@@ -39,6 +39,24 @@ const area = { left: 50, right: 350, bottom: 300 };
     assert.notEqual(same[0].y, same[1].y);
 }
 
+// ── A tab does not cover the dot that reads its curve ──────────────────────
+{
+    const [plain] = cursorHandleLayout({ ...area, a: 100, b: 250 });
+    // The curve along the bottom, as a spectrum's floor is: the dot sits on the tab's row.
+    const [a, b] = cursorHandleLayout({ ...area, top: 20, a: 100, b: 250, dotA: plain.y + 4, dotB: 120 });
+    assert.ok(a.y + CURSOR_HANDLE_SIZE / 2 < plain.y + 4 - 8, 'A’s tab moves up, clear of its dot');
+    assert.equal(b.y, plain.y, 'B, whose dot is high on the plot, stays at the foot');
+    // Both dots low and close together: the tabs still do not cover each other.
+    const close = cursorHandleLayout({ ...area, top: 20, a: 200, b: 210, dotA: plain.y, dotB: plain.y });
+    assert.ok(Math.abs(close[0].y - close[1].y) >= CURSOR_HANDLE_SIZE, 'stacked, not on top of each other');
+    // Never above the plotting area.
+    const [high] = cursorHandleLayout({ left: 50, right: 350, top: 250, bottom: 300, a: 100, b: NaN, dotA: 282 });
+    assert.ok(high.y >= 250 + CURSOR_HANDLE_SIZE / 2, 'kept inside the plot');
+    // An edge tab has no dot to avoid.
+    const [edge] = cursorHandleLayout({ ...area, a: -50, b: NaN, dotA: plain.y });
+    assert.equal(edge.y, plain.y);
+}
+
 // ── A cursor without a position has no tab ──────────────────────────────────
 assert.deepEqual(cursorHandleLayout({ ...area, a: NaN, b: 120 }).map(t => t.which), ['b']);
 assert.deepEqual(cursorHandleLayout({ left: NaN, right: 10, bottom: 10, a: 1, b: 2 }), []);

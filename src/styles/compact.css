@@ -536,6 +536,14 @@ html.compact.compact-landscape .compact-sheet-size {
     color: var(--text-primary);
 }
 
+/* A toggle that is on (hide the time series), blue as on the desktop. */
+.compact-secondary-btn.is-active {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+}
+
 .compact-secondary-btn:disabled {
     opacity: 0.5;
     cursor: default;

@@ -7,9 +7,12 @@
 // tab at the foot of its line: a target the size of a finger, in the one place
 // a finger knows to look for it.
 //
-// Two rules keep the tabs usable:
+// Three rules keep the tabs usable:
 //  - a cursor outside the view leaves its tab at the edge it went past, so it
 //    can be dragged back in instead of being lost off screen;
+//  - a tab does not cover the dot that reads its curve: where the curve runs
+//    along the bottom (a spectrum's floor, a signal at its minimum) the tab
+//    sits just above the dot;
 //  - two tabs closer than a tab's width are not drawn on top of each other:
 //    B's goes one row up.
 //
@@ -20,13 +23,17 @@ export const CURSOR_HANDLE_SIZE = 28;
 export const CURSOR_HANDLE_REACH = 22;
 const ROW_GAP = 6;
 const EDGE_INSET = 4;
+// The dot on the curve, ring and shadow included.
+const DOT_RADIUS = 8;
 
 /**
- * @param {{left:number, right:number, bottom:number, a:number, b:number, size?:number}} geometry
- *   left/right/bottom: the plotting area; a/b: each cursor's pixel (NaN when it has none)
+ * @param {{left:number, right:number, top?:number, bottom:number, a:number, b:number,
+ *          dotA?:number, dotB?:number, size?:number}} geometry
+ *   left/right/top/bottom: the plotting area; a/b: each cursor's pixel (NaN when
+ *   it has none); dotA/dotB: the height of the dot each draws on its curve, if any
  * @returns {Array<{which:'a'|'b', x:number, y:number, side:null|'left'|'right'}>}
  */
-export function cursorHandleLayout({ left, right, bottom, a, b, size = CURSOR_HANDLE_SIZE }) {
+export function cursorHandleLayout({ left, right, top = -Infinity, bottom, a, b, dotA = NaN, dotB = NaN, size = CURSOR_HANDLE_SIZE }) {
     if (![left, right, bottom].every(Number.isFinite) || right <= left) return [];
     const half = size / 2;
     const place = (which, px) => {
@@ -37,9 +44,19 @@ export function cursorHandleLayout({ left, right, bottom, a, b, size = CURSOR_HA
     };
     const handles = [place('a', a), place('b', b)].filter(Boolean);
     const row = bottom - half - ROW_GAP;
-    for (const handle of handles) handle.y = row;
-    if (handles.length === 2 && Math.abs(handles[0].x - handles[1].x) < size + ROW_GAP) {
-        handles[1].y = row - size - ROW_GAP;
+    const dots = { a: dotA, b: dotB };
+    for (const handle of handles) {
+        handle.y = row;
+        // An edge tab stands for a cursor out of view: it has no dot to avoid.
+        const dot = handle.side ? NaN : dots[handle.which];
+        if (Number.isFinite(dot) && Math.abs(dot - row) < half + DOT_RADIUS) {
+            handle.y = Math.max(top + half, dot - DOT_RADIUS - ROW_GAP - half);
+        }
+    }
+    if (handles.length === 2
+        && Math.abs(handles[0].x - handles[1].x) < size + ROW_GAP
+        && Math.abs(handles[0].y - handles[1].y) < size + ROW_GAP) {
+        handles[1].y = Math.max(top + half, Math.min(handles[1].y, handles[0].y) - size - ROW_GAP);
     }
     return handles;
 }

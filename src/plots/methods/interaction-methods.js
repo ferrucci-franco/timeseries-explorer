@@ -3040,6 +3040,7 @@ proto._renderCursorViewOverlay = function(view, options = {}) {
     // Every cursor's pixel, on screen or not: the phone layout's tabs say
     // where an off-screen one went.
     const pixels = {};
+    const dotHeights = {};
     let frame = null;
     for (const item of items) {
         const g = this._cursorOverlayGeometry(view, item.trace, item.x, options);
@@ -3057,6 +3058,7 @@ proto._renderCursorViewOverlay = function(view, options = {}) {
         ].filter(Boolean).join(';');
         parts.push(`<div class="cursor-overlay-line cursor-overlay-line-${item.key}" style="${lineStyle}"></div>`);
         if (!options.lightweight && Number.isFinite(g.top) && g.top >= g.topAxis && g.top <= g.bottomAxis) {
+            dotHeights[item.key] = g.top;
             dots.push(`<div class="cursor-overlay-dot cursor-overlay-dot-${item.key}" style="left:${g.left}px;top:${g.top}px;background:${item.color};border-color:${item.color}"></div>`);
         }
     }
@@ -3073,22 +3075,25 @@ proto._renderCursorViewOverlay = function(view, options = {}) {
     }
     // The dots last: a tab at the foot of a line must not hide the value it
     // reads when the curve runs low.
-    parts.push(...this._cursorHandlesHTML(view, div, frame, pixels, items), ...dots);
+    parts.push(...this._cursorHandlesHTML(view, div, frame, pixels, dotHeights, items), ...dots);
     overlay.innerHTML = parts.join('');
     overlay.style.display = parts.length ? 'block' : 'none';
 };
 
 // The phone layout's A and B tabs (utils/cursor-handles.js): drawn with the
 // lines, and remembered on the pane so a touch can be tested against them.
-proto._cursorHandlesHTML = function(view, div, frame, pixels, items) {
+proto._cursorHandlesHTML = function(view, div, frame, pixels, dotHeights, items) {
     div._cursorHandles = [];
     if (!this.compactLayout || !frame) return [];
     const handles = cursorHandleLayout({
         left: frame.leftAxis,
         right: frame.rightAxis,
+        top: frame.topAxis,
         bottom: frame.bottomAxis,
         a: pixels.a,
         b: pixels.b,
+        dotA: dotHeights.a,
+        dotB: dotHeights.b,
     });
     div._cursorHandles = handles;
     return handles.map(handle => {
