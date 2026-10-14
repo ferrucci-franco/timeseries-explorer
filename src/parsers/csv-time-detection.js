@@ -4,7 +4,7 @@
  * Current CSV time detector. Same public contract, plus a
  * stronger heuristic detector and the ability to recognise:
  *   - numeric time anywhere (not just first column)
- *   - ISO datetime, slash/dash dates, month-name dates, Excel serials
+ *   - ISO datetime, slash/dash/dot dates, month-name dates, Excel serials
  *   - split Date + Time column pairs
  *
  * Public API:
@@ -294,10 +294,9 @@ export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ','
     if (strategy === 'custom-format') return parseCustomFormatMs(row?.[idx], timeSource.format?.pattern || '');
     if (strategy === 'iso-datetime') return parseIsoMs(row?.[idx]);
     if (strategy === 'partial-year-month') return parsePartialYearMonthMs(row?.[idx]);
-    if (strategy === 'slash-date' || strategy === 'dash-date') {
+    if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
         const order = timeSource.format?.dateOrder || 'YMD';
-        const sep = strategy === 'dash-date' ? '-' : '/';
-        return parseFlexibleDateMs(row?.[idx], order, sep);
+        return parseFlexibleDateMs(row?.[idx], order, dateSeparatorForStrategy(strategy));
     }
     if (strategy === 'yearless-date-time') {
         return parseYearlessDateTimeMs(row?.[idx], timeSource.format?.dateOrder || 'MDY');
@@ -509,6 +508,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         partialYearMonthDash: 0,
         slashDate: 0,          // a/b/c
         dashDate: 0,           // a-b-c (when leading part is 1-2 digits, so not ISO)
+        dotDate: 0,            // a.b.c (dd.MM.yyyy, as German/Swiss/Polish exports write it)
         yearlessDateTime: 0,   // MM/DD HH:mm:ss or DD/MM HH:mm:ss
         yearlessSlash: 0,
         yearlessDash: 0,
@@ -518,6 +518,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         yearlessCounts: { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         slashCounts: { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         dashCounts:  { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
+        dotCounts:   { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         hasTimePart: 0,
         meridiemTimePart: 0,
         excelSerialCandidate: 0,
@@ -603,6 +604,20 @@ function profileColumnContent(sample, colIdx, delimiter) {
             continue;
         }
 
+        // Dots between the parts: 08.10.2026 00:05. Three parts are required,
+        // so a decimal number (12.5) never reaches here as a date — it was
+        // counted as numeric above and fails this pattern anyway.
+        const dot = cell.match(
+            /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i,
+        );
+        if (dot && (dot[1].length === 4 ? dot[3].length <= 2 : (dot[1].length <= 2 && (dot[3].length === 2 || dot[3].length === 4)))) {
+            profile.dotDate++;
+            tallyDateAmbiguity(profile.dotCounts, +dot[1], +dot[2], dot[1]);
+            if (dot[4] != null) profile.hasTimePart++;
+            if (dot[4] != null && /[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
+            continue;
+        }
+
         const mn = matchMonthNameDate(cell);
         if (mn) {
             profile.monthNameDate++;
@@ -637,6 +652,7 @@ function evaluateSingleColumn(col, preferred) {
     const fPartialYearMonth = content.partialYearMonth / content.nonEmpty;
     const fSlash   = content.slashDate / content.nonEmpty;
     const fDash    = content.dashDate  / content.nonEmpty;
+    const fDot     = content.dotDate   / content.nonEmpty;
     const fYearless = content.yearlessDateTime / content.nonEmpty;
     const fMonthName = content.monthNameDate / content.nonEmpty;
     const fMono    = content.numericValues.length > 1
@@ -715,6 +731,24 @@ function evaluateSingleColumn(col, preferred) {
             score: clamp01(0.5 * headerScore.score + 0.5 + 0.1 * (hasTime ? 1 : 0)),
             format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, dashSeparator: true, ambiguous: order.ambiguous },
             descTag: 'dash-date',
+            col,
+        });
+    }
+
+    // ---- Datetime: dot date (dd.MM.yyyy) ---------------------------------
+    // A dotted date is day-first wherever it is written (DE, CH, AT, PL, RU,
+    // ...), so an ambiguous column leans DMY unless the caller says otherwise.
+    if (fDot >= 0.8) {
+        const order = resolveDmyOrMdy(content.dotCounts, preferred === 'MDY' ? 'MDY' : 'DMY');
+        const hasTime = content.hasTimePart / content.dotDate >= 0.5;
+        const hasMeridiem = hasTime && content.meridiemTimePart / Math.max(1, content.hasTimePart) >= 0.5;
+        out.push({
+            mode: 'single',
+            kind: 'datetime',
+            sourceIndexes: [col.index],
+            score: clamp01(0.5 * headerScore.score + 0.55 + 0.1 * (hasTime ? 1 : 0)),
+            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, dotSeparator: true, ambiguous: order.ambiguous },
+            descTag: 'dot-date',
             col,
         });
     }
@@ -831,15 +865,16 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
     const tc = timeCol.content;
     if (dc.nonEmpty === 0 || tc.nonEmpty === 0) return null;
 
-    const dateRatio = (dc.iso + dc.slashDate + dc.dashDate + dc.monthNameDate) / dc.nonEmpty;
+    const dateRatio = (dc.iso + dc.slashDate + dc.dashDate + dc.dotDate + dc.monthNameDate) / dc.nonEmpty;
     const timeRatio = tc.timeOfDay / tc.nonEmpty;
     if (dateRatio < 0.8 || timeRatio < 0.8) return null;
 
     let order = 'YMD';
     let ambiguous = false;
     let dashSeparator = false;
+    let dotSeparator = false;
     let monthName = false;
-    const counts = { iso: dc.iso, slash: dc.slashDate, dash: dc.dashDate, month: dc.monthNameDate };
+    const counts = { iso: dc.iso, slash: dc.slashDate, dash: dc.dashDate, dot: dc.dotDate, month: dc.monthNameDate };
     const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
     if (top === 'iso') {
         order = 'YMD';
@@ -850,6 +885,9 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
     } else if (top === 'dash') {
         const r = resolveDmyOrMdy(dc.dashCounts, preferred);
         order = r.order; ambiguous = r.ambiguous; dashSeparator = true;
+    } else if (top === 'dot') {
+        const r = resolveDmyOrMdy(dc.dotCounts, preferred === 'MDY' ? 'MDY' : 'DMY');
+        order = r.order; ambiguous = r.ambiguous; dotSeparator = true;
     } else {
         order = dc.monthNameDmy >= dc.monthNameMdy ? 'DMY' : 'MDY';
         monthName = true;
@@ -867,7 +905,7 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
         kind: 'datetime',
         sourceIndexes: [dateCol.index, timeCol.index],
         score,
-        format: { dateOrder: order, hasTime: true, timezone: 'floating', excelSerial: false, dashSeparator, ambiguous, monthName },
+        format: { dateOrder: order, hasTime: true, timezone: 'floating', excelSerial: false, dashSeparator, dotSeparator, ambiguous, monthName },
         descTag: 'split-date-time',
         col: dateCol,
         timeCol,
@@ -1000,10 +1038,10 @@ function buildResult(best, headers, delimiter, warnings) {
         const h = parseHeader(headers[idx]?.raw, idx);
         name = h.name;
         description = '[datetime, day 01 assumed]';
-    } else if (best.descTag === 'slash-date' || best.descTag === 'dash-date') {
+    } else if (best.descTag === 'slash-date' || best.descTag === 'dash-date' || best.descTag === 'dot-date') {
         const idx = best.sourceIndexes[0];
         const order = best.format.dateOrder;
-        const sep = best.descTag === 'dash-date' ? '-' : '/';
+        const sep = dateSeparatorForStrategy(best.descTag);
         parse = (row) => parseFlexibleDateMs(row?.[idx], order, sep);
         const h = parseHeader(headers[idx]?.raw, idx);
         name = h.name;
@@ -1115,8 +1153,10 @@ function parseFlexibleDateMs(cell, order, sep) {
     if (cell == null || cell === '') return NaN;
     const re = sep === '-'
         ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i
-        : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i;
-    const m = String(cell).match(re);
+        : sep === '.'
+            ? /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i
+            : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i;
+    const m = String(cell).trim().match(re);
     if (!m) return NaN;
 
     let y, mo, d;
@@ -1157,6 +1197,7 @@ function combineDateAndTimeMs(dateCell, timeCell, order) {
 
     const sep = dateStr.includes('/') ? '/'
               : dateStr.includes('-') ? '-'
+              : /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(dateStr.trim()) ? '.'
               : null;
     if (!sep) return NaN;
 
@@ -1166,8 +1207,10 @@ function combineDateAndTimeMs(dateCell, timeCell, order) {
 
     const re = sep === '-'
         ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})$/
-        : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})$/;
-    const dm = dateStr.match(re);
+        : sep === '.'
+            ? /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})$/
+            : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})$/;
+    const dm = dateStr.trim().match(re);
     let y, mo, d;
     if (dm) {
         const a = +dm[1], b = +dm[2], c = +dm[3];
@@ -1175,9 +1218,11 @@ function combineDateAndTimeMs(dateCell, timeCell, order) {
         else if (order === 'DMY') { d = a; mo = b; y = c; }
         else                      { mo = a; d = b; y = c; }
     } else {
-        const pm = dateStr.match(sep === '-'
+        const pm = dateStr.trim().match(sep === '-'
             ? /^(\d{1,4})-(\d{1,4})$/
-            : /^(\d{1,4})\/(\d{1,4})$/);
+            : sep === '.'
+                ? /^(\d{1,4})\.(\d{1,4})$/
+                : /^(\d{1,4})\/(\d{1,4})$/);
         if (!pm) return NaN;
         const a = +pm[1], b = +pm[2];
         if (String(pm[1]).length === 4 || order === 'YMD') {
@@ -1340,6 +1385,13 @@ function parseTimeOfDay(cell) {
         Se: t[3] != null ? +t[3] : 0,
         Ms: t[4] != null ? Math.round(Number('0.' + t[4]) * 1000) : 0,
     };
+}
+
+/** The character between the date parts for a slash/dash/dot strategy. */
+export function dateSeparatorForStrategy(strategy) {
+    if (strategy === 'dash-date') return '-';
+    if (strategy === 'dot-date') return '.';
+    return '/';
 }
 
 function excelSerialToMs(serial) {

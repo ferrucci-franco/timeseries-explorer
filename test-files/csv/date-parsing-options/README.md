@@ -17,4 +17,5 @@ Small files for manually testing `Adjust CSV parsing`. Every CSV has at most 10 
 - `13_hour_values_as_index.csv`: numeric `0..24` hour-like column intended as an existing index, not a clock datetime.
 - `14_existing_index_repeated.csv`: existing monotonic index column with repeated values.
 - `15_separate_date_time_columns.csv`: separate date and clock time columns.
+- `17_dot_dmy_datetime_semicolon.csv`: single datetime column, `dd.MM.yyyy HH:mm` (dots, as German/Swiss exports write it), semicolon delimiter, decimal comma.
 

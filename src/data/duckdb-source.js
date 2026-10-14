@@ -23,7 +23,8 @@ import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
-import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { buildCsvTree, resolveCsvGrouping } from '../parsers/csv-tree-grouping.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import {
     DUCKDB_EXTENSIONS_DIR,
@@ -3644,15 +3645,15 @@ export default class DuckDbSource {
         }
 
         const order = timeSource.format?.dateOrder || 'YMD';
-        if (strategy === 'slash-date' || strategy === 'dash-date') {
-            const formats = this._dateTimeFormats(order, strategy === 'dash-date' ? '-' : '/');
+        if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
+            const formats = this._dateTimeFormats(order, dateSeparatorForStrategy(strategy));
             return this._tryStrptimeSql(`CAST(${first} AS VARCHAR)`, formats);
         }
 
         if (timeSource.mode === 'split' && sourceNames.length >= 2) {
             const dateCol = this._quoteIdent(sourceNames[0]);
             const timeCol = this._quoteIdent(sourceNames[1]);
-            const sep = timeSource.format?.dashSeparator ? '-' : '/';
+            const sep = timeSource.format?.dotSeparator ? '.' : timeSource.format?.dashSeparator ? '-' : '/';
             const formats = this._dateTimeFormats(order, sep);
             const expr = `CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
             const partialYearMonth = `CAST(${dateCol} AS VARCHAR) || '-01 ' || CAST(${timeCol} AS VARCHAR)`;
@@ -4105,6 +4106,13 @@ export default class DuckDbSource {
             result.tree = this._buildColumnPathTree(result.variables, variablePaths);
             result.metadata.pandasMultiIndex = true;
             result.metadata.pandasColumnLevels = Math.max(...[...variablePaths.values()].map(path => path.length));
+        } else if (sourceInfo.format === 'csv' || sourceInfo.format === 'parquet') {
+            // The same folders the in-memory CSV parser cuts (csv-tree-grouping):
+            // a Parquet table, often a converted CSV, has the same flat names.
+            const names = Object.keys(result.variables).filter(name => name !== timeVar.name);
+            const resolved = resolveCsvGrouping(sourceInfo.csvProfile?.grouping || null, names);
+            result.tree = buildCsvTree(result.variables, resolved);
+            result.metadata.csvGrouping = resolved;
         } else if (this.structureParser?._buildTree) {
             result.tree = this.structureParser._buildTree(result.variables);
         } else {

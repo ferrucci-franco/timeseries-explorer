@@ -102,6 +102,34 @@ try {
         await closeDuckDbDatabase(datedDb);
     }
 
+    // Dates written with dots (dd.MM.yyyy HH:mm) and units in a row of their
+    // own: the converted file has the same instants the viewer reads.
+    const dottedCsv = join(dir, 'dotted.csv');
+    const dottedParquet = join(dir, 'dotted.parquet');
+    writeFileSync(dottedCsv, [
+        'Date et heure;Courant | Primo 5.0-1 (1)',
+        '[dd.MM.yyyy HH:mm];[A]',
+        '08.10.2026 00:00;1',
+        '08.10.2026 00:05;2',
+        '13.10.2026 00:10;3',
+        '',
+    ].join('\n'));
+    const dottedProfile = inspectCsvForParquet(dottedCsv);
+    assert.equal(dottedProfile.timeSource.strategy, 'dot-date');
+    assert.equal(dottedProfile.unitRowIndex, 1);
+    await convertCsvToParquet({ inputPath: dottedCsv, outputPath: dottedParquet, csvProfile: dottedProfile, overwrite: true });
+    const dottedDb = new Database(':memory:');
+    const dottedConn = dottedDb.connect();
+    try {
+        const read = `read_parquet('${dottedParquet.replace(/\\/g, '/').replace(/'/g, "''")}')`;
+        const rows = await runDuckDb(dottedConn, `SELECT CAST("Date et heure" AS VARCHAR) AS t, "Courant | Primo 5.0-1 (1)" AS a FROM ${read} ORDER BY 1`);
+        assert.deepEqual(rows.map(row => String(row.t)), ['2026-10-08 00:00:00', '2026-10-08 00:05:00', '2026-10-13 00:10:00']);
+        assert.deepEqual(rows.map(row => Number(row.a)), [1, 2, 3], 'the units row is not data');
+    } finally {
+        await closeDuckDbConnection(dottedConn);
+        await closeDuckDbDatabase(dottedDb);
+    }
+
     // The compression name is spliced into the COPY statement, so it is the one
     // option that could carry SQL rather than choose a codec.
     assert.equal(parquetCompression(undefined), 'zstd', 'the default is unchanged');

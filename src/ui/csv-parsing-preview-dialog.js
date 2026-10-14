@@ -1,7 +1,12 @@
 import i18n from '../i18n/index.js';
 import Modal from './modal.js';
-import { csvRowMatchesFilter, normalizeCsvRowFilter } from '../parsers/csv-parser.js';
-import { customDatetimePatternInfo, detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { csvRowMatchesFilter, normalizeCsvRowFilter, stripUnitBrackets } from '../parsers/csv-parser.js';
+import { customDatetimePatternInfo, dateSeparatorForStrategy, detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import {
+    normalizeCsvGrouping,
+    resolveCsvGrouping,
+    summarizeCsvGrouping,
+} from '../parsers/csv-tree-grouping.js';
 
 const LINE_LIMITS = [10, 25, 50, 100, 150, 200];
 const MAX_PREVIEW_LINES = 5000;
@@ -45,6 +50,20 @@ const ROW_FILTER_OPERATORS = [
     { value: '==', label: '==' },
     { value: '!=', label: '!=' },
     { value: 'is_numeric', labelKey: 'csvPreviewRowFilterIsNumeric' },
+];
+const SETTINGS_FILE_FORMAT = 'timeseries-explorer-parsing-settings';
+const SETTINGS_FILE_VERSION = 1;
+// The dialog state a settings file carries: how to read a table, never what
+// is in it. Column choices are positions, so they fit any file laid out the
+// same way.
+const PORTABLE_SETTING_KEYS = [
+    'delimiter', 'encoding', 'decimalSeparator',
+    'hasHeader', 'headerIndex', 'dataStartIndex',
+    'unitsMode', 'unitRowIndex', 'inlineUnitFormat',
+    'ignoredColumns', 'columnOverrides', 'rowFilter',
+    'timeMode', 'timeColumn', 'timeDateColumn', 'timeTimeColumn', 'timeParts',
+    'timeFormat', 'customDatetimePattern', 'dateOrder',
+    'grouping',
 ];
 const SAMPLE_REGION_KEYS = {
     start: 'csvPreviewSampleStart',
@@ -152,8 +171,8 @@ function customPatternFromTimeSource(timeSource) {
     if (strategy === 'matlab-datenum') return 'Matlab';
     if (strategy === 'partial-year-month') return format.dashSeparator === false ? 'yyyy/MM' : 'yyyy-MM';
     if (strategy === 'iso-datetime') return format.hasTime ? 'yyyy-MM-dd HH:mm:ss' : 'yyyy-MM-dd';
-    if (strategy === 'slash-date' || strategy === 'dash-date') {
-        return dateOrderPattern(format.dateOrder, strategy === 'dash-date' ? '-' : '/', !!format.hasTime, !!format.hasMeridiem);
+    if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
+        return dateOrderPattern(format.dateOrder, dateSeparatorForStrategy(strategy), !!format.hasTime, !!format.hasMeridiem);
     }
     if (strategy === 'month-name-date') {
         const order = format.dateOrder || 'DMY';
@@ -195,8 +214,8 @@ function autoDetectedFormatText(timeSource) {
         const pattern = format.hasTime ? 'yyyy-MM-dd HH:mm:ss' : 'yyyy-MM-dd';
         return i18n.t('csvPreviewAutoDetectedDatePattern').replace('{pattern}', pattern);
     }
-    if (strategy === 'slash-date' || strategy === 'dash-date') {
-        const separator = strategy === 'dash-date' ? '-' : '/';
+    if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
+        const separator = dateSeparatorForStrategy(strategy);
         return i18n.t('csvPreviewAutoDetectedDatePattern')
             .replace('{pattern}', dateOrderPattern(format.dateOrder, separator, !!format.hasTime, !!format.hasMeridiem));
     }
@@ -460,7 +479,7 @@ function buildManualTimeSource(parser, rawHeaders, dataRows, delimiter, columnIn
     const detected = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter, preferredDateOrder: dateOrder });
     if (detected?.ok && detected.sourceIndexes?.[0] === columnIndex) {
         const source = serializeTimeSource(detected);
-        if (source.format && dateOrder && (source.strategy === 'slash-date' || source.strategy === 'dash-date')) {
+        if (source.format && dateOrder && (source.strategy === 'slash-date' || source.strategy === 'dash-date' || source.strategy === 'dot-date')) {
             source.format.dateOrder = dateOrder;
         }
         return source;
@@ -543,6 +562,24 @@ function buildManualTimeSource(parser, rawHeaders, dataRows, delimiter, columnIn
         };
     }
 
+    const dotRatio = values.filter(value => /^\d{1,4}\.\d{1,2}\.\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i.test(value)).length / values.length;
+    if (dotRatio >= 0.8) {
+        const meridiemRatio = values.filter(value => /[AP]M\s*$/i.test(value)).length / values.length;
+        return {
+            ok: true,
+            kind: 'datetime',
+            mode: 'single',
+            strategy: 'dot-date',
+            sourceIndexes: [columnIndex],
+            sourceHeaders: [rawHeaders[columnIndex] || name],
+            name,
+            description: '[datetime]',
+            confidence: dotRatio,
+            format: { dateOrder: dateOrder || 'DMY', hasTime: true, hasMeridiem: meridiemRatio >= 0.5, timezone: 'floating', excelSerial: false, dotSeparator: true },
+            warnings: [],
+        };
+    }
+
     return { ok: false, reason: 'Selected time column does not parse as numeric time or a supported date.' };
 }
 
@@ -571,8 +608,8 @@ function buildSplitTimeSource(parser, rawHeaders, dataRows, delimiter, dateColum
     }
 
     const dateRatio = dateValues.filter(value =>
-        /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(value)
-        || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(value)
+        /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(value)
+        || /^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(value)
     ).length / dateValues.length;
     const timeRatio = timeValues.filter(value =>
         /^\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*(?:am|pm))?$/i.test(value)
@@ -584,6 +621,7 @@ function buildSplitTimeSource(parser, rawHeaders, dataRows, delimiter, dateColum
     const dateName = headerName(parser, rawHeaders[dateColumnIndex], dateColumnIndex);
     const timeName = headerName(parser, rawHeaders[timeColumnIndex], timeColumnIndex);
     const dashSeparator = dateValues.filter(value => value.includes('-')).length >= dateValues.length / 2;
+    const dotSeparator = !dashSeparator && dateValues.filter(value => value.includes('.')).length >= dateValues.length / 2;
     return {
         ok: true,
         kind: 'datetime',
@@ -594,7 +632,7 @@ function buildSplitTimeSource(parser, rawHeaders, dataRows, delimiter, dateColum
         name: `${dateName} ${timeName}`,
         description: '[datetime]',
         confidence: Math.min(dateRatio, timeRatio),
-        format: { dateOrder: dateOrder || 'YMD', hasTime: true, timezone: 'floating', excelSerial: false, dashSeparator },
+        format: { dateOrder: dateOrder || 'YMD', hasTime: true, timezone: 'floating', excelSerial: false, dashSeparator, dotSeparator },
         warnings: [],
     };
 }
@@ -759,8 +797,10 @@ export default class CsvParsingPreviewDialog {
             timeFormat: this.autoProfile?.timeSource?.strategy === 'custom-format' ? 'custom' : 'auto',
             customDatetimePattern: this.autoProfile?.timeSource?.format?.pattern || 'yyyy/MM/dd HH:mm:ss',
             dateOrder: this.autoProfile?.timeSource?.format?.dateOrder || 'YMD',
+            grouping: normalizeCsvGrouping(this.autoProfile?.grouping),
         };
         if (this.autoProfile?.timeSource?.mode === 'parts') this.state.timeMode = 'parts';
+        this.loadedSettings = null;
         this.preview = null;
         this.resultProfile = null;
         this.lastStartProfile = null;
@@ -932,7 +972,17 @@ export default class CsvParsingPreviewDialog {
             resetDecimal: true,
             resetUnits: true,
         }));
-        left.append(redetect);
+        const saveSettings = document.createElement('button');
+        saveSettings.type = 'button';
+        saveSettings.textContent = i18n.t('csvPreviewSaveSettings');
+        saveSettings.title = i18n.t('csvPreviewSaveSettingsTooltip');
+        saveSettings.addEventListener('click', () => this._saveSettingsFile());
+        const loadSettings = document.createElement('button');
+        loadSettings.type = 'button';
+        loadSettings.textContent = i18n.t('csvPreviewLoadSettings');
+        loadSettings.title = i18n.t('csvPreviewLoadSettingsTooltip');
+        loadSettings.addEventListener('click', () => this._pickSettingsFile());
+        left.append(redetect, saveSettings, loadSettings);
         const right = document.createElement('div');
         right.className = 'csv-preview-footer-right';
         const cancel = document.createElement('button');
@@ -1622,7 +1672,7 @@ export default class CsvParsingPreviewDialog {
             const unitRow = isStartSample ? (this._rowForLogicalIndex(unitRowIndex) || []) : [];
             headers = headers.map((header, index) => {
                 const unit = String(unitRow[index] ?? '').trim();
-                return unit ? { ...header, description: `[${unit}]` } : header;
+                return unit ? { ...header, description: `[${stripUnitBrackets(unit)}]` } : header;
             });
         }
         const baseHeaders = cloneProfile(headers);
@@ -1679,6 +1729,12 @@ export default class CsvParsingPreviewDialog {
                 .replace('{total}', String(widthRows.length)));
         }
         if (!sampleRows.length) messages.push('No visible data rows match the header width.');
+        const savedColumns = this.loadedSettings?.columnCount;
+        if (Number.isInteger(savedColumns) && expectedColumns && savedColumns !== expectedColumns) {
+            warnings.push(i18n.t('csvPreviewSettingsColumnMismatch')
+                .replace('{saved}', String(savedColumns))
+                .replace('{current}', String(expectedColumns)));
+        }
 
         let timeSource;
         if (this.state.timeMode === 'index') {
@@ -1769,6 +1825,7 @@ export default class CsvParsingPreviewDialog {
             rowFilter: normalizedFilter,
             ignoredColumns,
             columnOverrides: cloneProfile(this.state.columnOverrides || {}),
+            grouping: normalizeCsvGrouping(this.state.grouping),
             headerlessLocked: this.headerlessProfileLocked ? true : false,
             profileSource: 'user',
             previewDiscardedColumnCountRows: discardedRows,
@@ -2094,6 +2151,8 @@ export default class CsvParsingPreviewDialog {
             );
         }
 
+        const folderFields = this._renderFolderControls();
+
         const columnFields = [columnTitle, columnTools];
         if (this.state.showColumnTools) columnFields.push(columnNote, columnResetRow, columnList);
         const filterFields = [filterTitle, filterEnabled];
@@ -2118,9 +2177,209 @@ export default class CsvParsingPreviewDialog {
             this._field(i18n.t('csvPreviewFirstDataRow'), dataInput),
             ...filterFields,
             ...timeFields,
+            ...folderFields,
             ...columnFields,
             this.statusBox,
         );
+    }
+
+    // The folders the sidebar will show, and what auto chose. Names are the
+    // columns that become variables: the time axis and ignored columns are
+    // left out, as they are in the parsed file.
+    _groupingVariableNames() {
+        const profile = this.resultProfile || {};
+        const skip = new Set([
+            ...(profile.timeSource?.sourceIndexes || []),
+            ...(profile.ignoredColumns || []),
+        ]);
+        return (profile.headers || [])
+            .map((header, index) => (skip.has(index) ? null : header?.name))
+            .filter(Boolean);
+    }
+
+    _renderFolderControls() {
+        const title = document.createElement('div');
+        title.className = 'csv-preview-side-title';
+        title.textContent = i18n.t('csvPreviewFolders');
+
+        const grouping = normalizeCsvGrouping(this.state.grouping);
+        const update = (patch) => {
+            this.state.grouping = normalizeCsvGrouping({ ...grouping, ...patch });
+            this._rebuildAndRender();
+        };
+        const mode = this._select([
+            { value: 'auto', label: i18n.t('csvPreviewFoldersAuto') },
+            { value: 'none', label: i18n.t('csvPreviewFoldersNone') },
+            { value: 'dots', label: i18n.t('csvPreviewFoldersDots') },
+            { value: 'separator', label: i18n.t('csvPreviewFoldersSeparator') },
+        ], grouping.mode);
+        mode.title = i18n.t('csvPreviewFoldersTooltip');
+        mode.addEventListener('change', () => update({ mode: mode.value }));
+
+        const names = this._groupingVariableNames();
+        const resolved = resolveCsvGrouping(grouping, names);
+
+        const separator = document.createElement('input');
+        separator.type = 'text';
+        separator.className = 'csv-preview-folder-separator';
+        separator.maxLength = 8;
+        // Quoted: a bare "|" in an empty field reads as the text cursor.
+        separator.placeholder = `“${resolved.mode === 'separator' ? resolved.separator : '|'}”`;
+        separator.value = grouping.separator;
+        separator.disabled = grouping.mode !== 'separator';
+        separator.addEventListener('change', () => update({ separator: separator.value }));
+        separator.addEventListener('keydown', event => {
+            if (event.key === 'Enter') separator.blur();
+        });
+
+        const position = this._select([
+            { value: 'auto', label: i18n.t('csvPreviewFoldersPositionAuto') },
+            { value: 'prefix', label: i18n.t('csvPreviewFoldersPositionPrefix') },
+            { value: 'suffix', label: i18n.t('csvPreviewFoldersPositionSuffix') },
+        ], grouping.position);
+        position.disabled = grouping.mode !== 'separator' && grouping.mode !== 'auto';
+        position.addEventListener('change', () => update({ position: position.value }));
+
+        const note = document.createElement('div');
+        note.className = 'csv-preview-side-note csv-preview-folder-summary';
+        note.textContent = this._folderSummaryText(names, resolved);
+        note.title = note.textContent;
+
+        return [
+            title,
+            this._field(i18n.t('csvPreviewFoldersMode'), mode),
+            this._field(i18n.t('csvPreviewFoldersSeparatorLabel'), separator),
+            this._field(i18n.t('csvPreviewFoldersPosition'), position),
+            note,
+        ];
+    }
+
+    _folderSummaryText(names, resolved) {
+        const summary = summarizeCsvGrouping(names, resolved);
+        let text;
+        if (!summary.folders.length) {
+            text = i18n.t('csvPreviewFoldersFlatSummary').replace('{count}', String(names.length));
+        } else {
+            const shown = summary.folders.slice(0, 6)
+                .map(folder => `${folder.name} (${folder.count})`)
+                .join(', ');
+            const more = summary.folders.length > 6 ? ', …' : '';
+            text = i18n.t('csvPreviewFoldersSummary')
+                .replace('{count}', String(summary.folders.length))
+                .replace('{list}', shown + more);
+            if (summary.topLevel) {
+                text += ' ' + i18n.t('csvPreviewFoldersTopLevel').replace('{count}', String(summary.topLevel));
+            }
+        }
+        if (resolved.detected) {
+            const what = resolved.mode === 'separator'
+                ? i18n.t(resolved.position === 'suffix' ? 'csvPreviewFoldersDetectedSuffix' : 'csvPreviewFoldersDetectedPrefix')
+                    .replace('{separator}', resolved.separator)
+                : i18n.t('csvPreviewFoldersDetectedDots');
+            text = `${i18n.t('csvPreviewFoldersDetected').replace('{what}', what)} ${text}`;
+        }
+        return text;
+    }
+
+    _settingsSnapshot() {
+        const settings = {};
+        for (const key of PORTABLE_SETTING_KEYS) {
+            if (this.state[key] !== undefined) settings[key] = cloneProfile({ value: this.state[key] }).value;
+        }
+        return {
+            format: SETTINGS_FILE_FORMAT,
+            version: SETTINGS_FILE_VERSION,
+            savedAt: new Date().toISOString(),
+            source: this.title || '',
+            columnCount: (this.resultProfile?.rawHeaders || []).length,
+            columns: (this.resultProfile?.rawHeaders || []).slice(),
+            settings,
+        };
+    }
+
+    _settingsFileName() {
+        const base = String(this.title || 'table')
+            .replace(/\.[^.]+$/, '')
+            .replace(/[\\/:*?"<>|]+/g, '_')
+            .trim() || 'table';
+        return `${base}.parsing.json`;
+    }
+
+    _saveSettingsFile() {
+        const json = JSON.stringify(this._settingsSnapshot(), null, 2);
+        const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = this._settingsFileName();
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    _pickSettingsFile() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.hidden = true;
+        input.addEventListener('change', async () => {
+            const file = input.files?.[0];
+            input.remove();
+            if (!file) return;
+            try {
+                this.applySettingsFile(JSON.parse(await file.text()), file.name);
+            } catch (_) {
+                await Modal.alert(i18n.t('csvPreviewTitle'), i18n.t('csvPreviewSettingsInvalid'), { icon: 'CSV' });
+            }
+        });
+        document.body.appendChild(input);
+        input.click();
+    }
+
+    /**
+     * Put a saved settings file into the dialog. Throws on anything that is
+     * not one; unknown keys are ignored, so a file from a later version still
+     * applies what this one understands.
+     */
+    applySettingsFile(file, name = '') {
+        if (!file || file.format !== SETTINGS_FILE_FORMAT || !file.settings || typeof file.settings !== 'object') {
+            throw new Error('Not a parsing-settings file.');
+        }
+        const settings = file.settings;
+        const next = { ...this.state };
+        for (const key of PORTABLE_SETTING_KEYS) {
+            if (settings[key] !== undefined) next[key] = cloneProfile({ value: settings[key] }).value;
+        }
+        if (this.headerlessProfileLocked) next.hasHeader = false;
+        next.grouping = normalizeCsvGrouping(next.grouping);
+        next.showColumnTools = !!(
+            (Array.isArray(next.ignoredColumns) && next.ignoredColumns.length)
+            || (next.columnOverrides && Object.keys(next.columnOverrides).length)
+        );
+        this.state = next;
+        this.loadedSettings = {
+            name,
+            columnCount: Number.isInteger(file.columnCount) ? file.columnCount : null,
+        };
+        if (!this.sidePanel) {
+            // Not on screen (tests): the profile is all there is to update.
+            this.preview = this.parser.inspectPreview(this._selectedSegment()?.buffer, {
+                maxRows: this.state.lineLimit,
+                delimiter: this.state.delimiter,
+                encoding: this.state.encoding,
+            });
+            this._rebuildProfile();
+            return;
+        }
+        this.delimiterSelect.value = this.state.delimiter;
+        this.encodingSelect.value = this.state.encoding;
+        this._refreshPreview({ preserveStructure: true });
+        if (this.statusBox && name) {
+            const loaded = document.createElement('div');
+            loaded.className = 'csv-preview-note';
+            loaded.textContent = i18n.t('csvPreviewSettingsLoaded').replace('{name}', name);
+            this.statusBox.appendChild(loaded);
+        }
     }
 
     _renderColumnControls() {

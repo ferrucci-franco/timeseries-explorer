@@ -33,6 +33,7 @@ import {
 } from '../../compute/kernels/regrid.js';
 import * as kernelShared from '../../compute/kernels/shared.js';
 import { csvCell } from '../../utils/csv-cell.js';
+import { treeForDerivedData } from '../../parsers/csv-tree-grouping.js';
 
 export function installResampleMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -710,7 +711,7 @@ proto._buildResampledData = function(sourceData, time, config, names, resampled)
         filename: '',
         metadata,
         variables,
-        tree: this.parser._buildTree(variables),
+        tree: treeForDerivedData(sourceData, metadata, variables, vars => this.parser._buildTree(vars)),
     };
 };
 
