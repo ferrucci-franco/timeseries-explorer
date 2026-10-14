@@ -15,6 +15,7 @@ import {
     LAYOUT_OVERRIDE_STORAGE_KEY,
     effectiveViewportSize,
     isLandscapeViewport,
+    layoutOverrideToStore,
     normalizeLayoutOverride,
     shouldUseCompactLayout,
 } from '../../ui/compact-layout.js';
@@ -198,7 +199,12 @@ export function installCompactMethods(ViewerClass) {
     proto.initCompactLayout = function() {
         let override = 'auto';
         try {
-            override = normalizeLayoutOverride(globalThis.localStorage?.getItem(LAYOUT_OVERRIDE_STORAGE_KEY));
+            const stored = normalizeLayoutOverride(globalThis.localStorage?.getItem(LAYOUT_OVERRIDE_STORAGE_KEY));
+            // A "Desktop" saved on a large window (by an earlier version) is
+            // let go of here, so the window switches by its size again.
+            const { width, height } = this._compactViewportSize();
+            override = layoutOverrideToStore(stored, width, height);
+            if (override !== stored) globalThis.localStorage?.removeItem(LAYOUT_OVERRIDE_STORAGE_KEY);
         } catch (_) { /* no storage: automatic */ }
         this._compact = {
             active: false,
@@ -304,8 +310,18 @@ export function installCompactMethods(ViewerClass) {
         return !!this._compact?.active;
     };
 
+    proto._compactViewportSize = function() {
+        return effectiveViewportSize({
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            screenWidth: window.screen?.width,
+            screenHeight: window.screen?.height,
+        });
+    };
+
     proto._setCompactLayoutOverride = function(value) {
-        const override = normalizeLayoutOverride(value);
+        const { width, height } = this._compactViewportSize();
+        const override = layoutOverrideToStore(value, width, height);
         this._compact.override = override;
         try {
             if (override === 'auto') globalThis.localStorage?.removeItem(LAYOUT_OVERRIDE_STORAGE_KEY);
@@ -464,12 +480,7 @@ export function installCompactMethods(ViewerClass) {
         const turnRequested = !!this._compact.turnRequested;
         this._compact.turnRequested = false;
         if (this._compact.applied && !turnRequested && this._compactKeyboardUp()) return;
-        const { width, height } = effectiveViewportSize({
-            innerWidth: window.innerWidth,
-            innerHeight: window.innerHeight,
-            screenWidth: window.screen?.width,
-            screenHeight: window.screen?.height,
-        });
+        const { width, height } = this._compactViewportSize();
         const want = shouldUseCompactLayout({ width, height, override: this._compact.override });
         const landscape = isLandscapeViewport(width, height);
         const root = document.documentElement;

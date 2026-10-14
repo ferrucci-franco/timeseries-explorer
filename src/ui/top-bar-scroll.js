@@ -7,6 +7,8 @@
  * now scrolls: a touchpad or a finger swipes it, and a mouse wheel turns into
  * a sideways scroll over it, since a mouse has no other way to do that.
  *
+ * A slim bar along the bottom of the top bar shows that the row goes on.
+ *
  * Scrolling clips whatever overflows the row, and the row's menus open below
  * it. They are therefore placed with fixed coordinates under their button,
  * which overflow does not clip, and follow the button while the row scrolls.
@@ -17,10 +19,69 @@ const WINDOW_MARGIN = 8;
 
 const openMenus = new Map();
 
-function updateScrollHints(row) {
+// The fades at the ends say there is more, but are easy to miss. A slim bar
+// along the bottom of the top bar says it plainly, and shows how much: drawn
+// here rather than left to the browser, whose scrollbar is hidden until
+// hovered on many systems (Firefox and Windows 11 by default).
+function createScrollbar(topBar, row) {
+    const track = document.createElement('div');
+    track.className = 'top-bar-scrollbar';
+    track.setAttribute('aria-hidden', 'true');
+    track.hidden = true;
+    const thumb = document.createElement('div');
+    thumb.className = 'top-bar-scrollbar-thumb';
+    track.appendChild(thumb);
+    topBar.appendChild(track);
+
+    // Dragging the thumb moves the row with it; a click elsewhere on the track
+    // brings that part of the row into view.
+    const ratio = () => row.scrollWidth / Math.max(1, track.clientWidth);
+    thumb.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const startX = event.clientX;
+        const startScroll = row.scrollLeft;
+        const scale = ratio();
+        thumb.setPointerCapture?.(event.pointerId);
+        track.classList.add('is-dragging');
+        const move = (e) => { row.scrollLeft = startScroll + (e.clientX - startX) * scale; };
+        const end = () => {
+            track.classList.remove('is-dragging');
+            thumb.removeEventListener('pointermove', move);
+            thumb.removeEventListener('pointerup', end);
+            thumb.removeEventListener('pointercancel', end);
+        };
+        thumb.addEventListener('pointermove', move);
+        thumb.addEventListener('pointerup', end);
+        thumb.addEventListener('pointercancel', end);
+    });
+    track.addEventListener('pointerdown', (event) => {
+        if (event.target !== track) return;
+        event.preventDefault();
+        const x = event.clientX - track.getBoundingClientRect().left;
+        row.scrollTo({ left: x * ratio() - row.clientWidth / 2, behavior: 'smooth' });
+    });
+    return track;
+}
+
+function updateScrollbar(track, row) {
+    const max = row.scrollWidth - row.clientWidth;
+    track.hidden = max <= 1;
+    if (track.hidden) return;
+    track.style.left = `${row.offsetLeft}px`;
+    track.style.width = `${row.offsetWidth}px`;
+    const width = row.offsetWidth;
+    const thumbWidth = Math.max(24, width * row.clientWidth / row.scrollWidth);
+    const thumb = track.firstElementChild;
+    thumb.style.width = `${thumbWidth}px`;
+    thumb.style.transform = `translateX(${(width - thumbWidth) * (row.scrollLeft / max)}px)`;
+}
+
+function updateScrollHints(row, track) {
     const max = row.scrollWidth - row.clientWidth;
     row.classList.toggle('can-scroll-left', max > 1 && row.scrollLeft > 1);
     row.classList.toggle('can-scroll-right', max > 1 && row.scrollLeft < max - 1);
+    if (track) updateScrollbar(track, row);
 }
 
 function place(menu, anchor) {
@@ -90,13 +151,14 @@ export function initTopBarScroll(row) {
     if (!row) return;
     const topBar = row.closest('.top-bar');
     const brand = topBar?.querySelector('.top-bar-left');
+    const track = topBar ? createScrollbar(topBar, row) : null;
     const refresh = () => {
         if (brand) updateBrand(topBar, brand, row);
-        updateScrollHints(row);
+        updateScrollHints(row, track);
         replaceOpenMenus();
     };
     row.addEventListener('scroll', () => {
-        updateScrollHints(row);
+        updateScrollHints(row, track);
         replaceOpenMenus();
     }, { passive: true });
     window.addEventListener('resize', refresh);

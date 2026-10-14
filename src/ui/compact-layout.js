@@ -23,6 +23,20 @@ export function viewportWantsCompact(width, height) {
     return width < COMPACT_MAX_WIDTH || height < COMPACT_MAX_HEIGHT;
 }
 
+/**
+ * The choice worth remembering. "Desktop" only means something where the
+ * automatic choice would be the phone layout. On a large window it is what
+ * "automatic" gives anyway, and remembering it there only turned automatic
+ * switching off for good: someone who tried the mobile version on a laptop
+ * and came back to the desktop one found the window no longer switched to the
+ * phone layout when made small, with nothing in the desktop layout to undo it.
+ */
+export function layoutOverrideToStore(choice, width, height) {
+    const mode = normalizeLayoutOverride(choice);
+    if (mode === 'full' && !viewportWantsCompact(width, height)) return 'auto';
+    return mode;
+}
+
 export function shouldUseCompactLayout({ width, height, override = 'auto' } = {}) {
     const mode = normalizeLayoutOverride(override);
     if (mode === 'compact') return true;

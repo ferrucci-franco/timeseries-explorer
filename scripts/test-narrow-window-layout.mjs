@@ -35,6 +35,13 @@ assert.match(rule(base, '.top-bar-right > *'), /flex-shrink:\s*0/, 'the buttons 
 assert.match(rule(base, '.top-bar-left'), /overflow:\s*hidden/, 'a squeezed brand is clipped, not drawn under the buttons');
 assert.match(ui, /initTopBarScroll\(topBar\.querySelector\('\.top-bar-right'\)\)/, 'the scrolling row is set up at startup');
 
+// A visible bar says the row goes on: the browser's own scrollbar is hidden
+// until hovered on many systems, so the app draws one, only while it scrolls.
+assert.match(scroll, /className = 'top-bar-scrollbar'/, 'the row has its own scrollbar');
+assert.match(scroll, /track\.hidden = max <= 1/, 'the scrollbar shows only while the row scrolls');
+assert.match(scroll, /setPointerCapture/, 'the thumb can be dragged');
+assert.match(rule(base, '.top-bar-scrollbar[hidden]'), /display:\s*none/, 'a hidden scrollbar takes no room');
+
 // Its menus escape the scroller's clipping.
 assert.match(scroll, /menu\.style\.position = 'fixed'/, 'top bar menus are placed with fixed coordinates');
 assert.equal(ui.match(/placeTopBarMenu\(menu, /g)?.length, 2, 'the example and extra menus are placed under their button');
