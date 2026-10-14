@@ -378,8 +378,11 @@ try {
     cursors = await cursorState();
     assert.equal(cursors.on, true, 'hiding the sheet keeps the cursors');
     assert.match(cursors.chip, /ΔX=/, 'their reading stays in the app bar');
+    assert.equal(await page.locator('.compact-cursor-chip-tap').isVisible(), true, 'with a finger: a tap there brings the sheet back');
+    await shot(page, 'cursors-hidden');
     await page.locator('.compact-cursor-chip').click();
     await page.waitForFunction(() => window.app._compact.sheet === 'cursors');
+    assert.equal(await page.locator('.compact-cursor-chip-tap').isVisible(), false, 'the sheet open, the finger goes');
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
 

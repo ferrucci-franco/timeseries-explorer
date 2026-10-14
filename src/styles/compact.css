@@ -2608,6 +2608,43 @@ html.compact .compact-cursor-chip.is-open {
     background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
 }
 
+/* A finger while the sheet is hidden: a tap here brings it back. When the
+   sheet goes away it taps twice, to show where it went. */
+.compact-cursor-chip-tap {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: var(--primary-color);
+}
+
+.compact-cursor-chip-tap svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+html.compact .compact-cursor-chip.is-open .compact-cursor-chip-tap {
+    display: none;
+}
+
+.compact-cursor-chip-tap.is-nudging {
+    animation: compact-cursor-tap 0.6s ease-in-out 2;
+}
+
+@keyframes compact-cursor-tap {
+    0%, 100% { transform: none; }
+    45% { transform: translateY(2px) scale(0.88); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .compact-cursor-chip-tap.is-nudging {
+        animation: none;
+    }
+}
+
 .compact-cursor-chip-ab {
     flex: 0 0 auto;
     display: inline-flex;
@@ -2627,7 +2664,14 @@ html.compact .compact-cursor-chip.is-open {
     color: var(--text-secondary);
 }
 
-/* A narrow phone keeps the numbers rather than the letters. */
+/* A narrow phone keeps the numbers rather than the letters: the finger takes
+   their place while the sheet is hidden, and on the narrowest they go. */
+@media (max-width: 419px) {
+    html.compact .compact-cursor-chip:not(.is-open) .compact-cursor-chip-ab {
+        display: none;
+    }
+}
+
 @media (max-width: 359px) {
     .compact-cursor-chip-ab {
         display: none;

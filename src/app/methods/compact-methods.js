@@ -847,6 +847,7 @@ export function installCompactMethods(ViewerClass) {
         this._applyCompactSheetSize();
         this._compactNavButtons.forEach((btn, key) => btn.setAttribute('aria-pressed', String(key === id)));
         this._renderCompactSheetContent();
+        this._compactSyncCursorChip();
         requestAnimationFrame(() => this._compactSheet.classList.add('is-shown'));
         this._scheduleCompactResize();
         setTimeout(() => this._compactSheetTitle.focus?.({ preventScroll: true }), 50);
@@ -861,6 +862,8 @@ export function installCompactMethods(ViewerClass) {
         document.documentElement.classList.remove('compact-sheet-open', 'compact-sheet-full');
         document.querySelector('.main-container')?.removeAttribute('inert');
         this._compactNavButtons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+        // The cursors' reading in the app bar says the sheet is gone.
+        this._compactSyncCursorChip();
         if (!fromHistory) this._unwindCompactHistory();
         else this._compact.historyEntries = 0;
         if (!silent) {
