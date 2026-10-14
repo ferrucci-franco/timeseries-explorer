@@ -2620,16 +2620,39 @@ textarea.feedback-control {
     display: flex;
     align-items: center;
     justify-content: center;
+    pointer-events: all;
+}
+
+/* Only the backdrop fades. The whole overlay used to, dialog included, and a
+   load keeps the main thread busy right when the fade runs: Firefox then left
+   the fade part-way, the dialog half transparent, with the drop zone or the
+   new plot panel showing through its text and over its spinner. The dialog is
+   now either not shown or fully opaque. */
+.example-loading-overlay::before {
+    content: '';
+    position: absolute;
+    inset: 0;
     background-color: rgba(0, 0, 0, 0.48);
     backdrop-filter: blur(5px);
     -webkit-backdrop-filter: blur(5px);
     opacity: 0;
     transition: opacity 0.2s ease;
-    pointer-events: all;
 }
 
-.example-loading-overlay.show {
+.example-loading-overlay.show::before {
     opacity: 1;
+}
+
+.example-loading-overlay > .example-loading-dialog {
+    position: relative;
+}
+
+/* Its buttons animate `all`, visibility included, which would keep Cancel
+   on screen for the length of that transition after the dialog has gone. */
+.example-loading-overlay:not(.show) > .example-loading-dialog,
+.example-loading-overlay:not(.show) > .example-loading-dialog * {
+    visibility: hidden;
+    transition: none;
 }
 
 .example-loading-dialog {
