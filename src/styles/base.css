@@ -301,6 +301,64 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     flex-shrink: 0;
 }
 
+/* Under the row, only while it scrolls (src/ui/top-bar-scroll.js): a thin
+   line on the top bar's lower edge, its thumb as wide as the share of the
+   row in view. The track is taller than the line it draws, so it is easy to
+   grab, and the line thickens under the pointer. */
+.top-bar-scrollbar {
+    position: absolute;
+    bottom: 0;
+    height: 10px;
+    z-index: 3;
+    cursor: pointer;
+    touch-action: none;
+}
+
+.top-bar-scrollbar[hidden] {
+    display: none;
+}
+
+.top-bar-scrollbar::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 3px;
+    height: 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+    transition: height 0.15s;
+}
+
+.top-bar-scrollbar-thumb {
+    position: absolute;
+    left: 0;
+    bottom: 2px;
+    height: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary-color) 60%, var(--text-secondary));
+    opacity: 0.75;
+    cursor: grab;
+    transition: height 0.15s, opacity 0.15s;
+}
+
+.top-bar-scrollbar:hover::before,
+.top-bar-scrollbar.is-dragging::before {
+    height: 4px;
+    bottom: 2px;
+}
+
+.top-bar-scrollbar:hover .top-bar-scrollbar-thumb,
+.top-bar-scrollbar.is-dragging .top-bar-scrollbar-thumb {
+    height: 6px;
+    bottom: 1px;
+    opacity: 1;
+}
+
+.top-bar-scrollbar.is-dragging .top-bar-scrollbar-thumb {
+    cursor: grabbing;
+}
+
 /* Language Selector */
 .language-selector {
     display: flex;

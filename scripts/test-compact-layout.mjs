@@ -8,6 +8,7 @@ import {
     COMPACT_MAX_WIDTH,
     effectiveViewportSize,
     isLandscapeViewport,
+    layoutOverrideToStore,
     normalizeLayoutOverride,
     shouldUseCompactLayout,
     viewportWantsCompact,
@@ -39,6 +40,12 @@ assert.equal(viewportWantsCompact(NaN, 800), false);
 assert.equal(shouldUseCompactLayout({ width: 1400, height: 900, override: 'compact' }), true);
 assert.equal(shouldUseCompactLayout({ width: 390, height: 844, override: 'full' }), false);
 assert.equal(shouldUseCompactLayout({ width: 390, height: 844, override: 'auto' }), true);
+// "Desktop" is only remembered where it differs from the automatic choice:
+// kept on a large window, it turned automatic switching off for good.
+assert.equal(layoutOverrideToStore('full', 390, 844), 'full');
+assert.equal(layoutOverrideToStore('full', 1280, 800), 'auto');
+assert.equal(layoutOverrideToStore('compact', 1280, 800), 'compact');
+assert.equal(layoutOverrideToStore('auto', 390, 844), 'auto');
 assert.equal(normalizeLayoutOverride('nonsense'), 'auto');
 assert.equal(normalizeLayoutOverride(null), 'auto');
 
