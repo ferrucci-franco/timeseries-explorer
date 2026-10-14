@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
+import { initTopBarScroll, placeTopBarMenu } from '../../ui/top-bar-scroll.js';
 import { isTouchCapable } from '../../ui/touch-drag.js';
 import { copyTextToClipboard } from '../../utils/clipboard.js';
 import {
@@ -761,6 +762,7 @@ proto._initExampleMenu = function() {
         this._closePeerMenus('example');
         this._renderExampleMenu();
         menu.hidden = false;
+        placeTopBarMenu(menu, btn.closest('.example-menu-wrap') || btn);
         btn.setAttribute('aria-expanded', 'true');
     };
 
@@ -1483,6 +1485,7 @@ proto._initExtraMenu = function() {
         this._closePeerMenus('extra');
         this._renderExtraMenu();
         menu.hidden = false;
+        placeTopBarMenu(menu, btn.closest('.example-menu-wrap') || btn);
         btn.setAttribute('aria-expanded', 'true');
     };
 
@@ -3158,6 +3161,7 @@ proto._syncTopBarEdgeToggle = function() {
 proto.initTopBarToggle = function() {
     const topBar = document.querySelector('.top-bar');
     if (!topBar) return;
+    initTopBarScroll(topBar.querySelector('.top-bar-right'));
     this._topBarEdgeToggle = createEdgeToggle({
         side: 'top',
         collapsed: topBar.classList.contains('hidden'),

@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { placeTopBarMenu } from '../../ui/top-bar-scroll.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const LIVE_UPDATE_DUCKDB_APPEND_LIMITS = {
@@ -29,6 +30,7 @@ proto._initLiveUpdateControls = function() {
     const open = () => {
         this._renderLiveUpdateTopBarMenu(menu);
         menu.hidden = false;
+        placeTopBarMenu(menu, menuBtn.closest('.example-menu-wrap') || menuBtn);
         menuBtn.setAttribute('aria-expanded', 'true');
     };
 
