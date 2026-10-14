@@ -373,8 +373,9 @@ measurements. Only how they are reached and read changes.
 - **Moving one**: each line has a tab at its foot, 28 px drawn and 44 px to the
   touch, so a finger grabs the cursor and not the pan; the line itself still takes
   a finger within 18 px. Two tabs closer than a tab's width are not drawn on top of
-  each other: B's goes one row up. The dot that reads the curve is drawn over the
-  tabs.
+  each other: B's goes one row up. A tab does not cover the dot that reads its
+  curve: where the curve runs along the bottom (a spectrum's floor) the tab sits
+  just above the dot.
 - **Out of view**: a cursor past an edge leaves its tab at that edge (‹A, B›).
   Dragging it brings the cursor to the finger.
 - **Both together**: a tab (or line) held still for 0.45 s, then dragged, moves A
@@ -390,6 +391,11 @@ measurements. Only how they are reached and read changes.
   name's place (in FFT, those of the view chosen in the sheet: Δf on the spectrum), with a finger that says a tap there opens it again (it taps twice
   as the sheet goes; under 420 px it takes the A B letters' place). The plot then has the whole screen and
   the measurement is still read.
+- **FFT with its time pane hidden**: the time pane's cursors go with it; A|B moves
+  to the spectrum, and a short notice says the cursors now read the spectrum, as the
+  app bar then does. Shown again, the time pane is read again (unless Spectrum was
+  chosen in the sheet). Hide time series, like every toggle in the Analyze sheet,
+  is lit while it is on.
 - Rotation keeps the cursors, like everything else (§7). A new analysis closes them,
   as on the desktop.
 

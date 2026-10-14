@@ -1733,7 +1733,10 @@ export function installCompactMethods(ViewerClass) {
                         const current = pm._ensureFftState(plot).layout;
                         pm._setFftLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
                     } },
-                    { label: i18n.t('hideTimeSeries'), title: i18n.t('hideTimeSeriesTooltip'), run: () => pm._toggleFftTimeSeries(panelId) },
+                    { label: i18n.t('hideTimeSeries'), title: i18n.t('hideTimeSeriesTooltip'), pressed: !!pm._ensureFftState(plot).timeSeriesHidden, run: () => {
+                        pm._toggleFftTimeSeries(panelId);
+                        this._renderCompactSheetContent();
+                    } },
                 ],
             };
         }
@@ -1749,7 +1752,7 @@ export function installCompactMethods(ViewerClass) {
                         const current = pm._ensureTemporalProfileState(plot).layout;
                         pm._setTemporalProfileLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
                     } },
-                    { label: timeLabel, title: timeLabel, run: () => {
+                    { label: timeLabel, title: timeLabel, pressed: hidden, run: () => {
                         pm._toggleTemporalProfileTimeSeries(panelId);
                         this._renderCompactSheetContent();
                     } },
@@ -1768,7 +1771,7 @@ export function installCompactMethods(ViewerClass) {
                         const current = pm._ensureIntegralState(plot).layout;
                         pm._setIntegralLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
                     } },
-                    { label: timeLabel, title: timeLabel, run: () => {
+                    { label: timeLabel, title: timeLabel, pressed: hidden, run: () => {
                         pm._toggleIntegralTimeSeries(panelId);
                         this._renderCompactSheetContent();
                     } },
@@ -1820,7 +1823,15 @@ export function installCompactMethods(ViewerClass) {
         if (controls) {
             const actions = el('div', 'compact-action-row');
             for (const action of controls.actions) {
-                actions.appendChild(button('compact-secondary-btn', action.label, action.run, { title: action.title }));
+                // A toggle (hide the time series) shows that it is on, as on
+                // the desktop. Hiding a pane moves the cursors' A|B and reading
+                // to the pane left on screen.
+                const btn = button(`compact-secondary-btn${action.pressed ? ' is-active' : ''}`, action.label, () => {
+                    action.run();
+                    this._compactSyncCursors();
+                }, { title: action.title });
+                if (action.pressed !== undefined) btn.setAttribute('aria-pressed', String(!!action.pressed));
+                actions.appendChild(btn);
             }
             choose.appendChild(actions);
 

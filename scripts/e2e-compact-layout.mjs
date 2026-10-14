@@ -505,6 +505,38 @@ try {
     await page.waitForFunction(() => window.app._compact.sheet === null);
     assert.match(await page.locator('.compact-cursor-chip').innerText(), /Δf=/, 'and keeps them with the sheet hidden');
 
+    // Hiding FFT's time pane: its cursors go with it, A|B moves to the
+    // spectrum, the app bar says it now reads the spectrum; shown again, the
+    // time pane is read again. The Hide button says it is on.
+    await page.locator('.compact-cursor-chip').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'cursors');
+    await page.locator('.compact-cursor-views .compact-segment').first().click();
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    assert.match(await page.locator('.compact-cursor-chip').innerText(), /ΔX=/, 'the time pane chosen, the app bar reads it');
+    const hideTime = () => page.locator('.compact-sheet .compact-secondary-btn', { hasText: /Hide time/ });
+    const abPane = () => page.evaluate(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        const btn = [...document.querySelectorAll('.compact-active-panel .compact-cursor-btn')].find(b => !b.hidden);
+        return !btn ? null : plot.fftDiv.contains(btn) ? 'spectrum' : plot.div.contains(btn) ? 'time' : 'elsewhere';
+    });
+    assert.equal(await abPane(), 'time');
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    assert.equal(await hideTime().getAttribute('aria-pressed'), 'false');
+    await hideTime().click();
+    await page.waitForFunction(() => document.querySelector('.compact-sheet .compact-secondary-btn[aria-pressed="true"]'));
+    assert.deepEqual(await hideTime().evaluate(el => [el.classList.contains('is-active'), getComputedStyle(el).color]),
+        [true, 'rgb(255, 255, 255)'], 'Hide time series is lit, white on blue, while it is on');
+    assert.match(await page.locator('.compact-toast').innerText(), /spectrum/, 'a notice says the cursors now read the spectrum');
+    assert.match(await page.locator('.compact-cursor-chip').innerText(), /Δf=/, 'and so does the app bar');
+    assert.equal(await abPane(), 'spectrum', 'A|B moves to the spectrum, still on screen');
+    await hideTime().click();
+    await page.waitForFunction(() => !document.querySelector('.compact-sheet .compact-secondary-btn[aria-pressed="true"]'));
+    assert.match(await page.locator('.compact-cursor-chip').innerText(), /ΔX=/, 'shown again, the time pane is read again');
+    assert.equal(await abPane(), 'time');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+
     // ── Rotation keeps the session ──────────────────────────────────────────
     await page.setViewportSize({ width: 844, height: 390 });
     await page.waitForFunction(() => document.documentElement.classList.contains('compact-landscape'));

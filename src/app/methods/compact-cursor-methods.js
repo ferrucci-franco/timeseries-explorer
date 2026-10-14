@@ -81,6 +81,15 @@ export function installCompactCursorMethods(ViewerClass) {
             .filter(view => pm._viewCursors(view).enabled && !(timeHidden && !view.isSpectrum));
     };
 
+    // The view the sheet and the pill read: the one chosen in the sheet (FFT:
+    // time or spectrum) while it is on screen, else the time pane. A pane
+    // hidden for a while does not undo the choice: shown again, it is read
+    // again.
+    proto._compactChosenCursorView = function(views) {
+        return views.find(view => view.id === this._compact.cursorViewId)
+            || views.find(view => !view.isSpectrum) || views[0];
+    };
+
     // Which pane carries the A|B button: the time pane, or the spectrum when
     // FFT hides the time pane.
     proto._compactCursorPane = function(plot) {
@@ -164,10 +173,18 @@ export function installCompactCursorMethods(ViewerClass) {
         const show = views.length > 0;
         chip.hidden = !show;
         this._compactAppBar?.classList.toggle('has-cursor-chip', show);
-        if (!show) return;
-        // The view chosen in the sheet (FFT: time or spectrum), else the time pane.
-        const view = views.find(candidate => candidate.id === this._compact.cursorViewId)
-            || views.find(candidate => !candidate.isSpectrum) || views[0];
+        if (!show) {
+            chip._viewId = null;
+            return;
+        }
+        const view = this._compactChosenCursorView(views);
+        // In FFT, hiding or showing the time pane changes what the pill reads
+        // while the user is elsewhere: say so, once.
+        if (chip._plot === plot && chip._viewId && chip._viewId !== view.id && this._compact.sheet !== 'cursors') {
+            this._compactToast(i18n.t(view.isSpectrum ? 'compactCursorsReadSpectrum' : 'compactCursorsReadTime'));
+        }
+        chip._plot = plot;
+        chip._viewId = view.id;
         let readout = this._compactCursorReadouts.get(plot)?.[view.id];
         if (!readout && !this._compactCursorSyncing) {
             // Turned on before the phone layout was (a session, the desktop
@@ -270,8 +287,7 @@ export function installCompactCursorMethods(ViewerClass) {
             }
             return page;
         }
-        if (!views.some(view => view.id === this._compact.cursorViewId)) this._compact.cursorViewId = views[0].id;
-        const view = views.find(candidate => candidate.id === this._compact.cursorViewId);
+        const view = this._compactChosenCursorView(views);
 
         // FFT: the time pane's cursors and the spectrum's, one at a time.
         if (views.length > 1) {
