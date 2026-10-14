@@ -480,15 +480,16 @@ export default class DuckDbSource {
     }
 
     async _parseFile(file, displayName, opts) {
-        const { lazy = false, overviewPoints = 10000, format = 'csv', csvProfile = null } = opts;
+        const { lazy = false, overviewPoints = 10000, format = 'csv', csvProfile = null, signal = null } = opts;
         await this.init();
+        if (signal?.aborted) throw this._queryAbortError();
         const id = ++this._nextTableId;
         const handle = `omv_${id}_${displayName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         const tableName = `omv_t_${id}`;
         await this.registerFile(handle, file);
         let result = null;
         try {
-            result = await this._loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format, csvProfile });
+            result = await this._loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format, csvProfile, signal });
         } catch (err) {
             try { await this._conn.query(`DROP TABLE IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
             try { await this._conn.query(`DROP VIEW IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
@@ -1895,13 +1896,14 @@ export default class DuckDbSource {
             // Re-check here so it never starts a full-file scan after its turn
             // finally reaches the connection.
             if (signal?.aborted) throw this._queryAbortError();
-            return this._interactiveQueryUnlocked(sql, { signal });
+            return this._interactiveQueryUnlocked(sql, { signal, keepSchema: options?.keepSchema === true });
         });
     }
 
     async _interactiveQueryUnlocked(sql, options = {}) {
         await this.init();
         const signal = options?.signal;
+        const keepSchema = options?.keepSchema === true;
         if (signal?.aborted) throw this._queryAbortError();
         const active = { cancelled: false, reader: null };
         this._activeInteractiveQuery = active;
@@ -1921,7 +1923,12 @@ export default class DuckDbSource {
             if (active.cancelled) {
                 throw this._queryAbortError();
             }
-            const table = new arrow.Table(batches);
+            // keepSchema: a result with no rows has no batches, and a table
+            // built from none has no columns either. Callers that read the
+            // column names off the result need the reader's schema.
+            const table = keepSchema && reader.schema
+                ? new arrow.Table(reader.schema, batches)
+                : new arrow.Table(batches);
             table._omvPerf = {
                 sendMs: this._roundMs(t1 - t0),
                 readMs: this._roundMs(t2 - t1),
@@ -1951,8 +1958,16 @@ export default class DuckDbSource {
         return 'NULL';
     }
 
-    async _loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format, csvProfile = null }) {
+    async _loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format, csvProfile = null, signal = null }) {
         const escapedHandle = handle.replace(/'/g, "''");
+        // With a signal, the statements that scan the file are sent rather than
+        // queried, so the loading overlay's Cancel interrupts them. conn.query()
+        // cannot be interrupted: Cancel used to sit on "Cancelling…" until
+        // DuckDB had read the whole file anyway (tens of seconds for a large
+        // CSV), the same trap the Parquet conversion fell into before.
+        const query = (sql) => (signal
+            ? this._interactiveQuery(sql, { signal, keepSchema: true })
+            : this._conn.query(sql));
         const readExpr = format === 'parquet'
             ? `read_parquet('${escapedHandle}')`
             : this._csvReadExpr(escapedHandle, csvProfile);
@@ -1970,12 +1985,13 @@ export default class DuckDbSource {
         // full CSV/Parquet into DuckDB's WASM heap first, which is exactly
         // what large-file mode is trying to avoid.
         if (lazy) {
-            await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${sourceExpr}`);
+            await query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${sourceExpr}`);
             viewMode = true;
         } else {
             try {
-                await this._conn.query(`CREATE TABLE ${tableName} AS SELECT * FROM ${sourceExpr}`);
+                await query(`CREATE TABLE ${tableName} AS SELECT * FROM ${sourceExpr}`);
             } catch (err) {
+                if (err?.name === 'AbortError') throw err;
                 const msg = String(err?.message || err);
                 const isOom = /malloc|out of memory|memory|allocation/i.test(msg);
                 if (!lazy || !isOom) {
@@ -2011,7 +2027,7 @@ export default class DuckDbSource {
         let totalRows;
         let dataSql;
         if (!viewMode) {
-            const countResult = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName} WHERE ${validTimeWhere}`);
+            const countResult = await query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName} WHERE ${validTimeWhere}`);
             const countCol = countResult.getChildAt(0) || countResult.getChild('n');
             totalRows = Number(countCol?.get(0) ?? 0);
             if (format === 'csv' && totalRows <= 0) {
@@ -2038,7 +2054,7 @@ export default class DuckDbSource {
                 SELECT * FROM sampled ORDER BY "${escTimeAlias}" ASC NULLS LAST
             `;
         }
-        const dataResult = await this._conn.query(dataSql);
+        const dataResult = await query(dataSql);
         const projectedNames = dataResult.schema.fields.map(f => f.name);
         const projectedTypes = dataResult.schema.fields.map((f, i) =>
             i === 0 ? 'DOUBLE' : String(f.type || '').toUpperCase()
@@ -2059,14 +2075,17 @@ export default class DuckDbSource {
             // first/last values are not the file's true time range. Issue an
             // aggregate query — DuckDB can compute MIN/MAX without sorting.
             if (!timeInfo.generated) try {
-                const aggResult = await this._conn.query(
+                const aggResult = await query(
                     `SELECT MIN(${timeInfo.sql})::DOUBLE AS tmin, MAX(${timeInfo.sql})::DOUBLE AS tmax FROM ${tableName} WHERE ${validTimeWhere}`
                 );
                 const tmin = aggResult.getChild('tmin')?.get(0);
                 const tmax = aggResult.getChild('tmax')?.get(0);
                 if (Number.isFinite(Number(tmin))) legacy.metadata.timeStart = Number(tmin);
                 if (Number.isFinite(Number(tmax))) legacy.metadata.timeEnd = Number(tmax);
-            } catch (_) { /* metadata best-effort */ }
+            } catch (err) {
+                if (err?.name === 'AbortError') throw err;
+                /* metadata best-effort */
+            }
             legacy.metadata.numTimesteps = null;
         }
 
