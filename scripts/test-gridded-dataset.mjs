@@ -13,6 +13,7 @@ import { openNetcdf3 } from '../src/gridded/nc3-reader.js';
 import { BufferByteSource } from '../src/gridded/byte-source.js';
 import { sniffNetcdfContainer } from '../src/parsers/netcdf-sniff.js';
 import NetcdfParser from '../src/parsers/netcdf-parser.js';
+import { formatUnitPowers } from '../src/utils/unit-superscripts.js';
 
 const DIR = 'test-files/netcdf';
 const buffer = name => {
@@ -246,4 +247,13 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
     await assert.rejects(() => client.request('map', { datasetId: 'test-1', variable: '/t2m' }).promise, { code: 'GRIDDED_NOT_OPEN' });
 }
 
-console.log('Gridded dataset tests passed: new and legacy CDS layouts, ZIP, calendars, CDF-5, regions, client.');
+// Units as they are read: powers become superscripts, names ending in a
+// digit and CF time references are left alone.
+for (const [raw, shown] of [
+    ['m s**-1', 'm s⁻¹'], ['kg m**-2 s**-1', 'kg m⁻² s⁻¹'], ['m**2 s**-2', 'm² s⁻²'], ['kg m^-3', 'kg m⁻³'],
+    ['m s-1', 'm s⁻¹'], ['W m-2', 'W m⁻²'], ['m2 s-2', 'm² s⁻²'], ['10**-3 kg', '10⁻³ kg'],
+    ['K', 'K'], ['hPa', 'hPa'], ['CO2 ppm', 'CO2 ppm'], ['PM10', 'PM10'], ['degrees_north', 'degrees_north'],
+    ['hours since 1900-01-01 00:00:00', 'hours since 1900-01-01 00:00:00'], ['1', '1'], ['', ''],
+]) assert.equal(formatUnitPowers(raw), shown, raw);
+
+console.log('Gridded dataset tests passed: new and legacy CDS layouts, ZIP, calendars, CDF-5, regions, client, unit powers.');

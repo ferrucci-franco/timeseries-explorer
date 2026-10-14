@@ -214,22 +214,26 @@ coastlines, a time slider with playback, a level selector and palettes. Its
 colour scale is fitted to the whole period and stays fixed while the time
 moves, so colours compare across steps; "Auto-fit" re-fits it (whole period,
 exact period, current step, visible area; optional percentile clipping and
-centring on zero). An analysis panel next to the map turns it into series:
+centring on zero). The map opens in **Navigate** (drag or right-drag to pan,
+wheel or pinch to zoom); an analysis panel next to it turns it into series:
 
 - **Point**: click the map (or drag the orange ring, or type a latitude and
   longitude), then extract the time series of the nearest grid cell.
 - **Region**: draw a box or type its North/West/East/South limits (as in the
   Copernicus CDS form), adjust it on the map, then compute the area-weighted
   (cos latitude, or cell area when the file has latitude bounds) mean, minimum
-  and maximum for every time step.
+  and maximum for every time step. The box moves from inside and resizes from
+  its edges.
 
 Each extraction gets a colour and a tag (P1, R1…) shared by the map, the panel
 list and the preview. A click on a point or a box's edge selects it (and its
-row, and the other way round); the right button opens a menu to extract or
-remove it, Delete removes the selected one, and the trash icon empties the list.
+row, and the other way round); a right click (without dragging) opens a menu
+to extract or remove it, Delete removes the selected one, and the trash icon empties the list.
 
-Extractions become variables of the file in the explorer, where FFT, integrals,
-heatmaps and cursors work on them. The map and the extractions export through
+Extractions become variables of the file in the explorer, named by the
+quantity ("2 metre temperature (t2m) · 45°N 90°E"), where FFT, integrals,
+heatmaps and cursors work on them; sending them again updates the same panel.
+Units show their powers as superscripts ("m s**-1" → m s⁻¹). The map and the extractions export through
 the same dialog as the plot panels (CSV, PNG, SVG). The ZIP the Copernicus CDS sends for mixed instantaneous/accumulated
 requests is listed and can be opened as one dataset, and several files with
 the same grid (consecutive months) can be joined in time. CF calendars
@@ -238,7 +242,7 @@ the same grid (consecutive months) can be joined in time. CF calendars
 **Series files** (station data, ARM, PyPSA) keep the series explorer: CF time
 coordinates, units, scale and offset packing, missing values, groups and
 dimension scales are normalized into plottable series, one shared X coordinate
-per file. A gridded file can still be opened that way ("Open as series").
+per file.
 
 Design, diagnosis and roadmap:
 [`docs/netcdf-gridded-viewer-spec.md`](docs/netcdf-gridded-viewer-spec.md).
