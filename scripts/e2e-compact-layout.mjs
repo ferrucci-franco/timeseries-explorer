@@ -497,11 +497,13 @@ try {
     assert.equal(await viewTabs.count(), 2, 'the sheet offers the time pane and the spectrum');
     await viewTabs.nth(1).click();
     await page.waitForFunction(() => /f=/.test(document.querySelector('.compact-cursor-values')?.innerText || ''));
+    assert.match(await page.locator('.compact-cursor-chip').innerText(), /Δf=/, 'the app bar reads the spectrum’s cursors too');
     assert.deepEqual(await sizeProblems(), [], 'the cursor sheet is phone-sized');
     assert.deepEqual(await sidewaysProblems(page), [], 'and fits the width');
     await shot(page, 'cursors-spectrum');
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
+    assert.match(await page.locator('.compact-cursor-chip').innerText(), /Δf=/, 'and keeps them with the sheet hidden');
 
     // ── Rotation keeps the session ──────────────────────────────────────────
     await page.setViewportSize({ width: 844, height: 390 });

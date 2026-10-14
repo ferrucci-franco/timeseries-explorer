@@ -387,7 +387,7 @@ measurements. Only how they are reached and read changes.
   adjustment a finger cannot make by dragging); the A–B line; Copy and Turn off. An
   arrow held down keeps stepping.
 - **Small screens**: hidden, the sheet leaves Δx and Δy in the app bar, in the file
-  name's place, with a finger that says a tap there opens it again (it taps twice
+  name's place (in FFT, those of the view chosen in the sheet: Δf on the spectrum), with a finger that says a tap there opens it again (it taps twice
   as the sheet goes; under 420 px it takes the A B letters' place). The plot then has the whole screen and
   the measurement is still read.
 - Rotation keeps the cursors, like everything else (§7). A new analysis closes them,

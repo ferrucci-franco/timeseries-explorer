@@ -165,7 +165,9 @@ export function installCompactCursorMethods(ViewerClass) {
         chip.hidden = !show;
         this._compactAppBar?.classList.toggle('has-cursor-chip', show);
         if (!show) return;
-        const view = views.find(candidate => !candidate.isSpectrum) || views[0];
+        // The view chosen in the sheet (FFT: time or spectrum), else the time pane.
+        const view = views.find(candidate => candidate.id === this._compact.cursorViewId)
+            || views.find(candidate => !candidate.isSpectrum) || views[0];
         let readout = this._compactCursorReadouts.get(plot)?.[view.id];
         if (!readout && !this._compactCursorSyncing) {
             // Turned on before the phone layout was (a session, the desktop
@@ -281,6 +283,7 @@ export function installCompactCursorMethods(ViewerClass) {
                     if (selected) return;
                     this._compact.cursorViewId = candidate.id;
                     this._renderCompactSheetContent();
+                    this._compactSyncCursorChip();
                 });
                 tab.setAttribute('role', 'tab');
                 tab.setAttribute('aria-selected', String(selected));
