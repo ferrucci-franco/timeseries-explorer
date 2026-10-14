@@ -202,22 +202,34 @@ on the union of their time points, with gaps where a run has no sample.
 
 ## netCDF support
 
-The `.nc` and `.netcdf` loader accepts generic netCDF3 Classic, netCDF3
-64-bit-offset, and netCDF4/HDF5 datasets, while preserving the specialized
-component tree for PyPSA exports. CF-style time coordinates, units, scale and
-offset packing, missing values, groups, dimension scales, and numeric arrays
-with the time dimension in any position are normalized into plottable series.
-Additional dimensions are expanded using their coordinate labels. Variables
-that cannot share the selected X coordinate remain visible as non-plottable
-metadata.
+The `.nc`, `.nc4`, `.netcdf` and `.cdf` loader reads netCDF3 (Classic,
+64-bit offset and CDF-5) and netCDF4/HDF5. What a file is gets decided from its
+bytes, not its name: a ZIP, a GRIB file or a saved error page named `.nc` is
+reported as what it is, with what to do about it.
 
-The current viewer has one shared X coordinate per file and loads netCDF files
-eagerly. CDF-5 is not supported, and non-standard CF calendars such as
-`360_day` remain numeric rather than being converted to calendar timestamps;
-use netCDF4/HDF5 or netCDF3 Classic for maximum compatibility.
+**Gridded files** (ERA5, CMIP, regular lat/lon grids) open on a map, read by
+parts in a worker, so their size is not limited by memory (a multi-GB ERA5
+month opens in a couple of seconds). The map view has offline Natural Earth
+coastlines, a time slider with playback, a level selector, palettes and colour
+ranges. Two tools turn the map into series:
 
-Gridded files (ERA5, CMIP, WRF) are only partly usable today. The diagnosis and
-the specification of a map-based gridded viewer are in
+- **Point**: a click extracts the time series of the nearest grid cell.
+- **Box**: area-weighted (cos latitude, or cell area when the file has latitude
+  bounds) mean, minimum and maximum for every time step.
+
+Extractions become variables of the file in the explorer, where FFT, integrals,
+heatmaps and cursors work on them. The map and the extractions export as PNG
+and CSV. The ZIP the Copernicus CDS sends for mixed instantaneous/accumulated
+requests is listed and can be opened as one dataset, and several files with
+the same grid (consecutive months) can be joined in time. CF calendars
+`noleap`, `all_leap`, `360_day` and `julian` are decoded.
+
+**Series files** (station data, ARM, PyPSA) keep the series explorer: CF time
+coordinates, units, scale and offset packing, missing values, groups and
+dimension scales are normalized into plottable series, one shared X coordinate
+per file. A gridded file can still be opened that way ("Open as series").
+
+Design, diagnosis and roadmap:
 [`docs/netcdf-gridded-viewer-spec.md`](docs/netcdf-gridded-viewer-spec.md).
 
 ## Production build

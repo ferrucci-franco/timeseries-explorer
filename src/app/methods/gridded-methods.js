@@ -203,9 +203,10 @@ export function installGriddedMethods(TargetClass) {
                     const members = await this._griddedPickZipEntries(file, listed);
                     if (!members) continue;
                     if (members.files.length > 1 && members.together) {
-                        const result = await this._griddedProbe(members.files, { mode: 'merge-variables', title: this._fileBaseName(file.name) });
+                        const options = { mode: 'merge-variables', title: this._fileBaseName(file.name) };
+                        const result = await this._griddedProbe(members.files, options);
                         if (result?.gridded) {
-                            opened.push({ files: members.files, result, title: this._fileBaseName(file.name) });
+                            opened.push({ files: members.files, result, options, title: this._fileBaseName(file.name) });
                             continue;
                         }
                     }
@@ -310,9 +311,10 @@ export function installGriddedMethods(TargetClass) {
         if (!join) return opened;
         const files = opened.flatMap(group => group.files);
         try {
-            const result = await this._griddedProbe(files, { mode: 'concat-time', title: `${opened[0].title} (+${opened.length - 1})` });
+            const options = { mode: 'concat-time', title: `${opened[0].title} (+${opened.length - 1})` };
+            const result = await this._griddedProbe(files, options);
             for (const group of opened) griddedClient().close(group.result.datasetId);
-            return [{ files, result, title: `${opened[0].title} (+${opened.length - 1})` }];
+            return [{ files, result, options, title: options.title }];
         } catch (error) {
             await Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, ''), { icon: '🌐' });
             return opened;
@@ -449,7 +451,7 @@ export function installGriddedMethods(TargetClass) {
             transform,
             excel: null,
             matlab: null,
-            gridded: { datasetId: result.datasetId, files: group.files, model },
+            gridded: { datasetId: result.datasetId, files: group.files, model, options: group.options || {} },
         });
         this.plotManager.addFile(fileId, baseName, data, transform, { deferRebuild: options.deferPlotRebuild === true });
         const state = this._griddedState();
@@ -492,6 +494,62 @@ export function installGriddedMethods(TargetClass) {
             lastExtraction: [],
             extractionCount: 0,
         };
+    };
+
+    /**
+     * Reload a gridded dataset: open the file again (its latest version when
+     * the app can reach it) and rebuild the dataset. Extractions are dropped —
+     * they were cut from the data that just changed.
+     */
+    proto._griddedReload = async function(fileId) {
+        const entry = this.files.get(fileId);
+        if (!entry?.gridded) return false;
+        let files = entry.gridded.files;
+        try {
+            if (files.length === 1 && entry.fileHandle?.getFile) files = [await entry.fileHandle.getFile()];
+            else if (files.length === 1 && entry.localPath && this.capabilities?.isDesktop) files = [await this._readLocalResultPath(entry.localPath)];
+        } catch (error) {
+            console.warn('[netcdf] could not read the latest version, reopening the one in hand:', error?.message || error);
+        }
+        this._showFileLoadingOverlay?.(1);
+        this._updateFileLoadingOverlay?.(1, 1, this._fileDisplayName(entry), files[0]?.size);
+        let result;
+        try {
+            result = await this._griddedProbe(files, entry.gridded.options || {});
+        } catch (error) {
+            await Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, files[0]?.name || ''), { icon: '🌐' });
+            return true;
+        } finally {
+            this._hideFileLoadingOverlay?.();
+        }
+        if (!result?.gridded) {
+            griddedClient().close(result?.datasetId);
+            await Modal.alert(i18n.t('errorLoading'), i18n.t('griddedErrorUnknown').replace('{file}', files[0]?.name || ''), { icon: '🌐' });
+            return true;
+        }
+        const state = this._griddedState();
+        const previous = state.views.get(fileId);
+        if (previous) {
+            previous.playing = false;
+            griddedClient().close(previous.datasetId);
+        }
+        entry.gridded = { ...entry.gridded, datasetId: result.datasetId, files, model: result.model };
+        entry.file = files.length === 1 ? files[0] : entry.file;
+        entry.contentHash = files[0] ? this._fileFingerprint(files[0]) : '';
+        const data = this._griddedBuildData(result.model, entry.name);
+        this.plotManager.updateFileData(fileId, data);
+        const view = this._griddedInitialView(fileId, result.datasetId, result.model);
+        if (previous && result.model.variables.some(variable => variable.mapable && variable.key === previous.variableKey)) {
+            view.variableKey = previous.variableKey;
+            view.palette = previous.palette;
+            for (const [name, index] of Object.entries(previous.selection)) {
+                if (index < (result.model.axes[name]?.size || 0)) view.selection[name] = index;
+            }
+        }
+        state.views.set(fileId, view);
+        if (this.plotManager.activeFileId === fileId) this.renderVariablesTree(data.tree);
+        if (state.visibleFileId === fileId) this._showGriddedView(fileId);
+        return true;
     };
 
     proto._griddedReleaseFile = function(fileId) {
@@ -1003,7 +1061,14 @@ export function installGriddedMethods(TargetClass) {
             showlegend: false,
             dragmode: view.tool === 'box' ? 'drawrect' : 'pan',
             uirevision: `${view.fileId}|${view.variableKey}`,
-            title: { text: this._griddedMapTitle(view), font: { size: 12 }, x: 0.01, xanchor: 'left' },
+            // A decimated drawing says so in the title, where it stays visible,
+            // rather than in the status line that reports extractions.
+            title: {
+                text: grid.stride > 1
+                    ? `${this._griddedMapTitle(view)}  <span style="font-size:10px;opacity:0.7">(${i18n.t('griddedDecimatedShort').replace('{stride}', String(grid.stride))})</span>`
+                    : this._griddedMapTitle(view),
+                font: { size: 12 }, x: 0.01, xanchor: 'left',
+            },
             xaxis: {
                 range: view.zoom?.x || pad(lonMin, lonMax, dx),
                 title: { text: i18n.t('griddedLongitude') },
@@ -1031,7 +1096,6 @@ export function installGriddedMethods(TargetClass) {
         const first = !div._fullLayout;
         await Plotly.react(div, traces, layout, config);
         if (first) this._griddedBindPlot(div);
-        if (grid.stride > 1) this._griddedSetStatus(i18n.t('griddedDecimated').replace('{stride}', String(grid.stride)));
     };
 
     proto._griddedMapTitle = function(view) {

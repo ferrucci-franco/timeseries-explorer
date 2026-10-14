@@ -1163,6 +1163,11 @@ proto.reloadActiveFile = async function() {
     if (!id) return;
     const entry = this.files.get(id);
     if (!entry) return;
+    // A gridded dataset is reopened on its map, not reparsed as series.
+    if (entry.gridded) {
+        await this._griddedReload(id);
+        return;
+    }
     // Reloading a derived dataset means computing it again from its source's
     // current data — the one thing a file with no bytes behind it CAN reload.
     if (this._isDerivedDataset?.(entry)) {
@@ -1320,6 +1325,10 @@ proto.reloadActiveFileAsNewVersion = async function() {
     if (!sourceId) return;
     const source = this.files.get(sourceId);
     if (!source) return;
+    if (source.gridded) {
+        await this._griddedReload(sourceId);
+        return;
+    }
     if (await this._refuseReloadOfInMemoryFile(source)) return;
 
     const name = this._nextVersionName(source.name);
