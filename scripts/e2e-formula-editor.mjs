@@ -31,6 +31,7 @@ try {
     assert.equal(await page.locator('#derived-toggle').isDisabled(), true, '"New variable…" is off with no file loaded');
     assert.match(await page.locator('#derived-toggle').getAttribute('title'), /Load a file first/,
         'and its tooltip says why');
+    assert.equal(await page.locator('#data-tool-select').isDisabled(), true, 'so are the data tools');
     await page.setInputFiles('#file-input', [{ name: 'feeders.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') }]);
     await page.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
 
@@ -39,6 +40,7 @@ try {
     const side = () => page.locator('#derived-formula').inputValue();
 
     assert.equal(await page.locator('#derived-toggle').isEnabled(), true, 'a loaded file turns it on');
+    assert.equal(await page.locator('#data-tool-select').isEnabled(), true, 'and the data tools');
 
     // A real button, not a "+" beside the help: it says what it does.
     assert.equal((await page.locator('#derived-toggle').innerText()).replace(/\s+/g, ' ').trim(), '+ New variable…',

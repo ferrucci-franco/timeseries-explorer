@@ -4092,6 +4092,24 @@ proto._updateActionButtons = function() {
     if (!hasFiles && document.getElementById('derived-form')?.classList.contains('collapsed') === false) {
         this._toggleDerivedForm?.(false);
     }
+    // The data tools too: every one of them works on a file's signals. A tool
+    // left open when the last file closes is put away with its draft.
+    const toolSelect = document.getElementById('data-tool-select');
+    if (toolSelect) {
+        toolSelect.disabled = !hasFiles;
+        if (hasFiles) {
+            toolSelect.removeAttribute('data-i18n-title');
+            toolSelect.removeAttribute('title');
+        } else {
+            toolSelect.setAttribute('data-i18n-title', 'dataToolNeedsFile');
+            toolSelect.title = i18n.t('dataToolNeedsFile');
+            if (toolSelect.value) {
+                this._exitDataToolEditing?.();
+                this._clearDataToolDraft?.();
+                this._syncDataTools?.();
+            }
+        }
+    }
     this._updateLiveUpdateTopBar?.();
     const reloadModeToggle = document.getElementById('reload-as-version-toggle');
     const reloadModeSwitch = document.getElementById('reload-as-version-switch');
