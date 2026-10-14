@@ -235,6 +235,41 @@ try {
         await page.click('#gridded-view [data-action="close"]');
         await page.click('.file-entry-map');
         await mapShown(page);
+        // A wheel zoom only ever moves one way: no redraw between notches puts
+        // back the ranges it started from, and a grid this small is drawn
+        // whole once, never again for a zoom. The pointer is over the region
+        // drawn above, which must not swallow the wheel.
+        await page.evaluate(() => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            window.__zoom = { spans: [], drawn: window.app._griddedVisibleView().drawn, stop: false };
+            const sample = () => {
+                const range = div._fullLayout.xaxis.range;
+                window.__zoom.spans.push(Math.abs(range[1] - range[0]));
+                if (!window.__zoom.stop) requestAnimationFrame(sample);
+            };
+            sample();
+        });
+        const centre = await page.$eval('#gridded-view .gridded-map .nsewdrag', el => {
+            const rect = el.getBoundingClientRect();
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        });
+        await page.mouse.move(centre.x, centre.y);
+        for (let notch = 0; notch < 8; notch++) {
+            await page.mouse.wheel(0, -100);
+            await page.waitForTimeout(70);
+        }
+        await page.waitForTimeout(800);
+        const zoom = await page.evaluate(() => {
+            window.__zoom.stop = true;
+            const view = window.app._griddedVisibleView();
+            return { spans: window.__zoom.spans, sameDrawing: view.drawn === window.__zoom.drawn, zoomed: !!view.zoom };
+        });
+        assert.equal(zoom.zoomed, true, 'the wheel zooms the map');
+        assert.ok(zoom.spans.at(-1) < zoom.spans[0] * 0.8, `the map zoomed in (${zoom.spans[0]} → ${zoom.spans.at(-1)})`);
+        zoom.spans.forEach((span, index) => {
+            if (index) assert.ok(span <= zoom.spans[index - 1] + 1e-9, `zooming in never widens the view (${zoom.spans.join(', ')})`);
+        });
+        assert.equal(zoom.sameDrawing, true, 'a small grid is not redrawn for a zoom');
         // Reload reopens the dataset on its map; it is never reparsed as series.
         await page.evaluate(() => window.app.reloadActiveFile());
         await mapShown(page);
