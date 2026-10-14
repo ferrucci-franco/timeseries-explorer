@@ -1,0 +1,992 @@
+# Visor de datos grillados netCDF (ERA5 y afines): estado actual y especificación
+
+Estado: **especificación, nada implementado** (2026-10-14).
+Alcance: el lector netCDF *genérico* (`src/parsers/netcdf-parser.js`). Los
+archivos **PyPSA quedan fuera** de este documento: su lector
+(`pypsa-netcdf-parser.js`) funciona bien y no se toca. Cualquier cambio que salga
+de aquí tiene que mantener intacta la detección PyPSA (`_looksLikePypsa`) que se
+evalúa antes del camino genérico.
+
+Motivo: varios colegas intentaron abrir archivos ERA5 descargados del Copernicus
+Climate Data Store y "no anda nada". Este documento:
+
+1. explica **por qué** no anda, con mediciones (§1);
+2. compara con lo que existe hoy en línea y en escritorio (§2);
+3. define la propuesta de valor: lo que ninguna herramienta ofrece hoy sin
+   escribir código (§3);
+4. especifica el visor ideal, que debe correr igual en la web y en Electron (§4–§7);
+5. propone un orden de implementación por fases, empezando por un rescate rápido
+   que haga funcionar ERA5 ya (§8).
+
+---
+
+## 0. Resumen ejecutivo
+
+- El lector actual se diseñó para **series temporales guardadas en netCDF**
+  (estaciones, sensores, PyPSA). Para eso funciona bien. Pero un archivo grillado
+  (`[tiempo, lat, lon]` o `[tiempo, nivel, lat, lon]`) lo convierte en hasta
+  **10.000 series sueltas**, una por punto de grilla, con nombres como
+  `/t2m [latitude=72, longitude=-12]`. **No hay mapa, ni slider de tiempo, ni
+  noción de geografía.**
+- Con archivos sintéticos que copian el layout real del nuevo CDS, medimos:
+  - Un recorte europeo de **3,6 MB** tarda **75 s** en abrir (≈ 10.000 lecturas
+    punto a punto sobre datos comprimidos por bloques). Leer una variable entera
+    con la misma librería tarda **15 ms**.
+  - Un día global a 0,25° (110 MB) no termina en tiempo razonable (§1.2).
+  - Un mes horario global (1–3 GB, el caso típico) **ni siquiera entra**: el límite
+    es 250 MB en web y 1 GB en escritorio.
+  - El ZIP que entrega el CDS cuando se mezclan variables instantáneas y acumuladas
+    falla con un mensaje genérico.
+  - GRIB, el formato nativo de ERA5, no se reconoce.
+  - Un archivo de un solo instante (un "mapa") toma la **latitud como eje X**.
+- Las bases técnicas para hacerlo bien ya están en el proyecto o a mano:
+  - h5wasm puede leer un `File` local **por partes** dentro de un Worker
+    (WORKERFS), sin cargarlo entero ni subirlo a ningún servidor.
+  - Electron ya sirve archivos locales con soporte de `Range`.
+  - `fflate` (para ZIP) ya es dependencia.
+  - El explorador de series ya tiene FFT, integrales, mapas de calor y variables
+    derivadas.
+- **Propuesta:** un modo "Dataset grillado" con mapa 2D sobre costas offline,
+  slider de tiempo, selector de nivel y herramientas dibujables (punto, línea,
+  región). Cada herramienta produce una serie o un perfil que entra al explorador
+  existente, que ya sabe analizarlo.
+- **Lo que nadie ofrece junto** (ver §3): un archivo propio, local y privado, sin
+  instalar nada ni escribir código, con:
+  - medias por región dibujada **ponderadas por área**;
+  - transectos y cortes verticales;
+  - diagramas de Hovmöller;
+  - climatologías y anomalías;
+  - **FFT en tiempo y en espacio** (incluidos espectros de número de onda zonal y
+    mapas de amplitud y fase del ciclo diurno).
+  - Además, cada resultado puede mostrar el **código xarray equivalente**, como
+    puente pedagógico hacia la investigación.
+
+---
+
+## 1. Estado actual
+
+### 1.1 Cómo funciona hoy
+
+Flujo (`file-methods.js` → `parse:netcdf` en el worker → `NetcdfParser.parse`):
+
+1. **Límite de tamaño previo:** 250 MB en web y 1 GB en escritorio
+   (`pypsa-netcdf-limits.js`). El archivo se lee **entero** en un `ArrayBuffer`.
+2. **Detección por bytes mágicos:**
+   - HDF5 (netCDF4) → h5wasm. El buffer se **copia** al FS en memoria de
+     Emscripten, así que ocupa el doble de RAM.
+   - CDF-1/CDF-2 (netCDF3) → `netcdfjs`, que también necesita el buffer completo.
+   - CDF-5 → error explícito.
+   - Cualquier otra cosa → "not a recognized netCDF3 or netCDF4/HDF5 file".
+3. Si la raíz parece PyPSA → lector PyPSA (fuera de alcance).
+4. **Camino genérico** (`_parseGeneric`):
+   - Se elige **una sola coordenada X por archivo**, por puntaje. Pesan unidades CF
+     `… since …`, `axis=T`, `standard_name=time` y nombres tipo `time`. Solo
+     califican coordenadas 1-D de **longitud > 1**.
+   - Cada variable numérica que comparte esa dimensión se "despliega": una serie
+     por combinación de las demás dimensiones.
+   - Tope global de **10.000 series por archivo**, más un presupuesto de 2 M de
+     valores por variable. Si no entra, se toma una submuestra equiespaciada por eje
+     (ver `docs/netcdf-gridded-subsampling.md`).
+   - Cada serie se lee con un hyperslab **punto por punto** (`_readSeries`).
+5. Se decodifica `scale_factor`/`add_offset`/`_FillValue`/`missing_value`. El
+   tiempo CF se convierte a fecha, salvo los calendarios no estándar (`360_day`,
+   `noleap`, …), que quedan numéricos.
+6. El árbol de variables recibe una entrada por serie, más nodos de metadatos:
+   atributos globales, coordenadas auxiliares, variables omitidas y parciales.
+
+### 1.2 Pruebas con archivos tipo ERA5
+
+Para las pruebas se generaron archivos sintéticos con el **layout exacto** documentado
+para el nuevo CDS (desde 2024-09) y para el CDS legacy:
+
+- **Nuevo CDS:** netCDF4 con zlib + shuffle. `valid_time` int64 en
+  `seconds since 1970-01-01`, `pressure_level` float64 decreciente, `latitude`
+  90→-90, `longitude` 0→359.75, datos float32 con `_FillValue=NaN`, `number`
+  escalar int64 y `expver` string.
+- **Legacy:** netCDF3 64-bit offset, `time` int32 en `hours since 1900-01-01`,
+  int16 empaquetado.
+
+Se pasaron por el parser actual en Node, con las mismas versiones de `h5wasm` y
+`netcdfjs`.
+
+| Archivo de prueba | Tamaño | Resultado actual | Tiempo |
+|---|---:|---|---:|
+| Legacy CDS, netCDF3, 24 h, Europa 0,25° (161×209) | 1,6 MB | Abre: 10.000 de 33.649 puntos como series sueltas | 0,3 s |
+| Nuevo CDS, netCDF4, 24 h, Europa, 2 variables | 3,6 MB | Abre: 4.970 de 33.649 puntos por variable; omite `expver` y `number` | **75 s** |
+| Nuevo CDS, niveles de presión (4 niveles), 24 h, Europa | 7,4 MB | Abre: 10.000 de 134.596 series (4 niveles × 50 lat × 50 lon) | **80 s** |
+| Nuevo CDS, 24 h, **global** 0,25° (721×1440) | 110 MB | No termina en 25 min (ver nota) | > 25 min |
+| Nuevo CDS, **1 solo instante**, Europa | 0,2 MB | Abre, pero con **la latitud como eje X**, una "serie" por longitud y etiquetas `valid_time=1704067200` sin decodificar | 0,3 s |
+| ZIP del nuevo CDS (instant + accum) guardado como `.nc` | 7,3 MB | **Falla**: "not a recognized netCDF3 or netCDF4/HDF5 file" | — |
+| Mes horario global, 1 variable (caso típico real) | 1–3 GB | **Rechazado** por el límite de tamaño, en web y en escritorio | — |
+| GRIB (formato nativo de ERA5) | — | Extensión no aceptada | — |
+
+Nota sobre el global: una sola serie de un punto cuesta ≈ 245 ms porque obliga a
+descomprimir los 24 bloques completos. Con 10.000 puntos son ≈ 40 min.
+
+Lectura directa con h5wasm sobre los mismos archivos, que da la cota de lo
+alcanzable:
+
+| Operación | Europa 3,6 MB | Global 110 MB |
+|---|---:|---:|
+| Abrir y leer metadatos | 10 ms | 11 ms |
+| Un mapa (un instante, todos los puntos) | 14 ms | 50 ms |
+| Variable completa (24 mapas, `Float32Array`) | 15 ms | 1,2 s |
+| Serie temporal de **un** punto | 10 ms | 245 ms |
+
+**Conclusión:** el cuello de botella no es la librería sino la estrategia de
+lectura. Leer por bloques (por instante, en el orden en que está guardado el
+archivo) es entre 1.000 y 5.000 veces más rápido que leer punto a punto.
+
+### 1.3 Causas raíz
+
+| # | Problema | Dónde | Efecto con ERA5 |
+|---|---|---|---|
+| R1 | **Paradigma:** la grilla se aplana en series sueltas, con un solo eje X por archivo | `_parseGeneric` | No hay mapa. Diez mil entradas en el árbol (~100.000 nodos DOM) inútiles para un climatólogo |
+| R2 | **Carga ansiosa** del archivo completo y copia al FS de Emscripten | `parse()`, `_parseHdf5` | Un mes de ERA5 (1–3 GB) supera los límites. Pico de RAM ≈ 2× el archivo |
+| R3 | **Lectura punto a punto** de datos con compresión por bloques | `_readSeries` | 75 s para 3,6 MB. Cada punto vuelve a descomprimir todos los bloques |
+| R4 | `_descriptorIsNumeric` y `readFlat` leen **variables enteras como `Array` JS** (números en caja) solo para saber si son numéricas, y las cachean | `_descriptorIsNumeric`, `readFlat` | ~8–16× la memoria del `Float32Array` original. El tipo ya está en `dtype` |
+| R5 | No se reconoce el **ZIP** del nuevo CDS | detección por magia | Error genérico. El usuario cree que el archivo está roto |
+| R6 | **GRIB** no soportado | `RESULT_FILE_EXTENSIONS`, parser | El formato recomendado por ECMWF no abre |
+| R7 | Coordenada X candidata exige longitud > 1 | `_coordinateAxisCandidate` | Un archivo de un instante elige `latitude` como X; el tiempo queda como entero crudo |
+| R8 | Calendarios no estándar (`noleap`, `360_day`, `all_leap`) quedan numéricos | `_axisFromCoordinate` | CMIP y modelos climáticos sin fechas |
+| R9 | netCDF3 sin lectura parcial (`netcdfjs` exige el buffer completo); CDF-5 sin soporte | `_parseNetcdf3` | Archivos legacy grandes y salidas de WRF/MPAS en CDF-5 |
+| R10 | Un solo eje de tiempo por archivo | `_selectCoordinate` | Variables con otro eje (p. ej. `step`, otro `time`) quedan "no alineadas" |
+| R11 | Sin noción de **geografía:** no detecta lat/lon (ni 1-D ni curvilíneas 2-D como `XLAT`/`XLONG` de WRF), ni límites de celda, ni áreas | — | Imposible mapear, ponderar por área o recortar por región |
+| R12 | Las estadísticas sobre la submuestra **no son las del campo** (sin ponderación por área). Está documentado como limitación | `gridSample` | Medias espaciales engañosas si alguien las calcula con las series cargadas |
+| R13 | Errores poco accionables | mensajes | "No anda nada" en lugar de "esto es un ZIP con 2 netCDF: ¿cuál abrimos?" |
+
+### 1.4 Lo que funciona y hay que conservar
+
+- **Series temporales en netCDF** (estaciones, ARM `base_time`/`time_offset`,
+  MADIS, archivos con `time` + `station`). Este camino es correcto y debe seguir
+  igual para archivos que no son grillas geográficas.
+- Decodificación de tiempo CF (unidades `… since …`, orígenes con zona, `_`
+  entre fecha y hora), empaquetado y valores de relleno.
+- Grupos HDF5, dimension scales, atributos.
+- Detección y lector PyPSA, sin cambios.
+- Los fixtures y tests existentes: `npm run test:netcdf`, `verify:netcdf-corpus` y
+  `scripts/bench-netcdf-grid.mjs`.
+
+---
+
+## 2. Comparación con otras herramientas
+
+Relevamiento a octubre de 2026. Algunas capacidades no pudieron verificarse a mano
+y se marcan "?". Leyenda:
+
+- **S** = sí
+- **P** = parcial
+- **N** = no
+- **?** = no verificado
+
+### 2.1 Acceso
+
+| Herramienta | Tipo | ¿Instalar? | ¿Archivo propio, local, sin subirlo? | Formatos |
+|---|---|---|---|---|
+| Panoply 5.9 (NASA) | Escritorio, Java | Sí | S (escritorio) | netCDF3/4, HDF, GRIB, OPeNDAP |
+| ncview | Escritorio, X11 | Sí | S (escritorio) | netCDF |
+| IDV 6.3 (Unidata) | Escritorio, Java | Sí | S (escritorio) | netCDF, GRIB, THREDDS |
+| QGIS + Crayfish | Escritorio | Sí | S (escritorio) | netCDF, GRIB, Zarr (GDAL/MDAL) |
+| ArcGIS Pro | Escritorio, comercial | Sí | S (escritorio) | netCDF, GRIB, HDF, Zarr |
+| NASA Giovanni | Web | No (cuenta) | **N**: solo su catálogo | — |
+| Copernicus Climate Atlas / Climate Pulse / ERA Explorer | Web | No | **N**: solo sus datos | — |
+| Climate Reanalyzer, NOAA PSL WRIT | Web | No | **N** | — |
+| KNMI Climate Explorer | Web | No (registro) | **N**: el archivo se **sube** al servidor | netCDF, ASCII |
+| Climate Engine, Google Earth Engine | Web | No (cuenta Google) | N (GEE además exige código) | Catálogo propio |
+| earth.nullschool, Windy, Ventusky | Web | No | **N**: solo pronósticos propios | — |
+| Godiva3 / ncWMS / THREDDS | Servidor + web | Un admin instala el servidor | N | CF-netCDF |
+| xcube viewer | Web + servidor Python | Sí (`xcube serve`) | Solo con servidor local | Zarr, netCDF |
+| myHDF5 / H5Web | Web | No | **S**, archivos de cualquier tamaño, lectura parcial en Worker | Solo HDF5/netCDF4 (sin netCDF3) |
+| GribBox, demo grib-rs | Web | No | S (según sus autores) | GRIB2 / netCDF |
+| Browzarr | Web (pre-1.0) | No | ? | Zarr, netCDF4 |
+| Jupyter + xarray (Pangeo) | Código | Sí | S | Todos |
+| CDO / NCO | Línea de comandos | Sí | S | netCDF, GRIB |
+
+### 2.2 Análisis sin código
+
+Columnas: mapa = mapa con costas; reg. = estadística por región dibujada;
+transect. = transecto por línea; Hov. = Hovmöller; anom. = anomalías.
+
+| Herramienta | Mapa | Slider | Niveles | Reg. (¿pond. área?) | Transect. | Serie en punto | Hov. | FFT | Anom. |
+|---|---|---|---|---|---|---|---|---|---|
+| Panoply | S (200+ proyecciones) | S | S | N (solo media zonal) | P (lat/lon const.) | S | S (tiempo-lat) | N | P |
+| ncview | P | S | S | N | N | S | P | N | N |
+| IDV | S (3D) | S | S | P (fórmulas) | **S** | S | S | N | P |
+| QGIS + Crayfish | S | S | S | P (sin cos lat) | **S** | S | N | N | N |
+| ArcGIS Pro | S | S | S | S (extensión paga) | P | S | N | N | S |
+| Giovanni | S | S | S | S (caja) | P | S | S | N | P |
+| KNMI Climate Explorer | S | N | P | S (caja) | N | S | ? | **S (solo series)** | S |
+| NOAA PSL WRIT | S | N | S | S (caja) | P | S | S | N | S |
+| Climate Atlas | S | P | N | S (regiones / GeoJSON) | N | S | N | N | S |
+| Godiva3 / ncWMS | S | S | S | N | **S** | S | N | N | N |
+| xcube viewer | S | S | ? | **S (polígono dibujado)** | ? | S | N | N | P |
+| myHDF5 / H5Web | **N** (sin geografía) | P | P | N | N | S | P | N | N |
+| Windy / nullschool | S (muy lindo) | S | S | N | N | P | N | N | P |
+| xarray (código) | S | S | S | S (`weighted`) | S | S | S | S (xrft) | S |
+| CDO (CLI) | N | N | S | S (`fldmean`) | P | S | S | P | S |
+
+### 2.3 El hueco
+
+Ninguna herramienta reúne, **sin instalar, sin subir el archivo y sin escribir
+código**:
+
+1. **Mapa geográfico del archivo propio** (ERA5, CMIP, WRF), con costas, slider de
+   tiempo y selector de nivel.
+   - Las web que mantienen el archivo local (myHDF5, GribBox) no tienen geografía.
+   - Las web con mapa solo muestran su propio catálogo.
+   - KNMI exige subir el archivo.
+2. **Estadísticas en una región dibujada a mano, ponderadas por área.** Solo
+   xcube, y requiere un servidor Python.
+3. **Transecto por línea arbitraria y corte vertical a lo largo de ella.** Solo
+   herramientas de escritorio (IDV, QGIS + Crayfish) o servidores (Godiva3).
+4. **Hovmöller con promedio en la banda,** calculado en el cliente.
+5. **Análisis espectral:**
+   - En tiempo, solo KNMI (servidor, subiendo el archivo).
+   - **En espacio** (número de onda zonal, espectro 2D, número de onda–frecuencia),
+     **ninguna** herramienta sin código.
+6. **Climatologías y anomalías sobre el archivo propio** (período base a elección).
+   Solo con código o CLI.
+7. **Privacidad + archivos grandes en el navegador.** myHDF5 demuestra que la lectura
+   parcial de un archivo local de varios GB es viable, pero nadie la combinó con
+   análisis geográfico.
+
+---
+
+## 3. Propuesta de valor
+
+> **"Arrastrá tu ERA5 al navegador y en dos segundos tenés el mapa. Dibujá tu
+> región: media ponderada, mínimo y máximo, serie temporal, espectro. Sin instalar,
+> sin subir nada, sin una línea de código. Y si querés, te mostramos el código
+> xarray que hace lo mismo."**
+
+Diferenciadores concretos:
+
+1. **Local-first y privado.** El archivo nunca sale de la máquina. Funciona igual
+   en web (sin instalación) y en Electron, y offline con el build portable.
+2. **ERA5 sin fricción.** El visor:
+   - reconoce el ZIP del CDS y lo abre;
+   - reconoce GRIB (fase posterior);
+   - arma solo el eje de tiempo con `valid_time`;
+   - ignora `expver` y `number`;
+   - maneja la latitud descendente y la longitud 0–360;
+   - convierte acumulados (J m⁻² → W m⁻², m → mm);
+   - **concatena varios archivos mensuales**.
+3. **Herramientas dibujables:** punto, línea y región. Cada una es una puerta a un
+   análisis: cada herramienta produce series y perfiles que caen en el explorador
+   existente, con su FFT, integrales, mapas de calor, cursores y exportación. Es
+   la fortaleza única de esta app: ningún visor de mapas tiene detrás un
+   explorador de series de este nivel, y ningún explorador de series tiene
+   delante un mapa.
+4. **Espectral en tiempo y en espacio, sin código:**
+   - FFT de la serie de un punto o de una región;
+   - mapas de amplitud y fase de un período (p. ej. el ciclo diurno de ERA5
+     horario);
+   - espectro de número de onda zonal;
+   - espectro 2D;
+   - diagrama número de onda–frecuencia.
+5. **Honestidad numérica visible:**
+   - toda estadística espacial declara su ponderación (cos φ o área de celda);
+   - declara el número de celdas y la fracción de datos faltantes;
+   - declara si se calculó a resolución completa o sobre una vista previa.
+6. **Puente docencia → investigación.** Cada operación ofrece el fragmento
+   **xarray/Python equivalente** (copiar con un clic). El estudiante explora sin
+   código y después reproduce en Jupyter.
+7. **Reproducible:** una "receta" exportable (JSON sin datos) guarda archivo,
+   variable, región, período y operaciones, para compartir con colegas o
+   estudiantes.
+
+---
+
+## 4. Especificación funcional
+
+### 4.1 Principios
+
+- **P1, local y sin servidor.** Todo cálculo corre en Workers del navegador o del
+  renderer de Electron. Ningún byte del archivo sale de la máquina.
+- **P2, lectura perezosa.** Al abrir se leen solo los metadatos. Los datos se
+  leen por bloques, en el orden en que están guardados, cuando una vista los
+  necesita. El límite práctico lo pone el resultado, no el archivo de entrada.
+- **P3, sin código.** Todo se hace con clics y gestos. El código equivalente es
+  opcional y solo informativo.
+- **P4, el modo grillado complementa al explorador de series y no lo reemplaza.**
+  Los archivos netCDF que *son* series (estaciones, PyPSA) siguen abriendo como
+  hoy.
+- **P5, estadísticas correctas por defecto:** ponderación por área, NaN excluidos
+  y contados, unidades propagadas.
+- **P6, mensajes accionables.** Cada fallo dice qué es el archivo, por qué no se
+  puede y qué hacer.
+- **P7, misma app en web y en Electron.** Las diferencias se limitan a la capa de
+  E/S (§6.3).
+
+### 4.2 Entrada y detección
+
+**Detección por contenido, no por extensión** (bytes mágicos):
+
+| Firma | Formato | Acción |
+|---|---|---|
+| `89 48 44 46 0D 0A 1A 0A` | netCDF4/HDF5 | h5wasm, lectura perezosa |
+| `CDF\x01`, `CDF\x02` | netCDF3 classic / 64-bit offset | Lector netCDF3 perezoso propio (§6.2) |
+| `CDF\x05` | CDF-5 | Lector netCDF3 perezoso (CDF-5 es el mismo layout con enteros de 64 bits) |
+| `PK\x03\x04` | ZIP (típico del nuevo CDS) | Listar el contenido con `fflate`. Si son varios `.nc`, ofrecer abrir uno o todos como un dataset combinado (instant + accum comparten grilla y tiempo) |
+| `GRIB` | GRIB1/2 | Fase 3: ecCodes compilado a WASM, cargado bajo demanda. Antes de eso, un mensaje claro: "Es GRIB; pedí netCDF en el CDS o convertilo con …" |
+| `\x89PNG`, `%PDF`, HTML, etc. | No es un dato | Mensaje claro ("descargaste una página de error del CDS") |
+
+- **Extensiones aceptadas:**
+  - `.nc`, `.nc4`, `.netcdf`, `.cdf`, `.h5`/`.hdf5` (si tiene semántica netCDF);
+  - `.zip`;
+  - `.grib`, `.grb`, `.grib2`, `.grb2` (fase 3).
+- **Varios archivos a la vez** (p. ej. 12 meses de ERA5): si comparten variables y
+  grilla y difieren en el tiempo, se ofrece **concatenarlos en el eje temporal**,
+  como un `open_mfdataset` sin código.
+- **Fase 4:** directorio Zarr local (File System Access API en Chromium, `fs` en
+  Electron) y URL remota con CORS (Zarr, netCDF por HTTP Range).
+
+### 4.3 Interpretación CF: del archivo al modelo de dataset
+
+El primer paso deja de ser "elegir la X". Pasa a ser construir un **modelo de
+dataset**:
+
+```
+Dataset
+ ├─ dims: {valid_time: 744, pressure_level: 4, latitude: 721, longitude: 1440}
+ ├─ coords: tiempo (decodificado), nivel (unidades, positive=down), lat, lon (+ bounds si hay)
+ ├─ data_vars: t2m, d2m, … (dtype, shape, chunks, packing, fill, units, long_name)
+ └─ roles: qué dimensión es T, Z, Y, X; tipo de grilla; calendario
+```
+
+**Reglas de identificación de ejes,** en orden de prioridad:
+
+1. Atributo `axis` (T/Z/Y/X).
+2. `standard_name` (`time`, `latitude`, `longitude`, `air_pressure`,
+   `altitude`, `height`, `depth`, `model_level_number`, `projection_x_coordinate`,
+   etc.).
+3. Unidades:
+   - `degrees_north` / `degrees_east` y variantes;
+   - `… since …`;
+   - `Pa` / `hPa`, `m`, `level`.
+4. Nombres conocidos:
+   - `lat`/`latitude`/`nav_lat`/`XLAT`;
+   - `lon`/`longitude`/`nav_lon`/`XLONG`;
+   - `time`/`valid_time`/`Times`;
+   - `level`/`pressure_level`/`plev`/`lev`/`isobaricInhPa`.
+
+**Tipos de grilla:**
+
+- **Regular lat/lon** (ERA5, CMIP regridded): lat y lon 1-D.
+- **Curvilínea** (WRF, NEMO, ROMS): lat y lon 2-D (`XLAT[y,x]`). Se dibuja como
+  malla y se proyecta por celda.
+- **Proyectada** con `grid_mapping` (Lambert, polar estereográfica): se usan los
+  parámetros CF del atributo `grid_mapping` cuando estén.
+- **No geográfica:** cualquier grilla sin lat/lon. Se muestra como "imagen"
+  (ejes índice / coordenada) sin costas. Sigue siendo útil.
+
+**Tiempo:**
+
+- Decodificación CF completa con **calendarios** `standard`/`gregorian`,
+  `proleptic_gregorian`, `noleap`/`365_day`, `all_leap`/`366_day`, `360_day` y
+  `julian`. Se implementa una aritmética de fechas tipo cftime en JS.
+  - Los calendarios no estándar se muestran con su fecha nominal (p. ej.
+    `2050-02-30` en `360_day`).
+  - Internamente se guarda el instante en días desde el origen del calendario.
+- Eje de longitud 1: un archivo de un solo instante **es un mapa**, no una serie.
+- `valid_time` en int64 (BigInt64Array) convertido sin pérdida.
+- Si hay `time` + `step` (pronósticos, GRIB vía cfgrib): `valid_time = time + step`.
+  Se ofrece elegir entre "por fecha válida" y "por inicialización".
+
+**Otras reglas:**
+
+- **Variables auxiliares:**
+  - `expver`, `number` (escalar) y `realization` de longitud 1 → metadato.
+  - `number` de longitud > 1 → **dimensión de miembros de ensamble**, con selector
+    y estadísticas de ensamble (media, dispersión) como fase posterior.
+- **Orden y convenciones:**
+  - Latitud descendente → se presenta ascendente sin copiar (el índice se invierte
+    al dibujar).
+  - Longitud 0–360 → centrado a elección (−180..180 o 0..360) en el mapa, con
+    costura correcta en el antimeridiano.
+- **Empaquetado y relleno:** `scale_factor`, `add_offset`, `_FillValue`,
+  `missing_value`, `valid_min`/`valid_max`/`valid_range`, y `_Unsigned` para
+  enteros sin signo en netCDF3.
+- **Unidades:** se usa `units` como texto, con un conversor pequeño para los casos
+  frecuentes (§4.5.9).
+
+### 4.4 Interfaz: modo "Dataset grillado"
+
+Al abrir un archivo grillado, la app **no** genera miles de series. Muestra un
+**panel de dataset** y una **vista de mapa**:
+
+```
+┌──────────── barra: archivo · variable ▾ · nivel ▾ · tiempo ◀ ▶ ▶︎play · paleta ▾ ─────────────┐
+│ Panel dataset        │                                                             │ Inspector   │
+│  ▸ t2m  2 m temp (K) │                    MAPA 2D                                  │  valor bajo │
+│  ▸ d2m               │        (costas, grilla lat/lon, barra de color)             │  el cursor  │
+│  ▸ u10, v10 → |V|    │                                                             │  lat, lon,  │
+│ Dimensiones          │      herramientas: ● punto  ╱ línea  ▭ caja  ⬠ polígono      │  tiempo,    │
+│  valid_time 744      │                    ◯ círculo  🌐 región predefinida          │  nivel      │
+│  latitude 721        │                                                             │             │
+│  longitude 1440      ├──────── slider de tiempo con mini-serie de la media global ──┤             │
+│ Atributos            │ 2024-01-01 00:00 ━━━━━━━━━━━●━━━━━━━━━━━━━ 2024-01-31 23:00  │             │
+└──────────────────────┴─────────────────────────────────────────────────────────────┴─────────────┘
+         ↓ cada herramienta crea "resultados": series, perfiles y mapas derivados
+         → que se pueden enviar al explorador de series (FFT, integral, heatmap, …)
+```
+
+**Panel dataset:**
+
+- Variables con `long_name`, unidades, forma, tamaño en disco y en memoria.
+- Dimensiones y atributos.
+- Las "variables derivadas" que define el usuario (§4.5.9).
+
+**Mapa:**
+
+- **Barra de color** con modos de rango:
+  - automático por instante;
+  - fijo para todo el período (calculado de forma incremental);
+  - manual.
+- **Paletas** perceptuales (viridis, cividis) y divergentes centradas en 0 (RdBu)
+  para anomalías.
+
+**Inspector:**
+
+- Valor exacto bajo el cursor: celda, índice y coordenadas.
+- Copiar valor.
+
+**Slider de tiempo:**
+
+- Fecha legible según el calendario.
+- Paso ±1 y saltos de día, mes y año.
+- Play con velocidad ajustable.
+- Mini-serie de fondo (media del dominio) para orientarse.
+
+**Selector de nivel:**
+
+- Slider vertical con valor y unidad (p. ej. 850 hPa).
+- Opción "mosaico de niveles": un mapa por nivel, todos sincronizados.
+
+**Teléfono:** solo lectura (mapa + slider + punto). Mismos patrones de hojas que
+`phone-web-specification.md`. No es prioridad.
+
+### 4.5 Vistas y operaciones
+
+Cada operación declara qué lee, cuánto cuesta (estimado antes de lanzarla) y su
+resultado. Las que recorren todo el tiempo **corren en streaming**, bloque a
+bloque, con barra de progreso y botón de cancelar.
+
+#### 4.5.1 Mapa 2D (V-MAP)
+
+- **Raster por celda** (sin interpolar por defecto; interpolación bilineal
+  opcional).
+- **Costas, fronteras y graticula** de Natural Earth (dominio público), empaquetadas
+  **offline**: 110m siempre y 50m al hacer zoom.
+- **Proyecciones:**
+  - Fase 1: Equirectangular (Plate Carrée).
+  - Fase 3: Robinson, Mollweide, ortográfica (globo), estereográfica polar y
+    Lambert cónica (WRF).
+- **Superposiciones:**
+  - Contornos (isolíneas) de la misma variable o de otra (p. ej. geopotencial sobre
+    temperatura).
+  - Flechas o líneas de corriente para pares u/v (fase 3).
+- **Rendimiento:** los mapas grandes (0,1° de ERA5-Land, 6,5 M de celdas) se
+  reducen a la resolución de pantalla en el Worker, con una pirámide de
+  promedios. Al hacer zoom se lee la resolución completa del recorte visible.
+- **Exportar:** PNG, SVG y "datos del mapa visible" como CSV o netCDF.
+
+#### 4.5.2 Tiempo: slider y animación (V-TIME)
+
+- Navegación con cache LRU de instantes decodificados y precarga del siguiente.
+- **Animación:** exporta WebM/GIF (render en `OffscreenCanvas`).
+- **Agregación temporal al vuelo:** mostrar el mapa de la media, mín., máx.,
+  desvío o suma sobre un **intervalo elegido en el slider**, arrastrando un rango.
+
+#### 4.5.3 Niveles verticales (V-LEV)
+
+- Selector de nivel, mosaico de niveles y **perfil vertical en un punto** (eje en
+  presión con escala logarítmica opcional, o en altura).
+- **Corte vertical a lo largo de una línea dibujada** (distancia × nivel) en el
+  instante actual. Casos particulares: corte zonal (lon × p) y meridional (lat × p).
+- **Media zonal** (lat × p) del instante o del intervalo.
+- Fase 4: render volumétrico 3D (con los tipos `isosurface`/`volume` de Plotly,
+  que la app todavía no usa) para dominios chicos.
+
+#### 4.5.4 Serie en un punto (V-PT)
+
+- Clic en el mapa → serie temporal de esa celda en el nivel actual. Se pueden
+  "fijar" varios puntos y compararlos.
+- Opción "promedio de 3×3 celdas" o "radio de N km".
+- El resultado entra al explorador como variable normal: nombre, unidades,
+  coordenadas en la descripción.
+
+#### 4.5.5 Estadísticas en zonas (V-REG)
+
+**Definir la región:**
+
+- caja, polígono o círculo dibujados;
+- regiones predefinidas:
+  - países y continentes de Natural Earth;
+  - regiones de referencia del IPCC AR6 (fase 2);
+  - hemisferios, trópicos y bandas de latitud;
+- importar GeoJSON;
+- máscara tierra/mar, opcional, a partir de Natural Earth o del `lsm` del propio
+  archivo si viene.
+
+**Estadísticas** (por instante → **serie temporal**, o sobre un intervalo →
+número):
+
+- Media **ponderada por área**, con pesos según lo que traiga el archivo:
+  - límites de celda (`lat_bnds`) → área exacta de cada celda en la esfera;
+  - si no, `cos φ`;
+  - en grillas curvilíneas, el área de cada celda calculada a partir de sus
+    vértices.
+- **Mín. y máx., con su ubicación y su fecha** ("el máximo de 312,4 K fue en
+  (38,25 N; 5,5 W) el 2024-07-12 15:00").
+- Desvío estándar, percentiles (p10, p50, p90), suma e integral espacial (p. ej.
+  precipitación total en volumen).
+- Fracción de área sobre o bajo un umbral.
+- Cantidad de celdas y fracción de faltantes.
+- **La fórmula usada se declara junto al resultado.**
+
+**Visualización y regiones múltiples:**
+
+- La región y su contorno se ven en el mapa.
+- Varias regiones a la vez → varias series comparables.
+
+#### 4.5.6 Medias zonales y meridionales (V-ZON)
+
+- Media zonal → perfil por latitud. Media meridional en una banda → perfil por
+  longitud.
+
+#### 4.5.7 Transectos y Hovmöller (V-TRAN, V-HOV)
+
+- **Transecto:** se dibuja una polilínea; se muestrean puntos sobre la **línea
+  geodésica** (círculo máximo). El paso por defecto es la resolución de la grilla.
+  Interpolación al vecino más cercano o bilineal.
+  - Valor × distancia en el instante actual (perfil espacial).
+  - Distancia × tiempo (Hovmöller a lo largo de la línea).
+  - Distancia × nivel (corte vertical, ver V-LEV).
+- **Hovmöller clásico:**
+  - longitud × tiempo, promediando en una banda de latitud elegida;
+  - latitud × tiempo, promediando en una banda de longitud.
+- Estos resultados son **series espaciales** (función de la distancia o de la
+  coordenada) y entran al explorador como señales con eje X espacial (el
+  explorador ya soporta X numérico no temporal).
+
+#### 4.5.8 Tiempo: climatología, anomalías y re-muestreo (V-CLIM)
+
+- **Remuestreo:** horario → diario, mensual, estacional (DJF/MAM/JJA/SON) o anual.
+  Media, mín., máx. o suma según la variable. Los acumulados se suman, no se
+  promedian.
+- **Climatología** sobre un período base elegido: ciclo anual mensual, día del
+  año suavizado y **ciclo diurno medio** (ERA5 horario).
+- **Anomalías** respecto de esa climatología, como mapa o como serie.
+- **Mapas de estadísticos temporales** por celda: media, desvío, mín., máx.,
+  **tendencia lineal** (pendiente por década, con significancia opcional) y
+  percentiles.
+- **Diferencias:** dos instantes, dos intervalos, dos archivos o dos variables con
+  la misma grilla.
+
+#### 4.5.9 Variables derivadas y unidades (V-DER)
+
+- **Recetas de un clic** cuando se detectan las variables:
+  - |V| a partir de u/v, a 10 m o a 100 m;
+  - dirección del viento;
+  - temperatura en °C;
+  - humedad relativa a partir de T y Td;
+  - precipitación en mm (desde `tp` en m);
+  - flujos acumulados → W m⁻² (dividir J m⁻² por 3600 s en datos horarios);
+  - densidad de potencia eólica ½ρV³ y otros indicadores de energía, en línea con
+    el uso PyPSA del grupo.
+- **Expresiones libres** reutilizando el motor de variables derivadas existente,
+  aplicado celda a celda y de forma perezosa (se evalúa bloque a bloque).
+
+#### 4.5.10 Espectral: FFT en tiempo y en espacio (V-SPEC)
+
+**En tiempo:**
+
+- **FFT de la serie de un punto o de una región:** reutiliza la vista FFT existente
+  (ventanas, escalas, cursores). La serie solo se envía al explorador.
+- **Mapa de amplitud y fase en un período elegido** (p. ej. 24 h, 12 h o 365 d).
+  Se calcula por celda con un único coeficiente de Fourier (o un ajuste armónico
+  por mínimos cuadrados, que tolera huecos):
+  - en streaming, sin guardar el cubo;
+  - muestra dónde es fuerte el ciclo diurno y a qué hora local llega al máximo.
+- **Mapa de potencia en una banda de períodos** (p. ej. 2–7 días, sinóptica).
+
+**En espacio:**
+
+- **Espectro de número de onda zonal:** FFT a lo largo de cada círculo de latitud
+  (periódico en una grilla global), promediado en una banda de latitudes y en el
+  tiempo. Es un clásico para docencia (ondas planetarias vs. sinópticas).
+- **Espectro 2D de un recorte regional:** con eliminación de tendencia y ventana
+  (Tukey/Hann) para tratar la no periodicidad. Se muestra como espectro 2D y como
+  espectro radial (isótropo) en función de la longitud de onda en km.
+- **Espectro a lo largo de un transecto** (número de onda en ciclos por km).
+
+**Espacio-tiempo:**
+
+- **Diagrama número de onda–frecuencia** (tipo Wheeler–Kiladis) en una banda de
+  latitud: FFT 2D lon × tiempo, con opción de separar componentes simétrica y
+  antisimétrica en fase 4.
+
+**Todos los espectros:**
+
+- Ejes en período o longitud de onda además de en frecuencia o número de onda.
+- Escalas log/lineal.
+- Exportan CSV.
+
+#### 4.5.11 Comparación (V-CMP)
+
+- Dos mapas lado a lado, con cursor, zoom y tiempo sincronizados.
+- Diferencia A−B, si las grillas coinciden. Si no coinciden, un regrid espacial
+  simple, al vecino o bilineal. Es código nuevo: el kernel `regrid.js` existente
+  re-muestrea series en el tiempo, no grillas.
+
+### 4.6 Integración con el explorador de series
+
+- Todo resultado 1-D (series de punto, de región o de banda; transectos; perfiles;
+  espectros) se puede **"Enviar al explorador"**:
+  - aparece en el árbol de variables bajo el archivo, en un nodo `Extracciones`;
+  - lleva nombre, unidades y una descripción con la receta;
+  - queda disponible para todas las vistas existentes: FFT, integral, heatmap
+    calendario, histograma, correlación, cursores y exportación.
+- Al revés: elegir un instante en una serie extraída mueve el slider del mapa a esa
+  fecha (sincronización de tiempo).
+- Los archivos netCDF que **no** tienen grilla geográfica (series de estaciones,
+  PyPSA) siguen el camino actual. Si el archivo tiene grilla, el modo grillado es
+  el predeterminado. Una opción permite forzar "abrir como series" para un recorte
+  chico: es el comportamiento actual, acotado.
+
+### 4.7 Exportación y reproducibilidad
+
+- **Exportar:**
+  - Imágenes PNG/SVG de cualquier vista.
+  - CSV de series, perfiles y espectros.
+  - **netCDF del recorte** (variable × región × período × niveles), escrito con
+    h5wasm: un "subsetter" sin código.
+- **Receta** JSON (sin datos):
+  - qué archivo, con su huella (nombre, tamaño, hash de cabecera);
+  - qué variable, región, período y operaciones.
+  - Reabrir la receta con el mismo archivo reproduce el análisis.
+- **"Ver código"** en cada resultado: fragmento xarray (y CDO cuando aplique)
+  equivalente. Por ejemplo:
+
+  ```python
+  ds = xr.open_dataset("era5.nc")
+  w = np.cos(np.deg2rad(ds.latitude))
+  reg = ds.t2m.sel(latitude=slice(51, 42), longitude=slice(355, 368))
+  serie = reg.weighted(w).mean(("latitude", "longitude"))
+  ```
+
+  Para docencia es el puente explícito entre la exploración sin código y el trabajo
+  reproducible.
+
+---
+
+## 5. Requisitos no funcionales
+
+### 5.1 Objetivos de rendimiento
+
+Referencia: laptop de gama media y navegador Chromium actual. Los números de
+lectura parten de las mediciones de §1.2.
+
+| Operación | Objetivo |
+|---|---|
+| Abrir y mostrar metadatos, **cualquier tamaño** | < 1 s |
+| Primer mapa, global 0,25° | < 1 s (lectura ≈ 50 ms + render) |
+| Cambiar de instante (en cache / no en cache) | < 50 ms / < 300 ms |
+| Serie de un punto, 744 pasos horarios, bloques `(1, lat, lon)` | < 5 s, con progreso. Es la peor disposición; se mitiga leyendo en tandas y cacheando |
+| Media de región, 744 pasos, global 0,25° | < 60 s en streaming, con progreso y cancelación |
+| Mapa de amplitud del ciclo diurno, 1 mes horario global | < 90 s en streaming |
+| Pico de memoria | Independiente del tamaño del archivo; proporcional a resultados + cache (tope configurable, p. ej. 512 MB web y 2 GB Electron) |
+
+**Lectura según la disposición de los bloques:** el motor elige el orden de
+lectura según los *chunks* del archivo.
+
+- Una operación que necesita "todas las fechas en una región" recorre los bloques
+  de tiempo en orden y extrae la región de cada uno.
+- **Nunca** pide punto por punto (el error R3).
+- Los archivos del nuevo CDS traen bloques chicos en todas las dimensiones (los
+  usuarios reportan lecturas 5–15× más lentas). El planificador agrupa varios
+  bloques por lectura.
+
+### 5.2 Robustez y mensajes
+
+- Todo error de formato dice:
+  - qué se detectó (ZIP, GRIB, HTML, netCDF4 con filtro no soportado…);
+  - qué hacer (abrir el contenido del ZIP, pedir netCDF en el CDS, convertir con
+    una herramienta concreta).
+- **Filtros HDF5:** zlib, shuffle y fletcher32 incluidos. szip, zstd, blosc, lz4 y
+  bitshuffle se cargan bajo demanda vía `h5wasm-plugins` (cada vez más productos
+  usan compresores distintos de zlib).
+- Si un filtro no está disponible, la variable se lista igual con su motivo; no
+  falla el archivo entero.
+
+### 5.3 Accesibilidad e idiomas
+
+- **Idiomas:** las 4 de la app (es/en/fr/it).
+- **Paletas** aptas para daltonismo por defecto.
+- **Teclado:** el slider de tiempo y las herramientas funcionan con teclado
+  (←/→ instante, ↑/↓ nivel, espacio = play).
+
+---
+
+## 6. Arquitectura propuesta
+
+### 6.1 Módulos
+
+```
+src/gridded/
+  io/
+    sniff.js            detección por magia (HDF5, CDF1/2/5, ZIP, GRIB, basura)
+    h5-lazy.js          h5wasm en Worker + WORKERFS (web) / lectura por rangos (Electron)
+    nc3-lazy.js         lector netCDF3/CDF-5 perezoso (File.slice / Range), sin netcdfjs
+    zip.js              listado/extracción con fflate (ya es dependencia)
+    grib.js             (fase 3) ecCodes-WASM, carga diferida
+    multi.js            concatenación de varios archivos por tiempo
+  cf/
+    axes.js             roles T/Z/Y/X, tipos de grilla, grid_mapping
+    time.js             calendarios CF (cftime-like), int64, time+step
+    decode.js           packing, fill, valid_range, _Unsigned
+    units.js            conversiones frecuentes
+  engine/
+    planner.js          plan de lectura según chunks; estimación de costo
+    cache.js            LRU de bloques/instantes decodificados (tope de memoria)
+    reduce.js           reducciones en streaming (media ponderada, min/max+argmin, percentiles aprox.)
+    spectral.js         FFT 1D/2D, armónicos por mínimos cuadrados, número de onda zonal
+    regions.js          rasterizado de polígonos a máscara ponderada sobre la grilla
+    geo.js              áreas de celda, geodésicas, distancias
+  views/
+    map-canvas.js       raster WebGL2/Canvas + proyecciones + costas
+    hovmoller.js, transect.js, profile.js, spectra.js
+  bridge/
+    to-explorer.js      convierte resultados en variables del explorador
+    recipe.js           receta JSON + generador de código xarray/CDO
+public/geo/             Natural Earth 110m/50m (TopoJSON), regiones AR6
+```
+
+El camino de series actual (`netcdf-parser.js`) se conserva para archivos sin
+grilla. El paso de clasificación ("¿es una grilla geográfica?") decide qué camino
+tomar.
+
+### 6.2 Decisiones técnicas recomendadas
+
+**E/S HDF5.** Mantener **h5wasm** (ya es dependencia).
+
+- En el Worker de parseo, montar el `File` con **WORKERFS** en lugar de
+  `FS.writeFile`. Así h5wasm lee solo los bytes que necesita, vía `File.slice`, y
+  desaparecen el límite de tamaño y la copia en memoria. myHDF5/H5Web usan este
+  patrón con archivos de varios GB.
+- En Workers con Firefox, usar el build IIFE de h5wasm (ESM en Workers ha tenido
+  limitaciones).
+
+**netCDF3.** Reemplazar `netcdfjs` por un **lector propio perezoso**. El formato
+es simple: cabecera y offsets fijos, más el registro "unlimited" intercalado. Se
+lee con `File.slice` / `Range` y suma **CDF-5** casi gratis.
+
+**ZIP.** `fflate` en streaming: descomprimir una entrada a un `Blob` y abrirlo
+como archivo. Los netCDF dentro del ZIP del CDS suelen pesar menos que el límite
+de memoria del navegador. Para entradas enormes, avisar.
+
+**GRIB (fase 3).** Evaluar `@meri-imperiumi/eccodes-wasm` (ecCodes 2.4x a WASM,
+Apache-2.0) frente a `grib-rs` compilado a WASM.
+
+- Hay que verificar el soporte de empaquetados (simple, complex, JPEG2000, CCSDS)
+  que usa ERA5.
+- Se carga solo al abrir un GRIB, para no engordar el bundle.
+
+**Render del mapa:**
+
+- **Fase 1 (MVP):** reutilizar **Plotly** (ya integrado, con exportación,
+  cursores y temas): `heatmap` lon × lat con la costa de Natural Earth como traza
+  de líneas. Es Equirectangular, que alcanza para el 80% de los usos. Hay que
+  reducir la imagen a la resolución de pantalla antes de pasarla a Plotly.
+- **Fase 3:** un canvas **WebGL2** propio con proyección inversa por píxel en
+  shader (el dato como textura float). Da proyecciones arbitrarias, zoom fluido y
+  grillas grandes. Las proyecciones se definen con `d3-geo` y
+  `d3-geo-projection`, que son livianos y funcionan offline.
+- **No usar MapLibre ni Leaflet con teselas de fondo:** dependen de servidores de
+  teselas (rompe offline y privacidad) y fuerzan Mercator.
+
+**Cálculo.** Workers dedicados (pool) con `Float32Array`/`Float64Array`
+transferibles. Las reducciones largas reportan progreso y aceptan cancelación.
+Los kernels FFT existentes (`fft-worker.js`) se extienden a 2D.
+
+**Costas y regiones.**
+
+- Natural Earth 110m + 50m en TopoJSON: algunos cientos de kB comprimidos,
+  empaquetados en `public/` para que el build portable siga siendo offline.
+- Regiones AR6 (CC-BY) con atribución en `THIRD_PARTY_LICENSES.md`.
+
+### 6.3 Web vs. Electron
+
+| Aspecto | Web | Electron |
+|---|---|---|
+| Abrir archivo | `<input>` / arrastrar → `File` → WORKERFS | Igual, más abrir por ruta: el servidor local `electron/local-file-http.cjs` **ya soporta `Range`**, así que se lee por rangos con XHR síncrono en el Worker (patrón `createLazyFile`) |
+| Tamaño máximo de entrada | Sin límite práctico (lectura perezosa) | Ídem |
+| Varios archivos / carpeta | Selección múltiple; carpeta con File System Access (Chromium) | Diálogo de carpeta nativo |
+| Memoria para resultados | Tope menor (p. ej. 512 MB) | Tope mayor (p. ej. 2 GB), configurable |
+| Extras posibles | — | Fase 4, opcional: helper nativo (netCDF-C/ecCodes) para GRIB grandes o filtros raros, siempre con el camino WASM como predeterminado |
+| Privacidad | El archivo no sale del navegador | El archivo no sale de la máquina |
+
+---
+
+## 7. Flujos de ejemplo (criterios de aceptación)
+
+1. **ERA5 de un mes, Europa, t2m horario (nuevo CDS, ~300 MB):**
+   - arrastrar → mapa del primer instante en < 1 s;
+   - mover el slider;
+   - dibujar un polígono sobre Francia → serie de la media ponderada → "Enviar al
+     explorador" → FFT con el pico de 24 h visible;
+   - volver al mapa → mapa de amplitud y fase del ciclo diurno.
+2. **ZIP del CDS con `t2m` (instant) y `tp` (accum):**
+   - aviso "ZIP con 2 archivos netCDF del CDS" → abrir ambos como un dataset;
+   - `tp` se ofrece en mm/h.
+3. **Niveles de presión (u, v, t en 1000–250 hPa):**
+   - mapa a 850 hPa;
+   - línea dibujada sobre los Andes → corte vertical distancia × presión de t;
+   - perfil vertical en un punto.
+4. **Doce archivos mensuales:**
+   - seleccionarlos juntos → concatenación → climatología mensual 1991–2020 (si
+     el período lo permite) → mapa de anomalías de un mes.
+5. **Un solo instante:** abre como mapa. Nunca toma la latitud como eje X.
+6. **CMIP con `noleap`:** fechas correctas en el slider; anomalías respecto de un
+   período base.
+7. **WRF (curvilíneo, `XLAT`/`XLONG`, Lambert):** mapa sobre costas con la
+   geometría correcta; serie en un punto.
+8. **Archivo de estación (serie en netCDF) y PyPSA:** abren **exactamente como
+   hoy**.
+9. **GRIB (fase 3):** mismo flujo 1. Antes de la fase 3, un mensaje claro y
+   accionable.
+
+**Corpus de prueba a armar:**
+
+- Los fixtures actuales.
+- El corpus de 14 archivos de `netcdf-gridded-subsampling.md`.
+- Un generador de archivos sintéticos tipo ERA5, nuevo y legacy (como el usado
+  para §1.2): global y regional, de un instante, con niveles, ZIP instant + accum,
+  `noleap` y curvilíneo.
+- Al menos un ERA5 real chico por cada producto. Licencia CC-BY de Copernicus:
+  pueden versionarse recortes pequeños con atribución.
+
+---
+
+## 8. Hoja de ruta por fases
+
+### Fase 0: rescate (corto, alto impacto)
+
+Hace que "no anda nada" pase a "anda" **sin** cambiar el paradigma todavía.
+
+1. Detección de ZIP → abrir la entrada elegida (`fflate`). Detección de GRIB,
+   HTML, PNG… → mensajes accionables (R5, R6, R13).
+2. Leer cada variable **una vez, por bloques** (`object.value` o hyperslabs
+   alineados a los chunks), y extraer las series desde ese `Float32Array` en
+   memoria. Basta con eliminar la lectura punto a punto (R3): 75 s → < 1 s en el
+   caso medido.
+3. Comprobar si una variable es numérica con `dtype`, sin leerla (R4).
+4. Eje de longitud 1: un archivo de un instante no toma lat/lon como X. Decodificar
+   el tiempo también en las etiquetas de selectores (R7).
+5. WORKERFS en lugar de `FS.writeFile` para netCDF4 (R2). Con eso, los archivos
+   grandes al menos abren sus metadatos y una submuestra.
+
+### Fase 1: visor de mapas MVP
+
+- Clasificación "grilla geográfica"; modelo de dataset (§4.3) con calendarios.
+- Panel dataset, mapa Equirectangular (Plotly + costas Natural Earth), slider de
+  tiempo con play, selector de nivel, inspector.
+- Serie en un punto y **media, mín. y máx. ponderadas en una caja** → "Enviar al
+  explorador".
+- Concatenación de varios archivos. Exportar PNG y CSV.
+
+### Fase 2: análisis
+
+- Polígono, círculo, regiones predefinidas, GeoJSON, máscara tierra/mar.
+- Transectos, Hovmöller, cortes verticales, medias zonales.
+- Remuestreo, climatología y anomalías; mapas de estadísticos y tendencia.
+- Espectral temporal: FFT de región/punto (vista existente) y mapas de
+  amplitud/fase de un período.
+- Variables derivadas de un clic. "Ver código" xarray.
+
+### Fase 3: espacio, formatos y proyecciones
+
+- Espectro de número de onda zonal, espectro 2D y radial, espectro de transecto.
+- Canvas WebGL con proyecciones; grillas curvilíneas (WRF); vectores de viento.
+- GRIB vía WASM; filtros HDF5 extra; lector netCDF3/CDF-5 perezoso.
+
+### Fase 4: extras
+
+- Diagrama número de onda–frecuencia; ensambles (`number`).
+- Exportar recorte a netCDF; recetas; animación a WebM/GIF.
+- Zarr local y remoto; URL remotas; volumen 3D; vista de teléfono.
+
+---
+
+## 9. Preguntas abiertas
+
+1. **Prioridad de GRIB:** ¿los colegas descargan netCDF o GRIB? Si es GRIB,
+   conviene adelantarlo a la fase 1–2.
+2. **¿Modo grillado siempre que haya lat/lon,** o preguntar al abrir? (Propuesta:
+   automático, con un botón "abrir como series".)
+3. **Render:** ¿alcanza con Plotly Equirectangular para la fase 1, o las
+   proyecciones polares (Antártida/Ártico) son prioritarias para algún curso?
+4. **Datos remotos:** ¿interesa leer ERA5 directamente de Earth Data Hub o ARCO
+   (Zarr, requiere token y CORS) o se mantiene 100% local?
+5. **Licencias:**
+   - Natural Earth (dominio público) sin problema;
+   - regiones AR6 y datos de ejemplo Copernicus requieren atribución;
+   - ecCodes es Apache-2.0.
+6. **Docencia:** ¿qué análisis espectrales usan hoy en clase? Eso ordena V-SPEC
+   (zonal, 2D o número de onda–frecuencia primero).
+
+---
+
+## 10. Fuentes
+
+**Formato ERA5 en el nuevo CDS** (algunas páginas de ECMWF se consultaron por
+resumen de buscador):
+
+- https://confluence.ecmwf.int/display/CKB/GRIB+to+netCDF+conversion+on+new+CDS+and+ADS+systems
+- https://forum.ecmwf.int/t/forthcoming-update-to-the-format-of-netcdf-files-produced-by-the-conversion-of-grib-data-on-the-cds/7772
+- https://forum.ecmwf.int/t/cdsapi-reanalysis-single-level-is-being-download-as-a-zip-when-asked-for-unarchived/10172
+- https://forum.ecmwf.int/t/huge-performance-drop-when-reading-new-era5-netcdf4-format/12831
+- https://forum.ecmwf.int/t/netcdf-variable-expver-not-cf-compliant-in-era5-new-converter/7148
+- https://forum.ecmwf.int/t/netcdf-legacy-data-format/10616
+- https://forum.ecmwf.int/t/limitation-change-on-netcdf-era5-requests/12477
+- https://github.com/dbekaert/RAiDER/issues/689 (ejemplo real de `repr` del nuevo formato)
+- https://github.com/tkschuler/ERA5-Utils (diferencias legacy ↔ nuevo)
+- https://github.com/PyPSA/atlite/issues/413 (ZIP guardado como `.nc`)
+- https://github.com/google-research/arco-era5 ; https://earthdatahub.destine.eu/collections/era5
+
+**Herramientas comparadas:**
+
+- Panoply: https://www.giss.nasa.gov/tools/panoply/
+- IDV: https://docs.unidata.ucar.edu/idv/workshop/datadisplays/grid/CrossSections.html
+- QGIS / Crayfish: https://www.lutraconsulting.co.uk/products/crayfish
+- ArcGIS Pro: https://pro.arcgis.com/en/pro-app/3.4/tool-reference/image-analyst/zonal-statistics-as-table.htm
+- Giovanni: https://giovanni.gsfc.nasa.gov/
+- KNMI Climate Explorer: https://climexp.knmi.nl/start.cgi
+- NOAA PSL WRIT: https://psl.noaa.gov/data/writ/
+- Copernicus Interactive Climate Atlas: https://atlas.climate.copernicus.eu/
+- ERA Explorer: https://climate.copernicus.eu/era-explorer-app-global-climate-data-made-accessible-all
+- Climate Reanalyzer: https://climatereanalyzer.org/
+- xcube viewer: https://xcube.readthedocs.io/en/latest/viewer.html
+- Lexcube: https://github.com/msoechting/lexcube
+- Climate Engine: https://www.climateengine.org/
+- myHDF5: https://forum.hdfgroup.org/t/myhdf5-now-supports-opening-local-files-of-any-size/12236
+- Browzarr: https://github.com/EarthyScience/Browzarr
+- GribBox: https://gribbox.com/netcdf/viewer
+- CDO, ponderación de `fldmean`: https://code.mpimet.mpg.de/boards/2/topics/9482
+
+**Tecnología:**
+
+- h5wasm (WORKERFS, filtros): https://github.com/usnistgov/h5wasm ; https://www.npmjs.com/package/h5wasm-plugins
+- netcdfjs: https://github.com/cheminfo/netcdfjs
+- zarrita.js: https://github.com/manzt/zarrita.js
+- ecCodes WASM: https://www.jsdelivr.com/package/npm/@meri-imperiumi/eccodes-wasm
+- grib-rs: https://docs.rs/crate/grib/latest
+- d3-geo-projection: https://github.com/d3/d3-geo-projection
+- Natural Earth: https://www.naturalearthdata.com/
+
+**Documentos internos relacionados:**
+
+- `docs/netcdf-gridded-subsampling.md`: submuestreo actual y sus mediciones.
+- `docs/large-files.md`, `docs/file-size-limits.md`: límites actuales.
+- `docs/phone-web-specification.md`: patrones de UI móvil.
