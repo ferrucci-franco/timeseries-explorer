@@ -19,6 +19,7 @@ import {
     normalizeLayoutOverride,
     shouldUseCompactLayout,
 } from '../../ui/compact-layout.js';
+import { button, el, section } from './compact-dom.js';
 
 const SVG = {
     data: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
@@ -162,39 +163,6 @@ const REPLACED_CLOSE_BUTTONS = '.feedback-close, .desktop-download-close';
 // slide would redraw every frame.
 const SHEET_SETTLE_MS = 240;
 
-function el(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text != null) node.textContent = text;
-    return node;
-}
-
-function button(className, label, onClick, { icon = '', title = '' } = {}) {
-    const btn = el('button', className);
-    btn.type = 'button';
-    if (icon) {
-        const iconSpan = el('span', 'compact-btn-icon');
-        iconSpan.innerHTML = icon;
-        btn.appendChild(iconSpan);
-    }
-    if (label) btn.appendChild(el('span', 'compact-btn-label', label));
-    if (title || !label) {
-        btn.title = title || '';
-        btn.setAttribute('aria-label', title || label || '');
-    }
-    btn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        onClick(event);
-    });
-    return btn;
-}
-
-function section(titleText) {
-    const wrap = el('section', 'compact-section');
-    if (titleText) wrap.appendChild(el('h3', 'compact-section-title', titleText));
-    return wrap;
-}
-
 export function installCompactMethods(ViewerClass) {
     const proto = ViewerClass.prototype;
 
@@ -221,6 +189,7 @@ export function installCompactMethods(ViewerClass) {
             settleTimer: null,
         };
         this._buildCompactChrome();
+        this._initCompactCursors();
         this.layoutManager.onAfterRender = () => this._compactAfterLayoutRender();
         onPlotDrawn(div => {
             if (!this._compact.active) return;
@@ -360,7 +329,11 @@ export function installCompactMethods(ViewerClass) {
         caret.innerHTML = SVG.caret;
         this._compactPlotButton.append(this._compactPlotLabel, caret);
         this._compactTitle = el('span', 'compact-appbar-title');
-        appBar.append(this._compactPlotButton, this._compactTitle);
+        // While cursors are on, their Δx and Δy take the title's place; a tap
+        // opens their sheet (compact-cursor-methods).
+        this._compactCursorChip = button('compact-cursor-chip', '', () => this._compactToggleCursorSheet(), { title: i18n.t('compactCursorsChipTitle') });
+        this._compactCursorChip.hidden = true;
+        appBar.append(this._compactPlotButton, this._compactTitle, this._compactCursorChip);
 
         const nav = el('nav', 'compact-nav');
         nav.id = 'compact-nav';
@@ -617,6 +590,8 @@ export function installCompactMethods(ViewerClass) {
             if (label) label.textContent = i18n.t(item.labelKey);
         }
         this._compactNav.setAttribute('aria-label', i18n.t('compactNavigation'));
+        this._compactCursorChip.title = i18n.t('compactCursorsChipTitle');
+        this._compactCursorChip.setAttribute('aria-label', i18n.t('compactCursorsChipTitle'));
         this._compactBackBtn.title = i18n.t('compactBack');
         this._compactBackBtn.setAttribute('aria-label', i18n.t('compactBack'));
         this._compactCloseBtn.title = i18n.t('compactHide');
@@ -740,6 +715,7 @@ export function installCompactMethods(ViewerClass) {
             div._compactFitGroup = group;
         }
         group.hidden = false;
+        this._compactSyncCursorButton(group, owner);
         // The corner of the plotting area, not of the div: clear of the axis
         // labels on the right and of a legend placed above the plot.
         const size = div._fullLayout._size || {};
@@ -790,6 +766,7 @@ export function installCompactMethods(ViewerClass) {
         this._compactSyncPanels();
         this._scheduleCompactResize(0);
         this._compactSyncTreeMarks();
+        this._compactSyncCursors();
     };
 
     proto._compactPanelSummary = function(panelId) {
@@ -829,6 +806,7 @@ export function installCompactMethods(ViewerClass) {
         this._compactTitle.textContent = activeFile ? this._fileDisplayName(activeFile) : i18n.t('appTitle');
         this._compactTitle.title = this._compactTitle.textContent;
         this._compactSyncAnalyzeHalo();
+        this._compactSyncCursorChip();
     };
 
     // An analysis on the plot on screen (FFT, profile, integral…) puts a halo
@@ -1034,6 +1012,7 @@ export function installCompactMethods(ViewerClass) {
             plot: () => this._buildCompactPlotPage(),
             analyze: () => this._buildCompactAnalyzePage(),
             more: () => this._buildCompactMorePage(),
+            cursors: () => this._buildCompactCursorsPage(),
         };
         const page = builders[id]?.();
         if (!page) return;
@@ -1135,7 +1114,7 @@ export function installCompactMethods(ViewerClass) {
         const box = el('div', 'compact-help-box');
         box.appendChild(el('h4', '', i18n.t('compactHelpTitle')));
         const list = el('ul');
-        for (const key of ['compactHelpData', 'compactHelpPlot', 'compactHelpAnalyze', 'compactHelpMore', 'compactHelpGestures']) {
+        for (const key of ['compactHelpData', 'compactHelpPlot', 'compactHelpAnalyze', 'compactHelpMore', 'compactHelpGestures', 'compactHelpCursors']) {
             list.appendChild(el('li', '', i18n.t(key)));
         }
         box.append(list, el('p', '', i18n.t('compactHelpBelow')));
@@ -1557,6 +1536,7 @@ export function installCompactMethods(ViewerClass) {
         }
         view.appendChild(viewRow);
         node.appendChild(view);
+        this._buildCompactCursorSection(node, plot);
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
         const traces = plot?.traces || [];

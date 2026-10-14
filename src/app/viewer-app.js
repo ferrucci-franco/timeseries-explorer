@@ -20,6 +20,7 @@ import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
 import { installLiveUpdateMethods } from './methods/live-update-methods.js';
 import { installCompactMethods } from './methods/compact-methods.js';
+import { installCompactCursorMethods } from './methods/compact-cursor-methods.js';
 import { initialCapabilities, resolveCapabilities } from './capabilities.js';
 import { ADVANCED_SETTINGS_VERSION, migrateAdvancedSettings } from './advanced-settings-migration.js';
 
@@ -370,5 +371,6 @@ installTreeMethods(OpenModelicaViewer);
 installSessionMethods(OpenModelicaViewer);
 installLiveUpdateMethods(OpenModelicaViewer);
 installCompactMethods(OpenModelicaViewer);
+installCompactCursorMethods(OpenModelicaViewer);
 
 export default OpenModelicaViewer;
