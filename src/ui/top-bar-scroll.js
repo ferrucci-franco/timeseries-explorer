@@ -77,10 +77,26 @@ function updateScrollbar(track, row) {
     thumb.style.transform = `translateX(${(width - thumbWidth) * (row.scrollLeft / max)}px)`;
 }
 
-function updateScrollHints(row, track) {
+function createFade(topBar, side) {
+    const fade = document.createElement('div');
+    fade.className = `top-bar-fade top-bar-fade-${side}`;
+    fade.setAttribute('aria-hidden', 'true');
+    fade.hidden = true;
+    topBar.appendChild(fade);
+    return fade;
+}
+
+function updateScrollHints(row, hints) {
     const max = row.scrollWidth - row.clientWidth;
-    row.classList.toggle('can-scroll-left', max > 1 && row.scrollLeft > 1);
-    row.classList.toggle('can-scroll-right', max > 1 && row.scrollLeft < max - 1);
+    const { track, start, end } = hints || {};
+    if (start) {
+        start.hidden = !(max > 1 && row.scrollLeft > 1);
+        start.style.left = `${row.offsetLeft}px`;
+    }
+    if (end) {
+        end.hidden = !(max > 1 && row.scrollLeft < max - 1);
+        end.style.left = `${row.offsetLeft + row.offsetWidth - end.offsetWidth}px`;
+    }
     if (track) updateScrollbar(track, row);
 }
 
@@ -151,14 +167,18 @@ export function initTopBarScroll(row) {
     if (!row) return;
     const topBar = row.closest('.top-bar');
     const brand = topBar?.querySelector('.top-bar-left');
-    const track = topBar ? createScrollbar(topBar, row) : null;
+    const hints = topBar ? {
+        track: createScrollbar(topBar, row),
+        start: createFade(topBar, 'start'),
+        end: createFade(topBar, 'end'),
+    } : null;
     const refresh = () => {
         if (brand) updateBrand(topBar, brand, row);
-        updateScrollHints(row, track);
+        updateScrollHints(row, hints);
         replaceOpenMenus();
     };
     row.addEventListener('scroll', () => {
-        updateScrollHints(row, track);
+        updateScrollHints(row, hints);
         replaceOpenMenus();
     }, { passive: true });
     window.addEventListener('resize', refresh);

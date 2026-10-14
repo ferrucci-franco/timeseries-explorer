@@ -42,6 +42,14 @@ assert.match(scroll, /track\.hidden = max <= 1/, 'the scrollbar shows only while
 assert.match(scroll, /setPointerCapture/, 'the thumb can be dragged');
 assert.match(rule(base, '.top-bar-scrollbar[hidden]'), /display:\s*none/, 'a hidden scrollbar takes no room');
 
+// Nothing but the buttons is laid out inside the row. The fades used to be
+// sticky pseudo-elements with negative margins inside it, and Firefox counted
+// them into the row's width differently from Chrome: the row overflowed, with
+// its scrollbar showing, on a window with room to spare.
+assert.doesNotMatch(base, /\.top-bar-right::(before|after)/, 'no pseudo-element flex items in the row');
+assert.match(scroll, /top-bar-fade-\$\{side\}/, 'the fades are laid over the row, outside it');
+assert.match(rule(base, '.top-bar-fade'), /position:\s*absolute/, 'the fades take no room in the row');
+
 // Its menus escape the scroller's clipping.
 assert.match(scroll, /menu\.style\.position = 'fixed'/, 'top bar menus are placed with fixed coordinates');
 assert.equal(ui.match(/placeTopBarMenu\(menu, /g)?.length, 2, 'the example and extra menus are placed under their button');
