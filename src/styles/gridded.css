@@ -249,6 +249,20 @@
     cursor: crosshair !important;
 }
 
+/* Over something that can be picked (a point, a box's edge, the orange
+   ring), a hand; while the ring is dragged, a closed hand. */
+.gridded-map.gridded-over-item .nsewdrag {
+    cursor: pointer !important;
+}
+
+.gridded-map.gridded-over-ring .nsewdrag {
+    cursor: grab !important;
+}
+
+.gridded-map.gridded-dragging .nsewdrag {
+    cursor: grabbing !important;
+}
+
 .gridded-status {
     padding: 0.15rem 0.6rem;
     border-top: 1px solid var(--border-color);
@@ -291,8 +305,18 @@
     font-variant-numeric: tabular-nums;
 }
 
-.gridded-step {
-    min-width: 2rem;
+.gridded-view .gridded-step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 1.75rem;
+    padding: 0;
+    line-height: 1;
+}
+
+.gridded-step svg {
+    display: block;
 }
 
 .gridded-progress {
@@ -524,16 +548,26 @@
     gap: 0.3rem;
     padding: 0.3rem;
     border-radius: 0.3rem;
+    border: 1px solid transparent;
     background: var(--bg-primary);
+    cursor: pointer;
+}
+
+.gridded-result.selected {
+    border-color: #e040fb;
+    box-shadow: 0 0 0 1px #e040fb inset;
 }
 
 .gridded-result label {
-    flex: 1;
-    min-width: 0;
     display: flex;
-    align-items: flex-start;
-    gap: 0.35rem;
+    align-items: center;
+    height: 1.25rem;
     cursor: pointer;
+}
+
+.gridded-results-tools {
+    display: inline-flex;
+    gap: 0.25rem;
 }
 
 .gridded-swatch {
@@ -549,6 +583,7 @@
 }
 
 .gridded-result-text {
+    flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
     line-height: 1.3;
@@ -701,4 +736,35 @@ html.compact .gridded-toolbar {
 
 html.compact .gridded-time-label {
     min-width: 0;
+}
+
+/* The right-button menu on a point or a box of the map. */
+.gridded-context-menu {
+    position: fixed;
+    z-index: 10050;
+    display: flex;
+    flex-direction: column;
+    min-width: 11rem;
+    padding: 0.25rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.4rem;
+    background: var(--bg-primary);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    font-size: 0.85rem;
+}
+
+.gridded-context-menu button {
+    border: none;
+    background: none;
+    color: var(--text-primary);
+    text-align: left;
+    padding: 0.35rem 0.6rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+}
+
+.gridded-context-menu button:hover,
+.gridded-context-menu button:focus-visible {
+    background: var(--bg-secondary);
+    outline: none;
 }

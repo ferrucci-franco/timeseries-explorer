@@ -27,6 +27,18 @@ const FINE_COAST_SPAN_DEGREES = 70;
 // The export button of every plot panel, so the map's reads the same.
 const EXPORT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
 const GLOBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8.5" stroke-width="1.8"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17" stroke-width="1.6"/></svg>';
+// The time bar's buttons as drawn icons, all on the same 16-unit box: text
+// glyphs (⏮ ▶ ⏸ ▶|) come from different fonts and never line up.
+const svgIcon = body => `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="currentColor">${body}</svg>`;
+const STEP_ICONS = {
+    first: svgIcon('<rect x="2" y="3" width="2" height="10"/><path d="M9 3v10L4.5 8zM14 3v10L9.5 8z"/>'),
+    prev: svgIcon('<path d="M10 3v10L4 8z"/><rect x="11" y="3" width="2" height="10"/>'),
+    play: svgIcon('<path d="M4 2.5v11L13.5 8z"/>'),
+    pause: svgIcon('<rect x="3.5" y="3" width="3" height="10"/><rect x="9.5" y="3" width="3" height="10"/>'),
+    next: svgIcon('<rect x="3" y="3" width="2" height="10"/><path d="M6 3v10l6-5z"/>'),
+    last: svgIcon('<path d="M2 3v10l4.5-5zM7 3v10l4.5-5z"/><rect x="12" y="3" width="2" height="10"/>'),
+};
+const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>';
 // One colour per extraction, shared by its marker or box on the map, its row
 // in the panel and its curves in the preview.
 const SERIES_COLORS = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#17becf', '#8c564b', '#e377c2'];
@@ -553,6 +565,9 @@ export function installGriddedMethods(TargetClass) {
             mode: 'point',
             pendingPoint: null,
             pendingBox: null,
+            // The point or box picked on the map: { kind: 'pending-point' |
+            // 'pending-box' } or { kind: 'group', id }.
+            selected: null,
             groups: [],
             groupCount: 0,
             playing: false,
@@ -686,11 +701,11 @@ export function installGriddedMethods(TargetClass) {
                     <div class="gridded-body"><div class="gridded-map" data-role="map"></div></div>
                     <div class="gridded-status" data-role="status" aria-live="polite"></div>
                     <div class="gridded-timebar" data-role="timebar">
-                        <button type="button" class="gridded-step" data-step="first">⏮</button>
-                        <button type="button" class="gridded-step" data-step="prev">◀</button>
-                        <button type="button" class="gridded-step gridded-play" data-step="play">▶</button>
-                        <button type="button" class="gridded-step" data-step="next">▶|</button>
-                        <button type="button" class="gridded-step" data-step="last">⏭</button>
+                        <button type="button" class="gridded-step" data-step="first">${STEP_ICONS.first}</button>
+                        <button type="button" class="gridded-step" data-step="prev">${STEP_ICONS.prev}</button>
+                        <button type="button" class="gridded-step gridded-play" data-step="play">${STEP_ICONS.play}</button>
+                        <button type="button" class="gridded-step" data-step="next">${STEP_ICONS.next}</button>
+                        <button type="button" class="gridded-step" data-step="last">${STEP_ICONS.last}</button>
                         <input type="range" min="0" max="0" step="1" value="0" data-role="time">
                         <span class="gridded-time-label" data-role="time-label"></span>
                         <select data-role="speed" class="gridded-speed"></select>
@@ -742,7 +757,10 @@ export function installGriddedMethods(TargetClass) {
                     <section class="gridded-panel-section gridded-results">
                         <div class="gridded-results-head">
                             <h3 data-role="results-heading"></h3>
-                            <button type="button" class="gridded-icon-btn" data-action="export-series">${EXPORT_ICON}</button>
+                            <span class="gridded-results-tools">
+                                <button type="button" class="gridded-icon-btn" data-action="remove-all">${TRASH_ICON}</button>
+                                <button type="button" class="gridded-icon-btn" data-action="export-series">${EXPORT_ICON}</button>
+                            </span>
                         </div>
                         <p class="gridded-help" data-role="results-empty"></p>
                         <ul class="gridded-results-list" data-role="results"></ul>
@@ -922,10 +940,32 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'clear-point') this._griddedClearPending(current, 'point');
             else if (action === 'clear-region') this._griddedClearPending(current, 'region');
             else if (action === 'remove-group') this._griddedRemoveGroup(current, target.closest('[data-group]')?.dataset.group);
+            else if (action === 'remove-all') this._griddedRemoveAll(current);
             else if (action === 'export-map') this._griddedExportMap(current);
             else if (action === 'export-series') this._griddedExportSeries(current);
             else if (action === 'plot') this._griddedPlotChecked(current);
             else if (action === 'as-series') this._griddedOpenAsSeries(current.fileId);
+        });
+        // A row of the list selects its point or box on the map; the
+        // checkbox and the ✕ keep their own jobs.
+        root.querySelector('[data-role="results"]').addEventListener('click', event => {
+            if (event.target.closest('input, [data-action]')) return;
+            const current = view();
+            const id = event.target.closest('[data-group]')?.dataset.group;
+            if (current && id) this._griddedSelect(current, { kind: 'group', id });
+        });
+        // Delete removes the selected point or box, Escape lets go of it. On
+        // the document: a click on the map leaves the focus on the page.
+        document.addEventListener('keydown', event => {
+            const current = view();
+            if (!current?.selected || root.hidden || document.querySelector('.modal-overlay')) return;
+            if (event.target.closest?.('input, select, textarea, [contenteditable="true"], .modal-overlay')) return;
+            if (event.key === 'Delete' || event.key === 'Backspace') {
+                event.preventDefault();
+                this._griddedDeleteSelected(current);
+            } else if (event.key === 'Escape') {
+                this._griddedSelect(current, null);
+            }
         });
         root.addEventListener('keydown', event => {
             if (event.target.closest('input, select, textarea')) return;
@@ -1027,10 +1067,12 @@ export function installGriddedMethods(TargetClass) {
         set('[data-role="east-label"]', 'griddedEast');
         set('[data-action="extract-point"]', 'griddedExtractPoint');
         set('[data-action="extract-region"]', 'griddedExtractRegion');
-        set('[data-action="clear-point"]', 'griddedClear');
-        set('[data-action="clear-region"]', 'griddedClear');
+        set('[data-action="clear-point"]', 'griddedClearPoint');
+        set('[data-action="clear-region"]', 'griddedClearBox');
         set('[data-role="results-heading"]', 'griddedResultsHeading');
         set('[data-role="results-empty"]', 'griddedResultsEmpty');
+        set('[data-action="remove-all"]', 'griddedRemoveAll', 'title');
+        set('[data-action="remove-all"]', 'griddedRemoveAll', 'ariaLabel');
         set('[data-action="export-series"]', 'griddedExportSeriesTitle', 'title');
         set('[data-action="export-series"]', 'griddedExportSeriesTitle', 'ariaLabel');
         set('[data-action="plot"]', 'griddedPlotChecked');
@@ -1082,6 +1124,7 @@ export function installGriddedMethods(TargetClass) {
         const state = this._griddedState();
         const view = this._griddedVisibleView();
         if (view) view.playing = false;
+        this._griddedCloseMenu();
         state.visibleFileId = null;
         const root = document.getElementById('gridded-view');
         if (root) root.hidden = true;
@@ -1178,7 +1221,11 @@ export function installGriddedMethods(TargetClass) {
         const label = this._griddedEl('time-label');
         const play = document.querySelector('#gridded-view [data-step="play"]');
         if (play) {
-            play.textContent = view.playing ? '⏸' : '▶';
+            const icon = view.playing ? 'pause' : 'play';
+            if (play.dataset.icon !== icon) {
+                play.innerHTML = STEP_ICONS[icon];
+                play.dataset.icon = icon;
+            }
             play.title = i18n.t(view.playing ? 'griddedPause' : 'griddedPlay');
         }
         if (!label) return;
@@ -1195,6 +1242,7 @@ export function installGriddedMethods(TargetClass) {
         view.mode = mode;
         this._griddedSyncMode(view);
         const div = this._griddedEl('map');
+        this._griddedDeactivateShape(div);
         if (div?._fullLayout) Plotly.relayout(div, { dragmode: mode === 'region' ? 'drawrect' : 'pan' });
     };
 
@@ -1260,11 +1308,13 @@ export function installGriddedMethods(TargetClass) {
         const checked = (view.groups || []).filter(group => group.checked).length;
         root.querySelector('[data-action="plot"]').disabled = !checked;
         root.querySelector('[data-action="export-series"]').disabled = !(view.groups || []).length;
+        root.querySelector('[data-action="remove-all"]').disabled = !(view.groups || []).length;
     };
 
     proto._griddedClearPending = function(view, kind) {
         if (kind === 'point') view.pendingPoint = null;
         else view.pendingBox = null;
+        if (view.selected?.kind === (kind === 'point' ? 'pending-point' : 'pending-box')) view.selected = null;
         this._griddedSyncInputs(view);
         this._griddedDrawMap(view);
     };
@@ -1456,6 +1506,8 @@ export function installGriddedMethods(TargetClass) {
             coast: dark ? '#f2f2f2' : '#1a1a1a',
             border: dark ? 'rgba(240,240,240,0.55)' : 'rgba(30,30,30,0.45)',
             pending: dark ? '#ff8a65' : '#d84315',
+            // Magenta: in none of the palettes, so a selection shows on any map.
+            selected: '#e040fb',
         };
     };
 
@@ -1465,58 +1517,78 @@ export function installGriddedMethods(TargetClass) {
     };
 
     /**
-     * The point and box being set up (orange, the box editable) and the ones
-     * already extracted (in their series' colour, numbered like the list).
+     * What is drawn over the map: the point and the box being set up (orange;
+     * the box an editable shape, the ring dragged by _griddedBindPlot) and
+     * the extractions already made (in their series' colour, tagged like the
+     * list). The selected extraction is drawn heavier.
      */
     proto._griddedOverlays = function(view, colors) {
         const traces = [];
         const shapes = [];
         const annotations = [];
+        const annotationGroups = [];
+        const selectedId = view.selected?.kind === 'group' ? view.selected.id : null;
         const points = (view.groups || []).filter(group => group.kind === 'point');
         if (points.length) {
             traces.push({
                 type: 'scatter', mode: 'markers',
                 x: points.map(group => group.geometry.lon), y: points.map(group => group.geometry.lat),
-                marker: { symbol: 'circle', size: 11, color: points.map(group => group.color), line: { color: '#ffffff', width: 2 } },
+                marker: {
+                    symbol: 'circle',
+                    size: points.map(group => (group.id === selectedId ? 15 : 11)),
+                    color: points.map(group => group.color),
+                    line: { color: points.map(group => (group.id === selectedId ? colors.selected : '#ffffff')), width: points.map(group => (group.id === selectedId ? 3 : 2)) },
+                },
                 hoverinfo: 'skip', showlegend: false,
             });
-            for (const group of points) {
-                annotations.push({
-                    x: group.geometry.lon, y: group.geometry.lat, xref: 'x', yref: 'y', text: `<b>${group.tag}</b>`,
-                    showarrow: false, xanchor: 'left', yanchor: 'bottom', xshift: 6, yshift: 4,
-                    font: { color: '#ffffff', size: 11 }, bgcolor: group.color, borderpad: 2,
+        }
+        for (const group of view.groups || []) {
+            const selected = group.id === selectedId;
+            if (group.kind === 'region') {
+                const box = group.geometry;
+                shapes.push({
+                    type: 'rect', xref: 'x', yref: 'y', editable: false, name: `group:${group.id}`,
+                    x0: box.lonMin, x1: box.lonMax, y0: box.latMin, y1: box.latMax,
+                    line: { color: group.color, width: selected ? 3 : 1.5, dash: selected ? 'solid' : 'dash' },
+                    fillcolor: selected ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0)',
                 });
             }
-        }
-        for (const group of (view.groups || []).filter(item => item.kind === 'region')) {
-            const box = group.geometry;
-            shapes.push({
-                type: 'rect', xref: 'x', yref: 'y', editable: false,
-                x0: box.lonMin, x1: box.lonMax, y0: box.latMin, y1: box.latMax,
-                line: { color: group.color, width: 1.5, dash: 'dash' }, fillcolor: 'rgba(0,0,0,0)',
-            });
+            const anchor = group.kind === 'point'
+                ? { x: group.geometry.lon, y: group.geometry.lat, xshift: 6, yshift: 4 }
+                : { x: group.geometry.lonMin, y: group.geometry.latMax, xshift: 0, yshift: 0 };
             annotations.push({
-                x: box.lonMin, y: box.latMax, xref: 'x', yref: 'y', text: `<b>${group.tag}</b>`, showarrow: false,
+                ...anchor, xref: 'x', yref: 'y', text: `<b>${group.tag}</b>`, showarrow: false,
                 xanchor: 'left', yanchor: 'bottom', font: { color: '#ffffff', size: 11 }, bgcolor: group.color, borderpad: 2,
+                bordercolor: selected ? colors.selected : group.color, borderwidth: selected ? 2 : 0,
+                // Clickable, so the tag selects its extraction too.
+                captureevents: true,
             });
-        }
-        if (view.pendingPoint) {
-            traces.push({
-                type: 'scatter', mode: 'markers',
-                x: [view.pendingPoint.lon], y: [view.pendingPoint.lat],
-                marker: { symbol: 'circle-open', size: 16, color: colors.pending, line: { width: 3 } },
-                hoverinfo: 'skip', showlegend: false,
-            });
+            annotationGroups.push(group.id);
         }
         if (view.pendingBox) {
             const box = view.pendingBox;
-            // First, so its index (0) identifies it in Plotly's edit events.
-            shapes.unshift({
-                type: 'rect', xref: 'x', yref: 'y', editable: true,
+            shapes.push({
+                type: 'rect', xref: 'x', yref: 'y', editable: true, name: 'pending-box',
                 x0: box.lonMin, x1: box.lonMax, y0: box.latMin, y1: box.latMax,
-                line: { color: colors.pending, width: 2.5 }, fillcolor: 'rgba(216,67,21,0.10)',
+                line: { color: colors.pending, width: view.selected?.kind === 'pending-box' ? 3.5 : 2.5 },
+                fillcolor: 'rgba(216,67,21,0.10)',
             });
         }
+        // Last, so the drag below can move it with a restyle of this trace.
+        // (A shape sized in pixels would drag by itself, but once one has
+        // been on the map Plotly converts the next rectangle drawn wrongly.)
+        if (view.pendingPoint) {
+            traces.push({
+                type: 'scatter', mode: 'markers', name: 'pending-point',
+                x: [view.pendingPoint.lon], y: [view.pendingPoint.lat],
+                marker: {
+                    symbol: 'circle-open', size: 18, color: colors.pending,
+                    line: { width: view.selected?.kind === 'pending-point' ? 4.5 : 3.5 },
+                },
+                hoverinfo: 'skip', showlegend: false,
+            });
+        }
+        view.annotationGroups = annotationGroups;
         return { traces, shapes, annotations };
     };
 
@@ -1574,7 +1646,8 @@ export function installGriddedMethods(TargetClass) {
             traces.push({ type: 'scattergl', mode: 'lines', x: borders.x, y: borders.y, line: { color: colors.border, width: 0.6 }, hoverinfo: 'skip', showlegend: false });
             traces.push({ type: 'scattergl', mode: 'lines', x: coastline.x, y: coastline.y, line: { color: colors.coast, width: 1 }, hoverinfo: 'skip', showlegend: false });
         }
-        const overlays = this._griddedOverlays(view, colors);
+        // An exported image shows the extractions, not what is selected.
+        const overlays = this._griddedOverlays(target ? { ...view, selected: null } : view, colors);
         traces.push(...overlays.traces);
         const ranges = view.zoom || this._griddedFittedRanges(map, div);
         const paper = transparent ? 'rgba(0,0,0,0)' : colors.bg;
@@ -1622,10 +1695,21 @@ export function installGriddedMethods(TargetClass) {
             edits: { shapePosition: true },
         };
         const first = !div._fullLayout;
+        if (!target) this._griddedDeactivateShape(div);
         await Plotly.react(div, traces, layout, config);
         if (target) return;
         view.drawn = { stride: grid.stride, extent: grid.extent, coastScale };
         if (first) this._griddedBindPlot(div);
+    };
+
+    /**
+     * Plotly "activates" an editable shape that is clicked, and then treats
+     * the next rectangle drawn as a new outline for that shape and the next
+     * click as a mere deactivation. Selection is ours, so no shape is ever
+     * left active.
+     */
+    proto._griddedDeactivateShape = function(div) {
+        if (div?._fullLayout && div._fullLayout._activeShapeIndex !== undefined) delete div._fullLayout._activeShapeIndex;
     };
 
     proto._griddedShownRanges = function(div) {
@@ -1736,37 +1820,85 @@ export function installGriddedMethods(TargetClass) {
         const release = () => { interaction.pressed = false; };
         window.addEventListener('pointerup', release, { capture: true });
         window.addEventListener('pointercancel', release, { capture: true });
-        div.on('plotly_click', event => {
+        div.addEventListener('pointerdown', event => {
+            interaction.down = { x: event.clientX, y: event.clientY };
+            if (!event.target.closest?.('.gridded-context-menu')) this._griddedCloseMenu();
+        }, { capture: true });
+        div.addEventListener('mousemove', event => {
             const view = this._griddedVisibleView();
-            if (!view || view.mode !== 'point') return;
-            const point = (event?.points || []).find(item => item.data?.type === 'heatmap') || event?.points?.[0];
-            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
-            // A click places the point; the button (or Enter) extracts it.
-            view.pendingPoint = { lat: roundCoordinate(point.y), lon: roundCoordinate(point.x) };
-            this._griddedSyncInputs(view);
-            this._griddedDrawMap(view);
+            const at = view && !interaction.pressed && this._griddedEventCoords(div, event);
+            const hit = at ? this._griddedHitTest(view, at, event, { inside: false }) : null;
+            div.classList.toggle('gridded-over-ring', hit?.kind === 'pending-point');
+            div.classList.toggle('gridded-over-item', !!hit && hit.kind !== 'pending-point');
         });
+        // The orange ring follows the mouse when dragged. Plotly starts its
+        // pan or box drawing on mousedown, so that is stopped first.
+        div.addEventListener('mousedown', event => {
+            const view = this._griddedVisibleView();
+            if (event.button !== 0 || !view?.pendingPoint) return;
+            const at = this._griddedEventCoords(div, event);
+            if (!at || this._griddedHitTest(view, at, null, { inside: false })?.kind !== 'pending-point') return;
+            event.stopPropagation();
+            event.preventDefault();
+            this._griddedDragRing(view, div);
+        }, true);
+        // A click (not the end of a drag) selects what is under it; in the
+        // point tool, a click on empty map places the point there. The place
+        // comes from the pixel clicked, not from Plotly's hover, which lags
+        // behind a quick click and is missing over cells without data.
+        div.addEventListener('click', event => {
+            const down = interaction.down;
+            if (event.button !== 0 || (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4)) return;
+            const view = this._griddedVisibleView();
+            const at = view && this._griddedEventCoords(div, event);
+            if (!at) return;
+            const hit = this._griddedHitTest(view, at, event, { inside: false });
+            if (hit) {
+                this._griddedSelect(view, hit);
+            } else if (view.mode === 'point' && Math.abs(at.lat) <= 90) {
+                view.pendingPoint = { lat: roundCoordinate(at.lat), lon: roundCoordinate(at.lon) };
+                view.selected = { kind: 'pending-point' };
+                this._griddedSyncInputs(view);
+                this._griddedRenderSelection(view);
+                this._griddedDrawMap(view);
+            } else if (view.selected) {
+                this._griddedSelect(view, null);
+            }
+        }, true);
+        // Right button on a point or a box: a small menu to extract or remove it.
+        div.addEventListener('contextmenu', event => {
+            const view = this._griddedVisibleView();
+            const at = view && this._griddedEventCoords(div, event);
+            if (!at) return;
+            event.preventDefault();
+            const hit = this._griddedHitTest(view, at, event, { inside: true });
+            if (!hit) {
+                this._griddedCloseMenu();
+                return;
+            }
+            this._griddedSelect(view, hit);
+            this._griddedShowMenu(view, hit, event.clientX, event.clientY);
+        }, true);
         div.on('plotly_relayout', update => {
             const view = this._griddedVisibleView();
             if (!view || !update) return;
             const keys = Object.keys(update);
-            if (update.shapes || keys.some(key => key.startsWith('shapes['))) {
-                const shapes = div.layout.shapes || [];
-                // A new drawing is the last shape; an edit of the pending box is shape 0.
-                const shape = update.shapes ? shapes[shapes.length - 1] : shapes[0];
-                if (!shape) return;
-                view.pendingBox = {
-                    lonMin: roundCoordinate(Math.min(shape.x0, shape.x1)),
-                    lonMax: roundCoordinate(Math.max(shape.x0, shape.x1)),
-                    latMin: roundCoordinate(Math.max(-90, Math.min(shape.y0, shape.y1))),
-                    latMax: roundCoordinate(Math.min(90, Math.max(shape.y0, shape.y1))),
-                };
-                if (view.mode !== 'region') {
-                    view.mode = 'region';
-                    this._griddedSyncMode(view);
+            if (update.shapes) {
+                // A box just drawn: the one shape without a name.
+                const drawn = (div.layout.shapes || []).filter(shape => !shape.name).pop();
+                if (drawn) this._griddedSetPendingBox(view, drawn);
+                else this._griddedDrawOverlaysSoon(view);
+                return;
+            }
+            const edited = keys.map(key => /^shapes\[(\d+)\]/.exec(key)).find(Boolean);
+            if (edited) {
+                const shape = (div.layout.shapes || [])[Number(edited[1])];
+                if (shape?.name === 'pending-box') {
+                    this._griddedSetPendingBox(view, shape);
+                } else {
+                    // Only the orange shapes move; put anything else back.
+                    this._griddedDrawOverlaysSoon(view);
                 }
-                this._griddedSyncInputs(view);
-                this._griddedDrawOverlaysSoon(view);
                 return;
             }
             if (update['xaxis.autorange']) {
@@ -1784,6 +1916,185 @@ export function installGriddedMethods(TargetClass) {
             }
             this._griddedDrawMap(view);
         });
+    };
+
+    proto._griddedDragRing = function(view, div) {
+        const trace = (div.data || []).findIndex(item => item.name === 'pending-point');
+        div.classList.add('gridded-dragging');
+        const move = event => {
+            const at = this._griddedEventCoords(div, event);
+            if (!at || Math.abs(at.lat) > 90) return;
+            view.pendingPoint = { lat: roundCoordinate(at.lat), lon: roundCoordinate(at.lon) };
+            if (trace >= 0) Plotly.restyle(div, { x: [[view.pendingPoint.lon]], y: [[view.pendingPoint.lat]] }, [trace]);
+            this._griddedSyncInputs(view);
+        };
+        const stop = () => {
+            window.removeEventListener('mousemove', move, true);
+            window.removeEventListener('mouseup', stop, true);
+            div.classList.remove('gridded-dragging');
+            view.selected = { kind: 'pending-point' };
+            this._griddedDrawMap(view);
+        };
+        window.addEventListener('mousemove', move, true);
+        window.addEventListener('mouseup', stop, true);
+    };
+
+    proto._griddedSetPendingBox = function(view, shape) {
+        view.pendingBox = {
+            lonMin: roundCoordinate(Math.min(shape.x0, shape.x1)),
+            lonMax: roundCoordinate(Math.max(shape.x0, shape.x1)),
+            latMin: roundCoordinate(Math.max(-90, Math.min(shape.y0, shape.y1))),
+            latMax: roundCoordinate(Math.min(90, Math.max(shape.y0, shape.y1))),
+        };
+        view.selected = { kind: 'pending-box' };
+        if (view.mode !== 'region') {
+            view.mode = 'region';
+            this._griddedSyncMode(view);
+        }
+        this._griddedSyncInputs(view);
+        this._griddedRenderSelection(view);
+        this._griddedDrawOverlaysSoon(view);
+    };
+
+    /** A mouse event on the map as plot pixels and longitude/latitude, or null outside the plot. */
+    proto._griddedEventCoords = function(div, event) {
+        const layout = div?._fullLayout;
+        if (!layout?.xaxis?._length) return null;
+        const rect = div.getBoundingClientRect();
+        const xa = layout.xaxis;
+        const ya = layout.yaxis;
+        const px = event.clientX - rect.left - xa._offset;
+        const py = event.clientY - rect.top - ya._offset;
+        if (px < 0 || py < 0 || px > xa._length || py > ya._length) return null;
+        return { px, py, lon: xa.p2l(px), lat: ya.p2l(py), xa, ya };
+    };
+
+    /**
+     * The point or box under the pointer: the orange point, then the nearest
+     * extracted point, then the orange box, then the smallest extracted box.
+     * A box is hit on its edge, or anywhere inside with `inside` (the right
+     * button): a plain click inside a box must still place a point there.
+     */
+    proto._griddedHitTest = function(view, at, event, { inside }) {
+        const tagIndex = event?.target?.closest?.('.annotation')?.getAttribute('data-index');
+        if (tagIndex !== null && tagIndex !== undefined && view.annotationGroups?.[Number(tagIndex)]) {
+            return { kind: 'group', id: view.annotationGroups[Number(tagIndex)] };
+        }
+        const { px, py, xa, ya } = at;
+        const distance = (lon, lat) => Math.hypot(xa.l2p(lon) - px, ya.l2p(lat) - py);
+        if (view.pendingPoint && distance(view.pendingPoint.lon, view.pendingPoint.lat) <= 12) return { kind: 'pending-point' };
+        let nearest = null;
+        for (const group of (view.groups || []).filter(item => item.kind === 'point')) {
+            const d = distance(group.geometry.lon, group.geometry.lat);
+            if (d <= 10 && (!nearest || d < nearest.d)) nearest = { d, id: group.id };
+        }
+        if (nearest) return { kind: 'group', id: nearest.id };
+        const edge = 6;
+        const area = box => {
+            const left = Math.min(xa.l2p(box.lonMin), xa.l2p(box.lonMax));
+            const right = Math.max(xa.l2p(box.lonMin), xa.l2p(box.lonMax));
+            const top = Math.min(ya.l2p(box.latMin), ya.l2p(box.latMax));
+            const bottom = Math.max(ya.l2p(box.latMin), ya.l2p(box.latMax));
+            const within = px >= left - edge && px <= right + edge && py >= top - edge && py <= bottom + edge;
+            if (!within) return null;
+            const onEdge = px <= left + edge || px >= right - edge || py <= top + edge || py >= bottom - edge;
+            return inside || onEdge ? (right - left) * (bottom - top) : null;
+        };
+        if (view.pendingBox && area(view.pendingBox) !== null) return { kind: 'pending-box' };
+        let smallest = null;
+        for (const group of (view.groups || []).filter(item => item.kind === 'region')) {
+            const size = area(group.geometry);
+            if (size !== null && (!smallest || size < smallest.size)) smallest = { size, id: group.id };
+        }
+        return smallest ? { kind: 'group', id: smallest.id } : null;
+    };
+
+    /**
+     * Select a point or box (null clears): it is drawn heavier, its row is
+     * marked, and the orange ones bring up their tool and coordinates.
+     */
+    proto._griddedSelect = function(view, target) {
+        view.selected = target;
+        if (target?.kind === 'pending-point' && view.mode !== 'point') this._griddedSetMode(view, 'point');
+        if (target?.kind === 'pending-box' && view.mode !== 'region') this._griddedSetMode(view, 'region');
+        this._griddedRenderSelection(view);
+        this._griddedDrawMap(view);
+    };
+
+    proto._griddedRenderSelection = function(view) {
+        const id = view.selected?.kind === 'group' ? view.selected.id : null;
+        document.querySelectorAll('#gridded-view .gridded-result').forEach(row => {
+            const selected = row.dataset.group === id;
+            row.classList.toggle('selected', selected);
+            if (selected) row.scrollIntoView({ block: 'nearest' });
+        });
+    };
+
+    proto._griddedDeleteSelected = function(view, target = view.selected) {
+        if (!target) return;
+        if (target.kind === 'pending-point') this._griddedClearPending(view, 'point');
+        else if (target.kind === 'pending-box') this._griddedClearPending(view, 'region');
+        else if (target.kind === 'group') this._griddedRemoveGroup(view, target.id);
+        view.selected = null;
+        this._griddedRenderSelection(view);
+    };
+
+    proto._griddedShowMenu = function(view, target, x, y) {
+        this._griddedCloseMenu();
+        const items = [];
+        if (target.kind === 'pending-point') {
+            items.push([i18n.t('griddedExtractPoint'), () => this._griddedExtractPoint(view)]);
+            items.push([i18n.t('griddedDelete'), () => this._griddedDeleteSelected(view, target)]);
+        } else if (target.kind === 'pending-box') {
+            items.push([i18n.t('griddedExtractRegion'), () => this._griddedExtractRegion(view)]);
+            items.push([i18n.t('griddedDelete'), () => this._griddedDeleteSelected(view, target)]);
+        } else {
+            const group = (view.groups || []).find(item => item.id === target.id);
+            if (!group) return;
+            items.push([i18n.t('griddedDeleteExtraction').replace('{tag}', group.tag), () => this._griddedDeleteSelected(view, target)]);
+        }
+        const menu = document.createElement('div');
+        menu.className = 'gridded-context-menu';
+        menu.setAttribute('role', 'menu');
+        for (const [label, run] of items) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.setAttribute('role', 'menuitem');
+            button.textContent = label;
+            button.addEventListener('click', () => {
+                this._griddedCloseMenu();
+                run();
+            });
+            menu.appendChild(button);
+        }
+        document.body.appendChild(menu);
+        const rect = menu.getBoundingClientRect();
+        menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 4)}px`;
+        menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 4)}px`;
+        const close = event => {
+            if (event.type === 'keydown' && event.key !== 'Escape') return;
+            if (event.type === 'pointerdown' && menu.contains(event.target)) return;
+            this._griddedCloseMenu();
+        };
+        window.addEventListener('pointerdown', close, true);
+        window.addEventListener('keydown', close, true);
+        window.addEventListener('wheel', close, { capture: true, passive: true });
+        menu.focus?.();
+        menu.querySelector('button')?.focus();
+        this._griddedMenu = {
+            menu,
+            remove: () => {
+                window.removeEventListener('pointerdown', close, true);
+                window.removeEventListener('keydown', close, true);
+                window.removeEventListener('wheel', close, { capture: true, passive: true });
+                menu.remove();
+            },
+        };
+    };
+
+    proto._griddedCloseMenu = function() {
+        this._griddedMenu?.remove();
+        this._griddedMenu = null;
     };
 
     // ─── Extractions ──────────────────────────────────────────────────────
@@ -1852,6 +2163,7 @@ export function installGriddedMethods(TargetClass) {
             .replace('{variable}', variable.longName || variable.name)
             .replace('{where}', where);
         view.pendingPoint = null;
+        if (view.selected?.kind === 'pending-point') view.selected = null;
         this._griddedSyncInputs(view);
         const group = this._griddedAddGroup(view, {
             kind: 'point',
@@ -1878,6 +2190,7 @@ export function installGriddedMethods(TargetClass) {
             .replace('{cells}', String(result.cells))
             .replace('{weighting}', weighting);
         view.pendingBox = null;
+        if (view.selected?.kind === 'pending-box') view.selected = null;
         this._griddedSyncInputs(view);
         const group = this._griddedAddGroup(view, {
             kind: 'region',
@@ -1977,6 +2290,7 @@ export function installGriddedMethods(TargetClass) {
         const index = view.groups.findIndex(group => group.id === id);
         if (index < 0) return;
         const [group] = view.groups.splice(index, 1);
+        if (view.selected?.kind === 'group' && view.selected.id === id) view.selected = null;
         const data = this.plotManager.files.get(view.fileId)?.data;
         if (data) {
             const node = this._griddedExtractionNode(data);
@@ -1988,6 +2302,30 @@ export function installGriddedMethods(TargetClass) {
             }
             this._griddedCommitData(view, data);
         }
+        this._griddedRenderResults(view);
+        this._griddedDrawPreview(view);
+        this._griddedDrawMap(view);
+    };
+
+    proto._griddedRemoveAll = async function(view) {
+        const count = (view.groups || []).length;
+        if (!count) return;
+        const ok = await Modal.confirm(i18n.t('griddedRemoveAllConfirm').replace('{count}', String(count)), {
+            title: i18n.t('griddedRemoveAll'),
+            icon: '🗑️',
+        });
+        if (!ok) return;
+        const data = this.plotManager.files.get(view.fileId)?.data;
+        if (data) {
+            const node = this._griddedExtractionNode(data);
+            for (const group of view.groups) {
+                for (const name of group.names) delete data.variables[name];
+            }
+            for (const leaf of Object.keys(node._variables)) delete node._variables[leaf];
+            this._griddedCommitData(view, data);
+        }
+        view.groups = [];
+        if (view.selected?.kind === 'group') view.selected = null;
         this._griddedRenderResults(view);
         this._griddedDrawPreview(view);
         this._griddedDrawMap(view);
@@ -2017,7 +2355,11 @@ export function installGriddedMethods(TargetClass) {
                 note.textContent = group.note;
                 text.appendChild(note);
             }
-            label.append(checkbox, swatch, text);
+            // The checkbox alone toggles the curve; the rest of the row selects
+            // the point or box on the map.
+            label.append(checkbox);
+            item.title = i18n.t('griddedSelectOnMap');
+            if (view.selected?.kind === 'group' && view.selected.id === group.id) item.classList.add('selected');
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'gridded-remove';
@@ -2025,7 +2367,7 @@ export function installGriddedMethods(TargetClass) {
             remove.textContent = '✕';
             remove.title = i18n.t('griddedRemoveExtraction');
             remove.setAttribute('aria-label', i18n.t('griddedRemoveExtraction'));
-            item.append(label, remove);
+            item.append(label, swatch, text, remove);
             list.appendChild(item);
         }
         const empty = this._griddedEl('results-empty');

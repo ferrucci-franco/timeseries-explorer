@@ -1101,9 +1101,12 @@ resumen de buscador):
   trabajo (rediseñado tras la primera prueba con datos reales):
   1. **Extraer una serie temporal.** Tres modos:
      - **Navegar:** arrastrar mueve el mapa.
-     - **Punto:** un clic coloca un marcador y llena latitud y longitud, que
-       también se pueden escribir. Nada se lee hasta pulsar "Extraer serie
-       temporal" (o Enter). Se toma la celda más cercana.
+     - **Punto:** un clic coloca un anillo naranja y llena latitud y
+       longitud, que también se pueden escribir; el anillo se arrastra. El
+       lugar sale del píxel del clic, no del hover de Plotly (que llega tarde
+       en un clic rápido y falta sobre celdas sin dato). Nada se lee hasta
+       pulsar "Extraer serie temporal" (o Enter). Se toma la celda más
+       cercana.
      - **Región:** se dibuja un rectángulo o se escriben sus límites
        Norte/Oeste/Este/Sur, como en el formulario del CDS (Oeste > Este cruza el
        meridiano 180°). El recuadro naranja se puede arrastrar y redimensionar,
@@ -1119,6 +1122,21 @@ resumen de buscador):
      vista previa. Cada fila tiene una casilla para la vista previa y la
      exportación, y ✕ para quitarla junto con sus variables. "Abrir las series
      marcadas en los gráficos" cierra el mapa y las grafica en el explorador.
+  3. **Selección y borrado en el mapa** (tras la segunda prueba):
+     - un clic sobre un punto, el borde de un recuadro o su etiqueta lo
+       selecciona (magenta, color que no está en ninguna paleta) y marca su
+       fila; un clic en la fila lo marca en el mapa. Un clic dentro de un
+       recuadro no lo selecciona, para poder poner un punto ahí;
+     - el botón derecho abre un menú: "Extraer"/"Quitar" para lo naranja,
+       "Quitar R1 y sus series" para lo extraído; Supr quita lo seleccionado
+       y Escape lo suelta;
+     - "Quitar punto"/"Quitar recuadro" quitan solo lo naranja; el ícono de
+       papelera de la lista quita todas las extracciones, previa confirmación.
+
+     Plotly "activa" una forma editable al tocarla y trata el rectángulo
+     siguiente como un nuevo contorno de esa forma; la app nunca deja una
+     forma activa. El anillo no es una forma de tamaño en píxeles: con una de
+     esas en el mapa, Plotly convierte mal el rectángulo siguiente.
 - **Barra superior en una sola fila:** variable, nivel y escala a la izquierda;
   exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el título
   arriba, un formato de etiquetas acotado y un margen fijo: cambiar de instante

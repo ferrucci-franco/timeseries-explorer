@@ -216,15 +216,17 @@ moves, so colours compare across steps; "Auto-fit" re-fits it (whole period,
 exact period, current step, visible area; optional percentile clipping and
 centring on zero). An analysis panel next to the map turns it into series:
 
-- **Point**: click the map or type a latitude and longitude, then extract the
-  time series of the nearest grid cell.
+- **Point**: click the map (or drag the orange ring, or type a latitude and
+  longitude), then extract the time series of the nearest grid cell.
 - **Region**: draw a box or type its North/West/East/South limits (as in the
   Copernicus CDS form), adjust it on the map, then compute the area-weighted
   (cos latitude, or cell area when the file has latitude bounds) mean, minimum
   and maximum for every time step.
 
 Each extraction gets a colour and a tag (P1, R1…) shared by the map, the panel
-list and the preview, and can be removed.
+list and the preview. A click on a point or a box's edge selects it (and its
+row, and the other way round); the right button opens a menu to extract or
+remove it, Delete removes the selected one, and the trash icon empties the list.
 
 Extractions become variables of the file in the explorer, where FFT, integrals,
 heatmaps and cursors work on them. The map and the extractions export through
