@@ -34,7 +34,7 @@
 
 .gridded-title {
     font-weight: 600;
-    max-width: 16rem;
+    max-width: 11rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -60,8 +60,81 @@
     display: none;
 }
 
-.gridded-manual-range[hidden] {
+.gridded-scale input[type="number"] {
+    width: 4.8rem;
+}
+
+.gridded-toolbar [data-role="variable"] {
+    max-width: 15rem;
+}
+
+.gridded-scale input[type="number"]:disabled {
+    opacity: 0.6;
+}
+
+.gridded-autofit {
+    position: relative;
+}
+
+.gridded-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    width: 19rem;
+    padding: 0.4rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.4rem;
+    background: var(--bg-primary);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.gridded-menu[hidden] {
     display: none;
+}
+
+.gridded-menu-title {
+    padding: 0.15rem 0.3rem;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+}
+
+.gridded-view .gridded-menu > button {
+    text-align: left;
+    white-space: normal;
+    border-color: transparent;
+}
+
+.gridded-menu hr {
+    width: 100%;
+    margin: 0.2rem 0;
+    border: none;
+    border-top: 1px solid var(--border-color);
+}
+
+.gridded-menu label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 0.15rem 0.3rem;
+    cursor: pointer;
+    line-height: 1.3;
+}
+
+.gridded-view .gridded-menu-palette {
+    align-items: center;
+    justify-content: space-between;
+    cursor: default;
+}
+
+.gridded-menu-note {
+    margin: 0.2rem 0.3rem 0.1rem;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    line-height: 1.35;
 }
 
 .gridded-toolbar-end {
@@ -239,12 +312,47 @@
     flex: 1;
 }
 
+.gridded-splitter {
+    flex-shrink: 0;
+    height: 7px;
+    cursor: row-resize;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    position: relative;
+    touch-action: none;
+}
+
+.gridded-splitter[hidden] {
+    display: none;
+}
+
+/* A grip in the middle, so the boundary reads as something to drag. */
+.gridded-splitter::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 2px;
+    width: 42px;
+    height: 3px;
+    margin-left: -21px;
+    border-radius: 2px;
+    background: var(--text-secondary);
+    opacity: 0.55;
+}
+
+.gridded-splitter:hover::after,
+.gridded-splitter.dragging::after,
+.gridded-splitter:focus-visible::after {
+    background: var(--primary-color);
+    opacity: 1;
+}
+
 .gridded-preview {
+    flex-shrink: 0;
     height: 28%;
-    min-height: 8.5rem;
+    min-height: 90px;
     display: flex;
     flex-direction: column;
-    border-top: 1px solid var(--border-color);
 }
 
 .gridded-preview[hidden] {
@@ -485,19 +593,21 @@
     margin-top: 0.6rem;
 }
 
-/* The globe button on a gridded file's row: brings its map back. */
+/* The "Map" button on a gridded file's row: a labelled pill rather than a
+   bare icon, so the way back to the map is not missed. */
 .file-entry-map {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
+    gap: 0.2rem;
     flex-shrink: 0;
-    width: 1.55rem;
     height: 1.45rem;
-    padding: 0.15rem;
-    border: 1px solid transparent;
-    border-radius: 0.35rem;
-    background: color-mix(in srgb, #0f9d8a 14%, var(--bg-primary));
+    padding: 0 0.4rem 0 0.25rem;
+    border: 1px solid color-mix(in srgb, #0f9d8a 55%, var(--border-color));
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, #0f9d8a 18%, var(--bg-primary));
     color: var(--text-primary);
+    font-size: 0.7rem;
+    font-weight: 600;
     cursor: pointer;
 }
 
@@ -507,21 +617,64 @@
 
 .file-entry-map svg {
     display: block;
-    width: 1.05rem;
-    height: 1.05rem;
+    width: 0.95rem;
+    height: 0.95rem;
     stroke: currentColor;
 }
 
 .file-entry-map:hover,
 .file-entry-map.active {
-    border-color: color-mix(in srgb, #0f9d8a 62%, var(--border-color));
-    background: color-mix(in srgb, #0f9d8a 26%, var(--bg-primary));
+    background: #0f9d8a;
+    border-color: #0f9d8a;
+    color: #fff;
 }
 
-.file-entry.active .file-entry-map {
+.file-entry.active .file-entry-map:not(.active) {
     color: #fff;
-    border-color: rgba(255, 255, 255, 0.42);
-    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.16);
+}
+
+/* Over the plots, while a gridded file is active and its map is closed. */
+.gridded-return {
+    position: absolute;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 8;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    max-width: calc(100% - 2rem);
+    padding: 0.5rem 0.9rem 0.5rem 0.7rem;
+    border: none;
+    border-radius: 999px;
+    background: #0f9d8a;
+    color: #fff;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+}
+
+.gridded-return[hidden] {
+    display: none;
+}
+
+.gridded-return:hover {
+    background: #0c8676;
+}
+
+.gridded-return svg {
+    width: 1.15rem;
+    height: 1.15rem;
+    flex-shrink: 0;
+}
+
+.gridded-return span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Narrow windows and phones: the panel goes under the map. */

@@ -174,17 +174,47 @@ try {
         await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="remove-group"]');
         assert.equal((await extractions(page)).length, 4);
 
-        // The colour bar does not move the map when the range changes.
+        // The colour scale is fitted to the whole period and stays put while
+        // the time moves (t2m at 850 hPa... here t2m: 4 steps, exact range).
+        const scale = () => page.evaluate(() => [
+            Number(document.querySelector('#gridded-view [data-role="range-min"]').value),
+            Number(document.querySelector('#gridded-view [data-role="range-max"]').value),
+        ]);
+        await page.waitForFunction(() => window.app._griddedVisibleView().scale.range, null, { timeout: 30000 });
+        const period = await scale();
+        assert(Math.abs(period[0] - field(-75, 0, 0, 5)) < 0.01 && Math.abs(period[1] - field(75, 315, 3, 5)) < 0.01,
+            `the scale covers every step of the period (${period})`);
         const width = () => page.evaluate(() => document.querySelector('#gridded-view .gridded-map .nsewdrag').getBoundingClientRect().width);
         const before = await width();
         await page.click('#gridded-view [data-step="next"]');
         await page.waitForFunction(() => /\(2\/4\)/.test(document.querySelector('#gridded-view [data-role="time-label"]').textContent));
         await page.waitForTimeout(300);
-        await page.selectOption('#gridded-view [data-role="range"]', 'manual');
+        assert.deepEqual(await scale(), period, 'moving in time does not change the colour scale');
+        assert.deepEqual(await page.evaluate(() => {
+            const trace = document.querySelector('#gridded-view .gridded-map').data[0];
+            return [trace.zmin, trace.zmax];
+        }), await page.evaluate(() => window.app._griddedVisibleView().scale.range), 'the map is drawn with it');
+        // Auto-fit to the step on screen, then a typed bound (manual).
+        await page.click('#gridded-view [data-action="autofit-menu"]');
+        await page.click('#gridded-view [data-autofit="step"]');
+        const step = await scale();
+        assert(step[1] < period[1], 'fitted to one step, the maximum is that step\'s');
         await page.fill('#gridded-view [data-role="range-min"]', '-123456.789');
         await page.dispatchEvent('#gridded-view [data-role="range-min"]', 'change');
         await page.waitForTimeout(300);
+        assert.equal(await page.evaluate(() => window.app._griddedVisibleView().scale.source), 'manual');
+        // The colour bar does not move the map when the range changes.
         assert.equal(Math.round(await width()), Math.round(before), 'the plot area keeps its width');
+
+        // The boundary between map and preview drags.
+        const previewHeight = () => page.evaluate(() => document.querySelector('#gridded-view [data-role="preview"]').getBoundingClientRect().height);
+        const heightBefore = await previewHeight();
+        const grip = await page.$eval('#gridded-view [data-role="splitter"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+        await page.mouse.move(grip.x, grip.y);
+        await page.mouse.down();
+        await page.mouse.move(grip.x, grip.y - 120, { steps: 6 });
+        await page.mouse.up();
+        assert(await previewHeight() > heightBefore + 100, 'dragging the splitter up makes the preview taller');
 
         // Export goes through the panels' export dialog.
         await page.click('#gridded-view [data-action="export-map"]');
@@ -196,7 +226,13 @@ try {
         await page.click('#gridded-view [data-action="plot"]');
         await page.waitForFunction(() => [...window.app.plotManager.plots.values()].some(plot => plot.traces.length === 4), null, { timeout: 30000 });
         assert.equal(await page.evaluate(() => document.getElementById('gridded-view').hidden), true);
-        // The globe button on the file row brings the map back.
+        // Over the plots, a button says the map is still there; it brings it back.
+        await page.waitForSelector('#gridded-return:not([hidden])');
+        await page.click('#gridded-return');
+        await mapShown(page);
+        assert.equal(await page.evaluate(() => document.getElementById('gridded-return').hidden), true);
+        // So does the labelled "Map" button on the file row.
+        await page.click('#gridded-view [data-action="close"]');
         await page.click('.file-entry-map');
         await mapShown(page);
         // Reload reopens the dataset on its map; it is never reparsed as series.

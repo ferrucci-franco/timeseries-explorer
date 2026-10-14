@@ -590,6 +590,88 @@ export class GriddedDataset {
         return { total, blocks };
     }
 
+    /**
+     * The range of a variable's values over its whole time axis, at the
+     * selected level, for a colour scale that means the same at every step.
+     *
+     * `scope: 'sample'` reads `sampleCount` time steps spread evenly over the
+     * period (first and last included): a second or two on a global ERA5
+     * month. `scope: 'all'` reads every step, in blocks, with progress.
+     * Percentiles 1 and 99 come from a bounded subsample of every step read.
+     */
+    async valueRange(key, selection = {}, { scope = 'sample', sampleCount = 24 } = {}, job = {}) {
+        const variable = this._variable(key);
+        const tAxis = variable.roles.indexOf('t');
+        const yAxis = variable.roles.indexOf('y');
+        const xAxis = variable.roles.indexOf('x');
+        const total = tAxis >= 0 ? this.axes.get(variable.timeDim)?.size || 1 : 1;
+        let steps;
+        if (tAxis < 0) steps = [0];
+        else if (scope === 'all' || total <= sampleCount) steps = Array.from({ length: total }, (_, index) => index);
+        else {
+            // When the file's compressed chunks hold several time steps, reading
+            // one step decompresses its whole chunk: the sample then takes every
+            // step of a few chunks spread over the period, which costs the same
+            // and sees more of the data.
+            const chunkSteps = Math.max(1, Number(variable.segments[0].descriptor.chunks?.[tAxis]) || 1);
+            const blocks = Math.max(2, Math.min(sampleCount, Math.ceil(total / chunkSteps)));
+            const starts = [...new Set(Array.from({ length: blocks }, (_, index) => {
+                const chunk = Math.round((index * (Math.ceil(total / chunkSteps) - 1)) / (blocks - 1));
+                return chunk * chunkSteps;
+            }))];
+            const picked = new Set();
+            for (const start of starts) {
+                for (let step = start; step < Math.min(total, start + Math.min(chunkSteps, Math.ceil(sampleCount * 4 / blocks))); step++) picked.add(step);
+            }
+            picked.add(total - 1);
+            steps = [...picked].sort((a, b) => a - b);
+        }
+        // Consecutive steps are read together, in blocks the size the
+        // column and region reads use; scattered ones one at a time.
+        const ny = this.axes.get(variable.dimNames[yAxis]).size;
+        const nx = this.axes.get(variable.dimNames[xAxis]).size;
+        const perStep = ny * nx;
+        const blockSteps = Math.max(1, Math.floor(BLOCK_VALUE_TARGET / perStep));
+        const runs = [];
+        for (const step of steps) {
+            const last = runs.at(-1);
+            if (last && step === last[1] && last[1] - last[0] < blockSteps) last[1] = step + 1;
+            else runs.push([step, step + 1]);
+        }
+        const keepPerStep = Math.max(500, Math.floor(200000 / steps.length));
+        const kept = [];
+        let min = Infinity;
+        let max = -Infinity;
+        let done = 0;
+        for (const [start, stop] of runs) {
+            if (job.cancelled) throw new CancelledError();
+            for (let globalStart = start; globalStart < stop;) {
+                const { segment, local } = this._segmentFor(variable, globalStart);
+                const count = segment.tCount ?? segment.descriptor.shape[tAxis] ?? 1;
+                const take = tAxis >= 0 ? Math.min(stop - globalStart, count - local) : 1;
+                const overrides = tAxis >= 0 ? { [tAxis]: [local, local + take] } : {};
+                const ranges = this._ranges(variable, selection, overrides);
+                const values = decodeNumeric(flatNumbers(segment.descriptor.read(ranges)), segment.descriptor.userAttrs);
+                const stride = Math.max(1, Math.floor(perStep / keepPerStep));
+                for (let index = 0; index < values.length; index++) {
+                    const value = values[index];
+                    if (!Number.isFinite(value)) continue;
+                    if (value < min) min = value;
+                    if (value > max) max = value;
+                    if (index % stride === 0) kept.push(value);
+                }
+                globalStart += take;
+                done += take;
+                job.onProgress?.(done / steps.length);
+            }
+            await tick();
+        }
+        if (!Number.isFinite(min)) return { min: NaN, max: NaN, p01: NaN, p99: NaN, steps: steps.length, total };
+        const sorted = Float64Array.from(kept).sort();
+        const quantile = q => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+        return { min, max, p01: quantile(0.01), p99: quantile(0.99), steps: steps.length, total };
+    }
+
     /** The time series of the cell nearest (lat, lon) at the selected level. */
     async pointSeries(key, selection, lat, lon, job = {}) {
         const variable = this._variable(key);

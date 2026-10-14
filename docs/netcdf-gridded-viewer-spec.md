@@ -1119,10 +1119,31 @@ resumen de buscador):
      vista previa. Cada fila tiene una casilla para la vista previa y la
      exportación, y ✕ para quitarla junto con sus variables. "Abrir las series
      marcadas en los gráficos" cierra el mapa y las grafica en el explorador.
-- **Barra superior en una sola fila:** variable, nivel, paleta y escala a la
-  izquierda; exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el
-  título arriba, un formato de etiquetas acotado y un margen fijo: cambiar de
-  instante ya no cambia el ancho del mapa.
+- **Barra superior en una sola fila:** variable, nivel y escala a la izquierda;
+  exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el título
+  arriba, un formato de etiquetas acotado y un margen fijo: cambiar de instante
+  ya no cambia el ancho del mapa.
+- **Escala de colores fija en el tiempo.** Al reproducir, un color significa el
+  mismo valor en todos los instantes:
+  - Al abrir, o al cambiar de variable o de nivel, la escala se ajusta a **todo
+    el período** con una muestra de instantes. Si los bloques comprimidos del
+    archivo agrupan varios instantes, se toman bloques enteros repartidos en el
+    período, que cuestan lo mismo y ven más datos. Medido: 0,7 s en un día
+    global a 0,25° y 0,5 s en un año 6-horario regional.
+  - El mínimo y el máximo son editables a mano.
+  - El menú **"Autoajustar"** reajusta a todo el período, exacto (lee todos los
+    instantes, con progreso y cancelación), al instante en pantalla o a la zona
+    visible. Tiene tres opciones:
+    - ignorar extremos (percentiles 1–99);
+    - centrar en cero;
+    - "reajustar en cada instante" (el comportamiento anterior, desmarcado por
+      defecto).
+  - El menú también contiene la paleta y dice de dónde sale la escala actual.
+- **Divisor arrastrable** entre el mapa y la vista previa de las series (mouse
+  o flechas; doble clic vuelve al valor por defecto).
+- **Volver al mapa:** con un archivo grillado activo y el mapa cerrado, aparece
+  sobre los gráficos un botón verde "Volver al mapa · archivo". En la fila del
+  archivo, el globo pasó a ser un botón con texto, "Mapa".
 - **Encuadre:** grados iguales en ambos ejes. Una franja larga (una banda de
   latitudes) se muestra con la geografía de alrededor, sin pasar nunca de los
   polos.

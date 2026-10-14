@@ -210,8 +210,11 @@ reported as what it is, with what to do about it.
 **Gridded files** (ERA5, CMIP, regular lat/lon grids) open on a map, read by
 parts in a worker, so their size is not limited by memory (a multi-GB ERA5
 month opens in a couple of seconds). The map view has offline Natural Earth
-coastlines, a time slider with playback, a level selector, palettes and colour
-ranges. An analysis panel next to the map turns it into series:
+coastlines, a time slider with playback, a level selector and palettes. Its
+colour scale is fitted to the whole period and stays fixed while the time
+moves, so colours compare across steps; "Auto-fit" re-fits it (whole period,
+exact period, current step, visible area; optional percentile clipping and
+centring on zero). An analysis panel next to the map turns it into series:
 
 - **Point**: click the map or type a latitude and longitude, then extract the
   time series of the nearest grid cell.

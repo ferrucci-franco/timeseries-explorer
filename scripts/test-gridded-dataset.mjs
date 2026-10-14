@@ -104,6 +104,23 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
     dataset.close();
 }
 
+// --- The colour range over the whole period, sampled or exact.
+{
+    const dataset = await open('era5-like-new-cds.nc');
+    // t2m: 280 + 5 + 0.1 lat + 0.01 lon + t, one NaN cell; lat ±75, lon 0..315, t 0..3.
+    const exact = await dataset.valueRange('/t2m', {}, { scope: 'all' });
+    close(exact.min, field(-75, 0, 0, 5), 'exact minimum over every step');
+    close(exact.max, field(75, 315, 3, 5), 'exact maximum over every step');
+    assert.equal(exact.steps, 4);
+    const sampled = await dataset.valueRange('/t2m', {}, { scope: 'sample', sampleCount: 2 });
+    assert.equal(sampled.steps, 2, 'two steps: the first and the last');
+    close(sampled.max, exact.max, 'the last step is in the sample');
+    assert(sampled.p01 >= exact.min && sampled.p99 <= exact.max && sampled.p01 < sampled.p99);
+    const level = await dataset.valueRange('/t', { pressure_level: 1 }, { scope: 'all' });
+    close(level.max, field(75, 315, 3, 0, 1), 'the range follows the selected level');
+    dataset.close();
+}
+
 // --- Legacy CDS (netCDF3, unlimited time, int16 packed, odd-sized records)
 {
     const dataset = await open('era5-like-legacy-cds.nc');

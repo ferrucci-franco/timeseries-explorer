@@ -42,6 +42,10 @@ export async function handleGriddedRequest({ GriddedDataset, datasets }, op, pay
         const stats = await dataset().regionStats(payload.variable, payload.selection || {}, payload.box, job);
         return { result: stats, transfer: transferOf(stats.mean, stats.min, stats.max, stats.validFraction) };
     }
+    case 'range': {
+        const range = await dataset().valueRange(payload.variable, payload.selection || {}, payload.options || {}, job);
+        return { result: range };
+    }
     case 'close': {
         datasets.get(payload.datasetId)?.close();
         datasets.delete(payload.datasetId);
