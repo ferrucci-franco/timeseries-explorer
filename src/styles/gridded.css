@@ -2,6 +2,8 @@
    Gridded dataset view (netCDF maps)
    Covers the plot area, like the drop zone, and leaves the sidebar in place:
    the extractions it makes appear there as the file's variables.
+   Map column on the left; the analysis panel on the right reads top to
+   bottom as the workflow (tool → point or box → compute → results).
    ============================================ */
 .gridded-view {
     position: absolute;
@@ -18,12 +20,13 @@
     display: none;
 }
 
+/* ── Toolbar: one row; what is about the map on the left, leaving it on the right */
 .gridded-toolbar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.35rem 0.6rem;
-    padding: 0.45rem 0.6rem;
+    gap: 0.35rem 0.75rem;
+    padding: 0.4rem 0.6rem;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-secondary);
     font-size: 0.8rem;
@@ -31,7 +34,7 @@
 
 .gridded-title {
     font-weight: 600;
-    max-width: 18rem;
+    max-width: 16rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -47,6 +50,27 @@
     color: var(--text-secondary);
 }
 
+.gridded-dims {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.gridded-dims:empty {
+    display: none;
+}
+
+.gridded-manual-range[hidden] {
+    display: none;
+}
+
+.gridded-toolbar-end {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: auto;
+}
+
 .gridded-view select,
 .gridded-view input[type="number"] {
     font: inherit;
@@ -59,34 +83,14 @@
     max-width: 22rem;
 }
 
-.gridded-view input[type="number"] {
+.gridded-manual-range input[type="number"] {
     width: 6.5rem;
-}
-
-.gridded-dims {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-}
-
-.gridded-manual-range[hidden] {
-    display: none;
-}
-
-.gridded-tools,
-.gridded-actions {
-    display: inline-flex;
-    gap: 0.25rem;
-}
-
-.gridded-actions {
-    margin-left: auto;
 }
 
 .gridded-view button {
     font: inherit;
     font-size: 0.78rem;
-    padding: 0.2rem 0.55rem;
+    padding: 0.22rem 0.6rem;
     border: 1px solid var(--border-color);
     border-radius: 0.3rem;
     background: var(--bg-primary);
@@ -95,8 +99,13 @@
     white-space: nowrap;
 }
 
-.gridded-view button:hover {
+.gridded-view button:hover:not(:disabled) {
     background: var(--hover-bg);
+}
+
+.gridded-view button:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .gridded-view button:focus-visible,
@@ -106,14 +115,46 @@
     outline-offset: 1px;
 }
 
-.gridded-tool.active {
+.gridded-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 1.75rem;
+    padding: 0 !important;
+}
+
+.gridded-icon-btn svg {
+    width: 1.05rem;
+    height: 1.05rem;
+}
+
+.gridded-close {
+    font-weight: 600;
+}
+
+.gridded-view .gridded-primary {
     background: var(--primary-color);
     border-color: var(--primary-color);
     color: #fff;
 }
 
-.gridded-close {
-    font-weight: 600;
+.gridded-view .gridded-primary:hover:not(:disabled) {
+    background: var(--primary-hover);
+}
+
+/* ── Main area */
+.gridded-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+.gridded-map-column {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .gridded-body {
@@ -126,6 +167,13 @@
 .gridded-map {
     position: absolute;
     inset: 0;
+}
+
+/* Plotly draws a move cursor over the plot area; the point and region tools
+   pick a place, so they show a crosshair instead. */
+.gridded-map.gridded-cursor-point .nsewdrag,
+.gridded-map.gridded-cursor-region .nsewdrag {
+    cursor: crosshair !important;
 }
 
 .gridded-status {
@@ -166,7 +214,7 @@
 }
 
 .gridded-time-label {
-    min-width: 13rem;
+    min-width: 12rem;
     font-variant-numeric: tabular-nums;
 }
 
@@ -192,8 +240,8 @@
 }
 
 .gridded-preview {
-    height: 30%;
-    min-height: 9rem;
+    height: 28%;
+    min-height: 8.5rem;
     display: flex;
     flex-direction: column;
     border-top: 1px solid var(--border-color);
@@ -204,29 +252,230 @@
 }
 
 .gridded-preview-head {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.25rem 0.6rem;
-    font-size: 0.78rem;
-}
-
-.gridded-preview-head > span:first-child {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.gridded-preview-actions {
-    display: inline-flex;
-    gap: 0.3rem;
+    padding: 0.2rem 0.6rem 0;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
 }
 
 .gridded-preview-chart {
     flex: 1;
     min-height: 0;
     overflow: hidden;
+}
+
+/* ── Analysis panel */
+.gridded-panel {
+    width: 19rem;
+    flex-shrink: 0;
+    overflow-y: auto;
+    border-left: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 0.8rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.gridded-panel-section {
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.gridded-panel-section h3 {
+    margin: 0 0 0.45rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.gridded-modes {
+    display: flex;
+}
+
+.gridded-view .gridded-mode {
+    flex: 1;
+    border-radius: 0;
+    margin-left: -1px;
+    padding: 0.3rem 0.3rem;
+}
+
+.gridded-view .gridded-mode:first-child {
+    border-radius: 0.3rem 0 0 0.3rem;
+    margin-left: 0;
+}
+
+.gridded-view .gridded-mode:last-child {
+    border-radius: 0 0.3rem 0.3rem 0;
+}
+
+.gridded-view .gridded-mode.active {
+    position: relative;
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+}
+
+.gridded-help {
+    margin: 0.45rem 0 0;
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+
+.gridded-help[hidden] {
+    display: none;
+}
+
+.gridded-form {
+    margin-top: 0.55rem;
+}
+
+.gridded-form[hidden] {
+    display: none;
+}
+
+.gridded-coords {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.gridded-coords label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+}
+
+.gridded-view .gridded-coords input[type="number"] {
+    width: 100%;
+    box-sizing: border-box;
+    max-width: none;
+}
+
+.gridded-coords-point {
+    grid-template-columns: 1fr 1fr;
+}
+
+/* The CDS layout: north on top, west and east side by side, south below. */
+.gridded-coords-box {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+        "north north"
+        "west east"
+        "south south";
+}
+
+.gridded-north { grid-area: north; width: 50%; justify-self: center; }
+.gridded-west { grid-area: west; }
+.gridded-east { grid-area: east; }
+.gridded-south { grid-area: south; width: 50%; justify-self: center; }
+
+.gridded-form-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.55rem;
+}
+
+.gridded-form-actions .gridded-primary {
+    flex: 1;
+}
+
+.gridded-scope {
+    margin: 0.55rem 0 0;
+    padding: 0.35rem 0.45rem;
+    border-radius: 0.3rem;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+
+.gridded-results {
+    flex: 1;
+}
+
+.gridded-results-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.gridded-results-head h3 {
+    margin: 0;
+}
+
+.gridded-results-list {
+    list-style: none;
+    margin: 0.45rem 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.gridded-result {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.3rem;
+    padding: 0.3rem;
+    border-radius: 0.3rem;
+    background: var(--bg-primary);
+}
+
+.gridded-result label {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.35rem;
+    cursor: pointer;
+}
+
+.gridded-swatch {
+    flex-shrink: 0;
+    min-width: 1.6rem;
+    padding: 0 0.2rem;
+    border-radius: 0.25rem;
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.25rem;
+}
+
+.gridded-result-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+}
+
+.gridded-result-text small {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+}
+
+.gridded-view .gridded-remove {
+    flex-shrink: 0;
+    border: none;
+    background: none;
+    padding: 0 0.25rem;
+    color: var(--text-secondary);
+}
+
+.gridded-plot-btn {
+    width: 100%;
+}
+
+.gridded-panel-footer {
+    border-bottom: none;
+}
+
+.gridded-view .gridded-link {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--text-secondary);
+    text-decoration: underline;
+    white-space: normal;
+    text-align: left;
 }
 
 .gridded-zip-together {
@@ -275,14 +524,28 @@
     background: rgba(255, 255, 255, 0.14);
 }
 
+/* Narrow windows and phones: the panel goes under the map. */
+@media (max-width: 900px) {
+    .gridded-main {
+        flex-direction: column;
+        overflow-y: auto;
+    }
+
+    .gridded-map-column {
+        min-height: 60vh;
+    }
+
+    .gridded-panel {
+        width: auto;
+        border-left: none;
+        border-top: 1px solid var(--border-color);
+    }
+}
+
 html.compact .gridded-toolbar {
     font-size: 0.75rem;
 }
 
 html.compact .gridded-time-label {
     min-width: 0;
-}
-
-html.compact .gridded-actions {
-    margin-left: 0;
 }

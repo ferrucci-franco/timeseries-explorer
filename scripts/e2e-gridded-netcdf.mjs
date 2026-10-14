@@ -1,9 +1,11 @@
 // Gridded netCDF files open on a map, in a real browser.
 //
 // 1. An ERA5 file as the new Copernicus CDS writes it opens on its map (no
-//    series expansion); a point and a box become variables of the file with
-//    the right values; the time slider moves; the extractions plot in the
-//    explorer.
+//    series expansion). A click places a point and the button extracts it;
+//    typed coordinates and a typed box (CDS-style North/West/East/South) do
+//    the same; extractions can be removed; the colour bar never resizes the
+//    map; export uses the panels' dialog; the checked series plot in the
+//    explorer; reload reopens the map.
 // 2. The CDS ZIP (instant + accumulated variables) is listed and opened as
 //    one dataset.
 // 3. A station file stays with the series reader, unchanged.
@@ -76,7 +78,7 @@ const extractions = page => page.evaluate(() => {
 });
 
 try {
-    // 1. New-CDS ERA5: map, point, box, slider, plot.
+    // 1. New-CDS ERA5: map, point, region, slider, plot, export, reload.
     {
         const { context, page, errors } = await openApp();
         await page.setInputFiles('#file-input', resolve(FIXTURES, 'era5-like-new-cds.nc'));
@@ -91,6 +93,16 @@ try {
                 level: document.querySelector('#gridded-view [data-dim="pressure_level"]')?.selectedOptions[0]?.textContent,
                 time: document.querySelector('#gridded-view [data-role="time-label"]').textContent,
                 abscissa: data.metadata.timeName,
+                mode: document.querySelector('#gridded-view .gridded-mode.active')?.dataset.mode,
+                cursor: document.querySelector('#gridded-view .gridded-map').classList.contains('gridded-cursor-point'),
+                scope: document.querySelector('#gridded-view [data-role="scope"]').textContent,
+                toolbarRows: (() => {
+                    // Rows of the toolbar, by vertical centre (its items differ in height).
+                    const centres = [...document.querySelectorAll('#gridded-view .gridded-toolbar > *')]
+                        .filter(el => el.offsetParent)
+                        .map(el => { const rect = el.getBoundingClientRect(); return rect.top + rect.height / 2; });
+                    return Math.max(...centres) - Math.min(...centres) < 12 ? 1 : 2;
+                })(),
             };
         });
         assert.equal(state.gridded, true, 'the ERA5 file opens as a gridded dataset');
@@ -99,31 +111,48 @@ try {
         assert.equal(state.level, '850 hPa');
         assert.match(state.time, /^2024-01-01 00:00 +\(1\/4\)$/);
         assert.equal(state.abscissa, 'valid_time');
+        assert.equal(state.mode, 'point', 'the point tool is the starting tool');
+        assert.equal(state.cursor, true, 'the point tool shows a crosshair, not the move cursor');
+        assert.match(state.scope, /t · 850 hPa · .*4/, 'the panel says which level and how many steps an extraction uses');
+        assert.equal(state.toolbarRows, 1, 'the toolbar is one row at this width');
 
-        // A real click on the map adds one series.
+        // A click places a marker and fills the coordinates; nothing is read yet.
         const plot = await page.$eval('#gridded-view .gridded-map .nsewdrag', el => {
             const rect = el.getBoundingClientRect();
             return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
         });
         await page.mouse.click(plot.x + plot.w * 0.55, plot.y + plot.h * 0.35);
-        await page.waitForFunction(() => !document.querySelector('#gridded-view [data-role="preview"]').hidden, null, { timeout: 60000 });
-        assert.equal((await extractions(page)).length, 1);
+        await page.waitForFunction(() => document.querySelector('#gridded-view [data-input="lat"]').value !== '');
+        assert.equal((await extractions(page)).length, 0, 'a click alone extracts nothing');
+        assert.equal(await page.isEnabled('#gridded-view [data-action="extract-point"]'), true);
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => document.querySelectorAll('#gridded-view .gridded-result').length === 1, null, { timeout: 60000 });
 
-        // The values, at a known cell: t2m at 45 N 90 E.
-        await page.evaluate(async () => {
-            const app = window.app;
-            const view = app._griddedVisibleView();
-            view.variableKey = '/t2m';
-            app._griddedRenderControls(view);
-            await app._griddedExtractPoint(view, 44, 92);
-            await app._griddedExtractRegion(view, { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 });
-        });
-        const all = await extractions(page);
-        assert.equal(all.length, 5);
+        // Typed coordinates, on t2m: 44 N 92 E is the cell 45 N 90 E.
+        await page.selectOption('#gridded-view [data-role="variable"]', '/t2m');
+        await page.fill('#gridded-view [data-input="lat"]', '44');
+        await page.fill('#gridded-view [data-input="lon"]', '92');
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => document.querySelectorAll('#gridded-view .gridded-result').length === 2, null, { timeout: 60000 });
+        let all = await extractions(page);
         const point = all[1];
-        assert.match(point.label, /^t2m · 45°N 90°E$/);
+        assert.match(point.label, /^P2 · t2m · 45°N 90°E$/);
         point.values.forEach((value, step) => assert(Math.abs(value - field(45, 90, step, 5)) < 1e-3, `point value at step ${step}`));
-        const mean = all.find(item => /mean/.test(item.label));
+
+        // A region typed like the CDS form: North, West, East, South.
+        await page.click('#gridded-view [data-mode="region"]');
+        assert.equal(await page.evaluate(() => document.querySelector('#gridded-view .gridded-map').classList.contains('gridded-cursor-region')), true);
+        await page.fill('#gridded-view [data-input="north"]', '50');
+        await page.fill('#gridded-view [data-input="south"]', '0');
+        await page.fill('#gridded-view [data-input="west"]', '-50');
+        await page.fill('#gridded-view [data-input="east"]', '50');
+        // The box is on the map, editable, before anything is computed.
+        await page.waitForFunction(() => (document.querySelector('#gridded-view .gridded-map').layout.shapes || []).some(shape => shape.editable));
+        await page.click('#gridded-view [data-action="extract-region"]');
+        await page.waitForFunction(() => document.querySelectorAll('#gridded-view .gridded-result').length === 3, null, { timeout: 60000 });
+        all = await extractions(page);
+        assert.equal(all.length, 5, 'two points and the three curves of one region');
+        const mean = all.find(item => /^R1 · .*mean/.test(item.label));
         const expected = step => {
             let sum = 0;
             let weights = 0;
@@ -135,14 +164,37 @@ try {
             return sum / weights;
         };
         mean.values.forEach((value, step) => assert(Math.abs(value - expected(step)) < 1e-3, `area-weighted mean at step ${step}`));
+        const overlays = await page.evaluate(() => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            return { shapes: (div.layout.shapes || []).length, editable: (div.layout.shapes || []).filter(shape => shape.editable).length };
+        });
+        assert.deepEqual(overlays, { shapes: 1, editable: 0 }, 'the computed region stays on the map, dashed and fixed');
 
-        // The slider.
+        // Removing an extraction removes its variables.
+        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="remove-group"]');
+        assert.equal((await extractions(page)).length, 4);
+
+        // The colour bar does not move the map when the range changes.
+        const width = () => page.evaluate(() => document.querySelector('#gridded-view .gridded-map .nsewdrag').getBoundingClientRect().width);
+        const before = await width();
         await page.click('#gridded-view [data-step="next"]');
         await page.waitForFunction(() => /\(2\/4\)/.test(document.querySelector('#gridded-view [data-role="time-label"]').textContent));
+        await page.waitForTimeout(300);
+        await page.selectOption('#gridded-view [data-role="range"]', 'manual');
+        await page.fill('#gridded-view [data-role="range-min"]', '-123456.789');
+        await page.dispatchEvent('#gridded-view [data-role="range-min"]', 'change');
+        await page.waitForTimeout(300);
+        assert.equal(Math.round(await width()), Math.round(before), 'the plot area keeps its width');
 
-        // Plot in the explorer: the map closes, the three region curves draw.
+        // Export goes through the panels' export dialog.
+        await page.click('#gridded-view [data-action="export-map"]');
+        await page.waitForSelector('.modal-dialog-plot-export', { timeout: 10000 });
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.modal-dialog-plot-export', { state: 'detached', timeout: 10000 });
+
+        // Open in the plots: the map closes, the checked curves draw.
         await page.click('#gridded-view [data-action="plot"]');
-        await page.waitForFunction(() => [...window.app.plotManager.plots.values()].some(plot => plot.traces.length === 3), null, { timeout: 30000 });
+        await page.waitForFunction(() => [...window.app.plotManager.plots.values()].some(plot => plot.traces.length === 4), null, { timeout: 30000 });
         assert.equal(await page.evaluate(() => document.getElementById('gridded-view').hidden), true);
         // The globe button on the file row brings the map back.
         await page.click('.file-entry-map');
