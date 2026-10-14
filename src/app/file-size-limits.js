@@ -39,7 +39,7 @@ export const EAGER_ONLY_FORMATS = [
     },
     {
         id: 'netcdf',
-        extensions: ['.nc', '.netcdf'],
+        extensions: ['.nc', '.nc4', '.netcdf', '.cdf'],
         limitKey: 'pypsaNetcdfFullLoadMb',
         settingLabelKey: 'pypsaNetcdfFullLoadLimit',
         formatLabelKey: 'fileFormatNetcdf',

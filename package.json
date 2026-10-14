@@ -188,6 +188,7 @@
     "test:period-units": "node scripts/test-period-units.mjs",
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:netcdf": "node scripts/test-generic-netcdf-parser.mjs",
+    "test:gridded": "node scripts/test-gridded-dataset.mjs",
     "verify:netcdf-corpus": "node scripts/verify-netcdf-corpus.mjs",
     "test:pypsa": "node scripts/test-pypsa-netcdf-parser.mjs",
     "test:pypsa-session": "node scripts/test-pypsa-session.mjs",

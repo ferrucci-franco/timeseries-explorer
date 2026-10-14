@@ -1,20 +1,40 @@
 import h5wasm from 'h5wasm';
-import { NetCDFReader } from 'netcdfjs';
 import MatParser from './mat-parser.js';
 import PypsaNetcdfParser from './pypsa-netcdf-parser.js';
 import { PYPSA_NETCDF_DEFAULT_EAGER_LIMIT_BYTES } from './pypsa-netcdf-limits.js';
+import { netcdfContainerError, sniffNetcdfContainer } from './netcdf-sniff.js';
+import { openNetcdf3 } from '../gridded/nc3-reader.js';
+import { BufferByteSource } from '../gridded/byte-source.js';
+import {
+    DESCRIPTION_KEYS,
+    NON_STANDARD_CALENDARS,
+    UNIT_KEYS,
+    attrText,
+    attrValue,
+    attrsFromHdf5,
+    cfTimeUnits,
+    decodeNumeric,
+    flatten,
+    parseDate,
+    plainTimeUnitScaleMs,
+    scalar,
+} from './netcdf-cf.js';
 
-const HDF5_MAGIC = '89 48 44 46 0D 0A 1A 0A';
-const NETCDF3_MAGICS = new Map([
-    ['43 44 46 01', 'netcdf3-classic'],
-    ['43 44 46 02', 'netcdf3-64-bit-offset'],
-]);
-const CDF5_MAGIC = '43 44 46 05';
 const UNSUPPORTED_NODE = 'Unsupported variables';
 const PARTIAL_NODE = 'Partially loaded variables';
 const METADATA_NODE = 'File metadata';
 const COORDINATES_NODE = 'Coordinates';
 const MAX_GENERATED_SERIES = 10000;
+// Series are cut out of whole arrays, never read one at a time. A per-series
+// hyperslab looked cheap and was the single largest cost in the reader: on a
+// chunked, compressed variable every slice decompresses every chunk it touches,
+// so 5,000 series on a [24, 161, 209] ERA5 field decompressed the whole field
+// 5,000 times — 75 s for a 3.6 MB file whose variable reads whole in 15 ms.
+// Up to this many values a variable is read in one call; past it, it is read in
+// slabs along its sample axis, so the memory held at once stays bounded and the
+// file is still decompressed once.
+const WHOLE_READ_VALUE_LIMIT = 32 * 1024 * 1024;
+const SLAB_VALUE_TARGET = 8 * 1024 * 1024;
 // A gridded variable can expose tens of thousands (or millions) of spatial
 // points. Rejecting the whole variable leaves otherwise valid climate files
 // looking as if they failed to load. A bounded, evenly spaced subset is loaded
@@ -37,43 +57,12 @@ const MAX_GENERATED_SERIES = 10000;
 // docs/netcdf-gridded-subsampling.md.
 const SERIES_VALUE_BUDGET_PER_VARIABLE = 2000000;
 const MIN_SERIES_PER_VARIABLE = 64;
-const TECHNICAL_ATTRIBUTES = new Set([
-    'CLASS', 'NAME', 'REFERENCE_LIST', 'DIMENSION_LIST',
-    '_Netcdf4Coordinates', '_Netcdf4Dimid', '_NCProperties',
-]);
-const DESCRIPTION_KEYS = ['long_name', 'description', 'standard_name', 'title'];
-const UNIT_KEYS = ['units', 'unit', 'display_unit', 'displayUnit'];
 const TIME_LIKE_NAME = /^(time|times|date|datetime|timestamp|timestamps|time_?offset|time_?obs|observation_?time|time_?nominal|time_?valid)$/i;
-const TIME_UNIT_SCALES_MS = {
-    day: 86400000, days: 86400000,
-    hour: 3600000, hours: 3600000, hr: 3600000, hrs: 3600000,
-    minute: 60000, minutes: 60000, min: 60000, mins: 60000,
-    second: 1000, seconds: 1000, sec: 1000, secs: 1000, s: 1000,
-    millisecond: 1, milliseconds: 1, msec: 1, msecs: 1, ms: 1,
-    microsecond: 0.001, microseconds: 0.001, usec: 0.001, usecs: 0.001, us: 0.001, 'µs': 0.001,
-    nanosecond: 0.000001, nanoseconds: 0.000001, nsec: 0.000001, nsecs: 0.000001, ns: 0.000001,
-};
-
-function magic(buffer, length) {
-    return [...new Uint8Array(buffer, 0, Math.min(length, buffer.byteLength))]
-        .map(byte => byte.toString(16).padStart(2, '0').toUpperCase())
-        .join(' ');
-}
-
 function toArray(value) {
     if (value == null) return [];
     if (Array.isArray(value)) return value;
     if (ArrayBuffer.isView(value)) return Array.from(value);
     return [value];
-}
-
-function flatten(value, target = []) {
-    if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-        for (const item of value) flatten(item, target);
-    } else {
-        target.push(value);
-    }
-    return target;
 }
 
 function product(values) {
@@ -99,114 +88,12 @@ function idSegment(value) {
     return encodeURIComponent(String(value ?? ''));
 }
 
-function scalar(value) {
-    if (typeof value === 'bigint') {
-        const converted = Number(value);
-        return Number.isSafeInteger(converted) ? converted : String(value);
-    }
-    return value;
-}
-
-function normalizedAttributeValue(value) {
-    if (value == null) return value;
-    if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-        const values = flatten(value).map(scalar);
-        if (!values.length) return undefined;
-        return values.length === 1 ? values[0] : values;
-    }
-    if (typeof value === 'object') return undefined;
-    return scalar(value);
-}
-
-function attrsFromHdf5(entity, { includeTechnical = false } = {}) {
-    const attrs = {};
-    for (const [name, attribute] of Object.entries(entity?.attrs || {})) {
-        if (!includeTechnical && TECHNICAL_ATTRIBUTES.has(name)) continue;
-        const value = normalizedAttributeValue(attribute?.value);
-        if (value !== undefined && value !== null && value !== '') attrs[name] = value;
-    }
-    return attrs;
-}
-
-function attrsFromNetcdf3(attributes = []) {
-    return Object.fromEntries(attributes
-        .map(attribute => [attribute.name, normalizedAttributeValue(attribute.value)])
-        .filter(([, value]) => value !== undefined && value !== null && value !== ''));
-}
-
-function attrValue(attrs, names) {
-    const entries = Object.entries(attrs || {});
-    for (const wanted of names) {
-        const found = entries.find(([name]) => name.toLowerCase() === wanted.toLowerCase());
-        if (found) return found[1];
-    }
-    return undefined;
-}
-
-function attrText(attrs, names) {
-    const value = attrValue(attrs, names);
-    if (Array.isArray(value)) return value.map(item => String(item)).join(', ');
-    return value == null ? '' : String(value);
-}
-
-function parseDate(value) {
-    const text = String(value ?? '').replace(/\0/g, '').trim().replace(/^(\d{4}-\d{2}-\d{2})_(\d{2}:\d{2}:\d{2})/, '$1T$2');
-    if (!text || /^[+-]?\d+(?:\.\d+)?$/.test(text)) return NaN;
-    const match = text.match(/^(\d{1,4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?(?:\s*(Z|[+-]\d{2}:?\d{2}))?)?$/);
-    if (!match) {
-        const parsed = Date.parse(text);
-        return Number.isFinite(parsed) ? parsed : NaN;
-    }
-    const [, year, month, day, hour = '0', minute = '0', second = '0', fraction = '', zone = 'Z'] = match;
-    const milliseconds = fraction ? Math.round(Number(`0.${fraction}`) * 1000) : 0;
-    const normalizedZone = zone === 'Z' || zone.includes(':') ? zone : `${zone.slice(0, 3)}:${zone.slice(3)}`;
-    const date = [year.padStart(4, '0'), month.padStart(2, '0'), day.padStart(2, '0')].join('-');
-    const time = [hour.padStart(2, '0'), minute.padStart(2, '0'), second.padStart(2, '0')].join(':');
-    return Date.parse(`${date}T${time}.${String(milliseconds).padStart(3, '0')}${normalizedZone}`);
-}
-
-function cfTimeUnits(units) {
-    const match = String(units || '').trim().match(/^([A-Za-zµ]+)\s+since\s+(.+)$/i);
-    if (!match) return null;
-    const unit = match[1].toLowerCase();
-    const scaleMs = TIME_UNIT_SCALES_MS[unit];
-    const originMs = parseDate(match[2]);
-    return Number.isFinite(scaleMs) && Number.isFinite(originMs)
-        ? { scaleMs, originMs, originText: match[2] }
-        : null;
-}
-
-function plainTimeUnitScaleMs(units) {
-    const unit = String(units || '').trim().toLowerCase().match(/^([a-zµ]+)/)?.[1];
-    return TIME_UNIT_SCALES_MS[unit] || null;
-}
-
 function isNumericValue(value) {
     return typeof value === 'number' || typeof value === 'bigint';
 }
 
 function numericArray(value) {
     return Float64Array.from(flatten(value), item => Number(item));
-}
-
-function decodeNumeric(values, attrs) {
-    const fillValues = [attrValue(attrs, ['_FillValue']), attrValue(attrs, ['missing_value'])]
-        .flatMap(value => Array.isArray(value) ? value : [value])
-        .filter(value => value !== undefined && value !== null)
-        .map(Number);
-    const scale = Number(attrValue(attrs, ['scale_factor']) ?? 1);
-    const offset = Number(attrValue(attrs, ['add_offset']) ?? 0);
-    return Float64Array.from(values, raw => {
-        const value = Number(raw);
-        if (fillValues.some(fill => (Number.isNaN(fill) && Number.isNaN(value)) || value === fill)) return NaN;
-        return value * (Number.isFinite(scale) ? scale : 1) + (Number.isFinite(offset) ? offset : 0);
-    });
-}
-
-function rowMajorOffset(indexes, shape) {
-    let offset = 0;
-    for (let axis = 0; axis < shape.length; axis++) offset = offset * shape[axis] + indexes[axis];
-    return offset;
 }
 
 function combinations(shape) {
@@ -311,6 +198,33 @@ function seriesLimits(seriesCounts, sampleCount) {
     return limits;
 }
 
+/**
+ * A numeric view of whatever a reader returned for a variable: typed arrays
+ * pass through untouched (h5wasm hands those back), anything nested is
+ * flattened once. Never a boxed copy of a typed array — the old reader built a
+ * JS Array of every value just to ask whether they were numbers.
+ */
+function flatValues(value) {
+    if (ArrayBuffer.isView(value)) return value;
+    if (Array.isArray(value) && !value.some(item => Array.isArray(item) || ArrayBuffer.isView(item))) return value;
+    return flatten(value);
+}
+
+function rowMajorStrides(shape) {
+    const strides = new Array(shape.length).fill(1);
+    for (let axis = shape.length - 2; axis >= 0; axis--) strides[axis] = strides[axis + 1] * shape[axis + 1];
+    return strides;
+}
+
+function isoLabel(milliseconds) {
+    if (!Number.isFinite(milliseconds)) return '';
+    const date = new Date(milliseconds);
+    if (Number.isNaN(date.getTime())) return '';
+    const iso = date.toISOString();
+    if (iso.endsWith('T00:00:00.000Z')) return iso.slice(0, 10);
+    return iso.replace(/:00\.000Z$/, 'Z').replace(/\.000Z$/, 'Z');
+}
+
 function coordinateLabel(value, index) {
     if (value === undefined || value === null || value === '') return String(index);
     if (typeof value === 'number' && !Number.isFinite(value)) return String(index);
@@ -331,12 +245,10 @@ export default class NetcdfParser {
             throw new Error('netCDF support is currently limited to files that fit in memory. Large/lazy netCDF loading is not available yet.');
         }
 
-        const magic8 = magic(buffer, 8);
-        const magic4 = magic(buffer, 4);
-        if (magic8 === HDF5_MAGIC) return this._parseHdf5(buffer, filename);
-        if (NETCDF3_MAGICS.has(magic4)) return this._parseNetcdf3(buffer, filename, NETCDF3_MAGICS.get(magic4));
-        if (magic4 === CDF5_MAGIC) throw new Error('netCDF CDF-5 files are not supported by the browser reader. Convert the file to netCDF4/HDF5 or netCDF3 Classic.');
-        throw new Error('The selected file is not a recognized netCDF3 or netCDF4/HDF5 file.');
+        const { kind } = sniffNetcdfContainer(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096)));
+        if (kind === 'hdf5') return this._parseHdf5(buffer, filename);
+        if (kind === 'netcdf3-classic' || kind === 'netcdf3-64-bit-offset' || kind === 'cdf5') return this._parseNetcdf3(buffer, filename);
+        throw netcdfContainerError(kind);
     }
 
     async _parseHdf5(buffer, filename) {
@@ -373,6 +285,7 @@ export default class NetcdfParser {
                 if (object?.type !== 'Dataset') continue;
                 const dimId = Number(object.attrs?._Netcdf4Dimid?.value);
                 if (Number.isInteger(dimId)) dimensionById.set(dimId, path);
+                const typeInfo = this._hdf5TypeInfo(object);
                 descriptors.push({
                     path,
                     name: basename(path),
@@ -383,6 +296,9 @@ export default class NetcdfParser {
                     dimensions: [],
                     read: ranges => ranges ? object.slice(ranges) : object.value,
                     supportsSlice: true,
+                    numeric: typeInfo.numeric,
+                    textual: typeInfo.textual,
+                    chunks: typeInfo.chunks,
                     raw: object,
                 });
             }
@@ -411,28 +327,36 @@ export default class NetcdfParser {
         return descriptors;
     }
 
-    _parseNetcdf3(buffer, filename, format) {
-        let reader;
+    // H5T classes: 0 integer, 1 float, 3 string, 8 enum. Asking the type is free;
+    // reading the values to find out, which is what this used to do, cost a full
+    // decompression of every variable in the file before anything was drawn.
+    _hdf5TypeInfo(object) {
+        let metadata = null;
         try {
-            reader = new NetCDFReader(new Uint8Array(buffer));
+            metadata = object.metadata;
+        } catch {
+            metadata = null;
+        }
+        const typeClass = Number(metadata?.type);
+        const chunks = Array.isArray(metadata?.chunks) ? metadata.chunks.map(Number) : null;
+        if (!Number.isInteger(typeClass)) return { numeric: undefined, textual: undefined, chunks };
+        return { numeric: typeClass === 0 || typeClass === 1 || typeClass === 8, textual: typeClass === 3, chunks };
+    }
+
+    // netcdfjs used to read these, and it misreads record variables whose
+    // per-record size is not a multiple of four bytes: it keeps the padding
+    // between records as data, so every record after the first is shifted by a
+    // value. Legacy-CDS ERA5 files are exactly that (int16 fields on odd-sized
+    // grids). The by-parts reader follows the file format's padding rules and
+    // reads CDF-5 as well.
+    _parseNetcdf3(buffer, filename) {
+        let opened;
+        try {
+            opened = openNetcdf3(new BufferByteSource(buffer));
         } catch (error) {
             throw new Error(`Could not parse netCDF3 file: ${error?.message || error}`);
         }
-        const descriptors = reader.variables.map(variable => ({
-            path: `/${variable.name}`,
-            name: variable.name,
-            group: '/',
-            shape: variable.dimensions.map(id => {
-                const dimension = reader.dimensions[id];
-                return Number(dimension?.size || (dimension?.name === reader.recordDimension.name ? reader.recordDimension.length : 0));
-            }),
-            dimensions: variable.dimensions.map(id => `/${reader.dimensions[id]?.name || `dimension_${id}`}`),
-            attrs: attrsFromNetcdf3(variable.attributes),
-            userAttrs: attrsFromNetcdf3(variable.attributes),
-            read: () => reader.getDataVariable(variable),
-            supportsSlice: false,
-        }));
-        return this._parseGeneric(descriptors, attrsFromNetcdf3(reader.globalAttributes), filename, format);
+        return this._parseGeneric(opened.descriptors, opened.globalAttrs, filename, opened.storageFormat);
     }
 
     _parseGeneric(descriptors, globalAttrs, filename, storageFormat) {
@@ -493,6 +417,14 @@ export default class NetcdfParser {
         const plans = [];
         for (const descriptor of descriptors) {
             if (descriptor.path === coordinate?.path || coordinatePaths.has(descriptor.path)) continue;
+            // Scalars and text labels are context, not data: ERA5's `number`
+            // (the ensemble member, 0) and `expver` ("0001" per step) used to be
+            // listed under "Unsupported variables", which read as a failure.
+            if (descriptor.shape.length === 0 || (descriptor.textual === true && descriptor.shape.length <= 2)) {
+                this._addCoordinateMetadata(result.tree, descriptor, this._coordinateValues(descriptor, readFlat));
+                result.metadata.auxiliaryCoordinateCount += 1;
+                continue;
+            }
             const alignment = this._timeAlignment(descriptor, axis);
             if (!alignment) {
                 this._skip(result, descriptor, 'No dimension aligns with the selected X coordinate.');
@@ -540,10 +472,10 @@ export default class NetcdfParser {
                     sampledAxes: perAxis,
                 });
             }
-            for (const combination of sample.combinations) {
+            const rawSeries = this._readSeriesBatch(descriptor, alignment.axis, otherAxes, sample.combinations, readFlat);
+            for (const [combinationIndex, combination] of sample.combinations.entries()) {
                 const fixed = new Map(otherAxes.map((item, index) => [item.index, combination[index]]));
-                const rawValues = this._readSeries(descriptor, alignment.axis, fixed, readFlat);
-                const values = decodeNumeric(rawValues, descriptor.userAttrs);
+                const values = decodeNumeric(rawSeries[combinationIndex], descriptor.userAttrs);
                 const selectors = otherAxes.map(item => ({
                     dimension: basename(descriptor.dimensions[item.index]),
                     index: fixed.get(item.index),
@@ -617,13 +549,26 @@ export default class NetcdfParser {
         if (descriptor.shape.length === 1 && descriptor.shape[0] > 1) {
             return { dimension: descriptor.dimensions[0] || descriptor.path, length: descriptor.shape[0] };
         }
-        if (descriptor.shape.length === 2 && descriptor.shape[0] > 1) {
+        // A time axis with a single step is still the time axis. Without this a
+        // one-instant ERA5 download (a map) took latitude as its X coordinate and
+        // turned every longitude into a "series" running pole to pole.
+        if (descriptor.shape.length === 1 && descriptor.shape[0] === 1 && this._isTimeCoordinate(descriptor)) {
+            return { dimension: descriptor.dimensions[0] || descriptor.path, length: 1 };
+        }
+        if (descriptor.shape.length === 2 && descriptor.shape[0] > 1 && descriptor.textual !== false) {
             const values = this._coordinateValues(descriptor, readFlat);
             if (values.length === descriptor.shape[0] && values.every(value => typeof value === 'string')) {
                 return { dimension: descriptor.dimensions[0] || descriptor.path, length: descriptor.shape[0] };
             }
         }
         return null;
+    }
+
+    _isTimeCoordinate(descriptor) {
+        const attrs = descriptor.userAttrs || {};
+        if (cfTimeUnits(attrText(attrs, UNIT_KEYS))) return true;
+        if (String(attrValue(attrs, ['axis']) || '').toUpperCase() === 'T') return true;
+        return String(attrValue(attrs, ['standard_name']) || '').toLowerCase() === 'time';
     }
 
     _coordinateValues(descriptor, readFlat) {
@@ -655,7 +600,7 @@ export default class NetcdfParser {
         let timeKind = 'numeric';
         let timeDisplayMode;
         let timeSourceStrategy = 'netcdf-coordinate';
-        if (cf && !['360_day', '365_day', '366_day', 'noleap', 'all_leap'].includes(calendar)) {
+        if (cf && !NON_STANDARD_CALENDARS.has(calendar)) {
             values = Float64Array.from(numericArray(rawValues), value => cf.originMs + value * cf.scaleMs);
             timeKind = 'datetime';
             timeDisplayMode = 'calendar';
@@ -777,6 +722,7 @@ export default class NetcdfParser {
     }
 
     _descriptorIsNumeric(descriptor, readFlat) {
+        if (typeof descriptor.numeric === 'boolean') return descriptor.numeric && product(descriptor.shape) > 0;
         const values = readFlat(descriptor);
         return values.length > 0 && values.every(isNumericValue);
     }
@@ -796,24 +742,63 @@ export default class NetcdfParser {
     _dimensionLabels(dimension, size, descriptors, readFlat) {
         const coordinate = descriptors.find(item => item.path === dimension && item.shape.length === 1 && item.shape[0] === size)
             || descriptors.find(item => item.group === dirname(dimension) && item.name === basename(dimension) && item.shape.length === 1 && item.shape[0] === size);
-        return coordinate ? readFlat(coordinate) : Array.from({ length: size }, (_, index) => index);
-    }
-
-    _readSeries(descriptor, timeAxis, fixed, readFlat) {
-        if (descriptor.shape.length === 1) return readFlat(descriptor);
-        const ranges = descriptor.shape.map((_, axis) => axis === timeAxis ? [] : [fixed.get(axis), fixed.get(axis) + 1]);
-        if (descriptor.supportsSlice) try {
-            return flatten(descriptor.read(ranges));
-        } catch {
-            // Fall back to the row-major full array below.
-        }
-        const all = readFlat(descriptor);
-        const values = [];
-        for (let time = 0; time < descriptor.shape[timeAxis]; time++) {
-            const indexes = descriptor.shape.map((_, axis) => axis === timeAxis ? time : fixed.get(axis));
-            values.push(all[rowMajorOffset(indexes, descriptor.shape)]);
+        if (!coordinate) return Array.from({ length: size }, (_, index) => index);
+        const values = readFlat(coordinate);
+        const cf = cfTimeUnits(attrText(coordinate.userAttrs, UNIT_KEYS));
+        const calendar = String(attrValue(coordinate.userAttrs, ['calendar']) || 'standard').toLowerCase();
+        if (cf && !NON_STANDARD_CALENDARS.has(calendar)) {
+            // A selector reads "valid_time=2024-01-01T06:00Z", not "=1704088800".
+            return values.map((value, index) => isoLabel(cf.originMs + Number(value) * cf.scaleMs) || index);
         }
         return values;
+    }
+
+    /**
+     * Every requested series of one variable, cut out of the variable read whole
+     * (or in slabs along its sample axis when it is large), so each chunk on disk
+     * is decompressed once however many series come out of it.
+     */
+    _readSeriesBatch(descriptor, timeAxis, otherAxes, combinations, readFlat) {
+        const shape = descriptor.shape;
+        if (shape.length === 1) return [readFlat(descriptor)];
+        const length = shape[timeAxis];
+        const total = product(shape);
+        const outputs = combinations.map(() => new Float64Array(length));
+        const gather = (values, valuesShape, timeOffset) => {
+            const strides = rowMajorStrides(valuesShape);
+            const timeStride = strides[timeAxis];
+            const steps = valuesShape[timeAxis];
+            combinations.forEach((combination, index) => {
+                let base = 0;
+                otherAxes.forEach((item, position) => { base += combination[position] * strides[item.index]; });
+                const target = outputs[index];
+                for (let step = 0; step < steps; step++) target[timeOffset + step] = Number(values[base + step * timeStride]);
+            });
+        };
+        const wholeRead = () => gather(
+            descriptor.supportsSlice ? flatValues(descriptor.read()) : flatValues(descriptor.read ? descriptor.read() : readFlat(descriptor)),
+            shape,
+            0,
+        );
+        if (!descriptor.supportsSlice || total <= WHOLE_READ_VALUE_LIMIT) {
+            wholeRead();
+            return outputs;
+        }
+        const otherSize = Math.max(1, total / Math.max(1, length));
+        let block = Math.max(1, Math.floor(SLAB_VALUE_TARGET / otherSize));
+        const chunkSteps = Number(descriptor.chunks?.[timeAxis]);
+        if (Number.isInteger(chunkSteps) && chunkSteps > 0 && block >= chunkSteps) block = Math.floor(block / chunkSteps) * chunkSteps;
+        try {
+            for (let start = 0; start < length; start += block) {
+                const stop = Math.min(length, start + block);
+                const ranges = shape.map((size, axis) => (axis === timeAxis ? [start, stop] : [0, size]));
+                const slabShape = shape.map((size, axis) => (axis === timeAxis ? stop - start : size));
+                gather(flatValues(descriptor.read(ranges)), slabShape, start);
+            }
+        } catch {
+            wholeRead();
+        }
+        return outputs;
     }
 
     _seriesVariable(descriptor, selectors, values) {

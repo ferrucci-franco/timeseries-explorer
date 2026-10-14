@@ -395,9 +395,11 @@ assert.equal(wrfTimes.metadata.timeKind, 'datetime');
 assert.equal(new Date(wrfTimes.variables[wrfTimes.metadata.timeName].data[2]).toISOString(), '2000-01-24T14:00:00.000Z');
 assert.deepEqual(Array.from(wrfTimes.variables['netcdf:T2'].data), [280, 281, 282]);
 
+// CDF-5 is read now (the by-parts netCDF3 reader handles all three variants);
+// a header cut short says so instead of failing somewhere inside the parse.
 await assert.rejects(
     () => parser.parse(new Uint8Array([0x43, 0x44, 0x46, 0x05, 0, 0, 0, 0]).buffer, 'cdf5.nc'),
-    /CDF-5 files are not supported/
+    /header is truncated/
 );
 await assert.rejects(
     () => parser.parse(new Uint8Array([1, 2, 3, 4]).buffer, 'invalid.nc'),

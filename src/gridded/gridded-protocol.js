@@ -1,0 +1,53 @@
+// The requests a gridded dataset answers, shared by the worker and by the
+// in-page fallback (no Worker under file://), so both run the same code.
+
+function transferOf(...arrays) {
+    return arrays.filter(array => ArrayBuffer.isView(array)).map(array => array.buffer);
+}
+
+/**
+ * @param {{GriddedDataset: Function, datasets: Map}} context
+ * @param {string} op
+ * @param {object} payload
+ * @param {{cancelled: boolean, onProgress?: Function}} job
+ * @returns {Promise<{result: any, transfer?: ArrayBuffer[]}>}
+ */
+export async function handleGriddedRequest({ GriddedDataset, datasets }, op, payload, job) {
+    const dataset = () => {
+        const found = datasets.get(payload.datasetId);
+        if (!found) throw Object.assign(new Error('The dataset is no longer open.'), { code: 'GRIDDED_NOT_OPEN' });
+        return found;
+    };
+    switch (op) {
+    case 'open': {
+        const opened = await GriddedDataset.open(payload.inputs || [], payload.options || {});
+        const model = opened.model();
+        if (!opened.gridded) {
+            opened.close();
+            return { result: { gridded: false, model } };
+        }
+        datasets.get(payload.datasetId)?.close();
+        datasets.set(payload.datasetId, opened);
+        return { result: { gridded: true, model } };
+    }
+    case 'map': {
+        const map = dataset().readMap(payload.variable, payload.selection || {});
+        return { result: map, transfer: transferOf(map.values) };
+    }
+    case 'point': {
+        const series = await dataset().pointSeries(payload.variable, payload.selection || {}, payload.lat, payload.lon, job);
+        return { result: series, transfer: transferOf(series.values) };
+    }
+    case 'region': {
+        const stats = await dataset().regionStats(payload.variable, payload.selection || {}, payload.box, job);
+        return { result: stats, transfer: transferOf(stats.mean, stats.min, stats.max, stats.validFraction) };
+    }
+    case 'close': {
+        datasets.get(payload.datasetId)?.close();
+        datasets.delete(payload.datasetId);
+        return { result: true };
+    }
+    default:
+        throw new Error(`Unknown op "${op}"`);
+    }
+}

@@ -243,6 +243,13 @@ proto.loadFile = async function(file, options = {}) {
                 }
                 if (!currentFile) throw new Error(i18n.t('invalidFile'));
                 extension = this._fileExtension(currentFile.name);
+                // A gridded netCDF file opens on its map and is read by parts,
+                // so no size limit applies to it; anything else netCDF-like
+                // (station series, PyPSA) goes on to the series reader.
+                if (attempt === 0 && !options.matBuffer) {
+                    const gridded = await this._maybeOpenGridded(currentFile, extension, options);
+                    if (gridded) return gridded;
+                }
                 // Formats with no memory-saving path warn above their limit and
                 // let the user decide. `allowOversized` then has to travel with
                 // the request: the pickle and netCDF readers enforce the same
@@ -396,7 +403,10 @@ proto.loadFiles = async function(items = []) {
     // Sheet selection happens before the loading overlay so the picker is not
     // stacked under it and the progress counter reflects the expanded count.
     const excelEntries = await this._expandExcelEntries(Array.from(items || []));
-    const entries = await this._expandMatEntries(excelEntries);
+    const matEntries = await this._expandMatEntries(excelEntries);
+    // netCDF: ZIP archives listed, non-data files explained, gridded files
+    // opened (header only) and offered as one dataset when they belong together.
+    const entries = await this._expandNetcdfEntries(matEntries);
     if (!entries.length) return [];
 
     const loaded = [];
@@ -423,6 +433,9 @@ proto.loadFiles = async function(items = []) {
                 matBuffer: item?.matBuffer || null,
                 matInspection: item?.matInspection || null,
                 matSelection: item?.matSelection || null,
+                griddedOpen: item?.griddedOpen || null,
+                netcdfProbed: item?.netcdfProbed === true,
+                netcdfAsSeries: item?.netcdfAsSeries === true,
                 loadToken,
             });
             if (result) loaded.push(result);
@@ -451,7 +464,12 @@ proto.loadFiles = async function(items = []) {
         this._largeCsvRawApproved?.clear();
     }
 
+    // The last gridded dataset of the batch opens on its map.
+    const lastGridded = [...loaded].reverse().find(result => result.gridded);
+    if (lastGridded) this._showGriddedView(lastGridded.fileId);
+
     for (const result of loaded) {
+        if (result.gridded) continue;
         await this._showDatetimeAxisWarningIfNeeded(result.fileId, result.data);
         if (result.data?._duckdb) this._showLazyFileNotice(result.fileId, result.data);
         this._showNetcdfPartialLoadNotice(result.fileId);
@@ -1660,7 +1678,7 @@ proto._isDesktopStreamablePath = function(filePath) {
 };
 
 proto._isPypsaNetcdfExtension = function(extension) {
-    return extension === '.nc' || extension === '.netcdf';
+    return extension === '.nc' || extension === '.nc4' || extension === '.netcdf' || extension === '.cdf';
 };
 
 proto._isPickleExtension = function(extension) {
@@ -1839,6 +1857,26 @@ proto._readLocalResultPath = async function(filePath) {
             wrapped.name = err?.name === 'Error' ? 'NotReadableError' : (err?.name || 'NotReadableError');
             wrapped.code = err?.code || '';
             throw wrapped;
+        }
+    }
+
+    // netCDF on the desktop: fetched from the local server as a Blob, which
+    // the browser keeps on disk past its memory budget, instead of through IPC
+    // into one buffer. A gridded file is then read by parts from that Blob, so
+    // a multi-GB ERA5 month opens without the full-load question; a series
+    // file still gets the question, from loadFile, before it is read whole.
+    if (this.capabilities?.isDesktop && this._isPypsaNetcdfExtension(this._fileExtension(filePath))) {
+        try {
+            const origin = globalThis.location?.origin || '';
+            const response = await fetch(`${origin}${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`, { cache: 'no-store' });
+            if (response.ok) {
+                const blob = await response.blob();
+                const name = String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'dataset.nc';
+                const lastModified = Number(response.headers.get('x-omv-last-modified')) || Date.now();
+                return new File([blob], name, { lastModified, type: 'application/x-netcdf' });
+            }
+        } catch (err) {
+            console.warn('[netcdf] local fetch failed, reading through IPC instead:', err?.message || err);
         }
     }
 
@@ -2025,7 +2063,7 @@ proto._fileEntryTooltip = function(entry) {
 proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file, options);
-    if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
+    if (this._isPypsaNetcdfExtension(extension)) return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
     if (isAudioExtension(extension)) return this._parseAudioResultBuffer(filename, buffer, options);
@@ -2089,6 +2127,19 @@ proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options =
     // for why neither can travel as the number the app holds.
     const maxFileBytes = readerFileCeiling(this._pypsaNetcdfEagerLimitBytes(), options);
     const workerBuffer = detachedCopy(buffer);
+    try {
+        return await this._parseNetcdfOffThread(filename, buffer, workerBuffer, maxFileBytes);
+    } catch (err) {
+        // What the file turned out to be (ZIP, GRIB, an error page...), said in
+        // the user's language with what to do about it.
+        if (err?.containerKind && typeof this._griddedContainerMessage === 'function') {
+            throw new Error(this._griddedContainerMessage(err.containerKind, filename));
+        }
+        throw err;
+    }
+};
+
+proto._parseNetcdfOffThread = function(filename, buffer, workerBuffer, maxFileBytes) {
     return parseOffThread(
         'parse:netcdf',
         { filename, buffer: workerBuffer, maxFileBytes },
@@ -3983,6 +4034,7 @@ proto.removeFile = async function(fileId, options = {}) {
         if (!ok) return;
     }
     if (this._datasetEditing?.fileId === fileId) this._exitDerivedDatasetEditing?.();
+    if (fileEntry?.gridded) this._griddedReleaseFile?.(fileId);
 
     // Remove plots first. This invalidates lazy-detail/FFT tokens immediately,
     // so the close button never waits behind a long query or transform.
@@ -4372,6 +4424,21 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
             this._compactOpenFileActions?.(fileId, entry);
         });
 
+        // A gridded dataset reopens its map from here.
+        const mapBtn = document.createElement('button');
+        mapBtn.type = 'button';
+        mapBtn.className = 'file-entry-map';
+        mapBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke-width="1.8"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17" fill="none" stroke-width="1.6"/></svg>';
+        mapBtn.title = i18n.t('griddedShowMap');
+        mapBtn.setAttribute('aria-label', i18n.t('griddedShowMap'));
+        mapBtn.hidden = !entryData.gridded;
+        mapBtn.classList.toggle('active', !!entryData.gridded && this._gridded?.visibleFileId === fileId);
+        mapBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this._gridded?.visibleFileId === fileId) this._hideGriddedView();
+            else this._showGriddedView(fileId);
+        });
+
         const closeBtn = document.createElement('button');
         closeBtn.className = 'file-entry-close';
         closeBtn.textContent = 'x';
@@ -4390,6 +4457,7 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         entry.appendChild(saveBtn);
         entry.appendChild(csvParsingBtn);
         entry.appendChild(matArraysBtn);
+        entry.appendChild(mapBtn);
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
         entry.appendChild(moreBtn);
@@ -4403,6 +4471,7 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
 
 proto._fileTypeLabel = function(_entry, fileId = null) {
     const metadata = fileId ? this.plotManager.files.get(fileId)?.data?.metadata : null;
+    if (metadata?.format === 'gridded-netcdf') return i18n.t('fileTypeGriddedNetcdf');
     if (metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') {
         return i18n.t('fileTypePypsaNetcdf');
     }
