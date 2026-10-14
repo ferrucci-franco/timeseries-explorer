@@ -412,6 +412,61 @@ Dataset
 
 ### 4.4 Interfaz: modo "Dataset grillado"
 
+#### 4.4.0 Flujo de apertura
+
+A diferencia del `.mat`, no hay un diálogo obligatorio de "qué importar". El
+`.mat` lee el archivo **entero** y después pregunta qué variables convertir en
+series. Con lectura perezosa elegir antes no ahorra nada, y obligaría a decidir
+sin haber visto los datos. **El panel del dataset es el selector, y el mapa es lo
+que dice qué extraer.**
+
+Pasos al abrir (arrastrar, elegir o abrir por ruta en Electron):
+
+1. **Detección por contenido** (§4.2). Si no es un dato utilizable (GRIB antes de
+   la fase 3, HTML, PDF, imagen, archivo truncado), aparece un mensaje que dice qué
+   es y qué hacer. No se intenta parsear.
+2. **Lectura de la cabecera:** dimensiones, variables, atributos y chunks. Son
+   unos KB, en menos de 1 s, cualquiera sea el tamaño del archivo. Todavía no se
+   lee ningún dato.
+3. **Clasificación** del contenido:
+   - **Grilla geográfica:** al menos una variable de datos con dos ejes
+     reconocidos como Y/X (lat/lon 1-D, lat/lon 2-D curvilíneas o `grid_mapping`).
+     Se abre el **modo dataset grillado** (paso 4).
+   - **Series:** estaciones, `time` + `station`, ARM, PyPSA. Se usa el camino
+     actual del explorador, **sin cambios**.
+   - **Ambiguo:** tiene lat/lon, pero todas las variables son 1-D a lo largo de
+     una dimensión de estaciones o puntos (p. ej. `[time, station]` con
+     `lat[station]`). Aparece un diálogo: "¿Abrir como mapa de estaciones o como
+     series?".
+4. **Modo dataset grillado:**
+   - aparece el panel del dataset;
+   - el mapa muestra la **primera variable de datos** (la de más dimensiones,
+     excluyendo coordenadas y auxiliares como `expver` y `number`), en el **primer
+     instante** y el **primer nivel**;
+   - solo se lee ese mapa (≈ 50 ms en un global de 0,25°).
+5. Desde ahí, **cada herramienta lee lo que necesita**:
+   - clic en un punto → serie de esa celda;
+   - caja → media, mín. y máx. ponderadas, recorriendo el tiempo con barra de
+     progreso y botón de cancelar.
+
+Diálogos solo cuando hay una decisión real:
+
+| Situación | Diálogo |
+|---|---|
+| ZIP | Lista de entradas, con tamaño y variables de cada netCDF. Opciones: abrir una, o abrirlas todas **como un solo dataset** si comparten grilla y tiempo (caso instant + accum del CDS) |
+| Varios archivos seleccionados juntos con las mismas variables y grilla | "¿Concatenarlos en el tiempo?" (sí: un dataset; no: un dataset por archivo) |
+| Contenido ambiguo (paso 3) | "¿Mapa o series?" |
+| Archivo que hoy no se puede leer por partes, y es grande (netCDF3 antes del lector perezoso, en web) | Igual que hoy: aviso de tamaño, con la opción de continuar |
+
+**"Abrir como series"** está siempre disponible desde el panel del dataset. Abre
+un diálogo con la misma lógica que el selector del `.mat`:
+
+- variable, niveles, caja de lat/lon y período;
+- el diálogo muestra cuántas series resultan y cuánta memoria ocupan **antes**
+  de confirmar;
+- genera un conjunto **acotado** de series en el explorador, que reemplaza las
+  10.000 series elegidas a ciegas de hoy.
+
 Al abrir un archivo grillado, la app **no** genera miles de series. Muestra un
 **panel de dataset** y una **vista de mapa**:
 
