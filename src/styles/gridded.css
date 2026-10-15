@@ -108,6 +108,39 @@
     border-color: transparent;
 }
 
+/* The fit the scale comes from, in blue; typed ends mark their row. */
+.gridded-view .gridded-menu > button.active,
+.gridded-view .gridded-menu > button.active:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.gridded-menu-range {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.3rem;
+    border: 1px solid transparent;
+    border-radius: 0.3rem;
+}
+
+.gridded-menu-range > span:first-child {
+    flex: 1;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.gridded-menu-range.active {
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+}
+
+.gridded-menu-range input[type="number"] {
+    width: 5.2rem;
+}
+
 .gridded-menu hr {
     width: 100%;
     margin: 0.2rem 0;

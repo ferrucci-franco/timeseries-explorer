@@ -1194,6 +1194,9 @@ resumen de buscador):
      - "Ocultar / Mostrar" en "2 · Series extraídas" pliega la lista y la
        vista previa bajo el mapa, que toma todo el alto; el encabezado cuenta
        las series. Se recuerda para el próximo mapa (localStorage).
+     - Todo lo de la escala bajo un solo botón **"Color range"** en la
+       barra: los extremos escritos a mano, la paleta y los ajustes. El
+       ajuste en uso (o los extremos escritos) se marca en azul al abrirlo.
 - **Barra superior en una sola fila:** variable, nivel y escala a la izquierda;
   exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el título
   arriba, un formato de etiquetas acotado y un margen fijo: cambiar de instante

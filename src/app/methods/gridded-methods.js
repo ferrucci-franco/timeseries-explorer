@@ -761,13 +761,15 @@ export function installGriddedMethods(TargetClass) {
                 <label class="gridded-field"><span data-role="variable-label"></span><select data-role="variable"></select></label>
                 <span class="gridded-dims" data-role="dims"></span>
                 <span class="gridded-field gridded-scale">
-                    <span data-role="range-label"></span>
-                    <input type="number" step="any" data-role="range-min">
-                    <span aria-hidden="true">–</span>
-                    <input type="number" step="any" data-role="range-max">
                     <span class="gridded-autofit">
                         <button type="button" data-action="autofit-menu" aria-haspopup="true" aria-expanded="false"><span data-role="autofit-label"></span> ▾</button>
                         <div class="gridded-menu" data-role="autofit-menu" hidden>
+                            <div class="gridded-menu-range" data-role="range-row">
+                                <span data-role="range-label"></span>
+                                <input type="number" step="any" data-role="range-min">
+                                <span aria-hidden="true">–</span>
+                                <input type="number" step="any" data-role="range-max">
+                            </div>
                             <label class="gridded-menu-palette"><span data-role="palette-label"></span><select data-role="palette"></select></label>
                             <hr>
                             <div class="gridded-menu-title" data-role="autofit-title"></div>
@@ -1183,8 +1185,8 @@ export function installGriddedMethods(TargetClass) {
         };
         set('[data-role="variable-label"]', 'griddedVariable');
         set('[data-role="palette-label"]', 'griddedPalette');
-        set('[data-role="range-label"]', 'griddedColorRange');
-        set('[data-role="range-label"]', 'griddedColorRangeTitle', 'title');
+        set('[data-role="range-label"]', 'griddedRangeEnds');
+        set('[data-role="range-row"]', 'griddedColorRangeTitle', 'title');
         set('[data-role="range-min"]', 'griddedColorRangeTitle', 'title');
         set('[data-role="range-max"]', 'griddedColorRangeTitle', 'title');
         set('.gridded-menu-palette', 'griddedPaletteTitle', 'title');
@@ -1199,7 +1201,7 @@ export function installGriddedMethods(TargetClass) {
         });
         set('[data-role="range-min"]', 'griddedRangeMin', 'ariaLabel');
         set('[data-role="range-max"]', 'griddedRangeMax', 'ariaLabel');
-        set('[data-role="autofit-label"]', 'griddedAutofit');
+        set('[data-role="autofit-label"]', 'griddedColorRange');
         set('[data-action="autofit-menu"]', 'griddedAutofitTitle', 'title');
         set('[data-role="autofit-title"]', 'griddedAutofitMenuTitle');
         set('[data-autofit="sample"]', 'griddedAutofitSample');
@@ -1704,8 +1706,20 @@ export function installGriddedMethods(TargetClass) {
             .replace('{total}', String(stats?.total ?? '…'));
         const note = this._griddedEl('scale-source');
         if (note) note.textContent = text;
+        // The way the scale was set, marked in the menu: one of the fits, or
+        // the two values typed by hand.
+        const source = view.scale.follow ? 'follow' : view.scale.source;
+        root.querySelectorAll('[data-autofit]').forEach(item => {
+            const active = item.dataset.autofit === source;
+            item.classList.toggle('active', active);
+            item.setAttribute('aria-pressed', String(active));
+        });
+        root.querySelector('[data-role="range-row"]')?.classList.toggle('active', source === 'manual');
         const button = root.querySelector('[data-action="autofit-menu"]');
-        if (button) button.title = `${i18n.t('griddedAutofitTitle')}\n${text}`;
+        if (button) {
+            const range = low !== undefined && Number.isFinite(low) && Number.isFinite(high) ? `${format(low)} – ${format(high)}` : '';
+            button.title = `${i18n.t('griddedAutofitTitle')}${range ? `\n${range}` : ''}\n${text}`;
+        }
     };
 
     proto._griddedColors = function(theme = this.theme) {

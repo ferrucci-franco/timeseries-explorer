@@ -208,15 +208,26 @@ try {
             const trace = document.querySelector('#gridded-view .gridded-map').data[0];
             return [trace.zmin, trace.zmax];
         }), await page.evaluate(() => window.app._griddedVisibleView().scale.range), 'the map is drawn with it');
-        // Auto-fit to the step on screen, then a typed bound (manual).
+        // Everything about the scale is under one "Color range" button: the
+        // fit it comes from is marked in blue, and so are typed ends.
+        const marked = () => page.evaluate(() => ({
+            fits: [...document.querySelectorAll('#gridded-view [data-autofit].active')].map(button => button.dataset.autofit),
+            typed: document.querySelector('#gridded-view [data-role="range-row"]').classList.contains('active'),
+        }));
+        assert.equal(await page.isVisible('#gridded-view [data-role="range-min"]'), false, 'the ends are inside the menu, not on the toolbar');
         await page.click('#gridded-view [data-action="autofit-menu"]');
+        assert.deepEqual(await marked(), { fits: ['sample'], typed: false }, 'the menu marks the fit in use');
         await page.click('#gridded-view [data-autofit="step"]');
         const step = await scale();
         assert(step[1] < period[1], 'fitted to one step, the maximum is that step\'s');
+        await page.click('#gridded-view [data-action="autofit-menu"]');
+        assert.deepEqual(await marked(), { fits: ['step'], typed: false });
         await page.fill('#gridded-view [data-role="range-min"]', '-123456.789');
         await page.dispatchEvent('#gridded-view [data-role="range-min"]', 'change');
         await page.waitForTimeout(300);
         assert.equal(await page.evaluate(() => window.app._griddedVisibleView().scale.source), 'manual');
+        assert.deepEqual(await marked(), { fits: [], typed: true }, 'typed ends mark their row');
+        await page.keyboard.press('Escape');
         // The colour bar does not move the map when the range changes.
         assert.equal(Math.round(await width()), Math.round(before), 'the plot area keeps its width');
 
@@ -306,7 +317,7 @@ try {
         const tips = await page.evaluate(() => [
             ...[...document.querySelectorAll('#gridded-view [data-autofit]')].map(button => button.title),
             ...[...document.querySelectorAll('#gridded-view [data-scale-option]')].map(input => input.closest('label').title),
-            document.querySelector('#gridded-view [data-role="range-label"]').title,
+            document.querySelector('#gridded-view [data-role="range-row"]').title,
         ]);
         assert.ok(tips.length === 8 && tips.every(tip => tip.length > 30), `every scale option has a tooltip (${JSON.stringify(tips)})`);
         assert.equal(await page.$('#gridded-view [data-action="as-series"]'), null);
