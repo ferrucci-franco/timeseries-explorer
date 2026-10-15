@@ -11,8 +11,16 @@
 // definition as `lazyStats`, tagged with the source it was computed from.
 //
 // Hard bounds keep their original path (`_duckdbDataTool`, data-tools-methods.js).
+//
+// The moving average (and the moving-average detrend) has no SQL form: its
+// kernel runs over the file a chunk at a time (src/data/chunk-executor.js) and
+// writes its output to a sink, a table as long as the file, that the variable
+// reads (`definition.lazySink`). The run is a job behind an overlay with
+// progress and Cancel; a session keeps the definition and runs it again.
 
 import i18n from '../../i18n/index.js';
+import { runChunkedJob } from '../../data/chunk-executor.js';
+import { createMovingAverage } from '../../compute/kernels/moving-average.js';
 import {
     derivativeWindows,
     detrendAnchorSql,
@@ -32,6 +40,7 @@ import {
     GAP_THRESHOLD_FACTOR,
 } from '../../utils/sampling-gaps.js';
 import {
+    createMovingAverageDetrend,
     DETREND_METHODS,
     detrendRequestedOrder,
     detrendScale,
@@ -39,9 +48,11 @@ import {
 } from '../../compute/kernels/detrend.js';
 import { iqrFences, interpolatedQuantile } from '../../compute/kernels/outliers.js';
 
-// Detrend methods the lazy path computes. The moving-average baseline is a
-// centred window of arbitrary width: it waits for the chunked executor.
-export const LAZY_DETREND_METHODS = new Set(['mean', 'linear', 'polynomial', 'firstSample']);
+// Detrend methods the lazy path computes as SQL. The moving-average baseline,
+// a centred window of arbitrary width, runs in the chunked executor.
+const LAZY_SQL_DETREND_METHODS = new Set(['mean', 'linear', 'polynomial', 'firstSample']);
+// Every detrend method a lazy file offers.
+export const LAZY_DETREND_METHODS = new Set([...LAZY_SQL_DETREND_METHODS, 'movingAverage']);
 
 export function installLazyDataToolsMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -56,8 +67,16 @@ proto._isLazySqlToolConfig = function(config) {
     if (config.tool === 'removeOutliers') return config.method === 'iqr';
     if (config.tool === 'detrend') {
         const method = config.params?.method ?? config.method;
-        return DETREND_METHODS.has(method) && LAZY_DETREND_METHODS.has(method);
+        return DETREND_METHODS.has(method) && LAZY_SQL_DETREND_METHODS.has(method);
     }
+    return false;
+};
+
+// Whether the chunked executor computes this configuration into a sink.
+proto._isLazySinkToolConfig = function(config) {
+    if (!config) return false;
+    if (config.tool === 'movingAverage') return true;
+    if (config.tool === 'detrend') return (config.params?.method ?? config.method) === 'movingAverage';
     return false;
 };
 
@@ -214,20 +233,31 @@ proto._lazyIntegralStats = async function(data, definition) {
     };
 };
 
-// The output variable, from the definition and its statistics. Null while the
-// source has no SQL of its own (a formula not restored yet).
+// The output variable, from the definition and its statistics — or, for a tool
+// the chunked executor runs, its sink. Null while the source has no SQL of its
+// own (a formula not restored yet). Without statistics or a sink yet the
+// variable exists with no SQL, and its overview is empty.
 proto._lazySqlToolVariable = function(data, name, definition) {
     const source = data?._duckdb?.source;
     const sourceName = definition.sourceName;
     const sourceVariable = data?.variables?.[sourceName];
     if (!source || !sourceVariable || !source.hasSqlValue(sourceVariable)) return null;
-    const stats = definition.lazyStats || null;
+    const sink = this._isLazySinkToolConfig(definition) ? definition.lazySink || null : null;
+    const stats = definition.lazyStats || sink;
     const valueSql = source._valueExpressionSql(sourceVariable, sourceName, { castDouble: true });
     const sourceWindows = sourceVariable._duckdbWindows || [];
 
     let expr = null;
     let windows = sourceWindows;
-    if (definition.tool === 'derivative') {
+    if (this._isLazySinkToolConfig(definition)) {
+        // The output is in the sink: nothing of the source's SQL is needed to
+        // read it.
+        windows = [];
+        if (sink?.column) {
+            expr = quoteIdent(sink.column.column);
+            windows = [sink.column];
+        }
+    } else if (definition.tool === 'derivative') {
         const axis = this._lazyToolTimeAxis(data);
         const built = derivativeWindows(valueSql, axis.timeSql, {
             kind: axis.kind,
@@ -287,6 +317,7 @@ proto._lazySqlToolVariable = function(data, name, definition) {
             ...(definition.tool === 'removeOutliers'
                 ? { replacement: 'nan', outlierCount: stats?.count ?? null }
                 : {}),
+            ...(definition.tool === 'movingAverage' ? { window: definition.params?.window } : {}),
             ...(definition.tool === 'detrend'
                 ? { order: stats?.order ?? null, slope: stats?.slope ?? null, fitPoints: stats?.fitPoints ?? null }
                 : {}),
@@ -368,6 +399,7 @@ proto._applyLazySqlToolCreateMode = async function(context, config, options = {}
 // stale: the variable keeps its old SQL meanwhile, and a pass in the background
 // replaces it. Returns false while the source has no SQL yet.
 proto._reapplyLazySqlTool = function(fileId, data, name, definition) {
+    if (this._isLazySinkToolConfig(definition)) return this._reapplyLazySinkTool(fileId, data, name, definition);
     const sourceVariable = data.variables?.[definition.sourceName];
     if (!sourceVariable || !data._duckdb?.source?.hasSqlValue(sourceVariable)) return false;
     const signature = this._lazyToolSourceSignature(data, definition.sourceName);
@@ -415,6 +447,270 @@ proto._refreshLazyToolStats = async function(fileId, name, isCurrent = () => tru
         console.warn(`[duckdb] could not compute lazy data tool ${name}:`, err?.message || err);
         return false;
     }
+};
+
+
+// ─── Tools the chunked executor runs ────────────────────────────────────────
+
+proto._applyLazySinkToolCreateMode = async function(context, config, options = {}) {
+    const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
+    const source = data._duckdb?.source;
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
+    const existing = data.variables[outputName];
+    const existingDefinition = definitions?.get(outputName);
+    if (existing && !existingDefinition) throw new Error(i18n.t('outlierOutputExists').replace('{name}', outputName));
+    if (outputName === sourceName) throw new Error(i18n.t('outlierOutputSameAsSource'));
+    if (!source?.hasSqlValue(sourceVariable)) throw new Error(i18n.t('dataToolLazyDisabled'));
+
+    const definition = {
+        name: outputName,
+        tool,
+        targetMode: 'create',
+        sourceName,
+        method: config.method || null,
+        params: this._cloneDataToolParams(config.params),
+        replacement: '',
+    };
+    const signature = this._lazySinkSignature(data, definition);
+    const run = await this._runLazySinkJob(data, definition, options);
+    if (!run) {
+        if (!options.silent) this._setOutlierMessage(() => i18n.t('dataToolSinkCancelled').replace('{name}', outputName), '');
+        return null;
+    }
+    definition.lazySink = this._lazySinkRecord(run, signature);
+    const variable = this._lazySqlToolVariable(data, outputName, definition);
+    if (!variable?._duckdbExpr) {
+        await source.dropSink(data, run.sink.table);
+        throw new Error(i18n.t('dataToolLazyDisabled'));
+    }
+    data.variables[outputName] = variable;
+    // Replacing an earlier run drops its sink (_storeDataToolDefinition).
+    this._storeDataToolDefinition(fileId, outputName, { ...definition, variable });
+    // What is built on this output reads its sink: rebuild it.
+    const dependents = existingDefinition ? this._reapplyDataToolDependents(fileId, data, outputName) : [];
+    await this._refreshLazyDataToolOverview(data);
+
+    this.plotManager.updateFileData(fileId, data);
+    this._renderFilteredTree();
+    this._syncDataTools();
+    const result = { variable, count: 0, tool, name: outputName, warning: '' };
+    if (!options.silent) {
+        this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName, dependents.length);
+    }
+    return result;
+};
+
+// What a sink was computed from: the source (its SQL, the time axis, the rows
+// — see _lazyToolSourceSignature) and the tool's settings. A sink computed
+// from anything else is stale.
+proto._lazySinkSignature = function(data, definition) {
+    const source = this._lazyToolSourceSignature(data, definition.sourceName);
+    if (!source) return null;
+    return JSON.stringify([source, definition.tool, definition.params || {}]);
+};
+
+proto._lazySinkRecord = function(run, signature) {
+    return {
+        table: run.sink.table,
+        column: run.sink.columns[0],
+        signature,
+        rows: run.rows,
+        // The moving-average detrend's fit points (see computeDetrend).
+        fitPoints: run.fitPoints,
+    };
+};
+
+// The kernel a job runs: the incremental form of the tool's own kernel, fed
+// the source column of each chunk.
+proto._lazySinkKernel = function(definition) {
+    const params = definition.params || {};
+    const kernel = definition.tool === 'detrend' ? createMovingAverageDetrend(params) : createMovingAverage(params);
+    const sourceName = definition.sourceName;
+    return {
+        push: chunk => kernel.push(chunk.yByVar.get(sourceName)),
+        flush: () => kernel.flush(),
+        get used() { return kernel.used; },
+    };
+};
+
+// What the sinks may hold together, in bytes: the Advanced setting "Results in
+// memory", where 0 is no limit. Null leaves the engine's own default.
+proto._lazySinkBudgetBytes = function() {
+    const mb = Number(this.advancedSettings?.lazyResultsMb);
+    if (!Number.isFinite(mb) || mb < 0) return null;
+    return mb > 0 ? mb * 1024 * 1024 : Infinity;
+};
+
+/**
+ * Run a tool over the whole file into a new sink, behind an overlay with
+ * progress and Cancel. Returns `{ sink, rows, fitPoints }`, or null when it
+ * was cancelled (the sink is dropped then). Anything else that stops it is
+ * thrown, with a message for the panel.
+ *
+ * `overlayDelayMs` holds the overlay back: a run nobody asked for just now (a
+ * session restored, rows appended live, a source edited upstream) shows it
+ * only if it lasts, so a file that updates live does not flash a dialog at
+ * every append.
+ */
+proto._runLazySinkJob = async function(data, definition, { signal = null, overlayDelayMs = 0 } = {}) {
+    const source = data._duckdb.source;
+    const budgetBytes = this._lazySinkBudgetBytes();
+    if (budgetBytes !== null) source.sinkBudgetBytes = budgetBytes;
+    // Refused before reading anything when the size is known (Parquet, a
+    // counted file); otherwise the writer stops at the budget.
+    const totalRows = Number(data._duckdb.totalRows);
+    if (Number.isFinite(totalRows) && totalRows > 0) {
+        const budget = source.sinkBudget();
+        if (budget.used + source.sinkBytesFor(totalRows, 1) > budget.limit) {
+            throw new Error(this._lazySinkErrorMessage(definition.name, { code: 'SINK_BUDGET', ...budget }));
+        }
+    }
+    const controller = new AbortController();
+    if (signal?.aborted) controller.abort();
+    signal?.addEventListener?.('abort', () => controller.abort(), { once: true });
+    // The overlay's Cancel sets `cancelled`: that aborts the job there and
+    // then, rather than at the next chunk.
+    const token = {
+        get cancelled() { return controller.signal.aborted; },
+        set cancelled(value) { if (value) controller.abort(); },
+    };
+    let overlay = null;
+    const openOverlay = () => {
+        overlay = this._showBusyOverlay?.({
+            title: i18n.t('dataToolSinkRunning').replace('{name}', definition.name),
+            token,
+        }) || null;
+    };
+    const overlayTimer = overlayDelayMs > 0 ? setTimeout(openOverlay, overlayDelayMs) : null;
+    if (!overlayTimer) openOverlay();
+    const kernel = this._lazySinkKernel(definition);
+    try {
+        const sink = await source.createSink(data);
+        const { rows } = await runChunkedJob({
+            data,
+            sourceNames: [definition.sourceName],
+            kernel,
+            sink,
+            signal: controller.signal,
+            onProgress: ({ rows: done, totalRows: total }) => overlay?.progress(total
+                ? i18n.t('csvExportProgress')
+                    .replace('{done}', i18n.formatNumber(Math.min(done, total)))
+                    .replace('{total}', i18n.formatNumber(total))
+                : i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(done))),
+        });
+        return { sink, rows, fitPoints: kernel.used };
+    } catch (err) {
+        if (controller.signal.aborted || err?.name === 'AbortError') return null;
+        throw new Error(this._lazySinkErrorMessage(definition.name, err));
+    } finally {
+        if (overlayTimer) clearTimeout(overlayTimer);
+        overlay?.close();
+    }
+};
+
+proto._lazySinkErrorMessage = function(name, err) {
+    if (err?.code === 'SINK_BUDGET') {
+        const size = (bytes) => this._formatFileSize?.(bytes) || `${Math.round(bytes / 1048576)} MB`;
+        return i18n.t('dataToolSinkBudget')
+            .replace('{name}', name)
+            .replace('{limit}', size(err.limit))
+            .replace('{used}', size(err.used));
+    }
+    return i18n.t('dataToolSinkFailed').replace('{name}', name).replace('{error}', err?.message || String(err));
+};
+
+// Rebuild the output from its definition, synchronously (session restore, a
+// source edited upstream, a reload, rows appended live). A sink computed from
+// this very source is read as it is. Otherwise the variable exists at once —
+// reading the old sink while that is still there, empty if not — and the job
+// runs again in the background.
+proto._reapplyLazySinkTool = function(fileId, data, name, definition) {
+    const source = data._duckdb?.source;
+    const sourceVariable = data.variables?.[definition.sourceName];
+    if (!sourceVariable || !source?.hasSqlValue(sourceVariable)) return false;
+    if (definition.lazySink && !source.hasSink(definition.lazySink.table)) definition.lazySink = null;
+    const current = !!definition.lazySink && definition.lazySink.signature === this._lazySinkSignature(data, definition);
+    const variable = this._lazySqlToolVariable(data, name, definition);
+    if (!variable) return false;
+    data.variables[name] = variable;
+    definition.variable = variable;
+    if (!current) this._scheduleLazySinkJob(fileId, name);
+    return true;
+};
+
+// Jobs run one at a time: each has its overlay, and they read the same files.
+// A later request for the same output supersedes one still waiting.
+proto._scheduleLazySinkJob = function(fileId, name) {
+    if (!this._lazySinkRuns) this._lazySinkRuns = new Map();
+    const key = `${fileId}\u001e${name}`;
+    const run = (this._lazySinkRuns.get(key) || 0) + 1;
+    this._lazySinkRuns.set(key, run);
+    const isCurrent = () => this._lazySinkRuns.get(key) === run;
+    const previous = this._lazySinkQueue || Promise.resolve();
+    const promise = previous.catch(() => null)
+        .then(() => (isCurrent() ? this._refreshLazySinkTool(fileId, name, isCurrent) : false));
+    this._lazySinkQueue = promise;
+    // Awaited with the statistics passes (tests, and whoever needs every lazy
+    // tool settled).
+    if (!this._lazyToolStatsPending) this._lazyToolStatsPending = new Set();
+    this._lazyToolStatsPending.add(promise);
+    promise.finally(() => this._lazyToolStatsPending.delete(promise));
+    return promise;
+};
+
+proto._refreshLazySinkTool = async function(fileId, name, isCurrent = () => true) {
+    const data = this.plotManager.files.get(fileId)?.data;
+    const definition = this.dataToolVariablesByFile?.get(fileId)?.get(name);
+    if (!data?._duckdb || !definition || !this._isLazySinkToolConfig(definition)) return false;
+    const source = data._duckdb.source;
+    const signature = this._lazySinkSignature(data, definition);
+    if (!signature) return false;
+    if (definition.lazySink?.signature === signature && source.hasSink(definition.lazySink.table)) return false;
+    let run = null;
+    try {
+        run = await this._runLazySinkJob(data, definition, { overlayDelayMs: 1000 });
+    } catch (err) {
+        console.warn(`[duckdb] could not compute lazy data tool ${name}:`, err?.message || err);
+        this._setOutlierMessage(err?.message || String(err), 'error');
+        return false;
+    }
+    if (!run) {
+        this._setOutlierMessage(() => i18n.t('dataToolSinkNotComputed').replace('{name}', name), 'error');
+        return false;
+    }
+    // Edited, deleted, renamed or reloaded meanwhile: this run answers nothing.
+    const stillCurrent = isCurrent()
+        && this.dataToolVariablesByFile?.get(fileId)?.get(name) === definition
+        && this.plotManager.files.get(fileId)?.data === data
+        && this._lazySinkSignature(data, definition) === signature;
+    if (!stillCurrent) {
+        await source.dropSink(data, run.sink.table);
+        return false;
+    }
+    const replaced = definition.lazySink?.table;
+    definition.lazySink = this._lazySinkRecord(run, signature);
+    const variable = this._lazySqlToolVariable(data, name, definition);
+    if (!variable) {
+        definition.lazySink = null;
+        await source.dropSink(data, run.sink.table);
+        return false;
+    }
+    data.variables[name] = variable;
+    definition.variable = variable;
+    this._reapplyDataToolDependents(fileId, data, name);
+    await this._refreshLazyDataToolOverview(data);
+    this.plotManager.updateFileData(fileId, data);
+    this._renderFilteredTree?.();
+    if (replaced && replaced !== run.sink.table) await source.dropSink(data, replaced);
+    return true;
+};
+
+// A deleted output's sink: nothing reads it any more.
+proto._dropLazySink = function(fileId, table) {
+    const data = this.plotManager?.files?.get(fileId)?.data;
+    const source = data?._duckdb?.source;
+    if (!source || !table) return;
+    source.dropSink(data, table).catch(err => console.warn('[duckdb] could not drop a sink:', err?.message || err));
 };
 
 }

@@ -111,6 +111,8 @@
     "test:concat-csv-export": "node scripts/test-timeseries-concat-export.mjs",
     "test:formula-sql": "node scripts/test-formula-sql.mjs",
     "test:lazy-data-tools": "node scripts/test-lazy-data-tools.mjs",
+    "test:lazy-sink-tools": "node scripts/test-lazy-sink-tools.mjs",
+    "test:moving-average-chunks": "node scripts/test-moving-average-chunks.mjs",
     "test:dropped-traces-batch": "node scripts/test-dropped-traces-batch.mjs",
     "test:loading-cancel-button": "node scripts/test-loading-cancel-button.mjs",
     "test:loading-cancel-interrupts": "node scripts/test-loading-cancel-interrupts.mjs",

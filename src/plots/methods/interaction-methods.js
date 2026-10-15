@@ -466,7 +466,10 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
         // translated to SQL are also `derived` but can be read from the file,
         // and must keep using the DuckDB path — hence the check.
         const droppedVar = data?.variables?.[t.varName];
-        if (droppedVar?.derived && !droppedVar._duckdbCol && !droppedVar._duckdbExpr) {
+        const readable = lazyMeta.source?.hasSqlValue
+            ? lazyMeta.source.hasSqlValue(droppedVar)
+            : !!(droppedVar?._duckdbCol || droppedVar?._duckdbExpr);
+        if (droppedVar?.derived && !readable) {
             const built = this._buildTimeTrace(t, range, plot, idx);
             if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, mode: built.mode, marker: built.marker, prepared: true });
             if (perf) perf.eagerTraces++;

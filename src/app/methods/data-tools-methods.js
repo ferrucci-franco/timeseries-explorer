@@ -63,7 +63,7 @@ export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
 export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 // What a lazy file offers (see _isDataToolAvailableForData).
-const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'detrend']);
+const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'detrend']);
 const LAZY_OUTLIER_METHODS = new Set(['bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
@@ -695,6 +695,18 @@ proto._syncOutlierMethodControls = function() {
     if (sliderValue) sliderValue.textContent = this._formatOutlierNumber(this._getOutlierSensitivity(), 0);
 };
 
+// How many samples a tool would read from `variable`: its array, or for a lazy
+// file the file's rows — the overview in memory is a sample of them. Infinity
+// when a lazy file's row count is not known (a CSV is not counted on open).
+proto._dataToolSeriesLength = function(data, variable) {
+    if (!variable) return NaN;
+    if (this._isDataToolLazyData(data)) {
+        const rows = Number(data?._duckdb?.totalRows);
+        return Number.isFinite(rows) && rows > 0 ? rows : Infinity;
+    }
+    return Number(variable.data?.length);
+};
+
 proto._syncMovingAverageControls = function() {
     const input = document.getElementById('moving-average-window');
     const slider = document.getElementById('moving-average-window-slider');
@@ -708,7 +720,7 @@ proto._syncMovingAverageControls = function() {
     // source picked there is no length to cap against, and clamping to the
     // two-sample floor would drag the default 21 down to 2 in the slider while
     // the number box still read 21.
-    const length = Number(source?.data?.length);
+    const length = this._dataToolSeriesLength(this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null, source);
     const max = Number.isFinite(length) && length >= 2 ? length : Infinity;
     if (Number.isFinite(max)) input.max = String(max);
     else input.removeAttribute('max');
@@ -762,9 +774,8 @@ proto._syncDetrendControls = function() {
     document.getElementById('detrend-window-wrap')?.classList.toggle('collapsed', method !== 'movingAverage');
 
     const sourceName = document.getElementById('outlier-variable')?.value || '';
-    const length = Number(this.activeFileId
-        ? this.plotManager.files.get(this.activeFileId)?.data?.variables?.[sourceName]?.data?.length
-        : 0);
+    const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
+    const length = this._dataToolSeriesLength(data, data?.variables?.[sourceName]);
     const max = Number.isFinite(length) && length >= 3 ? length : Infinity;
 
     for (const [inputId, sliderId, valueId, normalize] of [
@@ -1120,7 +1131,14 @@ proto._commitDataToolNow = async function(options = {}) {
 };
 
 proto._createDataToolVariable = async function(context, config) {
-    if (context.lazy) return this._applyLazyDataToolCreateMode(context, config, {});
+    if (context.lazy) {
+        try {
+            return await this._applyLazyDataToolCreateMode(context, config, {});
+        } catch (err) {
+            this._setOutlierMessage(err?.message || String(err), 'error');
+            return null;
+        }
+    }
 
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
     try {
@@ -1342,9 +1360,11 @@ proto._renameDataToolVariable = function(fileId, data, oldName, newName, options
 };
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {
-    // The derivative, IQR and detrend are SQL over the file
-    // (lazy-data-tools-methods.js); hard bounds keep the path below.
+    // The derivative, IQR and detrend are SQL over the file, the moving
+    // average a job writing to a sink (lazy-data-tools-methods.js); hard
+    // bounds keep the path below.
     if (this._isLazySqlToolConfig(config)) return this._applyLazySqlToolCreateMode(context, config, options);
+    if (this._isLazySinkToolConfig(config)) return this._applyLazySinkToolCreateMode(context, config, options);
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
     if (!this._isLazyBoundsConfig(config)) throw new Error(i18n.t('dataToolLazyDisabled'));
     const definitions = this.dataToolVariablesByFile?.get(fileId);
@@ -2678,11 +2698,9 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
         };
     }
     if (tool === 'movingAverage') {
-        const max = context?.sourceVariable?.data?.length
-            || (document.getElementById('outlier-variable')?.value
-                ? data?.variables?.[document.getElementById('outlier-variable')?.value]?.data?.length
-                : 201)
-            || 201;
+        const sourceVariable = context?.sourceVariable
+            || data?.variables?.[document.getElementById('outlier-variable')?.value || ''];
+        const max = this._dataToolSeriesLength(data, sourceVariable) || 201;
         return { tool, params: { window: this._normalizeMovingAverageWindow(document.getElementById('moving-average-window')?.value, max) } };
     }
     if (tool === 'interpolate') {
@@ -2745,8 +2763,8 @@ proto._isDataToolAvailableForData = function(tool, data) {
     if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool) || FILE_DATA_TOOLS.has(tool);
     // A lazy file's variables are DuckDB expressions, not arrays: only the tools
     // written as SQL over the file (hard bounds, IQR, derivative, integral,
-    // detrend) run
-    // on one. The rest wait for the chunked executor (docs/any-size-files.md).
+    // detrend) and those the chunked executor runs (moving average) work on
+    // one. The rest wait for the later sub-phases (docs/any-size-files.md).
     return LAZY_DATA_TOOLS.has(tool);
 };
 
@@ -2859,13 +2877,23 @@ proto._isDataToolLazyData = function(data) {
 proto._storeDataToolDefinition = function(fileId, name, definition) {
     if (!this.dataToolVariablesByFile) this.dataToolVariablesByFile = new Map();
     if (!this.dataToolVariablesByFile.has(fileId)) this.dataToolVariablesByFile.set(fileId, new Map());
-    this.dataToolVariablesByFile.get(fileId).set(name, this._normalizeDataToolDefinition(definition));
+    const definitions = this.dataToolVariablesByFile.get(fileId);
+    // An edit that replaces a lazy output written by the chunked executor —
+    // with a new run, or with another tool — takes the old sink with it. The
+    // drop waits its turn on the engine's connection, behind the queries the
+    // caller makes next with the new SQL.
+    const replacedSink = definitions.get(name)?.lazySink?.table;
+    definitions.set(name, this._normalizeDataToolDefinition(definition));
+    if (replacedSink && replacedSink !== definition?.lazySink?.table) this._dropLazySink?.(fileId, replacedSink);
 };
 
 proto._deleteDataToolDefinition = function(fileId, name) {
     const definitions = this.dataToolVariablesByFile?.get(fileId);
     if (!definitions) return;
+    // A lazy output written by the chunked executor takes its sink with it.
+    const sink = definitions.get(name)?.lazySink?.table;
     definitions.delete(name);
+    if (sink) this._dropLazySink?.(fileId, sink);
     if (!definitions.size) this.dataToolVariablesByFile.delete(fileId);
 };
 
@@ -2973,7 +3001,7 @@ proto._reapplyDataToolDefinition = function(fileId, data, name, definition) {
         if (!sourceVariable) throw new Error(`Unknown source variable "${definition.sourceName}".`);
         const targetMode = definition.targetMode || 'create';
         if (this._isDataToolLazyData(data)) {
-            if (targetMode === 'create' && this._isLazySqlToolConfig(definition)) {
+            if (targetMode === 'create' && (this._isLazySqlToolConfig(definition) || this._isLazySinkToolConfig(definition))) {
                 return this._reapplyLazySqlTool(fileId, data, name, definition);
             }
             if (definition.tool !== 'removeOutliers' || definition.method !== 'bounds') return false;

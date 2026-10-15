@@ -275,6 +275,10 @@ class OpenModelicaViewer {
             // not on the file: see AUDIO_DECODED_FORMAT in file-size-limits.js.
             audioFullLoadMb: desktop ? 1024 : 400,
             csvCompactHintMb: 500,
+            // What the results of the data tools on files in memory-saving
+            // mode may hold together in the engine's memory (a moving
+            // average is a copy of a column as long as the file).
+            lazyResultsMb: 1024,
             panZoomRefreshMode: 'auto',
         };
     }
@@ -316,6 +320,7 @@ class OpenModelicaViewer {
             pypsaNetcdfFullLoadMb: [0, Infinity],
             audioFullLoadMb: [0, Infinity],
             csvCompactHintMb: [100, 4096],
+            lazyResultsMb: [0, Infinity],
         };
     }
 
