@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b-1 implementadas (sección "Implementado (fase 4b-1)"); Parquet sin red resuelto (§8); el resto de la 4b diseñado (sección "Diseño (fase 4b)"); la base sigue en memoria, con la base en OPFS medida y decidida para más adelante (§10); el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b-1 implementadas (sección "Implementado (fase 4b-1)"); Parquet sin red resuelto (§8); el resto de la 4b diseñado (sección "Diseño (fase 4b)"); la base de DuckDB sigue en memoria, con OPFS medido y dejado para la 4b-4 (§10, "Decidido en la 4b-1"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -864,7 +864,8 @@ infraestructura que las otras tres solo usan.
 - **Memoria de wasm.** Sumideros + búferes de DuckDB + el archivo que se
   escanea comparten 4 GiB. El presupuesto es una estimación; la 4b-1 tiene
   que medir el residente real en Chromium con un archivo grande y ajustar los
-  24 B/fila. Con la base en OPFS (§10) el presupuesto lo aplica DuckDB
+  24 B/fila. *Medido en la 4b-1: 7,3 B/fila para `(rn, y)` tras el
+  `CHECKPOINT`; el presupuesto cuenta 16 (ver "Implementado (fase 4b-1)").* Con la base en OPFS (§10) el presupuesto lo aplica DuckDB
   (`memory_limit`) y los sumideros dejan de contar contra los 4 GiB; a cambio,
   ese límite acota también los escaneos y las pasadas de estadísticas, que hoy
   usan lo que haya.
@@ -997,16 +998,45 @@ Pruebas:
 
 Medido en Chromium con el bundle de la app (`node bench/lazy-sink-job.mjs`):
 
-| Qué (CSV de 2 M filas, 34 MB, base en memoria) | Medida |
-|---|---|
-| Media móvil, ventana 101, el trabajo entero (stream, kernel, sumidero, `CHECKPOINT`) | 2,8 s |
-| Memoria del motor tras el trabajo | +15 MB: **7,3 B/fila** (una señal suave; la estimación del presupuesto cuenta 16) |
-| Zoom de 1000 filas que lee el sumidero y el archivo | 0,35 s (el CSV se recorre igual: la unión no deja filtrar en el escaneo) |
-| Refresco del resumen con el sumidero | 0,8 s |
-| Las pasadas de antes, como referencia: `COUNT`, cuartiles exactos, sumas del detrend, umbral de huecos | 0,3 / 2,4 / 1,1 / 2,0 s |
-| Lo mismo con la base en OPFS, sin límite | igual (7,6 B/fila) |
-| `memory_limit` de 61 MiB, en memoria o en OPFS | **el lector de CSV no abre el archivo**: pide bloques de 30,5 MiB (*could not allocate block of size 30.5 MiB*) |
+CSV de 20 M filas (359 MB) abierto en lazy por la entrada de archivos,
+Chromium headless, un hilo. Tiempos en segundos; cada configuración en una
+pestaña nueva.
 
+| Qué | Memoria, sin límite | Memoria, 1 GiB | Memoria, 512 MiB | OPFS, 512 MiB | OPFS, 256 MiB |
+|---|---|---|---|---|---|
+| Abrir en lazy | 8,5 | 9,0 | 8,8 | 9,3 | 8,3 |
+| `COUNT` | 2,4 | 2,5 | 2,7 | 2,3 | 2,6 |
+| Cuartiles exactos (3b) | 20,6 | 20,2 | 22,8 | 20,4 | 21,9 |
+| Sumas del detrend lineal (3b) | 12,0 | 10,4 | 10,3 | 11,0 | 11,1 |
+| Umbral de huecos de la integral (4a) | 23,7 | 20,6 | 20,0 | 21,1 | 21,5 |
+| **Media móvil, ventana 101: el trabajo entero** | **26,6** | 21,8 | 21,7 | 25,3 | 26,2 |
+| Memoria del sumidero (20 M filas) | 145 MB | 145 MB | 145 MB | 152 MB | 152 MB |
+| Zoom de 1000 filas con el sumidero | 4,4 | 3,9 | 3,7 | 4,3 | 5,0 |
+| Refresco del resumen con el sumidero | 8,2 | 7,2 | 8,8 | 8,1 | 7,9 |
+
+Y aparte, en memoria sin límite: un zoom de 1000 filas **sin** sumidero, 3,9 s
+contra 4,3 con él. Un CSV lazy se recorre entero en cada consulta, con
+sumidero o sin él (§8, "CSV re-escanea por consulta"): la unión posicional
+agrega ~10 %. Con 2 M filas (34 MB) todo escala en proporción (el trabajo,
+2,8 s); con un `memory_limit` de **61 MiB**, en memoria o en OPFS, el lector
+de CSV no abre el archivo: pide bloques de 30,5 MiB (*could not allocate
+block of size 30.5 MiB*).
+
+Lo que dicen:
+
+- **El trabajo cuesta lo que una pasada de la 3b**: ~0,8 M filas/s, del
+  orden de los cuartiles o del umbral de huecos sobre el mismo archivo. Lo
+  domina leer el CSV, no el kernel (0,4 s por 20 M filas, §"Hechos medidos").
+- **El sumidero ocupa 7,3 B/fila** tras el `CHECKPOINT`: el `rn` se comprime a
+  casi nada y los valores (5 decimales) bastante. El presupuesto cuenta
+  16 B/fila, el doble: con el ajuste por defecto entran ~65 M filas según la
+  cuenta y ~140 M de verdad para una señal así. Una señal con todos los
+  dígitos de un double no se comprime (~8–9 B/fila), así que la cuenta se
+  deja en 16: nunca promete lo que no hay.
+- **Un `memory_limit` de 256 MiB a 1 GiB no cambia nada** de lo que ya
+  funcionaba: el escaneo del CSV y las pasadas de la 3b y la 4a dan los
+  mismos tiempos (±10 %). El que falla es uno mínimo (61 MiB). Ver §10 para lo
+  que eso decide.
 
 ## 8. Riesgos y decisiones abiertas
 
@@ -1171,7 +1201,37 @@ en este entorno de desarrollo la extensión Parquet no se puede bajar (§8).
   vigilar son las consultas globales (correlación cruzada, exportación con
   columnas de las dos fuentes), que tienen que ir por trozos también.
 
-### Lo que hay que medir en la 4b-1 antes de elegir
+### Decidido en la 4b-1: la base sigue en memoria, por ahora
+
+Medido en la 4b-1 (tabla en "Implementado (fase 4b-1)"): un `memory_limit`
+de 256 MiB a 1 GiB deja el escaneo de un CSV de 359 MB y las pasadas de la
+3b y la 4a como estaban, en memoria o con la base en OPFS, y la base en OPFS
+da los mismos tiempos para todo, el trabajo de la media móvil incluido. Con
+61 MiB el lector de CSV ya no abre el archivo. La condición que esta sección
+ponía — que el límite no rompa lo que funciona — se cumple con un límite de
+256 MiB o más.
+
+Aun así **la base sigue en memoria** en la 4b-1:
+
+1. Un sumidero ocupa 7–8 B/fila comprimido: el presupuesto por defecto
+   (1 GB) guarda la media móvil de cualquier archivo que esta app abre hoy en
+   un navegador, varias veces.
+2. OPFS trae costos que la app tendría que cargar (los medidos arriba): un
+   archivo por pestaña, la reapertura en solo lectura dentro del mismo
+   *worker*, borrar huérfanos al arrancar, la cuota y el desalojo del
+   almacenamiento temporal, `TEMP` para la carga eager. No vale la pena
+   mientras nada necesite más memoria que la que hay.
+3. El cambio es local cuando haga falta: `_bootstrap` abre la base en OPFS y
+   el presupuesto pasa a ser el `memory_limit` del motor (≥ 256 MiB); el
+   ejecutor, los sumideros y su lectura no cambian.
+
+Cuándo volver: en la 4b-4 (los datasets de remuestreo y colapsar, que son
+tablas enteras, y varias salidas a la vez), o cuando alguien llegue al
+presupuesto. Lo que no se midió acá: un CSV de varios GB (el disco de este
+entorno), la cuota y el desalojo de OPFS bajo presión de disco, y el costo de
+catálogos y vistas en una base en disco.
+
+### Lo que había que medir en la 4b-1 antes de elegir
 
 - **`memory_limit` contra lo que ya funciona.** Hoy el motor usa hasta el
   *heap* de wasm; con un límite, las pasadas de estadísticas de la 3b
