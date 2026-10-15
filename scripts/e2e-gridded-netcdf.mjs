@@ -321,6 +321,10 @@ try {
         ]);
         assert.ok(tips.length === 8 && tips.every(tip => tip.length > 30), `every scale option has a tooltip (${JSON.stringify(tips)})`);
         assert.equal(await page.$('#gridded-view [data-action="as-series"]'), null);
+        // Text buttons beside icon buttons are as tall as they are.
+        const heights = await page.evaluate(() => ['export-map', 'close', 'toggle-results', 'remove-all', 'export-series']
+            .map(action => Math.round(document.querySelector(`#gridded-view [data-action="${action}"]`).getBoundingClientRect().height)));
+        assert.ok(heights.every(height => height === heights[0]), `one height for the toolbar and list buttons (${heights})`);
         // A wheel zoom only ever moves one way: no redraw between notches puts
         // back the ranges it started from, and a grid this small is drawn
         // whole once, never again for a zoom. The pointer is over the region

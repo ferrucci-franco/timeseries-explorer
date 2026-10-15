@@ -285,6 +285,16 @@
     font-weight: 600;
 }
 
+/* Text buttons that sit beside icon buttons take their height. */
+.gridded-view .gridded-close,
+.gridded-view .gridded-results-toggle {
+    display: inline-flex;
+    align-items: center;
+    height: 1.75rem;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
 .gridded-view .gridded-primary {
     background: var(--primary-color);
     border-color: var(--primary-color);
