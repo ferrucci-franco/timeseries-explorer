@@ -2858,6 +2858,11 @@ export function installGriddedMethods(TargetClass) {
             const entry = {
                 id: `s${view.setCount}`,
                 key,
+                // Which field this set was read from, said outright: the
+                // label spells it for a reader, these two for the app (a
+                // saved session, and whatever asks the dataset again).
+                variableKey: variable.key,
+                levelIndex: levelIndex ?? null,
                 label: `${quantity}${levelText ? ` · ${levelText}` : ''}`,
                 short: `${variable.name}${levelText ? ` ${levelText}` : ''}`,
                 color: group.sets.length ? this._griddedNextColor(view) : group.color,
@@ -3072,6 +3077,8 @@ export function installGriddedMethods(TargetClass) {
                 sets: (group.sets || []).map(set => ({
                     id: set.id,
                     key: set.key,
+                    variableKey: set.variableKey ?? null,
+                    levelIndex: set.levelIndex ?? null,
                     label: set.label,
                     short: set.short,
                     color: set.color,
@@ -3165,6 +3172,8 @@ export function installGriddedMethods(TargetClass) {
                 const set = {
                     id: saveSet.id,
                     key: saveSet.key,
+                    variableKey: saveSet.variableKey ?? null,
+                    levelIndex: saveSet.levelIndex ?? null,
                     label: saveSet.label,
                     short: saveSet.short,
                     color: saveSet.color || group.color,

@@ -827,7 +827,11 @@ try {
                 groups: view.groups.map(group => ({
                     tag: group.tag, kind: group.kind, where: group.where, color: group.color,
                     geometry: group.geometry,
-                    sets: group.sets.map(set => ({ label: set.label, checked: set.checked, color: set.color, names: [...set.names], roles: [...set.roles] })),
+                    sets: group.sets.map(set => ({
+                        label: set.label, checked: set.checked, color: set.color, key: set.key,
+                        variableKey: set.variableKey, levelIndex: set.levelIndex,
+                        names: [...set.names], roles: [...set.roles],
+                    })),
                 })),
                 variableKey: view.variableKey,
                 selection: { ...view.selection },
@@ -848,6 +852,8 @@ try {
         });
         assert.equal(before.groups.length, 2);
         assert.equal(before.groups[0].sets.length, 3, 'one folder with the three series of the place');
+        assert.deepEqual(before.groups[0].sets.map(set => [set.variableKey, set.levelIndex]), [['/t2m', null], ['/t', 0], ['/t', 1]],
+            'every set says which field and which level it was read from');
 
         // Save the project (the bytes the download would carry), then load it
         // back over the workspace, as a user would after reopening the app.
@@ -888,7 +894,11 @@ try {
                 groups: view.groups.map(group => ({
                     tag: group.tag, kind: group.kind, where: group.where, color: group.color,
                     geometry: group.geometry,
-                    sets: group.sets.map(set => ({ label: set.label, checked: set.checked, color: set.color, names: [...set.names], roles: [...set.roles] })),
+                    sets: group.sets.map(set => ({
+                        label: set.label, checked: set.checked, color: set.color, key: set.key,
+                        variableKey: set.variableKey, levelIndex: set.levelIndex,
+                        names: [...set.names], roles: [...set.roles],
+                    })),
                 })),
                 variableKey: view.variableKey,
                 selection: { ...view.selection },
