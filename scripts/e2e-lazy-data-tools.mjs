@@ -2,13 +2,14 @@
 // (lazy) mode, in a real browser with the DuckDB-WASM the app ships.
 //
 // A 12 MB CSV (above the 10 MB full-load limit set here) opens lazily. Through
-// the panel's own controls: the tool picker offers derivative, detrend and
-// integral and outliers and nothing else; the outlier method is hard bounds;
-// the integral leaves out interpolating across holes; the detrend methods
-// leave out the moving-average baseline. A derivative, an integral and a
-// linear detrend are created with "Create and plot", and each is
-// drawn from SQL over the file (a zoom returns full resolution), with no page
-// error.
+// the panel's own controls: the tool picker offers derivative, detrend,
+// integral, moving average and outliers and nothing else; the outlier method
+// is hard bounds; the integral leaves out interpolating across holes; every
+// detrend method is offered. A derivative, an integral, a linear detrend, a
+// moving average and a moving-average detrend are created with "Create and
+// plot", and each is drawn from the file (a zoom returns full resolution),
+// with no page error. The moving average runs as a job behind an overlay that
+// counts the rows; cancelled, it leaves no variable and no sink.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:lazy-data-tools`.
 // Not part of test:release, which stays offline and browser-free.
@@ -69,8 +70,8 @@ try {
 
     const picker = await page.evaluate(() => Object.fromEntries(
         [...document.querySelectorAll('#data-tool-select option')].filter(o => o.value).map(o => [o.value, !o.disabled])));
-    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'integrate', 'removeOutliers'],
-        'a lazy file offers the tools written as SQL');
+    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'integrate', 'movingAverage', 'removeOutliers'],
+        'a lazy file offers the tools written as SQL and the moving average');
 
     await createAndPlot(page, 'derivative', 'a', 'da', () => pick(page, 'derivative-method', 'centered'));
 
@@ -93,10 +94,77 @@ try {
     await createAndPlot(page, 'detrend', 'b', 'lb', async () => {
         const methods = await page.evaluate(() => Object.fromEntries(
             [...document.querySelectorAll('#detrend-method option')].map(o => [o.value, !o.disabled])));
-        assert.equal(methods.movingAverage, false, 'the moving-average baseline is not offered');
-        assert.equal(methods.linear, true, 'a straight line is');
+        assert.equal(methods.movingAverage && methods.linear, true, 'every detrend method is offered');
         await pick(page, 'detrend-method', 'linear');
     });
+
+    // The moving average is a job over the whole file: an overlay says so and
+    // counts the rows while it runs.
+    await page.evaluate(() => {
+        window.__overlays = [];
+        new MutationObserver(records => {
+            for (const record of records) {
+                for (const node of record.addedNodes) {
+                    if (node.id === 'file-loading-overlay') {
+                        window.__overlays.push(node.querySelector('#file-loading-title')?.textContent || '');
+                        new MutationObserver(() => {
+                            const hint = node.querySelector('#file-loading-hint')?.textContent || '';
+                            if (hint) window.__overlays.push(hint);
+                        }).observe(node, { subtree: true, childList: true, characterData: true });
+                    }
+                }
+            }
+        }).observe(document.body, { childList: true });
+    });
+    await createAndPlot(page, 'movingAverage', 'a', 'ma', async () => {
+        await page.locator('#moving-average-window').fill('501');
+        await page.locator('#moving-average-window').dispatchEvent('change');
+    });
+    const overlays = await page.evaluate(() => window.__overlays);
+    assert.ok(overlays.some(text => /\bma\b/.test(text)), `the job runs behind an overlay naming it (${overlays.join(' | ')})`);
+    await createAndPlot(page, 'detrend', 'b', 'hb', async () => {
+        await pick(page, 'detrend-method', 'movingAverage');
+        await page.locator('#detrend-window').fill('201');
+        await page.locator('#detrend-window').dispatchEvent('change');
+    });
+
+    // Cancelled as soon as it starts: nothing is created, nothing is left.
+    const cancelled = await page.evaluate(async () => {
+        const source = [...window.app.plotManager.files.values()][0].data._duckdb.source;
+        const sinksBefore = source._liveSinks.size;
+        const observer = new MutationObserver(records => {
+            for (const record of records) {
+                for (const node of record.addedNodes) {
+                    if (node.id === 'file-loading-overlay') node.querySelector('#file-loading-cancel')?.click();
+                }
+            }
+        });
+        observer.observe(document.body, { childList: true });
+        const select = (id, value) => {
+            const el = document.getElementById(id);
+            el.value = value;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        select('data-tool-select', 'movingAverage');
+        select('outlier-variable', 'a');
+        const output = document.getElementById('outlier-output-name');
+        output.value = 'never';
+        output.dispatchEvent(new Event('input', { bubbles: true }));
+        await window.app.commitDataTool({ plot: true });
+        observer.disconnect();
+        const tables = await source.query("SELECT COUNT(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name LIKE '%_sink_%'");
+        return {
+            created: !!window.app.plotManager.files.values().next().value.data.variables.never,
+            sinksBefore,
+            sinksAfter: source._liveSinks.size,
+            tables: tables.getChild('n').get(0),
+            message: document.getElementById('outlier-message')?.textContent || '',
+        };
+    });
+    assert.equal(cancelled.created, false, 'a cancelled job creates no variable');
+    assert.equal(cancelled.sinksAfter, cancelled.sinksBefore, 'and keeps no sink');
+    assert.equal(cancelled.tables, cancelled.sinksBefore, 'no table is left behind in DuckDB');
+    assert.match(cancelled.message, /never/, `the panel says it was not created (${cancelled.message})`);
 
     // Each output is on a plot and reads the file, not the overview: a narrow
     // zoom returns every row in it.
@@ -104,20 +172,20 @@ try {
         const data = [...window.app.plotManager.files.values()][0].data;
         const source = data._duckdb.source;
         const out = {};
-        for (const name of ['da', 'ia', 'lb']) {
+        for (const name of ['da', 'ia', 'lb', 'ma', 'hb']) {
             const raw = await source.getRawColumnsRange(data, [name], 1000, 1010, 1e6);
             out[name] = { rows: raw.x.length, finite: [...raw.yByVar.get(name)].filter(Number.isFinite).length };
         }
         const traced = [...window.app.plotManager.plots.values()].flatMap(p => p.traces.map(t => t.varName));
         return { out, traced, message: document.getElementById('outlier-message')?.textContent || '' };
     });
-    for (const name of ['da', 'ia', 'lb']) {
+    for (const name of ['da', 'ia', 'lb', 'ma', 'hb']) {
         assert.equal(zoom.out[name].rows, 1001, `${name}: a 10 s zoom returns all 1001 rows`);
         assert.ok(zoom.out[name].finite > 990, `${name}: with values`);
         assert.ok(zoom.traced.includes(name), `${name} is plotted`);
     }
     assert.deepEqual(errors, [], 'no page error');
-    console.log('e2e lazy data tools: derivative, integral and detrend created from the panel on a lazy file');
+    console.log('e2e lazy data tools: derivative, integral, detrend and moving averages created from the panel on a lazy file');
 } finally {
     await browser.close();
     await server.close();

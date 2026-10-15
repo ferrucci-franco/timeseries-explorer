@@ -46,7 +46,7 @@ import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } fro
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
-import { collectWindows, doubleLiteral, quoteIdent, rowIndexWindow, windowedFromSql } from './lazy-tool-sql.js';
+import { collectWindows, doubleLiteral, quoteIdent, rowIndexWindow, sinkColumn, windowedFromSql } from './lazy-tool-sql.js';
 import {
     buildTemporalProfileFinalSql,
     buildTemporalProfileTimeStatsSql,
@@ -69,6 +69,9 @@ const PARQUET_COMPRESSIONS = new Set(['zstd', 'snappy', 'gzip', 'lz4', 'none']);
 // per-chunk overhead of a consumer disappears, small enough that fifty columns
 // still fit comfortably in one chunk.
 const STREAM_DEFAULT_CHUNK_ROWS = 262144;
+// What the sinks of every file may hold together in the engine's memory, unless
+// the app sets another limit (the Advanced setting "Results in memory").
+export const DEFAULT_SINK_BUDGET_BYTES = 1024 * 1024 * 1024;
 
 export default class DuckDbSource {
     constructor(structureParser = null) {
@@ -90,6 +93,10 @@ export default class DuckDbSource {
         this._connectionQueue = Promise.resolve();
         this._parquetLoaded = false;
         this._parquetPromise = null;
+        // Sinks of every file (createSink), and what they may hold together.
+        this._nextSinkId = 0;
+        this._liveSinks = new Map();
+        this.sinkBudgetBytes = DEFAULT_SINK_BUDGET_BYTES;
     }
 
     static isAvailable() {
@@ -512,6 +519,7 @@ export default class DuckDbSource {
     async release(legacyData) {
         const meta = legacyData?._duckdb;
         if (!meta) return;
+        for (const table of [...(meta.sinks?.keys() || [])]) await this.dropSink(legacyData, table);
         const objects = [
             meta.combinedViewName,
             meta.appendTableName,
@@ -835,6 +843,58 @@ export default class DuckDbSource {
         if (signal?.aborted) throw this._queryAbortError();
 
         const sql = this._rawRowsSql(legacyData, requested, ranged ? { lo, hi } : {});
+        yield* this._streamSql(sql, (batches, rowStart) => this._streamChunk(batches, requested, rowStart), { chunkRows, signal });
+    }
+
+    /**
+     * The rows a chunked job reads (src/data/chunk-executor.js): the rows
+     * every lazy query serves — the ones with a time, past the profile's row
+     * filter — in the file's order, each with its position in the file as
+     * read. The positions are what the job's sink rows line up with
+     * (_joinedRelationSql); where the file has rows no query serves, they
+     * jump.
+     *
+     *   for await (const { rows, x, yByVar } of source.streamJobColumns(data, names)) { … }
+     *
+     * `rows` holds the positions, `yByVar` the values. `x` is the time axis
+     * (the row's index for a generated one) when `withTime` is set, and null
+     * otherwise: the time expression of a calendar column can cost more than
+     * the rest of the read. Options as streamColumns, minus the range.
+     */
+    async *streamJobColumns(legacyData, varNames, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('streamJobColumns: data is not DuckDB-backed (eager mode)');
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        const chunkRows = Math.max(1, Math.round(Number(options.chunkRows) || STREAM_DEFAULT_CHUNK_ROWS));
+        const withTime = !!options.withTime;
+        const from = this._fromSql(legacyData, requested.map(item => item.variable), { rawRowNumber: true });
+        const values = requested
+            .map(({ variable, varName }, index) => `, ${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
+            .join('');
+        let sql;
+        if (meta.generatedTime) {
+            const time = withTime ? '(ROW_NUMBER() OVER () - 1)::DOUBLE' : 'CAST(NULL AS DOUBLE)';
+            sql = `SELECT __omv_raw_rn::DOUBLE AS rn, ${time} AS t${values} FROM ${from}`;
+        } else {
+            const tExpr = this.timeValueSql(legacyData);
+            sql = `SELECT __omv_raw_rn::DOUBLE AS rn, ${withTime ? `${tExpr}::DOUBLE` : 'CAST(NULL AS DOUBLE)'} AS t${values}`
+                + ` FROM ${from} WHERE ${tExpr} IS NOT NULL`;
+        }
+        yield* this._streamSql(sql, (batches) => {
+            const column = (idx) => this._joinedColumn(batches, idx);
+            const yByVar = new Map();
+            requested.forEach(({ varName }, index) => yByVar.set(varName, column(index + 2)));
+            return { rows: column(0), x: withTime ? column(1) : null, yByVar };
+        }, { chunkRows, signal: options.signal });
+    }
+
+    // One query's rows, `chunkRows` at a time, on a connection of its own (see
+    // streamColumns for why), with `toChunk(batches, rowStart)` turning the
+    // Arrow batches of a chunk into what the caller yields.
+    async *_streamSql(sql, toChunk, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS, signal = null } = {}) {
+        if (signal?.aborted) throw this._queryAbortError();
         let conn = null;
         let reader = null;
         let done = false;
@@ -859,7 +919,7 @@ export default class DuckDbSource {
                 pending.push(batch);
                 pendingRows += batch.numRows;
                 if (pendingRows >= chunkRows) {
-                    const chunk = this._streamChunk(pending, requested, rowStart);
+                    const chunk = toChunk(pending, rowStart);
                     rowStart += pendingRows;
                     pending = [];
                     pendingRows = 0;
@@ -868,7 +928,7 @@ export default class DuckDbSource {
                 }
             }
             if (aborted || signal?.aborted) throw this._queryAbortError();
-            if (pendingRows) yield this._streamChunk(pending, requested, rowStart);
+            if (pendingRows) yield toChunk(pending, rowStart);
             done = true;
         } finally {
             signal?.removeEventListener?.('abort', cancel);
@@ -889,18 +949,211 @@ export default class DuckDbSource {
     // on the batches passing `instanceof` for this module's copy of Arrow —
     // which they do not when the engine was loaded as a separate bundle.
     _streamChunk(batches, requested, rowStart) {
-        const column = (idx) => {
-            const parts = batches.map(batch => this._extractColumnAsFloat64(batch, idx, 'DOUBLE'));
-            if (parts.length === 1) return parts[0];
-            const out = new Float64Array(parts.reduce((n, part) => n + part.length, 0));
-            let at = 0;
-            for (const part of parts) { out.set(part, at); at += part.length; }
-            return out;
-        };
+        const column = (idx) => this._joinedColumn(batches, idx);
         const x = column(0);
         const yByVar = new Map();
         requested.forEach(({ varName }, index) => yByVar.set(varName, column(index + 1)));
         return { x, yByVar, rowStart };
+    }
+
+    _joinedColumn(batches, idx) {
+        const parts = batches.map(batch => this._extractColumnAsFloat64(batch, idx, 'DOUBLE'));
+        if (parts.length === 1) return parts[0];
+        const out = new Float64Array(parts.reduce((n, part) => n + part.length, 0));
+        let at = 0;
+        for (const part of parts) { out.set(part, at); at += part.length; }
+        return out;
+    }
+
+    // ─── Sinks: tool outputs too large to hold ───────────────────────────────
+    //
+    // A tool the chunked executor runs (src/data/chunk-executor.js) writes its
+    // output, as large as the file, to a table in DuckDB: a sink. It has a row
+    // for every row of the file as read, in order, so it is read by joining it
+    // to the file by position (_joinedRelationSql), and a variable reads it
+    // through a sinkColumn in its `_duckdbWindows`. The table lives in the
+    // engine's memory, which the file's scans share, so the sinks of every
+    // file together are held to a budget (`sinkBudgetBytes`).
+    //
+    // A sink is the output of one run: a new run writes a new table, and the
+    // old one is dropped once nothing reads it. Sinks are never saved — a
+    // session keeps the tool's definition, and runs it again.
+
+    /**
+     * An empty sink for a file, with `columns` value columns. Returns
+     * `{ table, columns }`, `columns` holding the sinkColumn of each value
+     * column for the variables that read it.
+     */
+    async createSink(legacyData, { columns = 1 } = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('createSink: data is not DuckDB-backed (eager mode)');
+        await this.init();
+        const id = ++this._nextSinkId;
+        const table = `${meta.baseTableName || meta.tableName}_sink_${id}`;
+        const entries = Array.from({ length: Math.max(1, columns) }, (_, index) => sinkColumn(table, index));
+        const rnColumn = `__omv_sink_rn_${id}`;
+        const definition = [`${quoteIdent(rnColumn)} BIGINT`, ...entries.map(entry => `${quoteIdent(entry.column)} DOUBLE`)].join(', ');
+        await this._withConnectionLock(() => this._conn.query(`CREATE TABLE ${table} (${definition})`));
+        const sink = { table, rnColumn, columns: entries, rows: 0, bytes: 0 };
+        (meta.sinks ||= new Map()).set(table, sink);
+        this._liveSinks.set(table, sink);
+        return sink;
+    }
+
+    // The bytes a sink of `rows` rows and `columns` value columns is counted
+    // for: a row number and the values, 8 bytes each. Measured in Chromium
+    // (docs/any-size-files.md, 4b-1): fewer once DuckDB compresses the table,
+    // so the budget errs on the side of refusing.
+    sinkBytesFor(rows, columns = 1) {
+        return Math.max(0, Number(rows) || 0) * 8 * (1 + Math.max(1, columns));
+    }
+
+    // Bytes the live sinks of every file are counted for, and what is left.
+    sinkBudget() {
+        let used = 0;
+        for (const sink of this._liveSinks.values()) used += sink.bytes;
+        const limit = Number(this.sinkBudgetBytes);
+        return { limit, used, available: Math.max(0, limit - used) };
+    }
+
+    /**
+     * Rows for a sink, in order: `write(rows, columns)` takes the file
+     * positions of the rows (ascending, as streamJobColumns gives them) and
+     * one Float64Array per value column. A position skipped since the last
+     * row written gets a row of NULLs, so the sink keeps a row for every row
+     * of the file. NaN is stored as NULL, which every lazy query reads as NaN;
+     * ±∞ are stored as they are.
+     *
+     * Rows are inserted `chunkRows` at a time, on a connection of the
+     * writer's own (the shared one serves zooms meanwhile). Past the budget,
+     * `write` throws an error with code SINK_BUDGET. `finish()` inserts the
+     * rest and compacts the table; `abort()` drops it.
+     */
+    openSinkWriter(legacyData, sink, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS } = {}) {
+        const nColumns = sink.columns.length;
+        const bufferRows = Math.max(1, Math.round(Number(chunkRows) || STREAM_DEFAULT_CHUNK_ROWS));
+        let conn = null;
+        let rn = new Float64Array(bufferRows);
+        let values = Array.from({ length: nColumns }, () => new Float64Array(bufferRows));
+        let buffered = 0;
+        let nextRow = 0;
+        let closed = false;
+
+        const insert = async () => {
+            if (!buffered) return;
+            const budget = this.sinkBudget();
+            if (budget.used + this.sinkBytesFor(buffered, nColumns) > budget.limit) throw sinkBudgetError(budget);
+            conn ||= await this._openStreamConnection();
+            const table = this._sinkArrowTable(sink, rn, values, buffered);
+            await conn.insertArrowTable(table, { name: sink.table, create: false });
+            sink.rows += buffered;
+            sink.bytes = this.sinkBytesFor(sink.rows, nColumns);
+            buffered = 0;
+            rn = new Float64Array(bufferRows);
+            values = Array.from({ length: nColumns }, () => new Float64Array(bufferRows));
+        };
+        return {
+            sink,
+            write: async (rows, columns) => {
+                if (closed) throw new Error('sink writer: write after close');
+                let i = 0;
+                while (i < rows.length) {
+                    const row = rows[i];
+                    if (!(row >= nextRow)) throw new Error(`sink writer: row ${row} out of order (next is ${nextRow})`);
+                    const room = bufferRows - buffered;
+                    if (row > nextRow) {
+                        // Rows of the file the job did not read: NULL.
+                        const gap = Math.min(row - nextRow, room);
+                        for (let k = 0; k < gap; k++) rn[buffered + k] = nextRow + k;
+                        for (let c = 0; c < nColumns; c++) values[c].fill(NaN, buffered, buffered + gap);
+                        buffered += gap;
+                        nextRow += gap;
+                    } else {
+                        // A run of consecutive rows, copied as a block.
+                        const limit = Math.min(rows.length, i + room);
+                        let j = i + 1;
+                        while (j < limit && rows[j] === row + (j - i)) j++;
+                        for (let k = 0; k < j - i; k++) rn[buffered + k] = row + k;
+                        for (let c = 0; c < nColumns; c++) values[c].set(columns[c].subarray(i, j), buffered);
+                        buffered += j - i;
+                        nextRow = row + (j - i);
+                        i = j;
+                    }
+                    if (buffered === bufferRows) await insert();
+                }
+            },
+            finish: async () => {
+                if (closed) return sink;
+                closed = true;
+                try {
+                    await insert();
+                    // Compacts what was written while the table grew
+                    // (measured: 369 → 221 MB for 20M rows of a sine).
+                    try { await conn?.query('CHECKPOINT'); } catch (_) { /* best effort */ }
+                } finally {
+                    await this._closeStreamConnection(conn);
+                    conn = null;
+                }
+                this._clearRangeCacheForTable(legacyData?._duckdb?.tableName);
+                return sink;
+            },
+            abort: async () => {
+                closed = true;
+                await this._closeStreamConnection(conn);
+                conn = null;
+                await this.dropSink(legacyData, sink.table);
+            },
+        };
+    }
+
+    // An Arrow table of the first `n` buffered rows. The row number is an
+    // Int32 while it fits (DuckDB widens it to the BIGINT column); the values
+    // carry a validity bitmap with NaN as NULL.
+    _sinkArrowTable(sink, rn, values, n) {
+        const last = n ? rn[n - 1] : 0;
+        let rnVector;
+        if (last < 2147483647) {
+            rnVector = arrow.makeVector(Int32Array.from(rn.subarray(0, n)));
+        } else {
+            const wide = new BigInt64Array(n);
+            for (let i = 0; i < n; i++) wide[i] = BigInt(rn[i]);
+            rnVector = arrow.makeVector(wide);
+        }
+        const columns = { [sink.rnColumn]: rnVector };
+        sink.columns.forEach((entry, c) => {
+            const data = values[c].subarray(0, n);
+            const bitmap = new Uint8Array(Math.ceil(n / 8));
+            let nullCount = 0;
+            for (let i = 0; i < n; i++) {
+                if (Number.isNaN(data[i])) nullCount++;
+                else bitmap[i >> 3] |= 1 << (i & 7);
+            }
+            columns[entry.column] = arrow.makeVector(arrow.makeData({
+                type: new arrow.Float64(),
+                length: n,
+                nullCount,
+                nullBitmap: nullCount ? bitmap : null,
+                data,
+            }));
+        });
+        return new arrow.Table(columns);
+    }
+
+    // Whether a sink still exists: a reload or a closed file drops them.
+    hasSink(table) {
+        return !!table && this._liveSinks.has(table);
+    }
+
+    // Drop a sink. Safe to call twice, and on a sink of a file already closed.
+    async dropSink(legacyData, table) {
+        if (!table) return;
+        legacyData?._duckdb?.sinks?.delete(table);
+        this._liveSinks.delete(table);
+        if (!this._conn) return;
+        try {
+            await this._withConnectionLock(() => this._conn.query(`DROP TABLE IF EXISTS ${table}`));
+        } catch (_) { /* already gone */ }
+        this._clearRangeCacheForTable(legacyData?._duckdb?.tableName);
     }
 
     // Connections opened for streams, tracked so shutdown() can close any that
@@ -2098,6 +2351,10 @@ export default class DuckDbSource {
                 baseTableName: tableName,
                 combinedViewName: null,
                 appendTableName: null,
+                // The file as read, before the profile's row filter: what a
+                // sink's rows line up with (see _joinedRelationSql).
+                readExpr,
+                readWhere,
                 timeColumn: timeInfo.sourceNames[0] || timeInfo.name,
                 timeExprSql: timeInfo.sql,
                 generatedTime: !!timeInfo.generated,
@@ -3884,7 +4141,15 @@ export default class DuckDbSource {
     // Data Tools result over one, or a formula translated to SQL. Anything else
     // exists only over the overview.
     hasSqlValue(variable) {
-        return !!(variable?._duckdbCol || variable?._duckdbDataTool || variable?._duckdbExpr);
+        if (!(variable?._duckdbCol || variable?._duckdbDataTool || variable?._duckdbExpr)) return false;
+        // SQL that reads a sink dropped since (an edit replaced it, the file
+        // was reloaded) has nothing to read: the variable keeps its overview
+        // until it is rebuilt, rather than every query of the file failing on
+        // the missing table.
+        for (const window of variable._duckdbWindows || []) {
+            if (window?.sink && !this._liveSinks.has(window.sink)) return false;
+        }
+        return true;
     }
 
     // The time axis as the raw values the file's time column holds — what
@@ -3906,12 +4171,51 @@ export default class DuckDbSource {
     // computes those windows over every row first, so a time filter in the
     // query narrows the result, not the rows the window sees. Only such queries
     // pay for it — the subquery keeps DuckDB from filtering inside the scan.
-    _fromSql(legacyData, variables = []) {
+    //
+    // A variable written by the chunked executor reads a sink (sinkColumn in
+    // lazy-tool-sql.js): the sink is joined to the file by position, below
+    // the windows, so a window over it sees every row. `rawRowNumber` adds
+    // `__omv_raw_rn`, each row's position in the file as read — what a job
+    // writes its sink rows against.
+    _fromSql(legacyData, variables = [], { rawRowNumber = false } = {}) {
         const meta = legacyData?._duckdb;
-        const windows = collectWindows(variables);
-        if (!windows.length) return meta.tableName;
+        const all = collectWindows(variables);
+        const sinks = all.filter(w => w.sink);
+        const windows = all.filter(w => !w.sink);
+        const from = sinks.length || rawRowNumber
+            ? this._joinedRelationSql(meta, sinks, { rawRowNumber })
+            : meta.tableName;
+        if (!windows.length) return from;
         const tExpr = this.timeValueSql(legacyData);
-        return windowedFromSql(meta.tableName, tExpr ? `${tExpr} IS NOT NULL` : 'TRUE', windows);
+        return windowedFromSql(from, tExpr ? `${tExpr} IS NOT NULL` : 'TRUE', windows);
+    }
+
+    // The file as read, rows the profile filters out included: one row per
+    // row of the file, in the file's order. A file that grew by live update
+    // has its appended rows after (those were filtered before being stored).
+    _rawRelationSql(meta) {
+        const read = meta.readExpr || meta.baseTableName || meta.tableName;
+        if (!meta.appendTableName) return read;
+        return `(SELECT * FROM ${read} UNION ALL SELECT * FROM ${meta.appendTableName})`;
+    }
+
+    /**
+     * The file with sinks joined by position, then the profile's row filter.
+     *
+     * The join is on the raw read, not on the file's view: DuckDB runs a
+     * POSITIONAL JOIN of two plain scans as a POSITIONAL_SCAN, row beside row
+     * with nothing held, but as soon as one side is filtered (the view applies
+     * the row filter) it materializes that side. So the sink has a row for
+     * every row of the read, and the filter is applied after the join. A sink
+     * shorter than the file reads NULL past its end (rows the job had no
+     * output for at the tail: filtered or without time).
+     */
+    _joinedRelationSql(meta, sinks = [], { rawRowNumber = false } = {}) {
+        const joins = [...new Set(sinks.map(sink => sink.sink))]
+            .map(table => ` POSITIONAL JOIN ${table}`).join('');
+        const rowNumber = rawRowNumber ? ', (ROW_NUMBER() OVER () - 1) AS __omv_raw_rn' : '';
+        const joined = `(SELECT *${rowNumber} FROM ${this._rawRelationSql(meta)}${joins})`;
+        return meta.readWhere ? `(SELECT * FROM ${joined} WHERE ${meta.readWhere})` : joined;
     }
 
     _valueExpressionSql(variable, fallbackName = '', options = {}) {
@@ -4250,9 +4554,21 @@ export default class DuckDbSource {
         this._conn = null;
         this._db = null;
         this._initPromise = null;
+        // Its tables went with the engine.
+        this._liveSinks.clear();
         // A new engine starts without the Parquet reader.
         this._parquetLoaded = false;
     }
+}
+
+// A sink that would take the sinks past their budget. The app explains it
+// (code SINK_BUDGET) with the numbers it carries.
+function sinkBudgetError(budget) {
+    const err = new Error('The results of the data tools would exceed the memory set aside for them.');
+    err.code = 'SINK_BUDGET';
+    err.limit = budget.limit;
+    err.used = budget.used;
+    return err;
 }
 
 // A cancelled conversion is the user's decision, not a failure: the `cancelled`

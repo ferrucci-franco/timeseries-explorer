@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; Parquet sin red resuelto (§8); 4b diseñada (sección "Diseño (fase 4b)"), con la base en OPFS medida como alternativa al presupuesto en memoria (§10); el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b-1 implementadas (sección "Implementado (fase 4b-1)"); Parquet sin red resuelto (§8); el resto de la 4b diseñado (sección "Diseño (fase 4b)"); la base de DuckDB sigue en memoria, con OPFS medido y dejado para la 4b-4 (§10, "Decidido en la 4b-1"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -70,7 +70,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 
 | Función | En lazy | Cadena |
 |---|---|---|
-| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b** (salvo detrend por media móvil) | `dataToolLazyDisabled` |
+| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b**, ~~integral~~ en la 4a (salvo *interpolar*), ~~media móvil y detrend por media móvil~~ en la **4b-1** | `dataToolLazyDisabled` |
 | Outliers por picos | deshabilitados (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | `dataToolLazyBoundsOnly` |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
@@ -214,7 +214,7 @@ puede correr sobre trozos. Tres familias:
 |---|---|---|---|
 | Outliers por cotas (`detectBoundsOutliers`) | puntual | SQL, **ya hecho** | — |
 | Derivada (`computeDerivative`) | ±1 (centrada), 1 (diferencia) | SQL `LAG`/`LEAD` como columna virtual, **hecho (3b)** | Exacta bit a bit y en streaming (`STREAMING_WINDOW`). Δt = 0 y no finitos replican el kernel. |
-| Media móvil (`computeMovingAverage`) | ventana *w* | forma incremental con estado (suma y conteo corridos), **4b-1** | La suma corrida es sensible al orden: se lleva el estado, no se recalcula por trozo. Bit a bit. |
+| Media móvil (`computeMovingAverage`) | ventana *w* | forma incremental con estado (suma y conteo corridos), **hecho (4b-1)** | La suma corrida es sensible al orden: se lleva el estado, no se recalcula por trozo. Bit a bit. |
 | Integral (`computeIntegral`) | estado (acumulado) | `SUM() OVER (ROWS UNBOUNDED PRECEDING)` en streaming, **hecho (4a)** salvo la política *interpolar* | Exacta bit a bit. Cada zoom re-escanea desde el inicio del archivo: correcto, y en CSV igual de lento que cualquier zoom. |
 | Picos (`detectSpikeOutliers`) | ventana `half` | trozos con solape 25 (+16 para las rachas), en el pool de workers, **4b-3** | Sin estado: la mediana y la MAD de una ventana no dependen del orden de inserción. 10 s por 20 M en JS: por eso en workers. |
 | Outliers IQR (`detectIqrOutliers`) | global (cuantiles) | cuantiles exactos por pasadas de histograma, luego predicado puntual en SQL, **hecho (3b)** | `quantile_cont` guardaría la columna entera en memoria: no se usa. Exacto bit a bit. |
@@ -285,7 +285,7 @@ En orden de valor visible por esfuerzo:
 | 2 | **Exportación exacta** para lazy sobre el stream (CSV; Parquet vía `COPY` directo) | 1 día | bajo; cierra el defecto §1.6 del blueprint, visible al usuario desde el primer día |
 | 3 | Herramientas puntuales y de ventana como **columnas virtuales SQL**: derivada, IQR, detrend (tras su pasada de agregados) | 1–2 días + paridad eager/lazy por herramienta | medio: semántica de no finitos y Δt = 0 |
 | 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
-| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
+| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
 | 5 | Proyecto por definición para archivos lazy | 2–3 días | medio: formato de sesión, compatibilidad hacia atrás |
 | 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
 
@@ -565,7 +565,7 @@ de multiplicar por 0,001. El e2e crea una integral desde el panel.
 
 ### Diseño (fase 4b): las herramientas que no se escriben en SQL
 
-**Estado: diseño; nada implementado.** Lo que queda después de la 4a son las
+**Estado: diseño; la 4b-1 está implementada (sección "Implementado (fase 4b-1)", con lo que cambió respecto de este diseño).** Lo que queda después de la 4a son las
 herramientas cuya salida no es una expresión sobre la fila y sus vecinas
 inmediatas: media móvil (y el detrend por media móvil), filtro digital (hacia
 adelante y de fase cero), picos, rellenar faltantes, las políticas *interpolar*
@@ -864,7 +864,8 @@ infraestructura que las otras tres solo usan.
 - **Memoria de wasm.** Sumideros + búferes de DuckDB + el archivo que se
   escanea comparten 4 GiB. El presupuesto es una estimación; la 4b-1 tiene
   que medir el residente real en Chromium con un archivo grande y ajustar los
-  24 B/fila. Con la base en OPFS (§10) el presupuesto lo aplica DuckDB
+  24 B/fila. *Medido en la 4b-1: 7,3 B/fila para `(rn, y)` tras el
+  `CHECKPOINT`; el presupuesto cuenta 16 (ver "Implementado (fase 4b-1)").* Con la base en OPFS (§10) el presupuesto lo aplica DuckDB
   (`memory_limit`) y los sumideros dejan de contar contra los 4 GiB; a cambio,
   ese límite acota también los escaneos y las pasadas de estadísticas, que hoy
   usan lo que haya.
@@ -874,6 +875,168 @@ infraestructura que las otras tres solo usan.
 - **Reescribir kernels.** Es la parte con más riesgo de regresión; la
   mitigación es que la forma incremental conduce también el camino eager, así
   que los tests existentes fallan si algo cambia.
+
+### Implementado (fase 4b-1): el ejecutor, el sumidero y la media móvil
+
+**Media móvil** y **detrend por media móvil** en archivos lazy, sobre todas las
+filas del archivo, bit a bit con el kernel en memoria. Es la primera
+herramienta que no es SQL: el kernel corre en JS sobre el archivo leído por
+trozos y escribe su salida a un sumidero.
+
+**El kernel, en su forma incremental** (`createMovingAverage` en
+`src/compute/kernels/moving-average.js`): `push(trozo)` devuelve las salidas
+que ya puede dar, `flush()` el resto, y `push(trozo, true)` es las dos cosas
+en un solo array. `computeMovingAverage` es el conductor de un solo `push`, y
+el detrend por media móvil es la misma forma con `residual` (valor − media;
+`used` son sus puntos de ajuste: `createMovingAverageDetrend` en
+`detrend.js`). Lo que el diseño no había previsto: **la ventana depende del
+largo de la serie** (una ventana más ancha que la serie se achica a ella), y
+el largo no se conoce hasta el final. Solo importa cuando la serie es más
+corta que la ventana, así que el kernel no da nada hasta haber recibido una
+ventana entera de muestras; desde ahí la ventana es la pedida sea cual sea el
+largo. Retiene una ventana de muestras, nada más.
+
+**El ejecutor** (`runChunkedJob` en `src/data/chunk-executor.js`) lee con
+`streamJobColumns`, entrega cada trozo al kernel y escribe lo que sale en el
+sumidero, en la posición de su fila; las salidas van detrás de las entradas
+(media ventana), así que las posiciones esperan en una cola. Progreso por
+trozo y cancelación por `AbortSignal`, que corta el stream y borra el
+sumidero. Del contrato del diseño quedan para la 4b-3 el solape y la mirada
+hacia adelante (`overlap`, `lookahead`): la media móvil no los necesita.
+
+**La alineación, distinta del diseño.** El diseño proponía que el stream
+pidiera *todas* las filas del archivo (`allRows`). No sirve cuando la fuente
+lleva ventanas (la media móvil de una derivada): la derivada se calcula sobre
+las filas que sirven las consultas lazy (con tiempo, pasado el filtro del
+perfil), y un stream de todas las filas no puede dar esos valores. Lo que se
+hizo: el stream lee las filas que sirven las consultas, como siempre, pero
+cada una con su **posición en el archivo leído** (`__omv_raw_rn`, un
+`ROW_NUMBER() OVER ()` en streaming sobre la lectura cruda, antes del filtro y
+de las ventanas: `_fromSql(…, { rawRowNumber: true })`). El escritor rellena
+con filas NULL las posiciones que se salta, así que el sumidero tiene una fila
+por fila del archivo; las filas del final que nadie sirve pueden faltar, y la
+unión posicional las lee NULL.
+
+**El sumidero** (`createSink` y `openSinkWriter` en `DuckDbSource`): una tabla
+`<archivo>_sink_<n>(__omv_sink_rn_<n> BIGINT, "__omv_w_<hash>" DOUBLE)` en la
+memoria del motor, escrita por `insertArrowTable` en trozos de 262 144 filas
+por una conexión propia (el `rn` como Int32 mientras entra, NaN como NULL con
+el mapa de validez de Arrow, ±∞ tal cual), y compactada con `CHECKPOINT` al
+terminar. **Sin columna `t`**: el camino de lectura "solo el sumidero" del
+diseño (4 ms por zoom) obligaría a cambiar cómo cada consulta obtiene el
+tiempo; queda para cuando haga falta, y toda lectura pasa por la unión
+posicional.
+
+**Cómo se lee.** La columna del sumidero viaja en `_duckdbWindows` como una
+ventana más (`sinkColumn` en `lazy-tool-sql.js`: nivel 0, con `sink: tabla`),
+y la variable es `_duckdbExpr = "__omv_w_<hash>"`. Con eso las fórmulas, la
+derivada, la integral y todo lo que ya propagaba ventanas la lleva consigo sin
+código nuevo (el `_duckdbSinks` del diseño no hizo falta): el traductor de
+fórmulas encuentra la columna por su nombre. `_fromSql` separa sumideros de
+ventanas y arma `(SELECT * FROM <lectura cruda> POSITIONAL JOIN sumidero…)
+WHERE <filtro del perfil>`, con las ventanas encima; `meta` guarda ahora
+`readExpr` y `readWhere`. Con actualización en vivo la lectura cruda es la
+lectura `UNION ALL` la tabla de filas agregadas: el caso que materializa,
+como estaba previsto. Una variable cuyo sumidero ya no existe no tiene SQL
+(`hasSqlValue`): conserva su resumen en vez de hacer fallar toda consulta del
+archivo.
+
+**Presupuesto.** `sinkBudgetBytes`, que la app toma del ajuste avanzado nuevo
+*Resultados en memoria* (1024 MB por defecto; 0 es sin límite, como en los
+demás límites de esa pantalla), cuenta los sumideros de todos los archivos a
+`8 × (1 + columnas)` bytes por fila. Con el tamaño conocido (Parquet) el
+trabajo se rechaza antes de leer nada; si no (un CSV no se cuenta al abrirlo),
+el escritor se detiene al llegar, borra lo escrito y el panel explica qué
+ajuste cambiar.
+
+**En la app** (`lazy-data-tools-methods.js`): el selector ofrece la media
+móvil y todos los métodos de detrend; la ventana se acota con las filas del
+archivo cuando se conocen, no con las del resumen. El trabajo corre detrás del
+overlay de la exportación, con "{n} de {total} filas" y Cancelar, que aborta
+en el acto. Una ejecución que nadie pidió en ese momento — una sesión
+restaurada, filas agregadas en vivo, una fuente editada — muestra el overlay
+solo si dura más de un segundo, para que un archivo en vivo no haga aparecer
+un diálogo en cada agregado. Los trabajos van en cola de a uno; uno superado
+(editado, borrado, recargado mientras corría) se descarta. El sumidero de una
+ejecución se compara con la fuente por una firma (la de las estadísticas de la
+3b, más la herramienta y sus parámetros); si no coincide, el trabajo se
+vuelve a correr y la variable lee el sumidero viejo mientras tanto.
+
+**Ciclo de vida**, como lo pedía el diseño: el sumidero se borra al eliminar
+la variable, al reemplazarlo una edición (después de reconstruir lo que lo
+lee), al cancelar o fallar el trabajo, al cerrar o recargar el archivo. No
+viaja en la sesión: al restaurar, la variable existe de inmediato con el
+resumen vacío y el trabajo se vuelve a correr. La actualización en vivo
+recalcula todo (la firma incluye las filas agregadas); seguir desde el estado
+final es de la 4b-4.
+
+Pruebas:
+
+- `scripts/test-moving-average-chunks.mjs`: la forma incremental contra el
+  bucle que reemplazó, copiado tal cual, en 1944 cortes (trozos de 1, 2, 7 y
+  1000 filas y de tamaños al azar; series de 0 a 6000 muestras; ventanas de 2
+  a 10⁹, inválidas y más anchas que la serie; huecos, ±∞ y sumas que
+  desbordan), y el detrend por media móvil con sus puntos de ajuste. Falla si
+  se recalcula la suma por trozo, si se emite antes de conocer la ventana, o
+  si se suelta una muestra que todavía hay que restar.
+- `scripts/test-lazy-sink-tools.mjs` (DuckDB-WASM en Node): bit a bit contra
+  el kernel creada como la crea el panel (ventanas hasta 100 000 sobre 30 011
+  filas, desbordes a ±∞) y por el ejecutor en trozos de 1, 777 y 5000 filas;
+  un archivo con filtro de filas, filas sin tiempo y filas filtradas al final,
+  y uno con eje generado; un zoom exacto; el plan con `POSITIONAL_SCAN` y sin
+  `POSITIONAL_JOIN`, `ORDER_BY` ni `HASH_JOIN`; el `rn` del sumidero igual al
+  `ROW_NUMBER() OVER ()` tras la unión (el test del riesgo "Orden físico");
+  cadenas (media móvil de una derivada, derivada y fórmula de una media
+  móvil, media móvil de una media móvil, dos sumideros en una consulta);
+  cancelar antes y a mitad de camino, el presupuesto (por escritura y antes de
+  leer), una edición y un borrado sin sumideros huérfanos; una sesión que
+  vuelve a correr el trabajo, y el cierre del archivo que borra sus
+  sumideros.
+- `scripts/e2e-lazy-data-tools.mjs` (Chromium): media móvil y detrend por
+  media móvil creados desde el panel con su overlay, zoom de 1001 filas
+  exacto, y un Cancelar en el acto que no deja variable ni tabla.
+
+Medido en Chromium con el bundle de la app (`node bench/lazy-sink-job.mjs`):
+
+CSV de 20 M filas (359 MB) abierto en lazy por la entrada de archivos,
+Chromium headless, un hilo. Tiempos en segundos; cada configuración en una
+pestaña nueva.
+
+| Qué | Memoria, sin límite | Memoria, 1 GiB | Memoria, 512 MiB | OPFS, 512 MiB | OPFS, 256 MiB |
+|---|---|---|---|---|---|
+| Abrir en lazy | 8,5 | 9,0 | 8,8 | 9,3 | 8,3 |
+| `COUNT` | 2,4 | 2,5 | 2,7 | 2,3 | 2,6 |
+| Cuartiles exactos (3b) | 20,6 | 20,2 | 22,8 | 20,4 | 21,9 |
+| Sumas del detrend lineal (3b) | 12,0 | 10,4 | 10,3 | 11,0 | 11,1 |
+| Umbral de huecos de la integral (4a) | 23,7 | 20,6 | 20,0 | 21,1 | 21,5 |
+| **Media móvil, ventana 101: el trabajo entero** | **26,6** | 21,8 | 21,7 | 25,3 | 26,2 |
+| Memoria del sumidero (20 M filas) | 145 MB | 145 MB | 145 MB | 152 MB | 152 MB |
+| Zoom de 1000 filas con el sumidero | 4,4 | 3,9 | 3,7 | 4,3 | 5,0 |
+| Refresco del resumen con el sumidero | 8,2 | 7,2 | 8,8 | 8,1 | 7,9 |
+
+Y aparte, en memoria sin límite: un zoom de 1000 filas **sin** sumidero, 3,9 s
+contra 4,3 con él. Un CSV lazy se recorre entero en cada consulta, con
+sumidero o sin él (§8, "CSV re-escanea por consulta"): la unión posicional
+agrega ~10 %. Con 2 M filas (34 MB) todo escala en proporción (el trabajo,
+2,8 s); con un `memory_limit` de **61 MiB**, en memoria o en OPFS, el lector
+de CSV no abre el archivo: pide bloques de 30,5 MiB (*could not allocate
+block of size 30.5 MiB*).
+
+Lo que dicen:
+
+- **El trabajo cuesta lo que una pasada de la 3b**: ~0,8 M filas/s, del
+  orden de los cuartiles o del umbral de huecos sobre el mismo archivo. Lo
+  domina leer el CSV, no el kernel (0,4 s por 20 M filas, §"Hechos medidos").
+- **El sumidero ocupa 7,3 B/fila** tras el `CHECKPOINT`: el `rn` se comprime a
+  casi nada y los valores (5 decimales) bastante. El presupuesto cuenta
+  16 B/fila, el doble: con el ajuste por defecto entran ~65 M filas según la
+  cuenta y ~140 M de verdad para una señal así. Una señal con todos los
+  dígitos de un double no se comprime (~8–9 B/fila), así que la cuenta se
+  deja en 16: nunca promete lo que no hay.
+- **Un `memory_limit` de 256 MiB a 1 GiB no cambia nada** de lo que ya
+  funcionaba: el escaneo del CSV y las pasadas de la 3b y la 4a dan los
+  mismos tiempos (±10 %). El que falla es uno mínimo (61 MiB). Ver §10 para lo
+  que eso decide.
 
 ## 8. Riesgos y decisiones abiertas
 
@@ -1038,7 +1201,37 @@ en este entorno de desarrollo la extensión Parquet no se puede bajar (§8).
   vigilar son las consultas globales (correlación cruzada, exportación con
   columnas de las dos fuentes), que tienen que ir por trozos también.
 
-### Lo que hay que medir en la 4b-1 antes de elegir
+### Decidido en la 4b-1: la base sigue en memoria, por ahora
+
+Medido en la 4b-1 (tabla en "Implementado (fase 4b-1)"): un `memory_limit`
+de 256 MiB a 1 GiB deja el escaneo de un CSV de 359 MB y las pasadas de la
+3b y la 4a como estaban, en memoria o con la base en OPFS, y la base en OPFS
+da los mismos tiempos para todo, el trabajo de la media móvil incluido. Con
+61 MiB el lector de CSV ya no abre el archivo. La condición que esta sección
+ponía — que el límite no rompa lo que funciona — se cumple con un límite de
+256 MiB o más.
+
+Aun así **la base sigue en memoria** en la 4b-1:
+
+1. Un sumidero ocupa 7–8 B/fila comprimido: el presupuesto por defecto
+   (1 GB) guarda la media móvil de cualquier archivo que esta app abre hoy en
+   un navegador, varias veces.
+2. OPFS trae costos que la app tendría que cargar (los medidos arriba): un
+   archivo por pestaña, la reapertura en solo lectura dentro del mismo
+   *worker*, borrar huérfanos al arrancar, la cuota y el desalojo del
+   almacenamiento temporal, `TEMP` para la carga eager. No vale la pena
+   mientras nada necesite más memoria que la que hay.
+3. El cambio es local cuando haga falta: `_bootstrap` abre la base en OPFS y
+   el presupuesto pasa a ser el `memory_limit` del motor (≥ 256 MiB); el
+   ejecutor, los sumideros y su lectura no cambian.
+
+Cuándo volver: en la 4b-4 (los datasets de remuestreo y colapsar, que son
+tablas enteras, y varias salidas a la vez), o cuando alguien llegue al
+presupuesto. Lo que no se midió acá: un CSV de varios GB (el disco de este
+entorno), la cuota y el desalojo de OPFS bajo presión de disco, y el costo de
+catálogos y vistas en una base en disco.
+
+### Lo que había que medir en la 4b-1 antes de elegir
 
 - **`memory_limit` contra lo que ya funciona.** Hoy el motor usa hasta el
   *heap* de wasm; con un límite, las pasadas de estadísticas de la 3b

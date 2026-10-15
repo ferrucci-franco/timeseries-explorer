@@ -16,8 +16,8 @@
 // A hole is not a data point, and a trend fitted through one would bend toward
 // whatever the hole was filled with.
 
-import { asFloat64, DataToolError, normalizeTimeContext } from './shared.js';
-import { computeMovingAverage } from './moving-average.js';
+import { asFloat64, DataToolError, normalizeMovingAverageWindow, normalizeTimeContext } from './shared.js';
+import { createMovingAverage } from './moving-average.js';
 
 export const DETREND_METHODS = new Set(['mean', 'linear', 'polynomial', 'movingAverage', 'firstSample']);
 
@@ -122,6 +122,21 @@ export function solveDetrendFit(powerSums, rhs, requested) {
 }
 
 /**
+ * The moving-average detrend as the incremental form of createMovingAverage:
+ * value − centred average, pushed a chunk at a time. `used` is the report's
+ * fitPoints. The window is the detrend's (at least 3), then the moving
+ * average's own clamp to the length of the series — both, as computeDetrend
+ * applies them.
+ */
+export function createMovingAverageDetrend(params = {}) {
+    const window = normalizeDetrendParams({ ...params, method: 'movingAverage' }).window;
+    return createMovingAverage({}, {
+        windowForLength: n => normalizeMovingAverageWindow(normalizeDetrendWindow(window, n), n),
+        residual: true,
+    });
+}
+
+/**
  * @returns {{
  *   values: Float64Array,
  *   coefficients: number[]|null, order: number|null,
@@ -161,15 +176,9 @@ export function computeDetrend(sourceValues, time, params = {}) {
         // Subtracting a centred moving average is a high-pass: what survives is
         // whatever moves faster than the window. Unlike a polynomial it follows a
         // wandering baseline, and unlike a filter it needs no coefficients.
-        const window = normalizeDetrendWindow(settings.window, n);
-        const baseline = computeMovingAverage(values, { window });
-        let used = 0;
-        for (let i = 0; i < n; i++) {
-            if (!Number.isFinite(values[i]) || !Number.isFinite(baseline[i])) continue;
-            out[i] = values[i] - baseline[i];
-            used++;
-        }
-        report.fitPoints = used;
+        const detrend = createMovingAverageDetrend(settings);
+        report.values = detrend.push(values, true);
+        report.fitPoints = detrend.used;
         return report;
     }
 

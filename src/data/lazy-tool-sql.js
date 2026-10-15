@@ -91,6 +91,20 @@ export function quoteIdent(name) {
     return `"${String(name ?? '').replace(/"/g, '""')}"`;
 }
 
+/**
+ * A column of a sink: a table the chunked executor wrote a tool's output to,
+ * one row per row of the file (src/data/chunk-executor.js). It travels in
+ * `_duckdbWindows` like a window column — so a formula, a derivative or any
+ * other SQL built on the output carries it along with no plumbing of its own —
+ * but it is not computed: DuckDbSource._fromSql joins the table to the file
+ * by position, under every window. Level 0: whatever reads it sits above it.
+ * The name has the window columns' shape, which is what lets the formula
+ * translator find it in SQL that reads it (src/expr/sql.js).
+ */
+export function sinkColumn(table, index = 0) {
+    return { column: `__omv_w_${hashText(`sink:${table}:${index}`)}`, sql: `/* ${table} */`, level: 0, sink: table };
+}
+
 // Every window column the variables need, once each, lowest level first.
 export function collectWindows(variables) {
     const byColumn = new Map();
@@ -113,7 +127,9 @@ export function mergeWindows(...lists) {
  * Returns `tableName` untouched when there is nothing to add.
  */
 export function windowedFromSql(tableName, validWhere, windows) {
-    if (!windows?.length) return tableName;
+    // Sink columns are joined, not computed (see sinkColumn).
+    windows = (windows || []).filter(w => !w.sink);
+    if (!windows.length) return tableName;
     let from = validWhere && validWhere !== 'TRUE'
         ? `(SELECT * FROM ${tableName} WHERE ${validWhere})`
         : `(SELECT * FROM ${tableName})`;

@@ -472,11 +472,16 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
 
 // ── What stays unavailable says so ──────────────────────────────────────────
 {
-    assert.equal(h._isDataToolAvailableForData('movingAverage', lazy), false, 'the moving average waits for the chunked executor');
+    assert.equal(h._isDataToolAvailableForData('filter', lazy), false, 'the filter waits for the chunked executor (4b-2)');
     assert.equal(h._isDataToolAvailableForData('derivative', lazy), true, 'the derivative is available');
     assert.equal(h._isDataToolAvailableForData('integrate', lazy), true, 'the integral is available');
+    // The moving average runs in the chunked executor, not as SQL
+    // (scripts/test-lazy-sink-tools.mjs).
+    assert.equal(h._isDataToolAvailableForData('movingAverage', lazy), true, 'the moving average is available');
     assert.equal(h._isLazySqlToolConfig({ tool: 'detrend', params: { method: 'movingAverage' } }), false,
-        'so does the moving-average baseline of a detrend');
+        'the moving-average baseline of a detrend is not SQL');
+    assert.equal(h._isLazySinkToolConfig({ tool: 'detrend', params: { method: 'movingAverage' } }), true,
+        'it runs in the chunked executor');
     assert.equal(h._isLazySqlToolConfig({ tool: 'removeOutliers', method: 'spike' }), false, 'and the spike detector');
 }
 console.log('lazy data tools: derivative, integral, IQR and detrend run over every row of a lazy file');

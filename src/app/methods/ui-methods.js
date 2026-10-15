@@ -1196,6 +1196,7 @@ proto.showDisplaySettings = function() {
         makeNumberField('pickleFullLoadMb', 'pickleFullLoadLimit', 'pickleFullLoadLimitHelp'),
         makeNumberField('pypsaNetcdfFullLoadMb', 'pypsaNetcdfFullLoadLimit', 'pypsaNetcdfFullLoadLimitHelp'),
         makeNumberField('audioFullLoadMb', 'audioFullLoadLimit', 'audioFullLoadLimitHelp'),
+        makeNumberField('lazyResultsMb', 'lazyResultsLimit', 'lazyResultsLimitHelp'),
     ];
 
     const compactControl = makeNumberField('csvCompactHintMb', 'csvCompactHintLimit', 'csvCompactHintLimitHelp');
