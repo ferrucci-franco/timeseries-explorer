@@ -212,9 +212,10 @@ parts in a worker, so their size is not limited by memory (a multi-GB ERA5
 month opens in a couple of seconds). The map view has offline Natural Earth
 coastlines, a time slider with playback, a level selector and palettes. Its
 colour scale is fitted to the whole period and stays fixed while the time
-moves, so colours compare across steps; "Auto-fit" re-fits it (whole period,
-exact period, current step, visible area; optional percentile clipping and
-centring on zero). The map opens in **Navigate** (drag or right-drag to pan,
+moves, so colours compare across steps. One "Color range" button holds it all:
+the two ends (typed by hand), the palette, and the fits (whole period, exact
+period, current step, visible area; optional percentile clipping and centring
+on zero), with the one in use marked in blue. The map opens in **Navigate** (drag or right-drag to pan,
 wheel or pinch to zoom); an analysis panel next to it turns it into series:
 
 - **Point**: click the map (or drag the orange ring, or type a latitude and
