@@ -15,7 +15,8 @@
 //   · a moving average created the way the panel creates it: the job's time,
 //     its rows, and the engine's memory before and after (the sink's bytes per
 //     row, which the budget estimates);
-//   · a zoom and an overview refresh that read the sink.
+//   · a zoom and an overview refresh that read the sink, and a zoom on the
+//     file alone to read them against.
 //
 // docs/any-size-files.md §10 says what had to be measured before choosing
 // where the database lives; the numbers are recorded there. One thread, this
@@ -145,6 +146,13 @@ try {
             await step('integral gap threshold (4a)', async () => {
                 const gaps = await app._lazySamplingGapThreshold(data, source.timeValueSql(data));
                 return { hasNominalStep: gaps.hasNominalStep };
+            });
+            // What a zoom costs without a sink, to read the one below against:
+            // a CSV is scanned whole by every query either way.
+            await step('zoom on the file alone (1000 rows)', async () => {
+                const mid = Math.floor(rows / 2) * 0.001;
+                const raw = await source.getRawColumnsRange(data, ['a'], mid, mid + 0.9995, 1e6);
+                return { rows: raw.x.length };
             });
             const before = await memory();
             await step('moving average job (window 101)', async () => {
