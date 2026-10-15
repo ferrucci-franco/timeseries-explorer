@@ -657,6 +657,9 @@ export function installGriddedMethods(TargetClass) {
             // 'pending-box' } or { kind: 'group', id }.
             selected: null,
             groups: [],
+            resultsHidden: (() => {
+                try { return localStorage.getItem('omv.gridded.resultsHidden') === '1'; } catch { return false; }
+            })(),
             groupCount: 0,
             playing: false,
             speed: 2,
@@ -859,15 +862,18 @@ export function installGriddedMethods(TargetClass) {
                     <section class="gridded-panel-section gridded-results">
                         <div class="gridded-results-head">
                             <h3 data-role="results-heading"></h3>
+                            <button type="button" class="gridded-results-toggle" data-action="toggle-results" aria-expanded="true"></button>
                             <span class="gridded-results-tools">
                                 <button type="button" class="gridded-icon-btn" data-action="remove-all">${TRASH_ICON}</button>
                                 <button type="button" class="gridded-icon-btn" data-action="export-series">${EXPORT_ICON}</button>
                             </span>
                         </div>
-                        <p class="gridded-help" data-role="results-empty"></p>
-                        <ul class="gridded-results-list" data-role="results"></ul>
-                        <button type="button" class="gridded-primary gridded-plot-btn" data-action="plot"></button>
-                        <p class="gridded-help" data-role="plot-help"></p>
+                        <div class="gridded-results-body" data-role="results-body">
+                            <p class="gridded-help" data-role="results-empty"></p>
+                            <ul class="gridded-results-list" data-role="results"></ul>
+                            <button type="button" class="gridded-primary gridded-plot-btn" data-action="plot"></button>
+                            <p class="gridded-help" data-role="plot-help"></p>
+                        </div>
                     </section>
                 </aside>
             </div>`;
@@ -1083,6 +1089,7 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'remove-set') this._griddedRemoveSet(current, target.closest('[data-group]')?.dataset.group, target.closest('[data-set]')?.dataset.set);
             else if (action === 'reuse-group') this._griddedReusePlace(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'remove-all') this._griddedRemoveAll(current);
+            else if (action === 'toggle-results') this._griddedToggleResults(current);
             else if (action === 'export-map') this._griddedExportMap(current);
             else if (action === 'export-series') this._griddedExportSeries(current);
             else if (action === 'plot') this._griddedPlotChecked(current);
@@ -1224,6 +1231,7 @@ export function installGriddedMethods(TargetClass) {
         set('[data-action="clear-point"]', 'griddedClearPoint');
         set('[data-action="clear-region"]', 'griddedClearBox');
         set('[data-role="results-heading"]', 'griddedResultsHeading');
+        if (this._griddedVisibleView()) this._griddedSyncResultsToggle(this._griddedVisibleView());
         set('[data-role="results-empty"]', 'griddedResultsEmpty');
         set('[data-action="remove-all"]', 'griddedRemoveAll', 'title');
         set('[data-action="remove-all"]', 'griddedRemoveAll', 'ariaLabel');
@@ -2862,7 +2870,35 @@ export function installGriddedMethods(TargetClass) {
         this._griddedSetStatus(i18n.t('griddedReuseStatus').replace(/\{tag\}/g, group.tag));
     };
 
+    /**
+     * Hide or show the list of extracted series together with their preview
+     * under the map, which then takes the whole height. Remembered for the
+     * next map (a per-viewer convenience); extracting still works hidden, and
+     * the heading counts the series.
+     */
+    proto._griddedToggleResults = function(view) {
+        view.resultsHidden = !view.resultsHidden;
+        try { localStorage.setItem('omv.gridded.resultsHidden', view.resultsHidden ? '1' : '0'); } catch { /* storage unavailable */ }
+        this._griddedRenderResults(view);
+        this._griddedDrawPreview(view);
+    };
+
+    proto._griddedSyncResultsToggle = function(view) {
+        const toggle = document.querySelector('#gridded-view [data-action="toggle-results"]');
+        const body = this._griddedEl('results-body');
+        const heading = this._griddedEl('results-heading');
+        if (!toggle || !body || !heading) return;
+        const hidden = !!view.resultsHidden;
+        body.hidden = hidden;
+        toggle.textContent = `${hidden ? '▸' : '▾'} ${i18n.t(hidden ? 'griddedShow' : 'griddedHide')}`;
+        toggle.title = i18n.t(hidden ? 'griddedShowResultsTitle' : 'griddedHideResultsTitle');
+        toggle.setAttribute('aria-expanded', String(!hidden));
+        const count = (view.groups || []).reduce((sum, group) => sum + group.sets.length, 0);
+        heading.textContent = i18n.t('griddedResultsHeading') + (hidden && count ? ` (${count})` : '');
+    };
+
     proto._griddedRenderResults = function(view) {
+        this._griddedSyncResultsToggle(view);
         const list = this._griddedEl('results');
         if (!list) return;
         list.innerHTML = '';
@@ -2944,7 +2980,7 @@ export function installGriddedMethods(TargetClass) {
         const panel = this._griddedEl('preview');
         const chart = this._griddedEl('preview-chart');
         if (!panel || !chart) return;
-        const series = this._griddedCheckedSeries(view);
+        const series = view.resultsHidden ? [] : this._griddedCheckedSeries(view);
         const splitter = this._griddedEl('splitter');
         if (!series.length) {
             panel.hidden = true;

@@ -273,6 +273,27 @@ try {
         await page.mouse.up({ button: 'right' });
         await page.waitForTimeout(200);
         assert.notDeepEqual(await previewRange(), previewBefore, 'a right-button drag pans the preview');
+        // "Hide" folds the list and the preview away, the map takes the
+        // height, and the heading still counts the series; "Show" brings
+        // them back.
+        const layoutNow = () => page.evaluate(() => ({
+            body: document.querySelector('#gridded-view [data-role="results-body"]').hidden,
+            preview: document.querySelector('#gridded-view [data-role="preview"]').hidden,
+            map: document.querySelector('#gridded-view .gridded-map').clientHeight,
+            heading: document.querySelector('#gridded-view [data-role="results-heading"]').textContent,
+        }));
+        const shown = await layoutNow();
+        await page.click('#gridded-view [data-action="toggle-results"]');
+        await page.waitForTimeout(300);
+        const folded = await layoutNow();
+        assert.equal(folded.body, true, 'Hide folds the list away');
+        assert.equal(folded.preview, true, 'and the preview under the map');
+        assert.ok(folded.map > shown.map + 50, `the map takes the height (${shown.map} → ${folded.map})`);
+        assert.match(folded.heading, /\(\d+\)$/, 'the heading counts the series');
+        await page.click('#gridded-view [data-action="toggle-results"]');
+        await page.waitForTimeout(300);
+        const back = await layoutNow();
+        assert.deepEqual([back.body, back.preview], [false, false], 'Show brings both back');
         // The "Map" button on the file row opens the map again. A map closed
         // with "Close map" does not put a button over the plots asking to
         // come back.

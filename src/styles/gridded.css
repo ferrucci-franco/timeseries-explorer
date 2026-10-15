@@ -577,6 +577,7 @@
 }
 
 .gridded-results-head h3 {
+    flex: 1;
     margin: 0;
 }
 
@@ -698,6 +699,16 @@
 .gridded-results-tools {
     display: inline-flex;
     gap: 0.25rem;
+}
+
+.gridded-view .gridded-results-toggle {
+    margin-right: 0.35rem;
+    padding: 0.15rem 0.45rem;
+    font-size: 0.74rem;
+}
+
+.gridded-results-body[hidden] {
+    display: none;
 }
 
 .gridded-swatch {

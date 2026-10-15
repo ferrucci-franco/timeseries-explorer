@@ -1191,6 +1191,9 @@ resumen de buscador):
      - Sin cursor de texto en ningún lugar de la app salvo en los campos de
        texto (con la navegación por cursor del navegador, F7, aparecía en
        botones y menús).
+     - "Ocultar / Mostrar" en "2 · Series extraídas" pliega la lista y la
+       vista previa bajo el mapa, que toma todo el alto; el encabezado cuenta
+       las series. Se recuerda para el próximo mapa (localStorage).
 - **Barra superior en una sola fila:** variable, nivel y escala a la izquierda;
   exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el título
   arriba, un formato de etiquetas acotado y un margen fijo: cambiar de instante
