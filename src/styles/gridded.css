@@ -507,6 +507,29 @@
     font-weight: 600;
 }
 
+/* The inspector: what the cell under the pointer holds (spec §4.4). */
+.gridded-inspector-rows {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15rem 0.5rem;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.gridded-inspector-rows > span:nth-child(odd) {
+    color: var(--text-secondary, #777);
+}
+
+.gridded-inspector-rows > span:nth-child(even) {
+    overflow-wrap: anywhere;
+}
+
+.gridded-view .gridded-inspector-copy {
+    margin-top: 0.45rem;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+}
+
 .gridded-modes {
     display: flex;
 }

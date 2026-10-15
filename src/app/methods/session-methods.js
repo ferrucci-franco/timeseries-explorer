@@ -57,6 +57,15 @@ proto.saveProjectSession = async function() {
         for (const fileMeta of session.files) {
             const entry = this.files.get(fileMeta.id);
             if (!entry || !fileMeta.archivePath) throw new Error(fileMeta.displayName || fileMeta.name || 'file');
+            const members = fileMeta.gridded?.files || [];
+            if (members.length) {
+                // A dataset of several files has no `entry.file`: each member
+                // is read from the list the dataset was opened with.
+                for (let index = 0; index < members.length; index++) {
+                    zipEntries[members[index].archivePath] = await this._readProjectEntryBytes(entry, entry.gridded?.files?.[index] || null);
+                }
+                continue;
+            }
             zipEntries[fileMeta.archivePath] = await this._readProjectEntryBytes(entry);
         }
     } catch (err) {
@@ -74,7 +83,7 @@ proto.saveProjectSession = async function() {
     return true;
 };
 
-proto._readProjectEntryBytes = async function(entry) {
+proto._readProjectEntryBytes = async function(entry, member = null) {
     const toBytes = value => {
         if (value instanceof ArrayBuffer) return new Uint8Array(value);
         if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -82,6 +91,12 @@ proto._readProjectEntryBytes = async function(entry) {
     };
 
     try {
+        // One named file of a dataset made of several (gridded netCDF).
+        if (member) {
+            const bytes = toBytes(await (member.arrayBuffer ? member.arrayBuffer() : this._readAsArrayBuffer(member)));
+            if (bytes) return bytes;
+            throw new Error(`Could not read ${member.name || 'a file of the dataset'}`);
+        }
         if (entry?.liveUpdate?.hasAppliedAppend) {
             const file = await this._readLiveUpdateFile(entry);
             const parsedEnd = Number(entry.liveUpdate.lastParsedOffset);
@@ -203,8 +218,18 @@ proto._createSessionSnapshot = function(options = {}) {
         const recipe = this._derivedDatasetRecipe?.(entry);
         if (recipe && this.files.has(recipe.sourceFileId)) continue;
         const displayName = this._fileDisplayName(entry);
+        // A gridded dataset can stand on several files — months joined along
+        // time, the entries of a CDS ZIP — and then has no single file of its
+        // own. Every one of them goes into the archive; the first is also the
+        // entry's `archivePath`, so everything that reads one file still works.
+        const griddedFiles = entry.gridded
+            ? entry.gridded.files.map(file => ({
+                name: file.name || displayName,
+                ...(includeData ? { archivePath: `data/${this._uniqueArchiveName(file.name || displayName, usedArchiveNames)}` } : {}),
+            }))
+            : null;
         const archivePath = includeData
-            ? `data/${this._uniqueArchiveName(displayName, usedArchiveNames)}`
+            ? (griddedFiles?.length ? griddedFiles[0].archivePath : `data/${this._uniqueArchiveName(displayName, usedArchiveNames)}`)
             : null;
         const data = this.plotManager.files.get(fileId)?.data;
         const csvProfile = data?.metadata?.csvProfile?.profileSource === 'user'
@@ -241,6 +266,16 @@ proto._createSessionSnapshot = function(options = {}) {
             gapSettings: gapSettings ? this._cloneSerializable(gapSettings) : null,
             transformPanelExpanded: !!this._expandedFileTransforms?.has(fileId),
             archivePath,
+            // The map of a gridded dataset: the files it was opened from, how
+            // they were joined, the places extracted on it and what it was
+            // showing (gridded-methods.js).
+            gridded: entry.gridded
+                ? {
+                    files: griddedFiles,
+                    options: this._cloneSerializable(entry.gridded.options || {}),
+                    view: this._griddedSessionState?.(fileId) || null,
+                }
+                : null,
             derivedDatasets: (this._derivedDatasetsOf?.(fileId) || [])
                 .map(([datasetId]) => this._serializeDerivedDataset(datasetId))
                 .filter(Boolean),
@@ -357,7 +392,12 @@ proto._parseSessionJson = function(text) {
 proto._loadProjectDataFromZip = async function(session, entries, options = {}) {
     for (const fileMeta of session.files || []) {
         if (!fileMeta.archivePath) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || 'file'));
-        if (!entries[fileMeta.archivePath]) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || fileMeta.archivePath));
+        const paths = fileMeta.gridded?.files?.length
+            ? fileMeta.gridded.files.map(member => member.archivePath)
+            : [fileMeta.archivePath];
+        for (const path of paths) {
+            if (!path || !entries[path]) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || path || fileMeta.archivePath));
+        }
     }
 
     if (!options.replaceConfirmed && (this.files.size || this.plotManager.hasAnyTraces())) {
@@ -384,13 +424,20 @@ proto._loadProjectDataFromZip = async function(session, entries, options = {}) {
     const fileMap = new Map();
     try {
         for (const fileMeta of session.files || []) {
-            const bytes = entries[fileMeta.archivePath];
-            const file = new File([bytes], fileMeta.displayName || `${fileMeta.name || 'results'}${fileMeta.extension || '.mat'}`);
+            const displayName = fileMeta.displayName || `${fileMeta.name || 'results'}${fileMeta.extension || '.mat'}`;
+            // A gridded dataset comes back from all of its files at once, and
+            // joined as it was: `griddedFiles` is what the map was built on.
+            const members = (fileMeta.gridded?.files || [])
+                .map(member => new File([entries[member.archivePath]], member.name || displayName));
+            const file = members[0] || new File([entries[fileMeta.archivePath]], displayName);
             // The archived bytes of an Excel entry are the raw workbook; restore
             // the recorded sheet directly so the sheet picker never re-appears.
             const result = await this.loadFile(file, {
                 excelSheetName: fileMeta.excel?.sheetName || null,
                 matSelection: fileMeta.matlab || null,
+                griddedFiles: members.length ? members : null,
+                griddedOptions: fileMeta.gridded?.options || null,
+                griddedTitle: fileMeta.name || '',
                 deferUi: true,
                 deferPlotRebuild: true,
                 throwOnError: true,
@@ -493,6 +540,9 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     this._applySessionSettings(settings);
     this._clearGeneratedVariablesForSession(fileMap);
     await this._applySessionFileMetadata(session, fileMap, { projectData: options.source === 'project' });
+    // Before the derived variables and the panels: both may name a series
+    // extracted on a map, which only exists once the map is put back.
+    this._applySessionGriddedViews(session, fileMap);
     this._applySessionDerivedVariables(session, fileMap, { defer: true });
     this._applySessionDataToolVariables(session, fileMap, { defer: true });
     this._reapplySessionGeneratedVariables(session, fileMap);
@@ -513,6 +563,9 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     this._syncSessionSettingsUI();
     const activeData = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
     if (activeData) this.renderVariablesTree(activeData.tree);
+    // Last, because it makes a file active and takes over the plot area: the
+    // map of a session that was saved with one open.
+    this._showRestoredGriddedView();
     this._resetDataToolPicker?.();
     if (typeof document !== 'undefined') {
         document.getElementById('drop-zone')?.classList.toggle('active', this.files.size === 0);
@@ -612,7 +665,14 @@ proto._sessionRequiredVariables = function(sessionFileId, session) {
         .filter(item => (item.targetMode || 'create') !== 'modify')
         .map(item => item.name)
         .filter(Boolean));
-    const generatedNames = new Set([...derivedNames, ...dataToolNames]);
+    // The series extracted on a map come back with the session itself
+    // (gridded.view), so a panel that plots one is not a file to look for.
+    const griddedNames = new Set((fileMeta?.gridded?.view?.groups || [])
+        .flatMap(group => group.sets || [])
+        .flatMap(set => set.items || [])
+        .map(item => item.name)
+        .filter(Boolean));
+    const generatedNames = new Set([...derivedNames, ...dataToolNames, ...griddedNames]);
     const names = new Set();
     for (const plot of session.plots || []) {
         for (const trace of plot.traces || []) {
@@ -848,6 +908,39 @@ proto._applySessionFileMetadata = async function(session, fileMap, options = {})
             { icon: 'CSV' },
         );
     }
+};
+
+/**
+ * The maps of the session: for every gridded dataset, the places extracted on
+ * it with their series (the panels reference those by name) and what the map
+ * was showing. The dataset itself was opened by `_loadProjectDataFromZip`,
+ * from all of its files.
+ */
+proto._applySessionGriddedViews = function(session, fileMap) {
+    if (typeof this._griddedRestoreSession !== 'function') return;
+    const state = this._griddedState();
+    // A project replaced the open files: the maps of the ones that are gone
+    // close, and their datasets in the worker with them.
+    for (const fileId of [...state.views.keys()]) {
+        if (!this.files.has(fileId)) this._griddedReleaseFile(fileId);
+    }
+    state.restoreOpenFileId = null;
+    for (const meta of session.files || []) {
+        const fileId = fileMap.get(meta.id);
+        const saved = meta.gridded?.view;
+        if (!fileId || !saved) continue;
+        if (!this._griddedRestoreSession(fileId, saved)) continue;
+        if (saved.open) state.restoreOpenFileId = fileId;
+    }
+};
+
+/** Reopens the map a session was saved with, once everything else is back. */
+proto._showRestoredGriddedView = function() {
+    if (typeof this._griddedState !== 'function') return;
+    const state = this._griddedState();
+    const fileId = state.restoreOpenFileId;
+    state.restoreOpenFileId = null;
+    if (fileId && this.files.get(fileId)?.gridded) this._showGriddedView(fileId);
 };
 
 proto._applySessionDerivedVariables = function(session, fileMap, options = {}) {

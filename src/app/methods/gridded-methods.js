@@ -15,6 +15,8 @@ import { extractZipEntry, isNetcdfEntryName, listZipEntries } from '../../gridde
 import { NETCDF_READABLE_KINDS, sniffNetcdfContainer } from '../../parsers/netcdf-sniff.js';
 import { formatUnitPowers } from '../../utils/unit-superscripts.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
+import { coastlineTrace, coastlineWindow, insideCoastlineWindow } from '../../gridded/coastlines.js';
+import { copyTextToClipboard } from '../../utils/clipboard.js';
 
 const GRIDDED_EXTENSIONS = new Set(['.nc', '.nc4', '.netcdf', '.cdf', '.zip']);
 // Above this many cells a map is drawn decimated to the screen; zooming in
@@ -55,36 +57,6 @@ function loadCoastlines(scale) {
             .catch(() => null));
     }
     return coastlineCache.get(scale);
-}
-
-/**
- * Coastline polylines as one x/y pair of arrays with null breaks, shifted into
- * the map's longitude convention (a 0..360 grid that could not be rolled keeps
- * 0..360, so the coast goes there too) and cut where a line jumps the seam.
- */
-export function coastlineTrace(lines, lonMin, lonMax) {
-    const shift = lonMax > 180;
-    const x = [];
-    const y = [];
-    for (const line of lines || []) {
-        let previous = null;
-        for (let index = 0; index < line.length; index += 2) {
-            let lon = line[index];
-            const lat = line[index + 1];
-            if (shift && lon < 0) lon += 360;
-            if (previous !== null && Math.abs(lon - previous) > 180) {
-                x.push(null);
-                y.push(null);
-            }
-            x.push(lon);
-            y.push(lat);
-            previous = lon;
-        }
-        x.push(null);
-        y.push(null);
-    }
-    // Margin so lines leaving the frame are not cut short of it.
-    return { x, y, lonMin, lonMax };
 }
 
 /**
@@ -473,6 +445,24 @@ export function installGriddedMethods(TargetClass) {
     proto._maybeOpenGridded = async function(file, extension, options = {}) {
         if (options.netcdfAsSeries || options.netcdfProbed || !this._isGriddedCandidateExtension(extension)) return null;
         if (options.griddedOpen) return this._registerGriddedDataset(options.griddedOpen, options);
+        // A session being restored hands back every file of the dataset and
+        // the way they were joined (several months along time, the entries of
+        // a CDS ZIP as one dataset), so it opens as the one dataset it was.
+        if (options.griddedFiles?.length) {
+            const files = options.griddedFiles;
+            const openOptions = options.griddedOptions || {};
+            const result = await this._griddedProbe(files, openOptions);
+            if (!result?.gridded) {
+                griddedClient().close(result?.datasetId);
+                return null;
+            }
+            return this._registerGriddedDataset({
+                files,
+                result,
+                options: openOptions,
+                title: options.griddedTitle || openOptions.title || this._fileBaseName(files[0].name),
+            }, options);
+        }
         const kind = await this._sniffFileHead(file);
         if (!NETCDF_READABLE_KINDS.has(kind) && kind !== 'cdf5') {
             if (extension === '.zip') return null;
@@ -525,11 +515,15 @@ export function installGriddedMethods(TargetClass) {
         const datasetNode = treeNode(i18n.t('griddedDatasetVariablesNode'), 'metadata');
         for (const variable of model.variables.filter(item => item.mapable)) {
             const shape = variable.dimNames.map((name, index) => `${name}=${variable.shape[index]}`).join(', ');
+            // How big the field is, which the shape alone does not say at a
+            // glance: 744 × 721 × 1440 is 772 million values.
+            const size = i18n.t('griddedVariableValues')
+                .replace('{count}', variable.shape.reduce((total, length) => total * (length || 0), 1).toLocaleString());
             datasetNode._variables[variable.name] = {
                 name: `grid:@var/${encodeURIComponent(variable.key)}`,
                 displayName: variable.name,
                 data: [shape],
-                description: `${variable.longName || variable.name}${variable.units ? ` [${variable.units}]` : ''} — ${shape}`,
+                description: `${variable.longName || variable.name}${variable.units ? ` [${variable.units}]` : ''} — ${shape} · ${size}`,
                 kind: 'parameter', dataType: 'string', isConstant: true, interpolation: 'constant',
                 negate: false, source: 'netcdf-gridded', plottable: false,
             };
@@ -816,6 +810,16 @@ export function installGriddedMethods(TargetClass) {
                     </div>
                 </div>
                 <aside class="gridded-panel" data-role="panel">
+                    <section class="gridded-panel-section gridded-inspector" data-role="inspector">
+                        <h3 data-role="inspector-heading"></h3>
+                        <div class="gridded-inspector-rows">
+                            <span data-role="inspector-at-label"></span><span data-role="inspector-at">—</span>
+                            <span data-role="inspector-cell-label"></span><span data-role="inspector-cell">—</span>
+                            <span data-role="inspector-value-label"></span><span data-role="inspector-value">—</span>
+                            <span data-role="inspector-when-label"></span><span data-role="inspector-when">—</span>
+                        </div>
+                        <button type="button" class="gridded-inspector-copy" data-action="copy-inspector"></button>
+                    </section>
                     <section class="gridded-panel-section">
                         <h3 data-role="tools-heading"></h3>
                         <div class="gridded-modes" role="radiogroup" data-role="modes">
@@ -1095,6 +1099,7 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'export-map') this._griddedExportMap(current);
             else if (action === 'export-series') this._griddedExportSeries(current);
             else if (action === 'plot') this._griddedPlotChecked(current);
+            else if (action === 'copy-inspector') this._griddedCopyInspector(current);
         });
         // A row of the list selects its point or box on the map; the
         // checkbox and the ✕ keep their own jobs.
@@ -1218,6 +1223,14 @@ export function installGriddedMethods(TargetClass) {
         set('[data-action="close"]', 'griddedCloseMap');
         set('[data-action="close"]', 'griddedCloseMapTitle', 'title');
         set('[data-action="cancel"]', 'griddedCancel');
+        set('[data-role="inspector-heading"]', 'griddedInspector');
+        set('[data-role="inspector"]', 'griddedInspectorTitle', 'title');
+        set('[data-role="inspector-at-label"]', 'griddedInspectorAt');
+        set('[data-role="inspector-cell-label"]', 'griddedInspectorCell');
+        set('[data-role="inspector-value-label"]', 'griddedInspectorValue');
+        set('[data-role="inspector-when-label"]', 'griddedInspectorWhen');
+        set('[data-action="copy-inspector"]', 'griddedInspectorCopy');
+        set('[data-action="copy-inspector"]', 'griddedInspectorCopyTitle', 'title');
         set('[data-role="tools-heading"]', 'griddedToolsHeading');
         set('[data-mode="navigate"]', 'griddedModeNavigate');
         set('[data-mode="point"]', 'griddedModePoint');
@@ -1362,6 +1375,7 @@ export function installGriddedMethods(TargetClass) {
         this._griddedSyncMode(view);
         this._griddedSyncInputs(view);
         this._griddedSyncScope(view);
+        this._griddedSyncInspector(view);
         this._griddedRenderResults(view);
     };
 
@@ -1447,6 +1461,91 @@ export function installGriddedMethods(TargetClass) {
         const axis = view.model.axes[dim];
         const index = view.selection[dim] || 0;
         label.textContent = `${axis.labels[index] ?? index}  (${index + 1}/${axis.size})`;
+    };
+
+    /**
+     * The inspector (§4.4): the cell under the pointer, said exactly — where
+     * it is, which cell of the grid it is, what it holds, and the step and
+     * level the map is showing. The reading stays when the pointer leaves the
+     * map, so "Copy" can still take it; it is copied as one line.
+     */
+    proto._griddedInspect = function(view, at) {
+        const map = view.map;
+        if (!map || !Number.isFinite(at?.lat) || !Number.isFinite(at?.lon)) return null;
+        const nearest = (values, target) => {
+            let best = 0;
+            let distance = Infinity;
+            for (let index = 0; index < values.length; index++) {
+                const away = Math.abs(values[index] - target);
+                if (away < distance) { distance = away; best = index; }
+            }
+            return best;
+        };
+        // Half a cell beyond the edge of the grid there is nothing to read:
+        // the map shows the geography around the data too.
+        const half = (values, index) => (values.length < 2
+            ? Infinity
+            : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
+        const row = nearest(map.lat, at.lat);
+        const column = nearest(map.lon, at.lon);
+        const inside = Math.abs(map.lat[row] - at.lat) <= half(map.lat, row) + 1e-9
+            && Math.abs(map.lon[column] - at.lon) <= half(map.lon, column) + 1e-9;
+        // The cell, not the value: the value is read from the map on screen,
+        // so the reading follows the step while the slider runs.
+        view.inspect = inside ? { row, column, lat: map.lat[row], lon: map.lon[column] } : null;
+        this._griddedSyncInspector(view);
+        return view.inspect;
+    };
+
+    /** The inspector's four lines, and the text "Copy" puts on the clipboard. */
+    proto._griddedInspectorText = function(view) {
+        const variable = this._griddedVariable(view);
+        const reading = view.inspect;
+        const axisName = role => {
+            const index = variable ? variable.roles.indexOf(role) : -1;
+            return index >= 0 ? variable.dimNames[index] : role;
+        };
+        const map = view.map;
+        const cell = reading && map && reading.row < map.ny && reading.column < map.nx
+            ? map.values[reading.row * map.nx + reading.column]
+            : NaN;
+        const value = Number.isFinite(cell) ? String(Number(cell.toPrecision(6))) : null;
+        return {
+            at: reading ? `${formatCoordinate(reading.lat, 'N', 'S')} ${formatCoordinate(reading.lon, 'E', 'W')}` : '',
+            cell: reading ? `${axisName('y')}[${reading.row}], ${axisName('x')}[${reading.column}]` : '',
+            value: reading
+                ? (value === null
+                    ? i18n.t('griddedInspectorNoData')
+                    : `${value}${variable?.units ? ` ${variable.units}` : ''}`)
+                : '',
+            when: this._griddedDimsLabel(view),
+            name: variable?.name || '',
+        };
+    };
+
+    proto._griddedSyncInspector = function(view) {
+        const section = this._griddedEl('inspector');
+        if (!section) return;
+        const text = this._griddedInspectorText(view);
+        const write = (role, value) => {
+            const element = this._griddedEl(role);
+            if (element) element.textContent = value || '—';
+        };
+        write('inspector-at', text.at);
+        write('inspector-cell', text.cell);
+        write('inspector-value', text.value);
+        write('inspector-when', text.when);
+        const copy = section.querySelector('[data-action="copy-inspector"]');
+        if (copy) copy.disabled = !view.inspect;
+    };
+
+    proto._griddedCopyInspector = async function(view) {
+        if (!view?.inspect) return;
+        const text = this._griddedInspectorText(view);
+        const line = [text.when, text.at, `${text.name}${text.name ? ' = ' : ''}${text.value}`]
+            .filter(Boolean).join(' · ');
+        const copied = await copyTextToClipboard(line);
+        this._griddedSetStatus(copied ? i18n.t('griddedInspectorCopied').replace('{text}', line) : i18n.t('griddedInspectorCopyFailed'), !copied);
     };
 
     proto._griddedSetMode = function(view, mode) {
@@ -1845,6 +1944,8 @@ export function installGriddedMethods(TargetClass) {
         const coastScale = this._griddedCoastScale(view);
         const coast = await loadCoastlines(coastScale) || await loadCoastlines('coarse');
         if (!target && this._griddedVisibleView() !== view) return;
+        const ranges = view.zoom || this._griddedFittedRanges(map, div);
+        const coastWindow = coastlineWindow(ranges);
         const units = variable?.units ? ` ${variable.units}` : '';
         const traces = [{
             type: 'heatmap',
@@ -1868,15 +1969,20 @@ export function installGriddedMethods(TargetClass) {
             hoverongaps: false,
         }];
         if (coast) {
-            const borders = coastlineTrace(coast.borders, lonMin, lonMax);
-            const coastline = coastlineTrace(coast.coastlines, lonMin, lonMax);
-            traces.push({ type: 'scattergl', mode: 'lines', x: borders.x, y: borders.y, line: { color: colors.border, width: 0.6 }, hoverinfo: 'skip', showlegend: false });
-            traces.push({ type: 'scattergl', mode: 'lines', x: coastline.x, y: coastline.y, line: { color: colors.coast, width: 1 }, hoverinfo: 'skip', showlegend: false });
+            const borders = coastlineTrace(coast.borders, lonMin, lonMax, coastWindow);
+            const coastline = coastlineTrace(coast.coastlines, lonMin, lonMax, coastWindow);
+            // Drawn as SVG, not WebGL: the WebGL layer is one canvas over the
+            // whole figure, and with `constrain: 'domain'` (which shrinks the
+            // drawing area to keep a degree square) its clipping left the
+            // coast a few pixels outside the axes. An SVG trace is clipped to
+            // the axes by Plotly itself, on screen and in an exported image.
+            // Cutting the lines to `coastWindow` is what keeps that cheap.
+            traces.push({ type: 'scatter', mode: 'lines', x: borders.x, y: borders.y, line: { color: colors.border, width: 0.6 }, hoverinfo: 'skip', showlegend: false });
+            traces.push({ type: 'scatter', mode: 'lines', x: coastline.x, y: coastline.y, line: { color: colors.coast, width: 1 }, hoverinfo: 'skip', showlegend: false });
         }
         // An exported image shows the extractions, not what is selected.
         const overlays = this._griddedOverlays(target ? { ...view, selected: null } : view, colors);
         traces.push(...overlays.traces);
-        const ranges = view.zoom || this._griddedFittedRanges(map, div);
         const paper = transparent ? 'rgba(0,0,0,0)' : colors.bg;
         const titleText = grid.stride > 1
             ? `${this._griddedMapTitle(view)}  <span style="font-size:10px;opacity:0.7">(${i18n.t('griddedDecimatedShort').replace('{stride}', String(grid.stride))})</span>`
@@ -1925,7 +2031,8 @@ export function installGriddedMethods(TargetClass) {
         if (!target) this._griddedDeactivateShape(div);
         await Plotly.react(div, traces, layout, config);
         if (target) return;
-        view.drawn = { stride: grid.stride, extent: grid.extent, coastScale };
+        view.drawn = { stride: grid.stride, extent: grid.extent, coastScale, coastWindow };
+        this._griddedSyncInspector(view);
         if (first) this._griddedBindPlot(div);
     };
 
@@ -1972,6 +2079,9 @@ export function installGriddedMethods(TargetClass) {
         const drawn = view.drawn;
         if (!drawn || !view.map) return true;
         if (this._griddedCoastScale(view) !== drawn.coastScale) return true;
+        // The coastlines are cut to a window around what was drawn; a pan or
+        // a zoom out of it needs them cut again.
+        if (view.zoom && !insideCoastlineWindow(drawn.coastWindow, view.zoom)) return true;
         const wanted = gridWindow(view.map, view.zoom?.x, view.zoom?.y);
         if (wanted.stride !== drawn.stride) return true;
         if (!drawn.extent) return wanted.windowed;
@@ -2014,10 +2124,11 @@ export function installGriddedMethods(TargetClass) {
         return { x, y };
     };
 
-    proto._griddedMapTitle = function(view) {
+    /** What the map is fixed at: the step, the level, any other dimension. */
+    proto._griddedDimsLabel = function(view) {
         const variable = this._griddedVariable(view);
         if (!variable) return '';
-        const parts = [variable.longName || variable.name];
+        const parts = [];
         variable.dimNames.forEach((name, index) => {
             const role = variable.roles[index];
             if (role === 'y' || role === 'x') return;
@@ -2027,6 +2138,12 @@ export function installGriddedMethods(TargetClass) {
             parts.push(role === 'z' && axis.units ? `${label} ${axis.units}` : label);
         });
         return parts.join(' · ');
+    };
+
+    proto._griddedMapTitle = function(view) {
+        const variable = this._griddedVariable(view);
+        if (!variable) return '';
+        return [variable.longName || variable.name, this._griddedDimsLabel(view)].filter(Boolean).join(' · ');
     };
 
     proto._griddedBindPlot = function(div) {
@@ -2050,6 +2167,7 @@ export function installGriddedMethods(TargetClass) {
         div.addEventListener('mousemove', event => {
             const view = this._griddedVisibleView();
             const at = view && !interaction.pressed && this._griddedEventCoords(div, event);
+            if (view && at) this._griddedInspect(view, at);
             let over = null;
             if (at) {
                 const target = this._griddedEditTarget(view, at, 'mouse');
@@ -2884,6 +3002,225 @@ export function installGriddedMethods(TargetClass) {
         this._griddedSetStatus(i18n.t('griddedReuseStatus').replace(/\{tag\}/g, group.tag));
     };
 
+    // ─── Sessions ─────────────────────────────────────────────────────────
+    //
+    // What a saved session keeps of a map: the places extracted on it (P1,
+    // R1…) with their series and their values, and what the map was showing
+    // (variable, level and step, palette, colour range, zoom, and whether the
+    // list of series was folded away). The files the dataset was opened from,
+    // and how they were joined, are kept beside this by session-methods.js,
+    // so a dataset of several months or a CDS ZIP opens again as one dataset.
+    //
+    // The values travel with the session rather than being read again: a
+    // project is restored from its own bytes, offline and in one pass, and a
+    // view session applied over the same file shows the same numbers without
+    // touching it.
+
+    /** JSON has no NaN; null stands for it, both ways. */
+    const sessionNumbers = values => Array.from(values || [], value => (Number.isFinite(value) ? value : null));
+    const sessionValues = values => Float64Array.from(values || [], value => (Number.isFinite(value) ? value : NaN));
+
+    /** The leaf name each extracted variable has in its place's folder. */
+    proto._griddedLeafNames = function(data) {
+        const names = new Map();
+        const parent = Object.values(data?.tree?._children || {}).find(child => child._griddedExtractions);
+        for (const place of Object.values(parent?._children || {})) {
+            for (const [leaf, variable] of Object.entries(place._variables || {})) {
+                if (variable?.name) names.set(variable.name, leaf);
+            }
+        }
+        return names;
+    };
+
+    proto._griddedSessionState = function(fileId) {
+        const view = this._griddedState().views.get(fileId);
+        if (!view) return null;
+        const data = this.plotManager.files.get(fileId)?.data;
+        const leaves = this._griddedLeafNames(data);
+        return {
+            open: this._griddedState().visibleFileId === fileId,
+            variableKey: view.variableKey || null,
+            selection: { ...view.selection },
+            palette: view.palette,
+            scale: {
+                range: view.scale.range ? [...view.scale.range] : null,
+                stats: view.scale.stats ? { ...view.scale.stats } : null,
+                source: view.scale.source || 'sample',
+                robust: !!view.scale.robust,
+                symmetric: !!view.scale.symmetric,
+                follow: !!view.scale.follow,
+            },
+            zoom: view.zoom ? { x: [...view.zoom.x], y: [...view.zoom.y] } : null,
+            extractLevels: view.extractLevels?.length ? [...view.extractLevels] : null,
+            resultsHidden: !!view.resultsHidden,
+            plotPanelId: view.plotPanelId ?? null,
+            counters: {
+                groupCount: view.groupCount || 0,
+                setCount: view.setCount || 0,
+                extractionCount: view.extractionCount || 0,
+                colorCount: view.colorCount || 0,
+                tagCounters: { ...(view.tagCounters || { point: 0, region: 0 }) },
+            },
+            groups: (view.groups || []).map(group => ({
+                id: group.id,
+                kind: group.kind,
+                tag: group.tag,
+                geometry: { ...group.geometry },
+                where: group.where,
+                note: group.note || '',
+                color: group.color,
+                sets: (group.sets || []).map(set => ({
+                    id: set.id,
+                    key: set.key,
+                    label: set.label,
+                    short: set.short,
+                    color: set.color,
+                    checked: set.checked !== false,
+                    items: set.names.map((name, index) => {
+                        const variable = data?.variables?.[name] || null;
+                        return {
+                            name,
+                            role: set.roles[index] || 'value',
+                            displayName: variable?.displayName || name,
+                            leaf: leaves.get(name) || variable?.displayName || name,
+                            description: variable?.description || '',
+                            units: variable?.units || '',
+                            values: sessionNumbers(variable?.data),
+                        };
+                    }),
+                })),
+            })),
+        };
+    };
+
+    /**
+     * Put a saved map back: its places and their series (the same `grid:x…`
+     * names, in the same folders of the tree, so the panels that plotted them
+     * find them again) and what the map was showing. Called while a session is
+     * applied, before the panels are rebuilt.
+     */
+    proto._griddedRestoreSession = function(fileId, saved) {
+        const view = this._griddedState().views.get(fileId);
+        const data = this.plotManager.files.get(fileId)?.data;
+        if (!view || !data || !saved) return false;
+        // Whatever this map held before gives way to what the session carries:
+        // its variables and its folders leave the tree first.
+        this._griddedDropVariables(data, (view.groups || []).flatMap(group => group.sets.flatMap(set => set.names)));
+        const extractions = this._griddedExtractionNode(data);
+        for (const name of Object.keys(extractions._children)) delete extractions._children[name];
+        for (const leaf of Object.keys(extractions._variables)) delete extractions._variables[leaf];
+        view.selected = null;
+        view.pendingPoint = null;
+        view.pendingBox = null;
+        const model = view.model;
+        if (saved.variableKey && model.variables.some(item => item.mapable && item.key === saved.variableKey)) {
+            view.variableKey = saved.variableKey;
+        }
+        for (const [name, index] of Object.entries(saved.selection || {})) {
+            const position = Number(index);
+            if (Number.isInteger(position) && position >= 0 && position < (model.axes[name]?.size || 0)) {
+                view.selection[name] = position;
+            }
+        }
+        if (PALETTES.includes(saved.palette)) view.palette = saved.palette;
+        const scale = saved.scale || {};
+        view.scale = {
+            range: Array.isArray(scale.range) && scale.range.length === 2 && scale.range.every(Number.isFinite)
+                ? [scale.range[0], scale.range[1]]
+                : null,
+            stats: scale.stats && Number.isFinite(scale.stats.min) ? { ...scale.stats } : null,
+            source: scale.source || 'sample',
+            robust: !!scale.robust,
+            symmetric: !!scale.symmetric,
+            follow: !!scale.follow,
+        };
+        const zoom = saved.zoom;
+        view.zoom = Array.isArray(zoom?.x) && Array.isArray(zoom?.y) && [...zoom.x, ...zoom.y].every(Number.isFinite)
+            ? { x: [...zoom.x], y: [...zoom.y] }
+            : null;
+        view.extractLevels = Array.isArray(saved.extractLevels) && saved.extractLevels.length ? [...saved.extractLevels] : null;
+        view.resultsHidden = !!saved.resultsHidden;
+        if (saved.plotPanelId !== null && saved.plotPanelId !== undefined) view.plotPanelId = saved.plotPanelId;
+        const counters = saved.counters || {};
+        view.groupCount = Number(counters.groupCount) || 0;
+        view.setCount = Number(counters.setCount) || 0;
+        view.extractionCount = Number(counters.extractionCount) || 0;
+        view.colorCount = Number(counters.colorCount) || 0;
+        view.tagCounters = { point: 0, region: 0, ...(counters.tagCounters || {}) };
+        view.groups = [];
+        for (const saveGroup of saved.groups || []) {
+            const group = {
+                id: saveGroup.id,
+                kind: saveGroup.kind === 'region' ? 'region' : 'point',
+                tag: saveGroup.tag,
+                geometry: { ...saveGroup.geometry },
+                where: saveGroup.where || '',
+                note: saveGroup.note || '',
+                color: saveGroup.color || this._griddedNextColor(view),
+                sets: [],
+            };
+            view.groups.push(group);
+            const folder = this._griddedPlaceNode(data, group);
+            for (const saveSet of saveGroup.sets || []) {
+                const set = {
+                    id: saveSet.id,
+                    key: saveSet.key,
+                    label: saveSet.label,
+                    short: saveSet.short,
+                    color: saveSet.color || group.color,
+                    checked: saveSet.checked !== false,
+                    names: [],
+                    roles: [],
+                };
+                for (const item of saveSet.items || []) {
+                    const values = sessionValues(item.values);
+                    const variable = {
+                        name: item.name,
+                        displayName: item.displayName || item.name,
+                        data: values,
+                        description: item.description || '',
+                        units: item.units || '',
+                        kind: 'variable',
+                        dataType: this.parser?._detectDataType ? this.parser._detectDataType(values, item.name) : 'numeric',
+                        isConstant: this.parser?._isConstantValues ? this.parser._isConstantValues(values) : false,
+                        interpolation: 'linear',
+                        negate: false,
+                        source: 'netcdf-gridded',
+                    };
+                    data.variables[item.name] = variable;
+                    folder._variables[item.leaf || variable.displayName] = variable;
+                    set.names.push(item.name);
+                    set.roles.push(item.role || 'value');
+                }
+                group.sets.push(set);
+            }
+        }
+        // Counters written by an older session, or missing: never hand out a
+        // name or a tag that is already on the map.
+        const maxOf = (values, prefix) => values.reduce((top, value) => {
+            const found = new RegExp(`^${prefix}(\\d+)$`).exec(String(value || ''));
+            return found ? Math.max(top, Number(found[1])) : top;
+        }, 0);
+        const sets = view.groups.flatMap(group => group.sets);
+        view.groupCount = Math.max(view.groupCount, maxOf(view.groups.map(group => group.id), 'g'));
+        view.setCount = Math.max(view.setCount, maxOf(sets.map(set => set.id), 's'));
+        view.extractionCount = Math.max(view.extractionCount, maxOf(sets.flatMap(set => set.names), 'grid:x'));
+        for (const kind of ['point', 'region']) {
+            const prefix = kind === 'point' ? 'P' : 'R';
+            view.tagCounters[kind] = Math.max(
+                view.tagCounters[kind] || 0,
+                maxOf(view.groups.filter(group => group.kind === kind).map(group => group.tag), prefix),
+            );
+        }
+        this._griddedCommitData(view, data);
+        if (this._griddedState().visibleFileId === fileId) {
+            this._griddedRenderControls(view);
+            this._griddedRequestMap(view);
+            this._griddedDrawPreview(view);
+        }
+        return true;
+    };
+
     /**
      * Hide or show the list of extracted series together with their preview
      * under the map, which then takes the whole height. Remembered for the
@@ -3009,12 +3346,23 @@ export function installGriddedMethods(TargetClass) {
         const datetime = time?.timeKind === 'datetime';
         const colors = this._griddedColors();
         const x = datetime ? Array.from(time.data, value => new Date(value)) : Array.from(time.data);
+        // Curves of different units never share an axis. The first unit
+        // keeps the left axis and every other one goes to a second axis on
+        // the right, each titled with the units it carries, so a preview of
+        // temperature and wind together is never read as kelvin. With more
+        // than two units the right axis says so, and the legend names the
+        // unit of every curve.
+        const unitOf = variable => variable.units || '';
+        const units = [...new Set(series.map(item => unitOf(item.variable)))];
+        const mixed = units.length > 1;
+        const roleName = role => (role === 'value' ? '' : ` ${i18n.t(role === 'mean' ? 'griddedMean' : role === 'min' ? 'griddedMin' : 'griddedMax')}`);
         const traces = series.map(({ group, set, variable, role }) => ({
             type: 'scatter',
             mode: 'lines',
             x,
             y: Array.from(variable.data),
-            name: `${group.tag} ${set.short}${role === 'value' ? '' : ` ${i18n.t(role === 'mean' ? 'griddedMean' : role === 'min' ? 'griddedMin' : 'griddedMax')}`}`,
+            yaxis: !mixed || unitOf(variable) === units[0] ? 'y' : 'y2',
+            name: `${group.tag} ${set.short}${roleName(role)}${mixed && unitOf(variable) ? ` [${variable.units}]` : ''}`,
             line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: set.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
             hovertemplate: `${variable.displayName}<br>%{y:.5~g}${variable.units ? ` ${variable.units}` : ''}<extra></extra>`,
         }));
@@ -3022,11 +3370,20 @@ export function installGriddedMethods(TargetClass) {
             paper_bgcolor: colors.bg,
             plot_bgcolor: colors.bg,
             font: { color: colors.font, size: 10, family: 'system-ui, sans-serif' },
-            margin: { l: 56, r: 96, t: 6, b: 28 },
+            margin: { l: 56, r: mixed ? 148 : 96, t: 6, b: 28 },
             showlegend: true,
-            legend: { x: 1.01, xanchor: 'left', y: 1, font: { size: 10 } },
+            legend: { x: mixed ? 1.13 : 1.01, xanchor: 'left', y: 1, font: { size: 10 } },
             xaxis: { gridcolor: colors.grid, type: datetime ? 'date' : 'linear', title: { text: datetime ? '' : (time.units || time.displayName) } },
-            yaxis: { gridcolor: colors.grid, title: { text: series[0].variable.units || '' } },
+            yaxis: { gridcolor: colors.grid, title: { text: units[0] || '' } },
+            yaxis2: {
+                gridcolor: colors.grid,
+                title: { text: units.slice(1).filter(Boolean).join(' / ') },
+                overlaying: 'y',
+                side: 'right',
+                zeroline: false,
+                showgrid: false,
+                visible: mixed,
+            },
         }, { displayModeBar: false, responsive: true }).then(() => {
             // As on the explorer's plots: the right button drags, a finger
             // pans and pinches (installed with every chart), the left button

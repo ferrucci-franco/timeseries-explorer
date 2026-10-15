@@ -14,6 +14,7 @@ import { BufferByteSource } from '../src/gridded/byte-source.js';
 import { sniffNetcdfContainer } from '../src/parsers/netcdf-sniff.js';
 import NetcdfParser from '../src/parsers/netcdf-parser.js';
 import { formatUnitPowers } from '../src/utils/unit-superscripts.js';
+import { coastlineTrace, coastlineWindow, insideCoastlineWindow } from '../src/gridded/coastlines.js';
 
 const DIR = 'test-files/netcdf';
 const buffer = name => {
@@ -275,4 +276,49 @@ for (const [raw, shown] of [
     ['hours since 1900-01-01 00:00:00', 'hours since 1900-01-01 00:00:00'], ['1', '1'], ['', ''],
 ]) assert.equal(formatUnitPowers(raw), shown, raw);
 
-console.log('Gridded dataset tests passed: new and legacy CDS layouts, ZIP, calendars, CDF-5, regions, client, unit powers.');
+// --- Coastlines: cut to the window the map is drawn with, so they never
+//     reach past the axes and the detailed set stays cheap.
+{
+    // One line across the world, every 10°, at the equator; one short line
+    // far to the east.
+    const across = [];
+    for (let lon = -180; lon <= 180; lon += 10) across.push(lon, 0);
+    const far = [150, 60, 160, 60, 170, 60];
+
+    const whole = coastlineTrace([across, far], -180, 180);
+    assert.equal(whole.x.filter(value => value !== null).length, across.length / 2 + 3, 'with no window every point is kept');
+
+    const window = { x: [-20, 20], y: [-10, 10] };
+    const cut = coastlineTrace([across, far], -180, 180, window);
+    const kept = cut.x.filter(value => value !== null);
+    assert.deepEqual(kept, [-30, -20, -10, 0, 10, 20, 30],
+        'only the window is kept, plus the point on either side so the line still reaches the edge');
+    assert.equal(cut.y.filter(value => value !== null).length, kept.length);
+    assert.equal(cut.x.at(-1), null, 'every kept run ends in a break');
+    // The line outside is gone altogether.
+    assert.equal(kept.filter(value => value >= 150).length, 0);
+
+    // A 0..360 grid takes the coast with it.
+    const rolled = coastlineTrace([[-170, 0, -160, 0]], 0, 350, { x: [150, 250], y: [-10, 10] });
+    assert.deepEqual(rolled.x.filter(value => value !== null), [190, 200], 'negative longitudes are shifted into 0..360');
+
+    // A line that jumps the seam is broken, not drawn across the map.
+    const seam = coastlineTrace([[179, 10, -179, 10]], -180, 180);
+    assert.deepEqual(seam.x, [179, null, -179, null], 'the seam breaks the line');
+
+    // The window is the view grown by half of itself, never past the poles.
+    assert.deepEqual(coastlineWindow({ x: [-20, 20], y: [0, 40] }), { x: [-40, 40], y: [-20, 60] });
+    assert.deepEqual(coastlineWindow({ x: [0, 360], y: [-90, 90] }), { x: [-180, 540], y: [-90, 90] });
+    // Ranges given high-to-low (a flipped axis) are read the same way.
+    assert.deepEqual(coastlineWindow({ x: [20, -20], y: [40, 0] }), { x: [-40, 40], y: [-20, 60] });
+
+    const window2 = coastlineWindow({ x: [-20, 20], y: [0, 40] });
+    assert.equal(insideCoastlineWindow(window2, { x: [-10, 10], y: [10, 30] }), true, 'a zoom in stays inside');
+    assert.equal(insideCoastlineWindow(window2, { x: [-50, 10], y: [10, 30] }), false, 'a pan out of it asks for a redraw');
+    const polar = coastlineWindow({ x: [-20, 20], y: [-80, 80] });
+    assert.deepEqual(polar.y, [-90, 90]);
+    assert.equal(insideCoastlineWindow(polar, { x: [-30, 30], y: [-100, 95] }), true, 'past the poles there is nothing more to draw');
+    assert.equal(insideCoastlineWindow(null, { x: [0, 1], y: [0, 1] }), false, 'a map drawn before there was a window is redrawn');
+}
+
+console.log('Gridded dataset tests passed: new and legacy CDS layouts, ZIP, calendars, CDF-5, regions, client, coastline window, unit powers.');

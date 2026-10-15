@@ -150,7 +150,60 @@ try {
     assert.equal(alerts.length, 1, 'unreadable project should show a clear error');
     assert.match(alerts[0].body, /unreadable\.mat/);
 
-    console.log('Session complete-project eager/lazy checks passed.');
+    // A gridded dataset can stand on several files (months joined along time,
+    // the entries of a CDS ZIP) and then has no `entry.file` of its own: the
+    // project has to carry every one of them, and the way they were joined.
+    alerts.length = 0;
+    const members = [new File(['month-one'], 'era5-2024-01.nc'), new File(['month-two'], 'era5-2024-02.nc')];
+    const joined = new SessionProjectHarness([[
+        'f1',
+        {
+            name: 'era5-2024-01 (+1)',
+            extension: '.nc',
+            buffer: null,
+            file: null,
+            contentHash: 'fingerprint',
+            transform: {},
+            gridded: {
+                datasetId: 'grid-1',
+                files: members,
+                model: {},
+                options: { mode: 'concat-time', title: 'era5-2024-01 (+1)' },
+            },
+        },
+    ]]);
+    joined._griddedSessionState = () => ({ open: true, palette: 'Cividis', groups: [{ id: 'g1', tag: 'P1', sets: [] }] });
+    assert.equal(await joined.saveProjectSession(), true, 'a dataset of several files can be saved');
+    assert.equal(alerts.length, 0);
+    const joinedZip = unzipSync(new Uint8Array(await joined.download.blob.arrayBuffer()));
+    const joinedMeta = JSON.parse(strFromU8(joinedZip['session.json'])).files[0];
+    assert.deepEqual(joinedMeta.gridded.files.map(member => member.name), ['era5-2024-01.nc', 'era5-2024-02.nc']);
+    assert.equal(joinedMeta.archivePath, joinedMeta.gridded.files[0].archivePath, 'the first member is the entry\'s own file');
+    assert.notEqual(joinedMeta.gridded.files[0].archivePath, joinedMeta.gridded.files[1].archivePath);
+    assert.equal(strFromU8(joinedZip[joinedMeta.gridded.files[0].archivePath]), 'month-one');
+    assert.equal(strFromU8(joinedZip[joinedMeta.gridded.files[1].archivePath]), 'month-two');
+    assert.equal(joinedMeta.gridded.options.mode, 'concat-time', 'and how they are read together');
+    assert.equal(joinedMeta.gridded.view.palette, 'Cividis', 'the map travels with the dataset');
+
+    // A view session (no data) still says which files the dataset was opened
+    // from, and keeps the map; it just carries no bytes.
+    const viewSession = joined._createSessionSnapshot({ includeData: false });
+    assert.deepEqual(viewSession.files[0].gridded.files.map(member => member.name), ['era5-2024-01.nc', 'era5-2024-02.nc']);
+    assert.equal(viewSession.files[0].gridded.files[0].archivePath, undefined);
+    assert.equal(viewSession.files[0].archivePath, null);
+    assert.equal(viewSession.files[0].gridded.view.open, true);
+
+    // A series extracted on a map comes back with the session itself, so it
+    // is not a variable to look for in the file (as for derived variables).
+    assert.deepEqual(
+        joined._sessionRequiredVariables('f1', {
+            files: [{ id: 'f1', gridded: { view: { groups: [{ sets: [{ items: [{ name: 'grid:x1' }, { name: 'grid:x2' }] }] }] } } }],
+            plots: [{ traces: [{ fileId: 'f1', varName: 'grid:x1' }, { fileId: 'f1', varName: 'pressure' }] }],
+        }),
+        ['pressure'],
+    );
+
+    console.log('Session complete-project eager/lazy/gridded checks passed.');
 } finally {
     Modal.alert = originalAlert;
 }
