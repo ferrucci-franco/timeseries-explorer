@@ -225,8 +225,11 @@ wheel or pinch to zoom); an analysis panel next to it turns it into series:
   and maximum for every time step. The box moves from inside and resizes from
   its edges.
 
-Each extraction gets a colour and a tag (P1, R1…) shared by the map, the panel
-list and the preview. A click on a point or a box's edge selects it (and its
+Both tools read the level on the map, or any set of levels (all of them, say),
+in one pass: one series per level. Each place gets a colour and a tag (P1,
+R1…) shared by the map, the panel list and the preview, and is a folder of the
+variable tree: "+" on its row puts it back on the map, and whatever is
+extracted there (another variable, other levels) joins the same folder. A click on a point or a box's edge selects it (and its
 row, and the other way round); a right click (without dragging) opens a menu
 to extract or remove it, Delete removes the selected one, and the trash icon empties the list.
 
