@@ -5248,6 +5248,7 @@ proto._setSamplesNotice = function(plot, state) {
         pill.title = label;
         pill.setAttribute('aria-label', label);
         pill.classList.add('active');
+        this._placeSamplesPill(panelEl, pill);
         plot._samplesHintTimer = setTimeout(() => {
             plot._samplesHintTimer = 0;
             this._setSamplesNotice(plot, null);
@@ -5256,6 +5257,41 @@ proto._setSamplesNotice = function(plot, state) {
         pill.classList.remove('active');
         pill.remove();
     }
+};
+
+// The pill shows right after the click that turned Samples on, while the Marks
+// menu is still open — and the menu, drawn above the panel, hid it whenever it
+// sat over the middle of the plot. Then the pill goes beside the menu, level
+// with the Samples item: to its right, or its left, or under it when the
+// panel is too narrow for either. Otherwise it keeps its usual place.
+proto._placeSamplesPill = function(panelEl, pill) {
+    pill.style.left = '';
+    pill.style.top = '';
+    pill.style.transform = '';
+    const menu = document.querySelector('.timeseries-marks-menu:not(.panel-view-menu):not(.panel-analysis-menu)');
+    if (!menu?.isConnected) return;
+    const menuRect = menu.getBoundingClientRect();
+    const pillRect = pill.getBoundingClientRect();
+    if (!menuRect.width || !pillRect.width) return;
+    const overlaps = pillRect.left < menuRect.right && pillRect.right > menuRect.left
+        && pillRect.top < menuRect.bottom && pillRect.bottom > menuRect.top;
+    if (!overlaps) return;
+    const panelRect = panelEl.getBoundingClientRect();
+    const row = menu.querySelector('.marks-item-samples')?.getBoundingClientRect() || menuRect;
+    const gap = 8;
+    let left;
+    let top = (row.top + row.bottom) / 2 - pillRect.height / 2;
+    if (menuRect.right + gap + pillRect.width <= panelRect.right - 4) {
+        left = menuRect.right + gap;
+    } else if (menuRect.left - gap - pillRect.width >= panelRect.left + 4) {
+        left = menuRect.left - gap - pillRect.width;
+    } else {
+        left = Math.max(panelRect.left + 4, Math.min(panelRect.right - 4 - pillRect.width, menuRect.left));
+        top = menuRect.bottom + gap;
+    }
+    pill.style.transform = 'none';
+    pill.style.left = `${left - panelRect.left}px`;
+    pill.style.top = `${top - panelRect.top}px`;
 };
 
 // After a refresh: work out why no dots are on screen, if none are, and show
