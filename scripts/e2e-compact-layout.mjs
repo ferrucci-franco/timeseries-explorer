@@ -915,6 +915,45 @@ try {
         await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
         await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
         assert.deepEqual(await profilePlot(), { mode: 'integral', traces: ['temp', 'load'] }, 'a tap adds to the integral');
+
+        // The histogram, the same way; its log counts (the desktop's View
+        // menu) is a button in the sheet.
+        await profilePage.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+        await profilePage.locator('.compact-radio', { hasText: 'Histogram' }).click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'histogram');
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return !!plot?.histogramOptionsEl && document.querySelector('.compact-sheet')?.contains(plot.histogramOptionsEl);
+        }, null, { timeout: 15000 });
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return plot?.histogramDiv?.data?.length > 0;
+        }, null, { timeout: 30000 });
+        assert.equal(await profilePage.locator('.hist-container .hist-topbar-group').first().isVisible(), false,
+            'the histogram\'s own buttons are in the sheet, not over the plot');
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.compact-sheet .hist-summary')?.textContent.trim()), true,
+            'the histogram\'s summary updates while its options are in the sheet');
+        assert.deepEqual(await sizeProblems(profilePage), [], 'the histogram options are phone-sized');
+        await profilePage.locator('.compact-sheet .compact-secondary-btn', { hasText: 'Log counts' }).click();
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return plot?.histogram?.yScale === 'log' && plot.histogramDiv?._fullLayout?.yaxis?.type === 'log';
+        });
+        assert.equal(await profilePage.locator('.compact-sheet .compact-secondary-btn', { hasText: 'Log counts' }).getAttribute('aria-pressed'), 'true',
+            'log counts shows that it is on');
+        await shot(profilePage, 'analyze-histogram');
+        await profilePage.locator('.compact-sheet-close').click();
+        await profilePage.waitForFunction(() => window.app._compact.sheet === null);
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.hist-container:not(.integral-container):not(.temporal-profile-container) .hist-workspace > .hist-options')), true,
+            'closing the sheet gives the histogram its options panel back');
+        await profilePage.waitForTimeout(400);
+        assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
+            'the time pane and the bars each have their fit buttons');
+        await shot(profilePage, 'histogram');
+        await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
+        assert.deepEqual(await profilePlot(), { mode: 'histogram', traces: ['temp'] }, 'a tap takes a signal off the histogram');
         assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
         await profileContext.close();
     }

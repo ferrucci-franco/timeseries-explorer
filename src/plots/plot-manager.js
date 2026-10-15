@@ -2345,9 +2345,12 @@ class PlotManager {
                 if (plot.histogramDiv) Plotly.purge(plot.histogramDiv);
                 Plotly.purge(plot.div);
                 histContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.histogramOptionsEl?.remove();
                 plot.div = null;
                 plot.histogramDiv = null;
                 plot.histogramContainer = null;
+                plot.histogramOptionsEl = null;
             } else if (phase2dFitContainer) {
                 // 2D fitting shell (TODO 10): the 2D plot.div is reparented into
                 // the container next to a temporal div. Checked before the

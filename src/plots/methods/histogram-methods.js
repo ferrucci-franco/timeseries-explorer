@@ -236,6 +236,9 @@ proto._createHistogramChart = function(panelId, panelEl) {
 
     plot.histogramContainer = container;
     plot.histogramDiv = histDiv;
+    // Kept by reference: the phone layout lends this panel to its Analyze
+    // sheet, where a lookup inside the container would no longer find it.
+    plot.histogramOptionsEl = options;
     plot.div = timeDiv;
 
     this._renderHistogramOptionsPanel(panelId, plot);
@@ -276,8 +279,11 @@ proto._createHistogramChart = function(panelId, panelEl) {
         const ro = new ResizeObserver(() => {
             clearTimeout(timer);
             timer = setTimeout(() => {
-                Plotly.Plots.resize(timeDiv);
-                Plotly.Plots.resize(histDiv);
+                // The chart may have been rebuilt meanwhile (a signal taken
+                // off), or a pane hidden: Plotly rejects a div not on screen.
+                for (const div of [timeDiv, histDiv]) {
+                    if (div.isConnected && div.offsetParent !== null) Promise.resolve(Plotly.Plots.resize(div)).catch(() => {});
+                }
             }, 50);
         });
         ro.observe(panelEl);
@@ -694,7 +700,7 @@ proto._setHistogramStatus = function(plot, text, kind = 'muted', warnings = []) 
 };
 
 proto._syncHistogramMessage = function(plot) {
-    const box = plot?.histogramContainer?.querySelector('.hist-message');
+    const box = this._histogramOptionsPanel(plot)?.querySelector('.hist-message');
     if (!box) return;
     const warning = plot._histogramWarningMessage || '';
     const kind = plot._histogramStatusKind || 'muted';
@@ -896,7 +902,7 @@ proto._toggleHistogramOptions = function(panelId) {
     const state = this._ensureHistogramState(plot);
     state.optionsVisible = !state.optionsVisible;
     syncEdgeToggle(plot.histogramContainer, !state.optionsVisible);
-    const options = plot.histogramContainer.querySelector('.hist-options');
+    const options = this._histogramOptionsPanel(plot);
     if (options) options.hidden = !state.optionsVisible;
     const optionsBtn = plot.histogramContainer.querySelector('.hist-options-btn');
     if (optionsBtn) {
@@ -990,9 +996,13 @@ proto._installHistogramSplitterHandlers = function(panelId, plot) {
 
 // ─── Options drawer ────────────────────────────────────────────────
 
+proto._histogramOptionsPanel = function(plot) {
+    return plot?.histogramOptionsEl || plot?.histogramContainer?.querySelector('.hist-options') || null;
+};
+
 proto._renderHistogramOptionsPanel = function(panelId, plot) {
     const state = this._ensureHistogramState(plot);
-    const options = plot?.histogramContainer?.querySelector('.hist-options');
+    const options = this._histogramOptionsPanel(plot);
     if (!options) return;
     options.innerHTML = '';
     const message = document.createElement('div');
@@ -1223,7 +1233,7 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
 };
 
 proto._syncHistogramOptionsPanel = function(plot) {
-    const options = plot?.histogramContainer?.querySelector('.hist-options');
+    const options = this._histogramOptionsPanel(plot);
     if (!options) return;
     const state = this._ensureHistogramState(plot);
     const isCal = this._histogramUsesCalendarTime(plot);
@@ -1242,7 +1252,7 @@ proto._syncHistogramOptionsPanel = function(plot) {
 };
 
 proto._syncHistogramSummary = function(plot, spec = plot?._histSpec, unit = '') {
-    const box = plot?.histogramContainer?.querySelector('.hist-summary');
+    const box = this._histogramOptionsPanel(plot)?.querySelector('.hist-summary');
     if (!box) return;
     const summary = plot?._histSummary || [];
     if (!summary.length) { box.textContent = ''; return; }
