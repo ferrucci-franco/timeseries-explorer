@@ -1,8 +1,8 @@
 # Phone Web Specification
 
-Status: first slice built (2026-10-04). It covers time series, FFT, the temporal
-profile and the integral, 2D, 2D + t and 3D plots and state animations, the
-measurement cursors, plus CSV parsing.
+Status: first slice built (2026-10-04). It covers time series, FFT, the histogram,
+the temporal profile and the integral, 2D, 2D + t and 3D plots and state
+animations, the measurement cursors, plus CSV parsing.
 
 Built:
 
@@ -13,9 +13,10 @@ Built:
 - one plot at a time, with the plot list in the Plot sheet;
 - the Data sheet, with tap-to-plot and the per-file page;
 - the Plot sheet: view and signals;
-- the Analyze sheet: time series, FFT, temporal profile and integral, each analysis with its
-  options lent to the sheet and its top-bar buttons (reset, V/H, hide the time
-  series) as buttons there;
+- the Analyze sheet: time series, FFT, histogram, temporal profile and integral, each
+  analysis with its options lent to the sheet and its top-bar buttons (reset, V/H,
+  hide the time series) as buttons there; the histogram's log counts, in the View
+  menu on the desktop, is a button there too;
 - 2D (x–y), 2D + t (x–y along time) and 3D (x–y–z) plots: the plot type in the Plot
   sheet, x then y (then z) by tapping in Data, the curves listed with removal, the
   1:1 aspect in 2D, and the 3D scene's gestures (pan with a slow double tap) in
@@ -41,7 +42,7 @@ The code is in `src/app/methods/compact-methods.js`,
 
 Not built yet:
 
-- the other analyses (histogram, heatmap, correlation);
+- the other analyses (heatmap, correlation);
 - View and Marks;
 - tap readouts beyond Plotly's own;
 - export through Web Share;
