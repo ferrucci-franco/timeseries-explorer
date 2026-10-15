@@ -945,6 +945,44 @@ try {
         assert.equal(fresh.tag, 'P2', 'the next point is P2, not P1 again');
         assert.equal(fresh.names.every(name => !Object.keys(before.values).includes(name)), true, 'and its series take new names');
         assert.equal(fresh.known, Object.keys(before.values).length + 1);
+
+        // The same map as a view session (JSON, no data at all), applied over
+        // the file that is already open: the trash empties the list, the
+        // session puts every place, name and value back.
+        const mapState = () => page.evaluate(() => {
+            const view = window.app._griddedVisibleView();
+            const data = window.app.plotManager.files.get(view.fileId).data;
+            const node = Object.values(data.tree._children).find(child => child._griddedExtractions);
+            return {
+                tags: view.groups.map(group => group.tag),
+                folders: Object.entries(node._children).map(([folder, place]) => [folder, Object.keys(place._variables)]),
+                values: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, Array.from(variable.data)])),
+            };
+        });
+        const beforeView = await mapState();
+        const viewJson = await page.evaluate(async () => {
+            const original = window.app._downloadBlob;
+            let blob = null;
+            window.app._downloadBlob = value => { blob = value; };
+            await window.app.saveViewSession();
+            window.app._downloadBlob = original;
+            return blob ? blob.text() : null;
+        });
+        assert.equal(viewJson ? JSON.parse(viewJson).files[0].gridded.view.groups.length : 0, 3,
+            'a view session carries the places too');
+        await page.click('#gridded-view [data-action="remove-all"]');
+        await page.click('.modal-overlay .modal-btn-confirm');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 0);
+        assert.equal((await extractions(page)).length, 0);
+        // The dialog that says the session was applied is answered as it comes.
+        const applying = page.evaluate(json => window.app.loadSessionOrProjectFile(new File([json], 'view.json')), viewJson);
+        await page.waitForSelector('.modal-overlay.show .modal-btn-confirm', { timeout: 60000 });
+        await page.click('.modal-overlay.show .modal-btn-confirm');
+        await applying;
+        await page.waitForTimeout(500);
+        assert.deepEqual(await mapState(), beforeView, 'the JSON alone puts the places, their names and their values back');
         assert.deepEqual(errors, []);
         await context.close();
     }
