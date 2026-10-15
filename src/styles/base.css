@@ -84,6 +84,29 @@ html, body {
     overscroll-behavior: none;
 }
 
+/* With caret browsing on (F7 in Chrome, Edge, Firefox), a click on any text —
+   a button, a menu entry, a checkbox label — leaves a blinking text caret
+   there, as if it could be typed into. Only the fields that take text show
+   one. */
+body {
+    caret-color: transparent;
+}
+
+input,
+textarea,
+[contenteditable=""],
+[contenteditable="true"] {
+    caret-color: auto;
+}
+
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"],
+input[type="button"],
+input[type="submit"] {
+    caret-color: transparent;
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background-color: var(--bg-primary);

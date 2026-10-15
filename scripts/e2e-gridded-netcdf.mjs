@@ -73,10 +73,13 @@ const mapShown = page => page.waitForFunction(
     null, { timeout: 120000 },
 );
 
+// Every extracted series, from the "Extractions" folder of the variable tree
+// (one subfolder per place: P1, R1…), with the name its curves carry.
 const extractions = page => page.evaluate(() => {
     const data = window.app.plotManager.files.get(window.app.plotManager.activeFileId).data;
     const node = Object.values(data.tree._children).find(child => child._griddedExtractions);
-    return Object.entries(node._variables).map(([label, variable]) => ({ label, name: variable.name, values: Array.from(variable.data) }));
+    return Object.entries(node._children).flatMap(([folder, place]) => Object.entries(place._variables)
+        .map(([leaf, variable]) => ({ folder, leaf, label: variable.displayName, name: variable.name, values: Array.from(variable.data) })));
 });
 
 try {
@@ -134,8 +137,10 @@ try {
         assert.equal(await page.isEnabled('#gridded-view [data-action="extract-point"]'), true);
         await page.click('#gridded-view [data-action="extract-point"]');
         await page.waitForFunction(() => document.querySelectorAll('#gridded-view .gridded-result').length === 1, null, { timeout: 60000 });
+        assert.equal(await page.evaluate(() => window.app._griddedVisibleView().mode), 'navigate', 'an extraction goes back to Navigate');
 
         // Typed coordinates, on t2m: 44 N 92 E is the cell 45 N 90 E.
+        await page.click('#gridded-view [data-mode="point"]');
         await page.selectOption('#gridded-view [data-role="variable"]', '/t2m');
         await page.fill('#gridded-view [data-input="lat"]', '44');
         await page.fill('#gridded-view [data-input="lon"]', '92');
@@ -144,6 +149,8 @@ try {
         let all = await extractions(page);
         const point = all[1];
         assert.match(point.label, /^P2 · 2 metre temperature \(t2m\) · 45°N 90°E$/, "the name says what the quantity is, not only its short name");
+        assert.equal(point.folder, 'P2 · 45°N 90°E', 'each place is a folder of the tree');
+        assert.equal(point.leaf, '2 metre temperature (t2m)', 'in its folder a series says only what it is');
         point.values.forEach((value, step) => assert(Math.abs(value - field(45, 90, step, 5)) < 1e-3, `point value at step ${step}`));
 
         // A region typed like the CDS form: North, West, East, South.
@@ -441,7 +448,7 @@ try {
         // An extracted point: its row selects it on the map; the right
         // button removes it.
         await page.click('#gridded-view [data-mode="point"]');
-        await page.mouse.click(...await toPage(90, 45));
+        await page.mouse.click(...await toPage(135, -15));
         await page.click('#gridded-view [data-action="extract-point"]');
         await page.waitForFunction(count => window.app._griddedVisibleView().groups.length === count, objectsNow.groups.length + 1, { timeout: 60000 });
         await page.waitForTimeout(500);
@@ -450,9 +457,45 @@ try {
         assert.deepEqual((await objects()).selected, { kind: 'group', id: extracted.id }, 'a row selects its point');
         await page.mouse.click(...await toPage(extracted.geometry.lon, extracted.geometry.lat), { button: 'right' });
         await page.waitForSelector('.gridded-context-menu');
-        assert.match((await objects()).menu[0], new RegExp(extracted.tag), 'the menu names the extraction');
-        await page.click('.gridded-context-menu button');
+        assert.ok((await objects()).menu.some(item => item.includes(extracted.tag)), 'the menu names the extraction');
+        await page.click('.gridded-context-menu button:last-child');
         assert.ok(!(await objects()).groups.some(group => group.id === extracted.id), 'the menu removes the point and its series');
+
+        // A place is a folder. "+" puts it back on the map; another variable,
+        // at all its levels (read in one go), joins the same place; the same
+        // series asked again is not added twice; one series leaves alone.
+        const groupCount = (await objects()).groups.length;
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.mouse.click(...await toPage(-90, -45));
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(count => window.app._griddedVisibleView().groups.length === count, groupCount + 1, { timeout: 60000 });
+        const place = await page.evaluate(() => {
+            const group = window.app._griddedVisibleView().groups.at(-1);
+            return { id: group.id, tag: group.tag, geometry: group.geometry };
+        });
+        await page.click(`#gridded-view .gridded-result[data-group="${place.id}"] [data-action="reuse-group"]`);
+        const reused = await page.evaluate(() => ({ mode: window.app._griddedVisibleView().mode, point: window.app._griddedVisibleView().pendingPoint }));
+        assert.deepEqual(reused, { mode: 'point', point: place.geometry }, '"+" puts the place back as the orange point');
+        await page.selectOption('#gridded-view [data-role="variable"]', '/t');
+        assert.equal(await page.isVisible('#gridded-view [data-role="levels-row"]'), true, 'a variable with levels offers the levels');
+        await page.click('#gridded-view [data-action="levels-menu"]');
+        await page.click('#gridded-view [data-action="levels-all"]');
+        assert.match(await page.textContent('#gridded-view [data-role="scope"]'), /all 2 levels/);
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(id => window.app._griddedVisibleView().groups.find(group => group.id === id).sets.length === 3, place.id, { timeout: 60000 });
+        const placeSeries = (await extractions(page)).filter(item => item.folder.startsWith(`${place.tag} · `));
+        assert.deepEqual(placeSeries.map(item => item.leaf), ['2 metre temperature (t2m)', 'Temperature (t) · 850 hPa', 'Temperature (t) · 500 hPa'], 'one folder, one series per variable and level');
+        placeSeries.slice(1).forEach((series, level) => series.values.forEach((value, step) => {
+            assert(Math.abs(value - field(-45, 270, step, 0, level)) < 1e-3, `level ${level}, step ${step}`);
+        }));
+        await page.click(`#gridded-view .gridded-result[data-group="${place.id}"] [data-action="reuse-group"]`);
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => /already/.test(document.querySelector('#gridded-view [data-role="status"]').textContent), null, { timeout: 30000 });
+        const setIds = await page.evaluate(id => window.app._griddedVisibleView().groups.find(group => group.id === id).sets.map(set => set.id), place.id);
+        assert.equal(setIds.length, 3, 'the same series is not added twice');
+        await page.click(`#gridded-view [data-set="${setIds[1]}"] [data-action="remove-set"]`);
+        assert.equal((await extractions(page)).filter(item => item.folder.startsWith(`${place.tag} · `)).length, 2, 'one series removed, the place stays');
+        await page.selectOption('#gridded-view [data-role="variable"]', '/t2m');
 
         // The trash empties the list, after asking.
         await page.click('#gridded-view [data-action="remove-all"]');

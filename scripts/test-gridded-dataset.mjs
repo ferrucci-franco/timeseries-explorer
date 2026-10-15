@@ -100,6 +100,25 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
     close(corner.mean[0], field(75, 45, 0, 5), 'only the valid cell counts');
 
     await assert.rejects(() => dataset.regionStats('/t2m', {}, { latMin: 80, latMax: 85, lonMin: 0, lonMax: 1 }), { code: 'GRIDDED_EMPTY_REGION' });
+
+    // Several levels in one read: each equals that level read on its own.
+    const levelsPoint = await dataset.pointSeries('/t', {}, 44, 92, {}, { levels: [1, 0] });
+    assert.deepEqual(levelsPoint.byLevel.map(item => item.index), [0, 1], 'levels come back sorted');
+    for (const { index, values } of levelsPoint.byLevel) {
+        const single = await dataset.pointSeries('/t', { pressure_level: index }, 44, 92);
+        assert.deepEqual(Array.from(values), Array.from(single.values), `point, level ${index}`);
+        values.forEach((value, step) => close(value, field(45, 90, step, 0, index), `point level ${index} step ${step}`));
+    }
+    const levelsRegion = await dataset.regionStats('/t', {}, { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 }, {}, { levels: [0, 1] });
+    assert.equal(levelsRegion.cells, 6);
+    for (const level of levelsRegion.byLevel) {
+        const single = await dataset.regionStats('/t', { pressure_level: level.index }, { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 });
+        for (const key of ['mean', 'min', 'max', 'validFraction']) {
+            assert.deepEqual(Array.from(level[key]), Array.from(single[key]), `region ${key}, level ${level.index}`);
+        }
+    }
+    // A variable without levels ignores the list.
+    assert.ok((await dataset.pointSeries('/t2m', {}, 44, 92, {}, { levels: [0, 1] })).values, 'no level axis: one series');
     const job = { cancelled: true };
     await assert.rejects(() => dataset.pointSeries('/t2m', {}, 0, 0, job), error => error.cancelled === true);
     dataset.close();

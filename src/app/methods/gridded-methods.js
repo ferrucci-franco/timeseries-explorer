@@ -841,6 +841,19 @@ export function installGriddedMethods(TargetClass) {
                                 <button type="button" data-action="clear-region"></button>
                             </div>
                         </div>
+                        <div class="gridded-levels" data-role="levels-row" hidden>
+                            <span data-role="levels-label"></span>
+                            <span class="gridded-levels-picker">
+                                <button type="button" data-action="levels-menu" aria-haspopup="true" aria-expanded="false"><span data-role="levels-summary"></span> ▾</button>
+                                <div class="gridded-menu gridded-levels-menu" data-role="levels-menu" hidden>
+                                    <div class="gridded-menu-actions">
+                                        <button type="button" data-action="levels-map"></button>
+                                        <button type="button" data-action="levels-all"></button>
+                                    </div>
+                                    <div class="gridded-levels-list" data-role="levels-list"></div>
+                                </div>
+                            </span>
+                        </div>
                         <p class="gridded-scope" data-role="scope"></p>
                     </section>
                     <section class="gridded-panel-section gridded-results">
@@ -897,6 +910,8 @@ export function installGriddedMethods(TargetClass) {
             const current = view();
             if (!current) return;
             current.variableKey = event.target.value;
+            // Another variable may have other levels, or none.
+            current.extractLevels = null;
             current.zoom = null;
             this._griddedRenderControls(current);
             this._griddedRequestMap(current);
@@ -962,6 +977,40 @@ export function installGriddedMethods(TargetClass) {
                 this._griddedDrawMap(current);
             });
         });
+        // The levels an extraction reads: the map's by default, or any set
+        // of them, all read together.
+        const levelsMenu = root.querySelector('[data-role="levels-menu"]');
+        const levelsButton = root.querySelector('[data-action="levels-menu"]');
+        const closeLevels = () => {
+            levelsMenu.hidden = true;
+            levelsButton.setAttribute('aria-expanded', 'false');
+        };
+        levelsButton.addEventListener('click', event => {
+            event.stopPropagation();
+            levelsMenu.hidden = !levelsMenu.hidden;
+            levelsButton.setAttribute('aria-expanded', String(!levelsMenu.hidden));
+        });
+        document.addEventListener('click', event => {
+            if (!levelsMenu.hidden && !event.target.closest('.gridded-levels-picker')) closeLevels();
+        });
+        levelsMenu.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { closeLevels(); levelsButton.focus(); }
+        });
+        const setLevels = levels => {
+            const current = view();
+            if (!current) return;
+            current.extractLevels = levels && levels.length ? levels : null;
+            this._griddedSyncScope(current);
+        };
+        levelsMenu.querySelector('[data-action="levels-map"]').addEventListener('click', () => setLevels(null));
+        levelsMenu.querySelector('[data-action="levels-all"]').addEventListener('click', () => {
+            const current = view();
+            const level = current && this._griddedLevelAxis(current, this._griddedVariable(current));
+            if (level) setLevels(Array.from({ length: level.axis.size }, (_, index) => index));
+        });
+        levelsMenu.querySelector('[data-role="levels-list"]').addEventListener('change', () => {
+            setLevels([...levelsMenu.querySelectorAll('[data-level]:checked')].map(input => Number(input.dataset.level)));
+        });
         this._griddedBindSplitter(root);
         root.querySelectorAll('.gridded-mode').forEach(button => {
             button.addEventListener('click', () => {
@@ -1007,9 +1056,10 @@ export function installGriddedMethods(TargetClass) {
         root.querySelector('[data-role="results"]').addEventListener('change', event => {
             const current = view();
             const id = event.target.closest('[data-group]')?.dataset.group;
-            if (!current || !id) return;
-            const group = current.groups.find(item => item.id === id);
-            if (group) group.checked = event.target.checked;
+            const setId = event.target.closest('[data-set]')?.dataset.set;
+            if (!current || !id || !setId) return;
+            const set = current.groups.find(item => item.id === id)?.sets.find(item => item.id === setId);
+            if (set) set.checked = event.target.checked;
             this._griddedSyncActions(current);
             this._griddedDrawPreview(current);
         });
@@ -1030,6 +1080,8 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'clear-point') this._griddedClearPending(current, 'point');
             else if (action === 'clear-region') this._griddedClearPending(current, 'region');
             else if (action === 'remove-group') this._griddedRemoveGroup(current, target.closest('[data-group]')?.dataset.group);
+            else if (action === 'remove-set') this._griddedRemoveSet(current, target.closest('[data-group]')?.dataset.group, target.closest('[data-set]')?.dataset.set);
+            else if (action === 'reuse-group') this._griddedReusePlace(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'remove-all') this._griddedRemoveAll(current);
             else if (action === 'export-map') this._griddedExportMap(current);
             else if (action === 'export-series') this._griddedExportSeries(current);
@@ -1309,12 +1361,60 @@ export function installGriddedMethods(TargetClass) {
         const element = this._griddedEl('scope');
         const variable = this._griddedVariable(view);
         if (!element || !variable) return;
-        const fixed = this._griddedSelectionSuffix(view, variable).replace(/^ @ /, '');
+        this._griddedSyncLevels(view, variable);
+        const level = this._griddedLevelAxis(view, variable);
+        const levels = this._griddedExtractionLevels(view, variable);
+        let fixed = this._griddedSelectionSuffix(view, variable).replace(/^ @ /, '');
+        if (level && levels.length > 1) {
+            // Other dimensions as chosen in the toolbar; the levels as chosen here.
+            const others = fixed.split(', ').filter(part => part !== this._griddedLevelLabel(level.axis, Number(view.selection[level.name]) || 0));
+            fixed = [this._griddedLevelsSummary(view, level, levels), ...others].filter(Boolean).join(', ');
+        }
         const steps = variable.timeDim ? view.model.axes[variable.timeDim]?.size || 1 : 1;
         element.textContent = i18n.t('griddedScope')
             .replace('{variable}', variable.name)
             .replace('{level}', fixed ? ` · ${fixed}` : '')
             .replace('{steps}', String(steps));
+    };
+
+    proto._griddedLevelsSummary = function(view, level, levels) {
+        if (levels.length === level.axis.size) return i18n.t('griddedLevelsAllCount').replace('{count}', String(levels.length));
+        if (levels.length <= 3) return levels.map(index => this._griddedLevelLabel(level.axis, index)).join(', ');
+        return i18n.t('griddedLevelsCount').replace('{count}', String(levels.length));
+    };
+
+    /** The levels row of the panel: shown for a variable with levels, in the point and region tools. */
+    proto._griddedSyncLevels = function(view, variable = this._griddedVariable(view)) {
+        const row = this._griddedEl('levels-row');
+        if (!row) return;
+        const level = this._griddedLevelAxis(view, variable);
+        row.hidden = !level || view.mode === 'navigate';
+        if (!level) return;
+        const levels = this._griddedExtractionLevels(view, variable);
+        const mapLevel = Number(view.selection[level.name]) || 0;
+        const following = !(view.extractLevels || []).length;
+        this._griddedEl('levels-label').textContent = i18n.t('griddedLevels');
+        row.title = i18n.t('griddedLevelsTitle');
+        this._griddedEl('levels-summary').textContent = following
+            ? i18n.t('griddedLevelsMap').replace('{level}', this._griddedLevelLabel(level.axis, mapLevel))
+            : this._griddedLevelsSummary(view, level, levels);
+        const menu = this._griddedEl('levels-menu');
+        menu.querySelector('[data-action="levels-map"]').textContent = i18n.t('griddedLevelsMapOnly');
+        menu.querySelector('[data-action="levels-all"]').textContent = i18n.t('griddedLevelsAll');
+        const list = this._griddedEl('levels-list');
+        const chosen = new Set(levels);
+        list.innerHTML = '';
+        for (let index = 0; index < level.axis.size; index++) {
+            const label = document.createElement('label');
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.dataset.level = String(index);
+            input.checked = chosen.has(index);
+            const text = document.createElement('span');
+            text.textContent = this._griddedLevelLabel(level.axis, index) + (index === mapLevel ? ` ${i18n.t('griddedLevelsOnMap')}` : '');
+            label.append(input, text);
+            list.appendChild(label);
+        }
     };
 
     proto._griddedSyncTimeLabel = function(view) {
@@ -1360,6 +1460,7 @@ export function installGriddedMethods(TargetClass) {
         const map = root.querySelector('[data-role="map"]');
         map.classList.toggle('gridded-cursor-point', view.mode === 'point');
         map.classList.toggle('gridded-cursor-region', view.mode === 'region');
+        this._griddedSyncLevels(view);
         const help = { navigate: 'griddedHelpNavigate', point: 'griddedHelpPoint', region: 'griddedHelpRegion' }[view.mode];
         this._griddedEl('mode-help').textContent = i18n.t(help || 'griddedHelpNavigate');
         this._griddedSyncActions(view);
@@ -1406,7 +1507,7 @@ export function installGriddedMethods(TargetClass) {
         root.querySelector('[data-action="extract-region"]').disabled = busy || !view.pendingBox;
         root.querySelector('[data-action="clear-point"]').disabled = !view.pendingPoint;
         root.querySelector('[data-action="clear-region"]').disabled = !view.pendingBox;
-        const checked = (view.groups || []).filter(group => group.checked).length;
+        const checked = (view.groups || []).flatMap(group => group.sets).filter(set => set.checked).length;
         root.querySelector('[data-action="plot"]').disabled = !checked;
         root.querySelector('[data-action="export-series"]').disabled = !(view.groups || []).length;
         root.querySelector('[data-action="remove-all"]').disabled = !(view.groups || []).length;
@@ -1417,6 +1518,7 @@ export function installGriddedMethods(TargetClass) {
         else view.pendingBox = null;
         if (view.selected?.kind === (kind === 'point' ? 'pending-point' : 'pending-box')) view.selected = null;
         this._griddedSyncInputs(view);
+        this._griddedBackToNavigate(view);
         this._griddedDrawMap(view);
     };
 
@@ -2314,6 +2416,7 @@ export function installGriddedMethods(TargetClass) {
         } else {
             const group = (view.groups || []).find(item => item.id === target.id);
             if (!group) return;
+            items.push([i18n.t('griddedReuseHere'), () => this._griddedReusePlace(view, group.id)]);
             items.push([i18n.t('griddedDeleteExtraction').replace('{tag}', group.tag), () => this._griddedDeleteSelected(view, target)]);
         }
         const menu = document.createElement('div');
@@ -2372,17 +2475,43 @@ export function installGriddedMethods(TargetClass) {
         return long ? `${long} (${variable.name})` : variable.name;
     };
 
-    proto._griddedSelectionSuffix = function(view, variable) {
+    proto._griddedSelectionSuffix = function(view, variable, levelIndex = null) {
         const parts = [];
         variable.dimNames.forEach((name, index) => {
             const role = variable.roles[index];
             if (role === 'y' || role === 'x' || role === 't') return;
             const axis = view.model.axes[name];
             if (!axis || axis.size < 2) return;
-            const label = axis.labels[view.selection[name] || 0];
+            const position = role === 'z' && levelIndex !== null ? levelIndex : view.selection[name] || 0;
+            const label = axis.labels[position];
             parts.push(role === 'z' && axis.units ? `${label} ${axis.units}` : `${name}=${label}`);
         });
         return parts.length ? ` @ ${parts.join(', ')}` : '';
+    };
+
+    /** The level axis of a variable, when it has more than one level. */
+    proto._griddedLevelAxis = function(view, variable) {
+        const index = variable ? variable.roles.indexOf('z') : -1;
+        if (index < 0) return null;
+        const name = variable.dimNames[index];
+        const axis = view.model.axes[name];
+        return axis && axis.size > 1 ? { name, axis } : null;
+    };
+
+    proto._griddedLevelLabel = function(axis, index) {
+        const label = axis.labels[index];
+        return axis.units ? `${label} ${axis.units}` : String(label);
+    };
+
+    /**
+     * The level indices an extraction reads: those ticked in the panel, or
+     * the one on the map. Null for a variable without levels.
+     */
+    proto._griddedExtractionLevels = function(view, variable) {
+        const level = this._griddedLevelAxis(view, variable);
+        if (!level) return null;
+        const chosen = (view.extractLevels || []).filter(index => index < level.axis.size);
+        return chosen.length ? [...chosen].sort((a, b) => a - b) : [Number(view.selection[level.name]) || 0];
     };
 
     proto._griddedCanExtract = function(view, variable) {
@@ -2421,64 +2550,92 @@ export function installGriddedMethods(TargetClass) {
         }
     };
 
+    /**
+     * After an extraction (or the orange point or box removed), back to
+     * Navigate: the next click on the map pans rather than placing another
+     * point by surprise.
+     */
+    proto._griddedBackToNavigate = function(view) {
+        if (view.mode !== 'navigate') this._griddedSetMode(view, 'navigate');
+    };
+
     proto._griddedExtractPoint = async function(view, at = view.pendingPoint) {
         const variable = this._griddedVariable(view);
         if (!at || !this._griddedCanExtract(view, variable)) return;
         const { lat, lon } = at;
+        const levels = this._griddedExtractionLevels(view, variable);
         const result = await this._griddedRunJob(view, 'point', {
-            variable: variable.key, selection: view.selection, lat, lon,
+            variable: variable.key, selection: view.selection, lat, lon, levels,
         }, i18n.t('griddedReadingPoint').replace('{lat}', formatCoordinate(lat, 'N', 'S')).replace('{lon}', formatCoordinate(lon, 'E', 'W')));
         if (!result) return;
         const where = `${formatCoordinate(result.cell.lat, 'N', 'S')} ${formatCoordinate(result.cell.lon, 'E', 'W')}`;
-        const suffix = this._griddedSelectionSuffix(view, variable);
-        const displayName = `${this._griddedQuantity(variable)} · ${where}${suffix}`;
+        const parts = result.byLevel || [{ index: null, values: result.values }];
         const description = i18n.t('griddedPointDescription')
             .replace('{variable}', variable.longName || variable.name)
             .replace('{where}', where);
         view.pendingPoint = null;
         if (view.selected?.kind === 'pending-point') view.selected = null;
         this._griddedSyncInputs(view);
-        const group = this._griddedAddGroup(view, {
+        const outcome = this._griddedAddSeries(view, {
             kind: 'point',
             geometry: { lat: result.cell.lat, lon: result.cell.lon },
-            label: displayName,
-            items: [{ displayName, values: result.values, units: variable.units, description, role: 'value' }],
+            where,
+            variable,
+            sets: parts.map(({ index, values }) => ({
+                levelIndex: index,
+                items: [{ role: 'value', values, description }],
+            })),
         });
-        this._griddedSetStatus(i18n.t('griddedPointDone').replace('{name}', `${group.tag} ${displayName}`));
+        this._griddedBackToNavigate(view);
+        if (!outcome) return;
+        this._griddedSetStatus(outcome.added
+            ? i18n.t('griddedPointDone').replace('{name}', `${outcome.group.tag} · ${this._griddedQuantity(variable)} · ${where}`)
+            : i18n.t('griddedAlreadyExtracted').replace('{tag}', outcome.group.tag));
     };
 
     proto._griddedExtractRegion = async function(view, box = view.pendingBox) {
         const variable = this._griddedVariable(view);
         if (!box || !this._griddedCanExtract(view, variable)) return;
         const where = `${formatCoordinate(box.latMin, 'N', 'S')}–${formatCoordinate(box.latMax, 'N', 'S')}, ${formatCoordinate(box.lonMin, 'E', 'W')}–${formatCoordinate(box.lonMax, 'E', 'W')}`;
+        const levels = this._griddedExtractionLevels(view, variable);
         const result = await this._griddedRunJob(view, 'region', {
-            variable: variable.key, selection: view.selection, box,
+            variable: variable.key, selection: view.selection, box, levels,
         }, i18n.t('griddedReadingRegion').replace('{where}', where));
         if (!result) return;
-        const suffix = this._griddedSelectionSuffix(view, variable);
         const weighting = i18n.t(result.weighting === 'cell-area' ? 'griddedWeightingArea' : 'griddedWeightingCosLat');
         const describe = key => i18n.t(key)
             .replace('{variable}', variable.longName || variable.name)
             .replace('{where}', where)
             .replace('{cells}', String(result.cells))
             .replace('{weighting}', weighting);
+        const parts = result.byLevel || [{ index: null, ...result }];
         view.pendingBox = null;
         if (view.selected?.kind === 'pending-box') view.selected = null;
         this._griddedSyncInputs(view);
-        const group = this._griddedAddGroup(view, {
+        const outcome = this._griddedAddSeries(view, {
             kind: 'region',
             geometry: { ...box },
-            label: `${this._griddedQuantity(variable)} · [${where}]${suffix}`,
+            where,
             note: i18n.t('griddedRegionNote').replace('{cells}', String(result.cells)).replace('{weighting}', weighting),
-            items: [
-                { displayName: `${this._griddedQuantity(variable)} · ${i18n.t('griddedMean')} [${where}]${suffix}`, values: result.mean, units: variable.units, description: describe('griddedMeanDescription'), role: 'mean' },
-                { displayName: `${this._griddedQuantity(variable)} · ${i18n.t('griddedMin')} [${where}]${suffix}`, values: result.min, units: variable.units, description: describe('griddedMinDescription'), role: 'min' },
-                { displayName: `${this._griddedQuantity(variable)} · ${i18n.t('griddedMax')} [${where}]${suffix}`, values: result.max, units: variable.units, description: describe('griddedMaxDescription'), role: 'max' },
-            ],
+            variable,
+            sets: parts.map(part => ({
+                levelIndex: part.index,
+                items: [
+                    { role: 'mean', values: part.mean, description: describe('griddedMeanDescription') },
+                    { role: 'min', values: part.min, description: describe('griddedMinDescription') },
+                    { role: 'max', values: part.max, description: describe('griddedMaxDescription') },
+                ],
+            })),
         });
-        const missing = Array.from(result.validFraction).some(value => value < 1);
+        this._griddedBackToNavigate(view);
+        if (!outcome) return;
+        if (!outcome.added) {
+            this._griddedSetStatus(i18n.t('griddedAlreadyExtracted').replace('{tag}', outcome.group.tag));
+            return;
+        }
+        const missing = parts.some(part => Array.from(part.validFraction).some(value => value < 1));
         this._griddedSetStatus(i18n.t('griddedRegionDone')
-            .replace('{tag}', group.tag)
+            .replace('{tag}', outcome.group.tag)
             .replace('{cells}', String(result.cells))
             .replace('{weighting}', weighting)
             + (missing ? ` ${i18n.t('griddedRegionMissing')}` : ''));
@@ -2494,62 +2651,117 @@ export function installGriddedMethods(TargetClass) {
         return node;
     };
 
+    /** The folder of one place (P1, R1…) under "Extractions". */
+    proto._griddedPlaceNode = function(data, group) {
+        const parent = this._griddedExtractionNode(data);
+        let node = Object.values(parent._children).find(child => child._griddedGroupId === group.id);
+        if (!node) {
+            const name = `${group.tag} · ${group.where}`;
+            node = treeNode(name);
+            node._griddedGroupId = group.id;
+            parent._children[name] = node;
+        }
+        return node;
+    };
+
+    proto._griddedSameGeometry = function(kind, a, b) {
+        const same = (x, y) => Math.abs(x - y) < 1e-6;
+        if (kind === 'point') return same(a.lat, b.lat) && same(a.lon, b.lon);
+        return same(a.latMin, b.latMin) && same(a.latMax, b.latMax) && same(a.lonMin, b.lonMin) && same(a.lonMax, b.lonMax);
+    };
+
+    proto._griddedNextColor = function(view) {
+        view.colorCount = (view.colorCount || 0) + 1;
+        return SERIES_COLORS[(view.colorCount - 1) % SERIES_COLORS.length];
+    };
+
     /**
-     * One extraction (a point, or a box with its mean, min and max) becomes
-     * one row of the panel's list and one or three variables of the file.
+     * A place is a point or a box; its series are what was extracted there:
+     * one set per variable and level (a value for a point; mean, min and max
+     * for a box). The same place extracted again — the same grid cell, the
+     * same box — adds its sets to the place it already is, so P1 and R1 are
+     * folders, not one-off results. A set already there is not read twice.
+     *
+     * @returns {{group: object, added: number}|null}
      */
-    proto._griddedAddGroup = function(view, { kind, geometry, label, note = '', items }) {
-        const entry = this.plotManager.files.get(view.fileId);
-        const data = entry?.data;
+    proto._griddedAddSeries = function(view, { kind, geometry, where, note = '', variable, sets }) {
+        const data = this.plotManager.files.get(view.fileId)?.data;
         if (!data) return null;
-        const node = this._griddedExtractionNode(data);
-        view.groupCount = (view.groupCount || 0) + 1;
-        const counters = view.tagCounters || (view.tagCounters = { point: 0, region: 0 });
-        counters[kind] += 1;
-        const tag = `${kind === 'point' ? 'P' : 'R'}${counters[kind]}`;
-        const group = {
-            id: `g${view.groupCount}`,
-            kind,
-            tag,
-            geometry,
-            label,
-            note,
-            color: SERIES_COLORS[(view.groupCount - 1) % SERIES_COLORS.length],
-            checked: true,
-            names: [],
-            roles: [],
-        };
-        for (const item of items) {
-            view.extractionCount += 1;
-            const name = `grid:x${view.extractionCount}`;
-            const display = `${tag} · ${item.displayName}`;
-            let leaf = display;
-            let suffix = 2;
-            while (node._variables[leaf]) leaf = `${display} (${suffix++})`;
-            const values = Float64Array.from(item.values);
-            data.variables[name] = {
-                name,
-                displayName: leaf,
-                data: values,
-                description: item.description,
-                units: item.units || '',
-                kind: 'variable',
-                dataType: this.parser?._detectDataType ? this.parser._detectDataType(values, name) : 'numeric',
-                isConstant: this.parser?._isConstantValues ? this.parser._isConstantValues(values) : false,
-                interpolation: 'linear',
-                negate: false,
-                source: 'netcdf-gridded',
+        let group = (view.groups || []).find(item => item.kind === kind && this._griddedSameGeometry(kind, item.geometry, geometry));
+        if (!group) {
+            view.groupCount = (view.groupCount || 0) + 1;
+            const counters = view.tagCounters || (view.tagCounters = { point: 0, region: 0 });
+            counters[kind] += 1;
+            group = {
+                id: `g${view.groupCount}`,
+                kind,
+                tag: `${kind === 'point' ? 'P' : 'R'}${counters[kind]}`,
+                geometry,
+                where,
+                note,
+                color: this._griddedNextColor(view),
+                sets: [],
             };
-            node._variables[leaf] = data.variables[name];
-            group.names.push(name);
-            group.roles.push(item.role);
+            view.groups.push(group);
+        }
+        const folder = this._griddedPlaceNode(data, group);
+        const level = this._griddedLevelAxis(view, variable);
+        const quantity = this._griddedQuantity(variable);
+        let added = 0;
+        for (const set of sets) {
+            const levelIndex = set.levelIndex ?? (level ? Number(view.selection[level.name]) || 0 : null);
+            const suffix = this._griddedSelectionSuffix(view, variable, levelIndex);
+            const key = `${variable.key}${suffix}`;
+            if (group.sets.some(item => item.key === key)) continue;
+            view.setCount = (view.setCount || 0) + 1;
+            const levelText = suffix.replace(/^ @ /, '');
+            const entry = {
+                id: `s${view.setCount}`,
+                key,
+                label: `${quantity}${levelText ? ` · ${levelText}` : ''}`,
+                short: `${variable.name}${levelText ? ` ${levelText}` : ''}`,
+                color: group.sets.length ? this._griddedNextColor(view) : group.color,
+                checked: true,
+                names: [],
+                roles: [],
+            };
+            for (const item of set.items) {
+                view.extractionCount += 1;
+                const name = `grid:x${view.extractionCount}`;
+                const roleText = item.role === 'value' ? '' : i18n.t(item.role === 'mean' ? 'griddedMean' : item.role === 'min' ? 'griddedMin' : 'griddedMax');
+                // In the plots' legends the curve stands alone, so it says
+                // where it is from; in its folder, only what it is.
+                const displayName = kind === 'point'
+                    ? `${group.tag} · ${quantity} · ${where}${suffix}`
+                    : `${group.tag} · ${quantity} · ${roleText} [${where}]${suffix}`;
+                let leaf = `${entry.label}${roleText ? ` · ${roleText}` : ''}`;
+                for (let copy = 2; folder._variables[leaf]; copy++) leaf = `${entry.label}${roleText ? ` · ${roleText}` : ''} (${copy})`;
+                const values = Float64Array.from(item.values);
+                data.variables[name] = {
+                    name,
+                    displayName,
+                    data: values,
+                    description: item.description,
+                    units: variable.units || '',
+                    kind: 'variable',
+                    dataType: this.parser?._detectDataType ? this.parser._detectDataType(values, name) : 'numeric',
+                    isConstant: this.parser?._isConstantValues ? this.parser._isConstantValues(values) : false,
+                    interpolation: 'linear',
+                    negate: false,
+                    source: 'netcdf-gridded',
+                };
+                folder._variables[leaf] = data.variables[name];
+                entry.names.push(name);
+                entry.roles.push(item.role);
+            }
+            group.sets.push(entry);
+            added += 1;
         }
         this._griddedCommitData(view, data);
-        view.groups.push(group);
         this._griddedRenderResults(view);
         this._griddedDrawPreview(view);
         this._griddedDrawMap(view);
-        return group;
+        return { group, added };
     };
 
     proto._griddedCommitData = function(view, data) {
@@ -2559,6 +2771,10 @@ export function installGriddedMethods(TargetClass) {
         if (this.plotManager.activeFileId === view.fileId) this._renderFilteredTree?.();
     };
 
+    proto._griddedDropVariables = function(data, names) {
+        for (const name of names) delete data.variables[name];
+    };
+
     proto._griddedRemoveGroup = function(view, id) {
         const index = view.groups.findIndex(group => group.id === id);
         if (index < 0) return;
@@ -2566,18 +2782,39 @@ export function installGriddedMethods(TargetClass) {
         if (view.selected?.kind === 'group' && view.selected.id === id) view.selected = null;
         const data = this.plotManager.files.get(view.fileId)?.data;
         if (data) {
-            const node = this._griddedExtractionNode(data);
-            for (const name of group.names) {
-                delete data.variables[name];
-                for (const [leaf, variable] of Object.entries(node._variables)) {
-                    if (variable?.name === name) delete node._variables[leaf];
-                }
+            this._griddedDropVariables(data, group.sets.flatMap(set => set.names));
+            const parent = this._griddedExtractionNode(data);
+            for (const [name, child] of Object.entries(parent._children)) {
+                if (child._griddedGroupId === id) delete parent._children[name];
             }
             this._griddedCommitData(view, data);
         }
         this._griddedRenderResults(view);
         this._griddedDrawPreview(view);
         this._griddedDrawMap(view);
+    };
+
+    /** One variable and level of a place; the place goes with its last one. */
+    proto._griddedRemoveSet = function(view, groupId, setId) {
+        const group = (view.groups || []).find(item => item.id === groupId);
+        const set = group?.sets.find(item => item.id === setId);
+        if (!set) return;
+        if (group.sets.length === 1) {
+            this._griddedRemoveGroup(view, groupId);
+            return;
+        }
+        group.sets = group.sets.filter(item => item !== set);
+        const data = this.plotManager.files.get(view.fileId)?.data;
+        if (data) {
+            this._griddedDropVariables(data, set.names);
+            const folder = this._griddedPlaceNode(data, group);
+            for (const [leaf, variable] of Object.entries(folder._variables)) {
+                if (set.names.includes(variable?.name)) delete folder._variables[leaf];
+            }
+            this._griddedCommitData(view, data);
+        }
+        this._griddedRenderResults(view);
+        this._griddedDrawPreview(view);
     };
 
     proto._griddedRemoveAll = async function(view) {
@@ -2590,10 +2827,9 @@ export function installGriddedMethods(TargetClass) {
         if (!ok) return;
         const data = this.plotManager.files.get(view.fileId)?.data;
         if (data) {
+            this._griddedDropVariables(data, view.groups.flatMap(group => group.sets.flatMap(set => set.names)));
             const node = this._griddedExtractionNode(data);
-            for (const group of view.groups) {
-                for (const name of group.names) delete data.variables[name];
-            }
+            for (const name of Object.keys(node._children)) delete node._children[name];
             for (const leaf of Object.keys(node._variables)) delete node._variables[leaf];
             this._griddedCommitData(view, data);
         }
@@ -2604,43 +2840,85 @@ export function installGriddedMethods(TargetClass) {
         this._griddedDrawMap(view);
     };
 
+    /**
+     * Put a place back on the map as the orange point or box, to extract
+     * another variable or other levels there: the new series join its folder.
+     */
+    proto._griddedReusePlace = function(view, id) {
+        const group = (view.groups || []).find(item => item.id === id);
+        if (!group) return;
+        if (group.kind === 'point') {
+            view.pendingPoint = { ...group.geometry };
+            view.selected = { kind: 'pending-point' };
+            this._griddedSetMode(view, 'point');
+        } else {
+            view.pendingBox = { ...group.geometry };
+            view.selected = { kind: 'pending-box' };
+            this._griddedSetMode(view, 'region');
+        }
+        this._griddedSyncInputs(view);
+        this._griddedRenderSelection(view);
+        this._griddedDrawMap(view);
+        this._griddedSetStatus(i18n.t('griddedReuseStatus').replace(/\{tag\}/g, group.tag));
+    };
+
     proto._griddedRenderResults = function(view) {
         const list = this._griddedEl('results');
         if (!list) return;
         list.innerHTML = '';
+        const button = (action, text, title) => {
+            const element = document.createElement('button');
+            element.type = 'button';
+            element.className = 'gridded-remove';
+            element.dataset.action = action;
+            element.textContent = text;
+            element.title = title;
+            element.setAttribute('aria-label', title);
+            return element;
+        };
         for (const group of view.groups || []) {
             const item = document.createElement('li');
             item.className = 'gridded-result';
             item.dataset.group = group.id;
-            const label = document.createElement('label');
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.checked = group.checked;
+            item.title = i18n.t('griddedSelectOnMap');
+            if (view.selected?.kind === 'group' && view.selected.id === group.id) item.classList.add('selected');
+            const head = document.createElement('div');
+            head.className = 'gridded-result-head';
             const swatch = document.createElement('span');
             swatch.className = 'gridded-swatch';
             swatch.style.background = group.color;
             swatch.textContent = group.tag;
             const text = document.createElement('span');
             text.className = 'gridded-result-text';
-            text.textContent = group.label;
+            text.textContent = group.kind === 'point' ? group.where : `[${group.where}]`;
             if (group.note) {
                 const note = document.createElement('small');
                 note.textContent = group.note;
                 text.appendChild(note);
             }
-            // The checkbox alone toggles the curve; the rest of the row selects
-            // the point or box on the map.
-            label.append(checkbox);
-            item.title = i18n.t('griddedSelectOnMap');
-            if (view.selected?.kind === 'group' && view.selected.id === group.id) item.classList.add('selected');
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'gridded-remove';
-            remove.dataset.action = 'remove-group';
-            remove.textContent = '✕';
-            remove.title = i18n.t('griddedRemoveExtraction');
-            remove.setAttribute('aria-label', i18n.t('griddedRemoveExtraction'));
-            item.append(label, swatch, text, remove);
+            head.append(swatch, text,
+                button('reuse-group', '+', i18n.t('griddedReuseHere')),
+                button('remove-group', '✕', i18n.t('griddedRemoveExtraction')));
+            const sets = document.createElement('ul');
+            sets.className = 'gridded-sets';
+            for (const set of group.sets) {
+                const row = document.createElement('li');
+                row.className = 'gridded-set';
+                row.dataset.set = set.id;
+                const label = document.createElement('label');
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = set.checked;
+                const dot = document.createElement('span');
+                dot.className = 'gridded-set-dot';
+                dot.style.background = set.color;
+                const name = document.createElement('span');
+                name.textContent = set.label;
+                label.append(checkbox, dot, name);
+                row.append(label, button('remove-set', '✕', i18n.t('griddedRemoveSet')));
+                sets.appendChild(row);
+            }
+            item.append(head, sets);
             list.appendChild(item);
         }
         const empty = this._griddedEl('results-empty');
@@ -2651,11 +2929,13 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedCheckedSeries = function(view) {
         const data = this.plotManager.files.get(view.fileId)?.data;
         const out = [];
-        for (const group of (view.groups || []).filter(item => item.checked)) {
-            group.names.forEach((name, index) => {
-                const variable = data?.variables?.[name];
-                if (variable) out.push({ group, variable, role: group.roles[index] });
-            });
+        for (const group of view.groups || []) {
+            for (const set of group.sets.filter(item => item.checked)) {
+                set.names.forEach((name, index) => {
+                    const variable = data?.variables?.[name];
+                    if (variable) out.push({ group, set, variable, role: set.roles[index] });
+                });
+            }
         }
         return out;
     };
@@ -2679,13 +2959,13 @@ export function installGriddedMethods(TargetClass) {
         const datetime = time?.timeKind === 'datetime';
         const colors = this._griddedColors();
         const x = datetime ? Array.from(time.data, value => new Date(value)) : Array.from(time.data);
-        const traces = series.map(({ group, variable, role }) => ({
+        const traces = series.map(({ group, set, variable, role }) => ({
             type: 'scatter',
             mode: 'lines',
             x,
             y: Array.from(variable.data),
-            name: `${group.tag} ${role === 'value' ? '' : i18n.t(role === 'mean' ? 'griddedMean' : role === 'min' ? 'griddedMin' : 'griddedMax')}`.trim(),
-            line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: group.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
+            name: `${group.tag} ${set.short}${role === 'value' ? '' : ` ${i18n.t(role === 'mean' ? 'griddedMean' : role === 'min' ? 'griddedMin' : 'griddedMax')}`}`,
+            line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: set.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
             hovertemplate: `${variable.displayName}<br>%{y:.5~g}${variable.units ? ` ${variable.units}` : ''}<extra></extra>`,
         }));
         Plotly.react(chart, traces, {
@@ -2863,7 +3143,7 @@ export function installGriddedMethods(TargetClass) {
         if (!data) return;
         const time = data.variables[data.metadata.timeName];
         const checked = this._griddedCheckedSeries(view).map(item => item.variable);
-        const columns = checked.length ? checked : (view.groups || []).flatMap(group => group.names.map(name => data.variables[name]).filter(Boolean));
+        const columns = checked.length ? checked : (view.groups || []).flatMap(group => group.sets.flatMap(set => set.names.map(name => data.variables[name]).filter(Boolean)));
         if (!columns.length) return;
         const datetime = time.timeKind === 'datetime';
         const header = [time.displayName, ...columns.map(variable => `${variable.displayName}${variable.units ? ` [${variable.units}]` : ''}`)];

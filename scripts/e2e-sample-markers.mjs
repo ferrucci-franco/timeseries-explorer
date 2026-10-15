@@ -95,6 +95,14 @@ try {
 
     await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-marks-btn`).click();
     await page.locator(`.timeseries-marks-menu[data-panel-id="${panelId}"] .marks-item-samples`).click();
+    // The pill shows while the menu is still open: beside it, not under it.
+    await page.waitForSelector(`.layout-panel[data-id="${panelId}"] .samples-zoom-indicator.active`, { timeout: 10000 });
+    const overlap = await page.evaluate(id => {
+        const menu = document.querySelector(`.timeseries-marks-menu[data-panel-id="${id}"]`).getBoundingClientRect();
+        const pill = document.querySelector(`.layout-panel[data-id="${id}"] .samples-zoom-indicator.active`).getBoundingClientRect();
+        return pill.left < menu.right && pill.right > menu.left && pill.top < menu.bottom && pill.bottom > menu.top;
+    }, panelId);
+    assert.equal(overlap, false, 'the pill is not hidden under the open Marks menu');
     await page.keyboard.press('Escape');
     await page.waitForFunction(id => window.app.plotManager.plots.get(id).showSamples, panelId);
     await page.waitForTimeout(600);

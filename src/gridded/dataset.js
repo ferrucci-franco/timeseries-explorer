@@ -672,8 +672,28 @@ export class GriddedDataset {
         return { min, max, p01: quantile(0.01), p99: quantile(0.99), steps: steps.length, total };
     }
 
-    /** The time series of the cell nearest (lat, lon) at the selected level. */
-    async pointSeries(key, selection, lat, lon, job = {}) {
+    /**
+     * The level indices asked for, sorted, and the contiguous range of the
+     * level axis that holds them — read in one go: the compressed chunks of
+     * a reanalysis usually hold every level, so reading level by level would
+     * decompress the same chunks again for each. Null when the variable has
+     * no level axis or no levels were asked for.
+     */
+    _levelPlan(variable, levels) {
+        const zAxis = variable.roles.indexOf('z');
+        if (zAxis < 0 || !Array.isArray(levels) || !levels.length) return null;
+        const size = this.axes.get(variable.dimNames[zAxis])?.size ?? 1;
+        const indices = [...new Set(levels.map(Number).filter(index => Number.isInteger(index) && index >= 0 && index < size))].sort((a, b) => a - b);
+        if (!indices.length) return null;
+        return { zAxis, indices, start: indices[0], stop: indices.at(-1) + 1 };
+    }
+
+    /**
+     * The time series of the cell nearest (lat, lon) at the selected level —
+     * or, with `levels` (indices of the level axis), at each of them:
+     * `byLevel: [{ index, values }]`, read together.
+     */
+    async pointSeries(key, selection, lat, lon, job = {}, { levels = null } = {}) {
         const variable = this._variable(key);
         const grid = this._grid(variable);
         const { row, column } = this._nearest(grid, lat, lon);
@@ -681,28 +701,49 @@ export class GriddedDataset {
         const yAxis = variable.roles.indexOf('y');
         const xAxis = variable.roles.indexOf('x');
         const cell = { lat: grid.lat[row], lon: grid.lon[column] > 180 ? grid.lon[column] - 360 : grid.lon[column] };
+        const plan = this._levelPlan(variable, levels);
+        const levelList = plan ? plan.indices : [null];
+        const atLevel = index => (index === null ? selection : { ...selection, [variable.dimNames[plan.zAxis]]: index });
         if (tAxis < 0) {
-            const map = this.readMap(key, selection);
             const displayRow = grid.yOrder.indexOf(row);
             const displayColumn = grid.xOrder.indexOf(column);
-            return { values: Float64Array.of(map.values[displayRow * map.nx + displayColumn]), cell };
+            const byLevel = levelList.map(index => {
+                const map = this.readMap(key, atLevel(index));
+                return { index, values: Float64Array.of(map.values[displayRow * map.nx + displayColumn]) };
+            });
+            return plan ? { byLevel, cell } : { values: byLevel[0].values, cell };
         }
+        const levelCount = plan ? plan.stop - plan.start : 1;
         const chunkSteps = Number(variable.segments[0].descriptor.chunks?.[tAxis]) || 1;
-        const { total, blocks } = this._timeBlocks(variable, 1, chunkSteps);
-        const out = new Float64Array(total);
+        const { total, blocks } = this._timeBlocks(variable, levelCount, chunkSteps);
+        const outs = levelList.map(() => new Float64Array(total));
         for (const [index, block] of blocks.entries()) {
             if (job.cancelled) throw new CancelledError();
-            const ranges = this._ranges(variable, selection, {
+            const overrides = {
                 [tAxis]: [block.localStart, block.localStop],
                 [yAxis]: [row, row + 1],
                 [xAxis]: [column, column + 1],
-            });
+            };
+            if (plan) overrides[plan.zAxis] = [plan.start, plan.stop];
+            const ranges = this._ranges(variable, selection, overrides);
             const values = decodeNumeric(flatNumbers(block.segment.descriptor.read(ranges)), block.segment.descriptor.userAttrs);
-            out.set(values, block.globalStart);
+            if (!plan) {
+                outs[0].set(values, block.globalStart);
+            } else {
+                // Only t and z are longer than one in this slab.
+                const tStride = plan.zAxis > tAxis ? levelCount : 1;
+                const zStride = plan.zAxis > tAxis ? 1 : block.localStop - block.localStart;
+                const steps = block.localStop - block.localStart;
+                plan.indices.forEach((level, position) => {
+                    const offset = (level - plan.start) * zStride;
+                    for (let step = 0; step < steps; step++) outs[position][block.globalStart + step] = values[offset + step * tStride];
+                });
+            }
             job.onProgress?.((index + 1) / blocks.length);
             await tick();
         }
-        return { values: out, cell };
+        if (!plan) return { values: outs[0], cell };
+        return { byLevel: plan.indices.map((level, position) => ({ index: level, values: outs[position] })), cell };
     }
 
     /**
@@ -710,7 +751,7 @@ export class GriddedDataset {
      * The box is in display coordinates (longitude -180..180 for global
      * grids); a box crossing the antimeridian has lonMin > lonMax.
      */
-    async regionStats(key, selection, box, job = {}) {
+    async regionStats(key, selection, box, job = {}, { levels = null } = {}) {
         const variable = this._variable(key);
         const grid = this._grid(variable);
         const latMin = Math.min(box.latMin, box.latMax);
@@ -737,17 +778,19 @@ export class GriddedDataset {
         }
         const rowStart = rows[0];
         const rowStop = rows.at(-1) + 1;
+        const plan = this._levelPlan(variable, levels);
+        const levelCount = plan ? plan.stop - plan.start : 1;
         const tAxis = variable.roles.indexOf('t');
         const yAxis = variable.roles.indexOf('y');
         const xAxis = variable.roles.indexOf('x');
         const weights = grid.weights.values;
         const totalCells = rows.length * columns.length;
-        const valuesPerStep = (rowStop - rowStart) * columns.length;
+        const valuesPerStep = (rowStop - rowStart) * columns.length * levelCount;
         const chunkSteps = tAxis >= 0 ? Number(variable.segments[0].descriptor.chunks?.[tAxis]) || 1 : 1;
         const { total, blocks } = tAxis >= 0
             ? this._timeBlocks(variable, valuesPerStep, chunkSteps)
             : { total: 1, blocks: [{ segment: variable.segments[0], localStart: 0, localStop: 1, globalStart: 0 }] };
-        const result = {
+        const stats = () => ({
             mean: new Float64Array(total).fill(NaN),
             min: new Float64Array(total).fill(NaN),
             max: new Float64Array(total).fill(NaN),
@@ -756,13 +799,12 @@ export class GriddedDataset {
             minLon: new Float64Array(total).fill(NaN),
             maxLat: new Float64Array(total).fill(NaN),
             maxLon: new Float64Array(total).fill(NaN),
-            cells: totalCells,
-            weighting: grid.weights.kind,
-            box: { latMin, latMax, lonMin: box.lonMin, lonMax: box.lonMax },
-        };
-        const sum = new Float64Array(total);
-        const weightSum = new Float64Array(total);
-        const valid = new Float64Array(total);
+            sum: new Float64Array(total),
+            weightSum: new Float64Array(total),
+            valid: new Float64Array(total),
+        });
+        const levelList = plan ? plan.indices : [null];
+        const perLevel = levelList.map(() => stats());
         const displayLon = value => (value > 180 ? value - 360 : value);
         for (const [blockIndex, block] of blocks.entries()) {
             if (job.cancelled) throw new CancelledError();
@@ -770,44 +812,61 @@ export class GriddedDataset {
             for (const [runStart, runStop] of runs) {
                 const overrides = { [yAxis]: [rowStart, rowStop], [xAxis]: [runStart, runStop] };
                 if (tAxis >= 0) overrides[tAxis] = [block.localStart, block.localStop];
+                if (plan) overrides[plan.zAxis] = [plan.start, plan.stop];
                 const ranges = this._ranges(variable, selection, overrides);
                 const counts = ranges.map(([start, stop]) => stop - start);
                 const strides = new Array(counts.length).fill(1);
                 for (let axis = counts.length - 2; axis >= 0; axis--) strides[axis] = strides[axis + 1] * counts[axis + 1];
                 const decoded = decodeNumeric(flatNumbers(block.segment.descriptor.read(ranges)), block.segment.descriptor.userAttrs);
-                for (let step = 0; step < steps; step++) {
-                    const t = block.globalStart + step;
-                    const base = tAxis >= 0 ? step * strides[tAxis] : 0;
-                    for (const row of rows) {
-                        const w = weights[row];
-                        const rowBase = base + (row - rowStart) * strides[yAxis];
-                        for (let column = runStart; column < runStop; column++) {
-                            const value = decoded[rowBase + (column - runStart) * strides[xAxis]];
-                            if (!Number.isFinite(value)) continue;
-                            valid[t] += 1;
-                            sum[t] += value * w;
-                            weightSum[t] += w;
-                            if (!(value >= result.min[t])) {
-                                result.min[t] = value;
-                                result.minLat[t] = grid.lat[row];
-                                result.minLon[t] = displayLon(grid.lon[column]);
-                            }
-                            if (!(value <= result.max[t])) {
-                                result.max[t] = value;
-                                result.maxLat[t] = grid.lat[row];
-                                result.maxLon[t] = displayLon(grid.lon[column]);
+                levelList.forEach((level, position) => {
+                    const result = perLevel[position];
+                    const levelBase = plan ? (level - plan.start) * strides[plan.zAxis] : 0;
+                    for (let step = 0; step < steps; step++) {
+                        const t = block.globalStart + step;
+                        const base = levelBase + (tAxis >= 0 ? step * strides[tAxis] : 0);
+                        for (const row of rows) {
+                            const w = weights[row];
+                            const rowBase = base + (row - rowStart) * strides[yAxis];
+                            for (let column = runStart; column < runStop; column++) {
+                                const value = decoded[rowBase + (column - runStart) * strides[xAxis]];
+                                if (!Number.isFinite(value)) continue;
+                                result.valid[t] += 1;
+                                result.sum[t] += value * w;
+                                result.weightSum[t] += w;
+                                if (!(value >= result.min[t])) {
+                                    result.min[t] = value;
+                                    result.minLat[t] = grid.lat[row];
+                                    result.minLon[t] = displayLon(grid.lon[column]);
+                                }
+                                if (!(value <= result.max[t])) {
+                                    result.max[t] = value;
+                                    result.maxLat[t] = grid.lat[row];
+                                    result.maxLon[t] = displayLon(grid.lon[column]);
+                                }
                             }
                         }
                     }
-                }
+                });
             }
             job.onProgress?.((blockIndex + 1) / blocks.length);
             await tick();
         }
-        for (let t = 0; t < total; t++) {
-            if (weightSum[t] > 0) result.mean[t] = sum[t] / weightSum[t];
-            result.validFraction[t] = valid[t] / totalCells;
-        }
-        return result;
+        const finish = result => {
+            for (let t = 0; t < total; t++) {
+                if (result.weightSum[t] > 0) result.mean[t] = result.sum[t] / result.weightSum[t];
+                result.validFraction[t] = result.valid[t] / totalCells;
+            }
+            delete result.sum;
+            delete result.weightSum;
+            delete result.valid;
+            return result;
+        };
+        const common = {
+            cells: totalCells,
+            weighting: grid.weights.kind,
+            box: { latMin, latMax, lonMin: box.lonMin, lonMax: box.lonMax },
+        };
+        if (!plan) return { ...finish(perLevel[0]), ...common };
+        return { ...common, byLevel: plan.indices.map((level, position) => ({ index: level, ...finish(perLevel[position]) })) };
     }
 }

@@ -1170,6 +1170,27 @@ resumen de buscador):
        tocan. La grafía del archivo queda en `unitsRaw`;
      - "Escala" pasa a "Rango de colores"; el rango, la paleta y cada opción
        de Autoajustar tienen un tooltip que dice qué hacen y cuándo usarlas.
+  5. **Cuarta prueba: lugares y niveles.**
+     - **Un lugar es una carpeta.** P1 o R1 es un punto o un recuadro; lo que
+       se extrae ahí (otra variable, otros niveles) se suma a ese lugar: la
+       misma celda de grilla o el mismo recuadro van a la misma carpeta, en el
+       panel y en el árbol (Extracciones › P1 · 45°N 90°E › Temperature (t) ·
+       850 hPa). Una serie ya extraída no se lee dos veces.
+     - "+" en la fila del lugar (o "Extraer otra variable u otro nivel acá"
+       en su menú) lo vuelve a poner en el mapa como punto o recuadro
+       naranja.
+     - **Niveles:** en Punto y Región, el selector de niveles toma el del mapa
+       por defecto, o varios, o todos. Se leen en una sola pasada (el rango
+       contiguo del eje de niveles): los bloques comprimidos de un reanálisis
+       suelen contener todos los niveles, así que leer nivel por nivel
+       descomprimiría los mismos bloques una y otra vez. Una serie por nivel,
+       cada una con su color.
+     - Cada serie de un lugar tiene su casilla y su ✕; el ✕ del lugar quita
+       todas.
+     - Extraer, o quitar el punto o el recuadro naranja, vuelve a Navegar.
+     - Sin cursor de texto en ningún lugar de la app salvo en los campos de
+       texto (con la navegación por cursor del navegador, F7, aparecía en
+       botones y menús).
 - **Barra superior en una sola fila:** variable, nivel y escala a la izquierda;
   exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el título
   arriba, un formato de etiquetas acotado y un margen fijo: cambiar de instante
