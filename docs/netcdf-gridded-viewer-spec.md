@@ -1,6 +1,6 @@
 # Visor de datos grillados netCDF (ERA5 y afines): estado actual y especificación
 
-Estado (2026-10-14): **Fase 0 y Fase 1 implementadas**, ver §11. Las fases 2–4
+Estado (2026-10-15): **Fase 0 y Fase 1 implementadas**, ver §11. Las fases 2–4
 siguen siendo especificación.
 Alcance: el lector netCDF *genérico* (`src/parsers/netcdf-parser.js`). Los
 archivos **PyPSA quedan fuera** de este documento: su lector
@@ -1234,22 +1234,89 @@ resumen de buscador):
   - Series extraídas: CSV de las marcadas, PNG o SVG de la vista previa.
 - **Electron:** el netCDF abierto por ruta se pide al servidor local como Blob
   (sin la pregunta de tamaño ni la copia por IPC) y se lee por partes.
+- **Inspector** (§4.4), arriba del panel: la celda bajo el puntero dicha
+  exacta — dónde está, qué fila y qué columna de la grilla es, su valor con
+  unidades, y el instante y el nivel que muestra el mapa. La lectura sigue al
+  slider y queda fija cuando el puntero deja el mapa, así que "Copiar" la
+  pone en el portapapeles como una sola línea.
+- **Vista previa con unidades mezcladas.** Las curvas que no comparten unidad
+  no comparten eje: la primera unidad se queda con el eje izquierdo y las
+  demás pasan a un segundo eje a la derecha, cada uno titulado con las
+  unidades que lleva, y la leyenda nombra la unidad de cada curva. Nunca se
+  muestra una unidad equivocada (K y m s⁻¹ juntas, por ejemplo).
+- **Costas dentro del recuadro.** Las costas y fronteras se dibujan como
+  trazos SVG, que Plotly recorta al área de ejes (en pantalla y en una imagen
+  exportada). Como trazos `scattergl` iban sobre un único lienzo de toda la
+  figura y, con `constrain: 'domain'` (que achica el área de dibujo para
+  mantener el grado cuadrado), quedaban unos píxeles afuera. Para que SVG
+  salga barato, las líneas se recortan a una ventana alrededor de lo que se
+  ve (el doble de ancha, nunca más allá de los polos): el juego 1:50m tiene
+  80.000 puntos en todo el mundo. Un desplazamiento que sale de esa ventana
+  vuelve a dibujar el mapa.
+- **Sesiones** (`session-methods.js` + `_griddedSessionState` /
+  `_griddedRestoreSession`): un proyecto guarda el mapa entero.
+  - **Todos los archivos del dataset** y cómo se unieron (`entry.gridded.files`
+    y `entry.gridded.options`): varios meses unidos en el tiempo
+    (`mode: 'concat-time'`) o un ZIP del CDS leído como un solo dataset
+    (`mode: 'merge-variables'`) van completos al ZIP del proyecto. Antes
+    fallaba al guardar, porque la sesión buscaba los bytes de un único
+    archivo y `entry.file` es null cuando hay varios.
+  - **Cada lugar** (P1, R1…) con su tipo, su geometría, su tag, su color y su
+    nota, y **cada set** con su variable y su nivel, sus roles (valor, media,
+    mín., máx.), los nombres `grid:x…`, el nombre de cada hoja del árbol, si
+    está marcado y **los valores**. Van en el JSON de la sesión, así que una
+    sesión de vista (sin datos) también los restituye, y restaurar no vuelve
+    a leer el archivo.
+  - **El estado de la vista:** variable, nivel e instante, paleta, escala
+    (rango, origen y opciones), zoom, los niveles elegidos para extraer, si
+    la lista de series estaba plegada, y si el mapa estaba abierto.
+  - **Los paneles** que mostraban esas series: las extracciones se reponen
+    antes de rearmar los gráficos, así que las curvas vuelven a su panel.
+    Una serie extraída no se busca en el archivo al restaurar (como las
+    variables derivadas, viene con la sesión).
+- **Panel dataset:** cada variable del árbol dice también cuántos valores
+  tiene (744 × 721 × 1440 son 772 millones), además de su forma, su nombre
+  largo y sus unidades.
 
 **Tests:**
 
-- `npm run test:gridded`: motor, lector netCDF3, ZIP, calendarios, regiones y
-  cliente, sobre los fixtures que genera
+- `npm run test:gridded`: motor, lector netCDF3, ZIP, calendarios, regiones,
+  cliente y la ventana de costas, sobre los fixtures que genera
   `scripts/generate-gridded-netcdf-fixtures.py`.
 - `npm run e2e:gridded-netcdf`: en Chromium. Mapa, punto, caja, slider,
-  graficar, ZIP del CDS, archivos de series sin cambios, mensaje de GRIB y el
-  camino de escritorio contra `electron/local-file-http.cjs`.
+  graficar, ZIP del CDS, archivos de series sin cambios, mensaje de GRIB, el
+  camino de escritorio contra `electron/local-file-http.cjs`, que nada del
+  mapa se dibuje fuera de los ejes, y los dos proyectos: uno con
+  extracciones y uno con un dataset de varios archivos.
+- `npm run test:session-project` (`scripts/test-session-project-save.mjs`):
+  un dataset de varios archivos entra entero en el ZIP del proyecto, con el
+  modo de unión y el mapa; una serie extraída no se busca en el archivo al
+  restaurar.
 
 **Pendiente de esta parte:**
 
-- Las extracciones no se guardan en una sesión. El archivo sí, y al restaurarlo
-  vuelve a abrir en el mapa.
 - No probado dentro de Electron mismo: el camino del renderer sí, contra el
   servidor de archivos de Electron.
 - "Abrir como series" se retiró del panel (§4.4.0); un archivo de grilla
   ya no se abre como series.
+- Fase 0, punto 5 (WORKERFS en lugar de `FS.writeFile`) está hecho en el
+  camino grillado (`src/gridded/dataset.js`), no en el lector de series
+  (`src/parsers/netcdf-parser.js`), que sigue recibiendo el archivo entero en
+  un `ArrayBuffer` y copiándolo al FS de Emscripten. Lo que motivaba R2 —los
+  ERA5 grandes— ya no pasa por ahí: un archivo de grilla se abre en el
+  worker y se lee por partes. Cambiarlo obligaría a mandar el `File` al
+  worker de parseo y a tocar el camino PyPSA, que este documento deja fuera.
+- Del detalle de §4.4, fuera de lo que pide la fase 1 en §8:
+  - el slider de tiempo no tiene saltos de día, mes y año ni la mini-serie de
+    fondo con la media del dominio;
+  - el selector de nivel es una lista, no un slider vertical, y no hay
+    "mosaico de niveles";
+  - el panel dataset no dice el tamaño en disco (comprimido) de cada
+    variable;
+  - el diálogo "¿mapa de estaciones o series?" para archivos ambiguos
+    (§4.4.0, paso 3) no existe: un archivo de estaciones va al lector de
+    series sin preguntar, y el mapa de estaciones no está en la fase 1.
+- La herramienta activa (Navegar / Punto / Región) y el punto o el recuadro
+  naranja a medio poner no se guardan en la sesión: un mapa restaurado abre
+  en Navegar, con lo ya extraído.
 

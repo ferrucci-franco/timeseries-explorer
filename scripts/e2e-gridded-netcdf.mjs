@@ -15,12 +15,18 @@
 // 5. The desktop path: a netCDF opened by path is fetched from the same local
 //    file server Electron runs (electron/local-file-http.cjs), not read
 //    through IPC into one buffer, and opens on its map.
+// 6. A saved project brings the map back: its places (P1, R1…), their series
+//    and values, the tree folders they live in, what the map was showing and
+//    the panel that plotted them.
+// 7. A dataset made of several files (a CDS ZIP read as one, months joined
+//    along time) is saved with all of its files and opens joined again.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:gridded-netcdf`.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import sharp from 'sharp';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 
@@ -367,6 +373,67 @@ try {
             if (index) assert.ok(span <= zoom.spans[index - 1] + 1e-9, `zooming in never widens the view (${zoom.spans.join(', ')})`);
         });
         assert.equal(zoom.sameDrawing, true, `a small grid is not redrawn for a zoom (${JSON.stringify(zoom.drawn)})`);
+
+        // The coastlines and borders stay inside the axes. They are SVG
+        // traces — the WebGL layer is one canvas over the whole figure, and
+        // with `constrain: 'domain'` (which shrinks the drawing area to keep
+        // a degree square) its clipping left them a few pixels outside — and
+        // they are cut to a window around the view, which is what keeps the
+        // 1:50m set (80.000 points worldwide) cheap. A pan out of that window
+        // draws them again.
+        const coastState = () => page.evaluate(() => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const view = window.app._griddedVisibleView();
+            const lines = div.data.filter(trace => trace.hoverinfo === 'skip' && trace.mode === 'lines');
+            return {
+                types: [...new Set(lines.map(trace => trace.type))],
+                points: lines.reduce((total, trace) => total + trace.x.filter(value => value !== null).length, 0),
+                window: view.drawn?.coastWindow,
+                zoom: view.zoom,
+            };
+        });
+        const zoomedCoast = await coastState();
+        assert.deepEqual(zoomedCoast.types, ['scatter'], 'the coast is an SVG trace, which Plotly clips to the axes');
+        assert.ok(zoomedCoast.points > 0 && zoomedCoast.points < 20000, `zoomed in, only the coast in sight is drawn (${zoomedCoast.points} points)`);
+        assert.ok(zoomedCoast.window.x[0] <= zoomedCoast.zoom.x[0] && zoomedCoast.window.x[1] >= zoomedCoast.zoom.x[1],
+            `the window holds the view with room to pan (${JSON.stringify(zoomedCoast)})`);
+        // Nothing is painted above the plot area: that band of the margin
+        // carries neither the title nor the ticks, so every pixel of it is
+        // the paper colour — in either theme — unless the map leaks out.
+        const band = await page.evaluate(() => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const rect = div.getBoundingClientRect();
+            const { xaxis, yaxis } = div._fullLayout;
+            const paper = window.app._griddedColors().bg;
+            return {
+                clip: {
+                    x: Math.round(rect.left + xaxis._offset + xaxis._length * 0.45),
+                    y: Math.round(rect.top + yaxis._offset) - 6,
+                    width: Math.round(xaxis._length * 0.5),
+                    height: 5,
+                },
+                paper: [1, 3, 5].map(at => parseInt(paper.slice(at, at + 2), 16)),
+            };
+        });
+        const bandPixels = await sharp(await page.screenshot({ clip: band.clip })).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+        let strayed = 0;
+        for (let index = 0; index < bandPixels.data.length; index += bandPixels.info.channels) {
+            const away = band.paper.reduce((top, channel, at) => Math.max(top, Math.abs(bandPixels.data[index + at] - channel)), 0);
+            if (away > 12) strayed += 1;
+        }
+        assert.equal(strayed, 0, `nothing of the map is drawn above the axes (${strayed} pixels are not the paper colour ${band.paper})`);
+        const panned = await page.evaluate(async () => {
+            const view = window.app._griddedVisibleView();
+            const drawn = view.drawn;
+            const span = Math.abs(view.zoom.x[1] - view.zoom.x[0]);
+            view.zoom = { x: [view.zoom.x[0] + span * 3, view.zoom.x[1] + span * 3], y: [...view.zoom.y] };
+            const needs = window.app._griddedZoomNeedsRedraw(view);
+            await window.app._griddedDrawMap(view);
+            return { needs, redrawn: view.drawn !== drawn, window: view.drawn.coastWindow, zoom: view.zoom };
+        });
+        assert.equal(panned.needs, true, 'a pan out of that window asks for a redraw');
+        assert.ok(panned.window.x[0] <= panned.zoom.x[0] && panned.window.x[1] >= panned.zoom.x[1], 'and the new window follows the view');
+
         // Points and boxes on the map. A click places the ring where it lands
         // (from the pixel, not from a lagging hover); the ring drags; the
         // right button opens a menu that removes it; a box drawn after the
@@ -691,7 +758,343 @@ try {
         await context.close();
     }
 
-    console.log('Gridded netCDF e2e passed: map, point and box extractions, slider, plotting, CDS ZIP, series files untouched, GRIB message, desktop path.');
+    // 6. A project keeps the map: its places, their series and their values,
+    //    what the map was showing, and the panel that plotted them.
+    {
+        const { context, page, errors } = await openApp();
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'era5-like-new-cds.nc'));
+        await mapShown(page);
+        // A point at a typed place, on t2m.
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.selectOption('#gridded-view [data-role="variable"]', '/t2m');
+        await page.fill('#gridded-view [data-input="lat"]', '44');
+        await page.fill('#gridded-view [data-input="lon"]', '92');
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 1, null, { timeout: 60000 });
+        // The same place again, with another variable at both its levels:
+        // one folder, three series.
+        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="reuse-group"]');
+        await page.selectOption('#gridded-view [data-role="variable"]', '/t');
+        await page.click('#gridded-view [data-action="levels-menu"]');
+        await page.click('#gridded-view [data-action="levels-all"]');
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups[0].sets.length === 3, null, { timeout: 60000 });
+        // And a region, back on t2m (a surface field, so no levels to pick):
+        // mean, minimum and maximum, three series.
+        await page.selectOption('#gridded-view [data-role="variable"]', '/t2m');
+        await page.click('#gridded-view [data-mode="region"]');
+        await page.fill('#gridded-view [data-input="north"]', '50');
+        await page.fill('#gridded-view [data-input="south"]', '0');
+        await page.fill('#gridded-view [data-input="west"]', '-50');
+        await page.fill('#gridded-view [data-input="east"]', '50');
+        await page.click('#gridded-view [data-action="extract-region"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 2, null, { timeout: 60000 });
+        // One series unchecked: that too is part of the state.
+        await page.uncheck('#gridded-view .gridded-result[data-group="g1"] .gridded-set:nth-child(2) input[type="checkbox"]');
+        // What the map shows: another step, another palette, typed ends (all
+        // three under the "Color range" button).
+        await page.click('#gridded-view [data-step="next"]');
+        await page.click('#gridded-view [data-action="autofit-menu"]');
+        await page.selectOption('#gridded-view [data-role="palette"]', 'Cividis');
+        await page.fill('#gridded-view [data-role="range-min"]', '250');
+        await page.fill('#gridded-view [data-role="range-max"]', '300');
+        await page.dispatchEvent('#gridded-view [data-role="range-max"]', 'change');
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(300);
+        // The checked series in a panel of the explorer: two of P1 (one is
+        // unchecked) and the three of R1. They are added one at a time, so
+        // wait until the panel has stopped filling.
+        await page.click('#gridded-view [data-action="plot"]');
+        await page.waitForSelector('#gridded-return:not([hidden])');
+        const extractionTraces = () => page.evaluate(() => [...window.app.plotManager.plots.values()]
+            .filter(plot => plot.traces.some(trace => String(trace.varName).startsWith('grid:x')))
+            .map(plot => plot.traces.length));
+        await page.waitForFunction(() => new Promise(resolve => {
+            const count = () => [...window.app.plotManager.plots.values()]
+                .reduce((total, plot) => total + plot.traces.filter(trace => String(trace.varName).startsWith('grid:x')).length, 0);
+            const before = count();
+            setTimeout(() => resolve(before > 0 && count() === before), 900);
+        }), null, { timeout: 60000, polling: 300 });
+        assert.deepEqual(await extractionTraces(), [5], 'the checked series are in one panel');
+        await page.click('#gridded-return');
+        await mapShown(page);
+
+        const before = await page.evaluate(() => {
+            const view = window.app._griddedVisibleView();
+            const data = window.app.plotManager.files.get(view.fileId).data;
+            const node = Object.values(data.tree._children).find(child => child._griddedExtractions);
+            return {
+                groups: view.groups.map(group => ({
+                    tag: group.tag, kind: group.kind, where: group.where, color: group.color,
+                    geometry: group.geometry,
+                    sets: group.sets.map(set => ({
+                        label: set.label, checked: set.checked, color: set.color, key: set.key,
+                        variableKey: set.variableKey, levelIndex: set.levelIndex,
+                        names: [...set.names], roles: [...set.roles],
+                    })),
+                })),
+                variableKey: view.variableKey,
+                selection: { ...view.selection },
+                palette: view.palette,
+                scale: { range: view.scale.range, source: view.scale.source },
+                folders: Object.entries(node._children).map(([folder, place]) => [folder, Object.keys(place._variables)]),
+                values: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, Array.from(variable.data)])),
+                labels: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, variable.displayName])),
+                traces: [...window.app.plotManager.plots.entries()]
+                    .filter(([, plot]) => plot.traces.some(trace => String(trace.varName).startsWith('grid:x')))
+                    .map(([panelId, plot]) => [panelId, plot.traces.map(trace => trace.varName).sort()]),
+                mapOpen: !document.getElementById('gridded-view').hidden,
+            };
+        });
+        assert.equal(before.groups.length, 2);
+        assert.equal(before.groups[0].sets.length, 3, 'one folder with the three series of the place');
+        assert.deepEqual(before.groups[0].sets.map(set => [set.variableKey, set.levelIndex]), [['/t2m', null], ['/t', 0], ['/t', 1]],
+            'every set says which field and which level it was read from');
+
+        // Save the project (the bytes the download would carry), then load it
+        // back over the workspace, as a user would after reopening the app.
+        const saved = await page.evaluate(async () => {
+            const original = window.app._downloadBlob;
+            let blob = null;
+            window.app._downloadBlob = value => { blob = value; };
+            const ok = await window.app.saveProjectSession();
+            window.app._downloadBlob = original;
+            if (!ok || !blob) return null;
+            window.__project = blob;
+            const { unzipSync, strFromU8 } = await import('/node_modules/fflate/esm/browser.js');
+            const entries = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+            const session = JSON.parse(strFromU8(entries['session.json']));
+            return { names: Object.keys(entries), gridded: session.files[0].gridded, size: blob.size };
+        });
+        assert.ok(saved, 'the project is saved');
+        assert.equal(saved.gridded.files.length, 1, 'the dataset lists the file it was opened from');
+        assert.ok(saved.names.includes(saved.gridded.files[0].archivePath), 'and the archive carries it');
+        assert.equal(saved.gridded.view.groups.length, 2, 'the places travel with the session');
+        assert.equal(saved.gridded.view.palette, 'Cividis');
+        assert.deepEqual(saved.gridded.view.scale.range, [250, 300]);
+
+        const loaded = await page.evaluate(async () => {
+            const file = new File([window.__project], 'project.zip');
+            return window.app.loadSessionOrProjectFile(file, { replaceConfirmed: true, silent: true });
+        });
+        assert.equal(loaded, true, 'the project loads');
+        await page.waitForFunction(() => !document.getElementById('gridded-view')?.hidden, null, { timeout: 60000 });
+        await page.waitForTimeout(800);
+
+        const after = await page.evaluate(() => {
+            const view = window.app._griddedVisibleView();
+            const data = window.app.plotManager.files.get(view.fileId).data;
+            const node = Object.values(data.tree._children).find(child => child._griddedExtractions);
+            return {
+                files: window.app.files.size,
+                groups: view.groups.map(group => ({
+                    tag: group.tag, kind: group.kind, where: group.where, color: group.color,
+                    geometry: group.geometry,
+                    sets: group.sets.map(set => ({
+                        label: set.label, checked: set.checked, color: set.color, key: set.key,
+                        variableKey: set.variableKey, levelIndex: set.levelIndex,
+                        names: [...set.names], roles: [...set.roles],
+                    })),
+                })),
+                variableKey: view.variableKey,
+                selection: { ...view.selection },
+                palette: view.palette,
+                scale: { range: view.scale.range, source: view.scale.source },
+                folders: Object.entries(node._children).map(([folder, place]) => [folder, Object.keys(place._variables)]),
+                values: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, Array.from(variable.data)])),
+                labels: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, variable.displayName])),
+                traces: [...window.app.plotManager.plots.entries()]
+                    .filter(([, plot]) => plot.traces.some(trace => String(trace.varName).startsWith('grid:x')))
+                    .map(([panelId, plot]) => [panelId, plot.traces.map(trace => trace.varName).sort()]),
+                mapOpen: !document.getElementById('gridded-view').hidden,
+                rows: document.querySelectorAll('#gridded-view .gridded-result').length,
+            };
+        });
+        assert.equal(after.files, 1, 'one dataset, not one file per member');
+        assert.deepEqual(after.groups, before.groups, 'the places, their series, colours and ticks come back');
+        assert.deepEqual(after.folders, before.folders, 'the tree has the same folders and the same names');
+        assert.deepEqual(after.values, before.values, 'with the same values');
+        assert.deepEqual(after.labels, before.labels, 'and the same names on the curves');
+        assert.deepEqual(after.traces, before.traces, 'the panel that plotted them plots them again');
+        assert.equal(after.variableKey, before.variableKey);
+        assert.deepEqual(after.selection, before.selection, 'the variable, level and step of the map');
+        assert.equal(after.palette, 'Cividis');
+        assert.deepEqual(after.scale, { range: [250, 300], source: 'manual' }, 'the colour range as it was typed');
+        assert.equal(after.mapOpen, true, 'a project saved with the map open opens on it');
+        assert.equal(after.rows, 2, 'the panel lists both places');
+        // Another extraction after the restore gets its own name and tag.
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.fill('#gridded-view [data-input="lat"]', '-15');
+        await page.fill('#gridded-view [data-input="lon"]', '135');
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 3, null, { timeout: 60000 });
+        const fresh = await page.evaluate(() => {
+            const view = window.app._griddedVisibleView();
+            const data = window.app.plotManager.files.get(view.fileId).data;
+            const group = view.groups.at(-1);
+            return { tag: group.tag, names: group.sets[0].names, known: Object.keys(data.variables).filter(name => name.startsWith('grid:x')).length };
+        });
+        assert.equal(fresh.tag, 'P2', 'the next point is P2, not P1 again');
+        assert.equal(fresh.names.every(name => !Object.keys(before.values).includes(name)), true, 'and its series take new names');
+        assert.equal(fresh.known, Object.keys(before.values).length + 1);
+
+        // The same map as a view session (JSON, no data at all), applied over
+        // the file that is already open: the trash empties the list, the
+        // session puts every place, name and value back.
+        const mapState = () => page.evaluate(() => {
+            const view = window.app._griddedVisibleView();
+            const data = window.app.plotManager.files.get(view.fileId).data;
+            const node = Object.values(data.tree._children).find(child => child._griddedExtractions);
+            return {
+                tags: view.groups.map(group => group.tag),
+                folders: Object.entries(node._children).map(([folder, place]) => [folder, Object.keys(place._variables)]),
+                values: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, Array.from(variable.data)])),
+            };
+        });
+        const beforeView = await mapState();
+        const viewJson = await page.evaluate(async () => {
+            const original = window.app._downloadBlob;
+            let blob = null;
+            window.app._downloadBlob = value => { blob = value; };
+            await window.app.saveViewSession();
+            window.app._downloadBlob = original;
+            return blob ? blob.text() : null;
+        });
+        assert.equal(viewJson ? JSON.parse(viewJson).files[0].gridded.view.groups.length : 0, 3,
+            'a view session carries the places too');
+        await page.click('#gridded-view [data-action="remove-all"]');
+        await page.click('.modal-overlay .modal-btn-confirm');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 0);
+        assert.equal((await extractions(page)).length, 0);
+        // The dialog that says the session was applied is answered as it comes.
+        const applying = page.evaluate(json => window.app.loadSessionOrProjectFile(new File([json], 'view.json')), viewJson);
+        await page.waitForSelector('.modal-overlay.show .modal-btn-confirm', { timeout: 60000 });
+        await page.click('.modal-overlay.show .modal-btn-confirm');
+        await applying;
+        await page.waitForTimeout(500);
+        assert.deepEqual(await mapState(), beforeView, 'the JSON alone puts the places, their names and their values back');
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
+    // 7. A dataset of several files (here the CDS ZIP read as one): the
+    //    project keeps every file and the way they were joined.
+    {
+        const { context, page, errors } = await openApp();
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'era5-like-instant-accum.zip'));
+        await page.waitForSelector('.modal-overlay.show .modal-btn-confirm', { timeout: 60000 });
+        await page.click('.modal-overlay.show .modal-btn-confirm');
+        await mapShown(page);
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.fill('#gridded-view [data-input="lat"]', '44');
+        await page.fill('#gridded-view [data-input="lon"]', '92');
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 1, null, { timeout: 60000 });
+        // The same place on the other variable, whose unit is not the same
+        // (total precipitation in m against a temperature in K): the preview
+        // gives it its own axis instead of reading it in kelvin.
+        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="reuse-group"]');
+        await page.selectOption('#gridded-view [data-role="variable"]', '/tp');
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups[0].sets.length === 2, null, { timeout: 60000 });
+        await page.waitForTimeout(600);
+        const axes = await page.evaluate(() => {
+            const chart = document.querySelector('#gridded-view [data-role="preview-chart"]');
+            const layout = chart._fullLayout;
+            return {
+                y: layout.yaxis.title.text,
+                y2: layout.yaxis2?.title.text,
+                y2Shown: !!layout.yaxis2?.visible,
+                traces: chart.data.map(trace => [trace.name, trace.yaxis || 'y']),
+            };
+        });
+        assert.equal(axes.y, 'K', 'the first unit keeps the left axis');
+        assert.equal(axes.y2, 'm', 'the other one gets the axis on the right');
+        assert.equal(axes.y2Shown, true);
+        assert.deepEqual(axes.traces.map(([, axis]) => axis), ['y', 'y2'], 'each curve is drawn against its own unit');
+        assert.ok(axes.traces.every(([name]) => /\[(K|m)\]$/.test(name)), `mixed units are named in the legend (${JSON.stringify(axes.traces)})`);
+        const before = await page.evaluate(() => {
+            const entry = [...window.app.files.values()][0];
+            const view = window.app._griddedVisibleView();
+            const data = window.app.plotManager.files.get(view.fileId).data;
+            return {
+                members: entry.gridded.files.map(file => file.name).sort(),
+                options: entry.gridded.options,
+                name: entry.name,
+                variables: [...document.querySelectorAll('#gridded-view [data-role="variable"] option')].map(option => option.value).sort(),
+                values: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, Array.from(variable.data)])),
+            };
+        });
+        assert.equal(before.members.length, 2, 'the ZIP was opened as one dataset of two files');
+
+        const saved = await page.evaluate(async () => {
+            const original = window.app._downloadBlob;
+            let blob = null;
+            window.app._downloadBlob = value => { blob = value; };
+            const ok = await window.app.saveProjectSession();
+            window.app._downloadBlob = original;
+            if (!ok || !blob) return null;
+            window.__project = blob;
+            const { unzipSync, strFromU8 } = await import('/node_modules/fflate/esm/browser.js');
+            const entries = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+            const session = JSON.parse(strFromU8(entries['session.json']));
+            return {
+                names: Object.keys(entries),
+                gridded: session.files[0].gridded,
+                sizes: session.files[0].gridded.files.map(member => entries[member.archivePath]?.length || 0),
+            };
+        });
+        assert.ok(saved, 'a dataset of several files can be saved at all (it has no single file of its own)');
+        assert.equal(saved.gridded.files.length, 2, 'both files are listed');
+        assert.deepEqual(saved.gridded.files.map(member => member.name).sort(), before.members);
+        assert.ok(saved.sizes.every(size => size > 0), `both files are in the archive (${saved.sizes})`);
+        assert.equal(saved.gridded.options.mode, 'merge-variables', 'and the way they were joined');
+
+        const loaded = await page.evaluate(async () => {
+            const file = new File([window.__project], 'project.zip');
+            return window.app.loadSessionOrProjectFile(file, { replaceConfirmed: true, silent: true });
+        });
+        assert.equal(loaded, true);
+        await page.waitForFunction(() => !document.getElementById('gridded-view')?.hidden, null, { timeout: 60000 });
+        await page.waitForTimeout(500);
+        const after = await page.evaluate(() => {
+            const entry = [...window.app.files.values()][0];
+            const view = window.app._griddedVisibleView();
+            const data = window.app.plotManager.files.get(view.fileId).data;
+            return {
+                files: window.app.files.size,
+                members: entry.gridded.files.map(file => file.name).sort(),
+                options: entry.gridded.options,
+                name: entry.name,
+                variables: [...document.querySelectorAll('#gridded-view [data-role="variable"] option')].map(option => option.value).sort(),
+                values: Object.fromEntries(Object.entries(data.variables)
+                    .filter(([name]) => name.startsWith('grid:x'))
+                    .map(([name, variable]) => [name, Array.from(variable.data)])),
+            };
+        });
+        assert.equal(after.files, 1, 'one dataset again, not two files');
+        assert.deepEqual(after.members, before.members);
+        assert.deepEqual(after.options, before.options);
+        assert.equal(after.name, before.name, 'with the name it had');
+        assert.deepEqual(after.variables, before.variables, 'both files\' variables are on the map again');
+        assert.deepEqual(after.values, before.values, 'and the series extracted from it');
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
+    console.log('Gridded netCDF e2e passed: map, point and box extractions, slider, plotting, CDS ZIP, series files untouched, GRIB message, desktop path, projects that keep the map.');
 } finally {
     await browser.close();
     await server.close();

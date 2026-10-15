@@ -226,6 +226,10 @@ wheel or pinch to zoom); an analysis panel next to it turns it into series:
   and maximum for every time step. The box moves from inside and resizes from
   its edges.
 
+An **inspector** at the top of the panel reads the cell under the pointer: where
+it is, its row and column in the grid, its value with units, and the step and
+level on screen. "Copy" puts that reading on the clipboard as one line.
+
 Both tools read the level on the map, or any set of levels (all of them, say),
 in one pass: one series per level. Each place gets a colour and a tag (P1,
 R1…) shared by the map, the panel list and the preview, and is a folder of the
@@ -237,11 +241,23 @@ to extract or remove it, Delete removes the selected one, and the trash icon emp
 Extractions become variables of the file in the explorer, named by the
 quantity ("2 metre temperature (t2m) · 45°N 90°E"), where FFT, integrals,
 heatmaps and cursors work on them; sending them again updates the same panel.
+In the preview under the map, curves that do not share a unit do not share an
+axis either: the first unit keeps the left axis and the others go to a second
+one on the right, each axis titled with the units it carries.
 Units show their powers as superscripts ("m s**-1" → m s⁻¹). The map and the extractions export through
 the same dialog as the plot panels (CSV, PNG, SVG). The ZIP the Copernicus CDS sends for mixed instantaneous/accumulated
 requests is listed and can be opened as one dataset, and several files with
 the same grid (consecutive months) can be joined in time. CF calendars
 `noleap`, `all_leap`, `360_day` and `julian` are decoded.
+
+A saved **project** keeps the map whole: every file the dataset was opened from
+(a CDS ZIP read as one dataset, or months joined in time, keep all of theirs)
+and the way they were joined, the places extracted on it with their series and
+their values, what the map was showing (variable, level and step, palette,
+colour range, zoom, and whether the list of series was folded away) and the
+panels that plotted those series. Opening the project puts all of it back, with
+the same names in the variable tree; a view session (JSON) does the same over
+the file opened again.
 
 **Series files** (station data, ARM, PyPSA) keep the series explorer: CF time
 coordinates, units, scale and offset packing, missing values, groups and
