@@ -1293,6 +1293,29 @@ resumen de buscador):
   modo de unión y el mapa; una serie extraída no se busca en el archivo al
   restaurar.
 
+**Valor en un punto y ayuda de cálculo:**
+
+- Punto: "Celda más cercana" (por defecto, como el CDS y CDO `remapnn`) o
+  "Interpolación bilineal" entre las cuatro celdas alrededor del punto (como
+  CDO `remapbil` o `xarray.interp`). Cruza el meridiano 0/360 de una grilla
+  global; fuera de la grilla toma el borde; una vecina sin dato se deja afuera
+  y las demás se vuelven a pesar. Varios niveles se interpolan en la misma
+  lectura (`pointSeries(..., { method: 'bilinear', levels })`).
+- Un lugar bilineal es el punto mismo ("30°N 22.5°E (bilineal)") y es otro
+  lugar que uno de celda más cercana en las mismas coordenadas; el método se
+  guarda con el lugar y en la sesión.
+- En el mapa: bajo el anillo naranja, un contorno punteado muestra de dónde
+  sale el valor (los bordes de la celda más cercana, o el cuadrado que une los
+  centros de las cuatro vecinas, marcados con puntos); sigue al anillo al
+  arrastrarlo y cambia con el método. Un punto extraído bilineal se dibuja
+  como rombo, uno de celda más cercana como círculo.
+- La región no cambia: media ponderada por área (cos φ o área de celda con
+  `lat_bnds`), celdas enteras si su centro cae en el recuadro (como CDO
+  `sellonlatbox` y `xarray.sel`), mínimo y máximo sin ponderar. Las fracciones
+  de celda quedan para las regiones con forma de la fase 2.
+- Un "?" junto a "1 · Extraer una serie temporal" abre un recuadro (fondo
+  difuminado) que explica todo esto.
+
 **Pendiente de esta parte:**
 
 - No probado dentro de Electron mismo: el camino del renderer sí, contra el

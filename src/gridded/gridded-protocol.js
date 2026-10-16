@@ -35,7 +35,7 @@ export async function handleGriddedRequest({ GriddedDataset, datasets }, op, pay
         return { result: map, transfer: transferOf(map.values) };
     }
     case 'point': {
-        const series = await dataset().pointSeries(payload.variable, payload.selection || {}, payload.lat, payload.lon, job, { levels: payload.levels });
+        const series = await dataset().pointSeries(payload.variable, payload.selection || {}, payload.lat, payload.lon, job, { levels: payload.levels, method: payload.method });
         const parts = series.byLevel || [series];
         return { result: series, transfer: transferOf(...parts.map(part => part.values)) };
     }

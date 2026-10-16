@@ -219,7 +219,11 @@ on zero), with the one in use marked in blue. The map opens in **Navigate** (dra
 wheel or pinch to zoom); an analysis panel next to it turns it into series:
 
 - **Point**: click the map (or drag the orange ring, or type a latitude and
-  longitude), then extract the time series of the nearest grid cell.
+  longitude), then extract the time series of the nearest grid cell, or one
+  interpolated bilinearly between the four cells around the point. A dotted
+  outline under the ring shows the cells the value comes from (the edges of
+  the nearest cell, or the square joining the four cell centres); extracted
+  bilinear points are drawn as diamonds, nearest-cell points as circles.
 - **Region**: draw a box or type its North/West/East/South limits (as in the
   Copernicus CDS form), adjust it on the map, then compute the area-weighted
   (cos latitude, or cell area when the file has latitude bounds) mean, minimum
@@ -230,7 +234,8 @@ An **inspector** at the top of the panel reads the cell under the pointer: where
 it is, its row and column in the grid, its value with units, and the step and
 level on screen. "Copy" puts that reading on the clipboard as one line.
 
-Both tools read the level on the map, or any set of levels (all of them, say),
+A "?" next to the tools explains how a point's value and a region's mean,
+minimum and maximum are computed. Both tools read the level on the map, or any set of levels (all of them, say),
 in one pass: one series per level. Each place gets a colour and a tag (P1,
 R1…) shared by the map, the panel list and the preview, and is a folder of the
 variable tree: "+" on its row puts it back on the map, and whatever is

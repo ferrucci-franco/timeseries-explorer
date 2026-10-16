@@ -118,6 +118,29 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
             assert.deepEqual(Array.from(level[key]), Array.from(single[key]), `region ${key}, level ${level.index}`);
         }
     }
+    // Bilinear interpolation between the four cells around the point. The
+    // fixture's field is linear in lat and lon, so inside a cell it is exact.
+    const bilinear = await dataset.pointSeries('/t2m', {}, 30, 22.5, {}, { method: 'bilinear' });
+    assert.equal(bilinear.method, 'bilinear');
+    assert.deepEqual(bilinear.cell, { lat: 30, lon: 22.5 }, 'the point itself, not a cell');
+    assert.equal(bilinear.neighbours.length, 4);
+    close(bilinear.neighbours.reduce((sum, item) => sum + item.weight, 0), 1, 'weights add up to one');
+    bilinear.values.forEach((value, step) => close(value, field(30, 22.5, step, 5), `bilinear step ${step}`));
+    // Across the 0/360 seam of a global grid: between 315 E and 0 E.
+    const seam = await dataset.pointSeries('/t2m', {}, -30, -22.5, {}, { method: 'bilinear' });
+    close(seam.values[0], (field(-15, 315, 0, 5) + field(-45, 315, 0, 5) + field(-15, 0, 0, 5) + field(-45, 0, 0, 5)) / 4, 'wraps the seam');
+    // Beyond the outermost latitude the edge row is kept.
+    const edge = await dataset.pointSeries('/t2m', {}, -80, 22.5, {}, { method: 'bilinear' });
+    close(edge.values[0], field(-75, 22.5, 0, 5), 'edge value past the last latitude');
+    // A neighbour without data (t2m is missing at 75 N 0 E) is left out.
+    const gap = await dataset.pointSeries('/t2m', {}, 60, 22.5, {}, { method: 'bilinear' });
+    close(gap.values[0], (field(45, 0, 0, 5) + field(45, 45, 0, 5) + field(75, 45, 0, 5)) / 3, 'renormalised over the cells with data');
+    // With levels, every level is interpolated.
+    const bilinearLevels = await dataset.pointSeries('/t', {}, 30, 22.5, {}, { method: 'bilinear', levels: [0, 1] });
+    bilinearLevels.byLevel.forEach(({ index, values }) => close(values[2], field(30, 22.5, 2, 0, index), `bilinear level ${index}`));
+    // Nearest stays the default.
+    assert.equal((await dataset.pointSeries('/t2m', {}, 30, 22.5)).method, 'nearest');
+
     // A variable without levels ignores the list.
     assert.ok((await dataset.pointSeries('/t2m', {}, 44, 92, {}, { levels: [0, 1] })).values, 'no level axis: one series');
     const job = { cancelled: true };

@@ -993,3 +993,58 @@ html.compact .gridded-time-label {
 .gridded-map .shapelayer path {
     pointer-events: none !important;
 }
+
+/* "1 · Extract a time series" carries a "?" that explains how a point's
+   value and a region's statistics are computed. */
+.gridded-tools-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.gridded-view .gridded-help-btn {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+/* How the value at a point is read. */
+.gridded-point-method {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.45rem;
+    font-size: 0.78rem;
+}
+
+.gridded-point-method > span {
+    color: var(--text-secondary);
+}
+
+.gridded-point-method select {
+    flex: 1;
+    min-width: 0;
+}
+
+.gridded-help-dialog .gridded-help-body {
+    text-align: left;
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
+.gridded-help-dialog .gridded-help-body h4 {
+    margin: 0.8rem 0 0.25rem;
+    font-size: 0.9rem;
+}
+
+.gridded-help-dialog .gridded-help-body h4:first-child {
+    margin-top: 0;
+}
+
+.gridded-help-dialog .gridded-help-body p {
+    margin: 0 0 0.45rem;
+}

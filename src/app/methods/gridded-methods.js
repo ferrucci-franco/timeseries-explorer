@@ -114,6 +114,60 @@ export function drawableGrid(map, xRange = null, yRange = null, maxCells = MAX_D
     };
 }
 
+/**
+ * The cells a point at (lat, lon) is read from, as a closed outline on the
+ * map: for "nearest", the edges of that one cell; for "bilinear", the square
+ * joining the centres of its four neighbours (fewer at the edge of a regional
+ * grid or beyond the outermost latitude), whose corners are marked. Mirrors
+ * GriddedDataset._bilinearCells, in the map's display longitudes.
+ */
+function pointStencil(map, lat, lon, method) {
+    const lats = map?.lat;
+    const lons = map?.lon;
+    if (!lats?.length || !lons?.length || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const last = lons.length - 1;
+    let x = lon;
+    if (lons[last] > 180 && x < 0) x += 360;
+    if (lons[0] < 0 && x > 180) x -= 360;
+    const outline = (west, east, south, north) => ({
+        x: [west, east, east, west, west], y: [south, south, north, north, south],
+    });
+    const sortedLats = Array.from(lats).sort((a, b) => a - b);
+    if (method !== 'bilinear') {
+        const nearest = (values, target) => values.reduce((best, value, index) => (Math.abs(value - target) < Math.abs(values[best] - target) ? index : best), 0);
+        const half = (values, index) => (values.length < 2 ? 0.5 : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
+        const row = nearest(lats, lat);
+        const column = nearest(lons, x);
+        const dy = half(lats, row);
+        const dx = half(lons, column);
+        return { ...outline(lons[column] - dx, lons[column] + dx, lats[row] - dy, lats[row] + dy), corners: false };
+    }
+    let low = 0;
+    while (low < sortedLats.length - 2 && sortedLats[low + 1] <= lat) low += 1;
+    let south = sortedLats[low];
+    let north = sortedLats[Math.min(low + 1, sortedLats.length - 1)];
+    // Beyond the outermost latitude only the edge row is read.
+    if (lat <= sortedLats[0]) north = south;
+    if (lat >= sortedLats[sortedLats.length - 1]) south = north = sortedLats[sortedLats.length - 1];
+    const step = last > 0 ? (lons[last] - lons[0]) / last : 360;
+    const global = last > 0 && Math.abs(lons[last] - lons[0] + step - 360) < step / 2;
+    let west;
+    let east;
+    if (x >= lons[0] && x <= lons[last]) {
+        let index = 0;
+        while (index < last - 1 && lons[index + 1] <= x) index += 1;
+        west = lons[index];
+        east = lons[Math.min(index + 1, last)];
+    } else if (global) {
+        // Across the seam: the last column and the first, one turn apart.
+        west = x < lons[0] ? lons[last] - 360 : lons[last];
+        east = x < lons[0] ? lons[0] : lons[0] + 360;
+    } else {
+        west = east = x < lons[0] ? lons[0] : lons[last];
+    }
+    return { ...outline(west, east, south, north), corners: true };
+}
+
 // How close to the orange box's edge a pointer resizes it rather than moving
 // it, in pixels: a mouse is precise, a finger is not.
 const BOX_EDGE_PX = { mouse: 6, touch: 16 };
@@ -645,6 +699,9 @@ export function installGriddedMethods(TargetClass) {
             // Navigate first: a click must not place anything before the
             // user has picked a tool.
             mode: 'navigate',
+            // The value at a point: the nearest grid cell, or bilinear
+            // interpolation between the four around it.
+            pointMethod: 'nearest',
             pendingPoint: null,
             pendingBox: null,
             // The point or box picked on the map: { kind: 'pending-point' |
@@ -821,7 +878,7 @@ export function installGriddedMethods(TargetClass) {
                         <button type="button" class="gridded-inspector-copy" data-action="copy-inspector"></button>
                     </section>
                     <section class="gridded-panel-section">
-                        <h3 data-role="tools-heading"></h3>
+                        <h3 class="gridded-tools-heading"><span data-role="tools-heading"></span><button type="button" class="fft-help-btn gridded-help-btn" data-action="methods-help">?</button></h3>
                         <div class="gridded-modes" role="radiogroup" data-role="modes">
                             <button type="button" class="gridded-mode" data-mode="navigate"></button>
                             <button type="button" class="gridded-mode" data-mode="point"></button>
@@ -833,6 +890,13 @@ export function installGriddedMethods(TargetClass) {
                                 <label><span data-role="lat-label"></span><input type="number" step="any" min="-90" max="90" data-input="lat"></label>
                                 <label><span data-role="lon-label"></span><input type="number" step="any" min="-180" max="360" data-input="lon"></label>
                             </div>
+                            <label class="gridded-point-method">
+                                <span data-role="point-method-label"></span>
+                                <select data-role="point-method">
+                                    <option value="nearest"></option>
+                                    <option value="bilinear"></option>
+                                </select>
+                            </label>
                             <div class="gridded-form-actions">
                                 <button type="button" class="gridded-primary" data-action="extract-point"></button>
                                 <button type="button" data-action="clear-point"></button>
@@ -989,6 +1053,13 @@ export function installGriddedMethods(TargetClass) {
                 this._griddedDrawMap(current);
             });
         });
+        root.querySelector('[data-role="point-method"]').addEventListener('change', event => {
+            const current = view();
+            if (!current) return;
+            current.pointMethod = event.target.value === 'bilinear' ? 'bilinear' : 'nearest';
+            // The outline under the ring shows the cells the new method reads.
+            if (current.pendingPoint) this._griddedDrawMap(current);
+        });
         // The levels an extraction reads: the map's by default, or any set
         // of them, all read together.
         const levelsMenu = root.querySelector('[data-role="levels-menu"]');
@@ -1096,6 +1167,7 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'reuse-group') this._griddedReusePlace(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'remove-all') this._griddedRemoveAll(current);
             else if (action === 'toggle-results') this._griddedToggleResults(current);
+            else if (action === 'methods-help') this._griddedShowMethodsHelp();
             else if (action === 'export-map') this._griddedExportMap(current);
             else if (action === 'export-series') this._griddedExportSeries(current);
             else if (action === 'plot') this._griddedPlotChecked(current);
@@ -1232,6 +1304,11 @@ export function installGriddedMethods(TargetClass) {
         set('[data-action="copy-inspector"]', 'griddedInspectorCopy');
         set('[data-action="copy-inspector"]', 'griddedInspectorCopyTitle', 'title');
         set('[data-role="tools-heading"]', 'griddedToolsHeading');
+        set('[data-action="methods-help"]', 'griddedMethodsHelp', 'title');
+        set('[data-action="methods-help"]', 'griddedMethodsHelp', 'ariaLabel');
+        set('[data-role="point-method-label"]', 'griddedPointMethod');
+        set('[data-role="point-method"] option[value="nearest"]', 'griddedPointNearest');
+        set('[data-role="point-method"] option[value="bilinear"]', 'griddedPointBilinear');
         set('[data-mode="navigate"]', 'griddedModeNavigate');
         set('[data-mode="point"]', 'griddedModePoint');
         set('[data-mode="region"]', 'griddedModeRegion');
@@ -1582,6 +1659,8 @@ export function installGriddedMethods(TargetClass) {
         };
         set('lat', view.pendingPoint?.lat);
         set('lon', view.pendingPoint?.lon);
+        const method = this._griddedEl('point-method');
+        if (method) method.value = view.pointMethod === 'bilinear' ? 'bilinear' : 'nearest';
         set('north', view.pendingBox?.latMax);
         set('south', view.pendingBox?.latMin);
         set('west', view.pendingBox?.lonMin);
@@ -1858,8 +1937,10 @@ export function installGriddedMethods(TargetClass) {
                 type: 'scatter', mode: 'markers',
                 x: points.map(group => group.geometry.lon), y: points.map(group => group.geometry.lat),
                 marker: {
-                    symbol: 'circle',
-                    size: points.map(group => (group.id === selectedId ? 15 : 11)),
+                    // A diamond for a value interpolated between cells, a
+                    // circle for the value of one cell.
+                    symbol: points.map(group => (group.method === 'bilinear' ? 'diamond' : 'circle')),
+                    size: points.map(group => (group.id === selectedId ? 15 : 11) + (group.method === 'bilinear' ? 2 : 0)),
                     color: points.map(group => group.color),
                     line: { color: points.map(group => (group.id === selectedId ? colors.selected : '#ffffff')), width: points.map(group => (group.id === selectedId ? 3 : 2)) },
                 },
@@ -1904,6 +1985,17 @@ export function installGriddedMethods(TargetClass) {
         // (A shape sized in pixels would drag by itself, but once one has
         // been on the map Plotly converts the next rectangle drawn wrongly.)
         if (view.pendingPoint) {
+            // The cell or cells the point will be read from, under the ring.
+            const stencil = pointStencil(view.map, view.pendingPoint.lat, view.pendingPoint.lon, view.pointMethod);
+            if (stencil) {
+                traces.push({
+                    type: 'scatter', mode: stencil.corners ? 'lines+markers' : 'lines', name: 'pending-stencil',
+                    x: stencil.x, y: stencil.y,
+                    line: { color: colors.pending, width: 1.5, dash: 'dot' },
+                    marker: { size: 6, color: colors.pending, line: { color: '#ffffff', width: 1 } },
+                    hoverinfo: 'skip', showlegend: false,
+                });
+            }
             traces.push({
                 type: 'scatter', mode: 'markers', name: 'pending-point',
                 x: [view.pendingPoint.lon], y: [view.pendingPoint.lat],
@@ -2390,11 +2482,17 @@ export function installGriddedMethods(TargetClass) {
         };
         if (target.kind === 'ring') {
             const trace = (div.data || []).findIndex(item => item.name === 'pending-point');
+            const stencilTrace = (div.data || []).findIndex(item => item.name === 'pending-stencil');
             return {
                 move: at => {
                     view.pendingPoint = { lat: roundCoordinate(Math.max(-90, Math.min(90, at.lat))), lon: roundCoordinate(at.lon) };
                     const { lat, lon } = view.pendingPoint;
-                    if (trace >= 0) schedule(() => Plotly.restyle(div, { x: [[lon]], y: [[lat]] }, [trace]));
+                    const stencil = stencilTrace >= 0 ? pointStencil(view.map, lat, lon, view.pointMethod) : null;
+                    if (trace >= 0) {
+                        schedule(() => (stencil
+                            ? Plotly.restyle(div, { x: [[lon], stencil.x], y: [[lat], stencil.y] }, [trace, stencilTrace])
+                            : Plotly.restyle(div, { x: [[lon]], y: [[lat]] }, [trace])));
+                    }
                     this._griddedSyncInputs(view);
                 },
                 end: () => finish('pending-point'),
@@ -2704,20 +2802,25 @@ export function installGriddedMethods(TargetClass) {
         if (!at || !this._griddedCanExtract(view, variable)) return;
         const { lat, lon } = at;
         const levels = this._griddedExtractionLevels(view, variable);
+        const method = view.pointMethod === 'bilinear' ? 'bilinear' : 'nearest';
         const result = await this._griddedRunJob(view, 'point', {
-            variable: variable.key, selection: view.selection, lat, lon, levels,
+            variable: variable.key, selection: view.selection, lat, lon, levels, method,
         }, i18n.t('griddedReadingPoint').replace('{lat}', formatCoordinate(lat, 'N', 'S')).replace('{lon}', formatCoordinate(lon, 'E', 'W')));
         if (!result) return;
-        const where = `${formatCoordinate(result.cell.lat, 'N', 'S')} ${formatCoordinate(result.cell.lon, 'E', 'W')}`;
+        const coordinates = `${formatCoordinate(result.cell.lat, 'N', 'S')} ${formatCoordinate(result.cell.lon, 'E', 'W')}`;
+        // A bilinear place is the point itself and says so; a nearest one is
+        // the grid cell it was read from.
+        const where = method === 'bilinear' ? `${coordinates} (${i18n.t('griddedBilinearTag')})` : coordinates;
         const parts = result.byLevel || [{ index: null, values: result.values }];
-        const description = i18n.t('griddedPointDescription')
+        const description = i18n.t(method === 'bilinear' ? 'griddedPointDescriptionBilinear' : 'griddedPointDescription')
             .replace('{variable}', variable.longName || variable.name)
-            .replace('{where}', where);
+            .replace('{where}', coordinates);
         view.pendingPoint = null;
         if (view.selected?.kind === 'pending-point') view.selected = null;
         this._griddedSyncInputs(view);
         const outcome = this._griddedAddSeries(view, {
             kind: 'point',
+            method,
             geometry: { lat: result.cell.lat, lon: result.cell.lon },
             where,
             variable,
@@ -2824,10 +2927,15 @@ export function installGriddedMethods(TargetClass) {
      *
      * @returns {{group: object, added: number}|null}
      */
-    proto._griddedAddSeries = function(view, { kind, geometry, where, note = '', variable, sets }) {
+    proto._griddedAddSeries = function(view, { kind, method = null, geometry, where, note = '', variable, sets }) {
         const data = this.plotManager.files.get(view.fileId)?.data;
         if (!data) return null;
-        let group = (view.groups || []).find(item => item.kind === kind && this._griddedSameGeometry(kind, item.geometry, geometry));
+        // A point read by interpolation and one read from the nearest cell
+        // are different places, even at the same coordinates.
+        const pointMethod = kind === 'point' ? (method || 'nearest') : null;
+        let group = (view.groups || []).find(item => item.kind === kind
+            && (kind !== 'point' || (item.method || 'nearest') === pointMethod)
+            && this._griddedSameGeometry(kind, item.geometry, geometry));
         if (!group) {
             view.groupCount = (view.groupCount || 0) + 1;
             const counters = view.tagCounters || (view.tagCounters = { point: 0, region: 0 });
@@ -2836,6 +2944,7 @@ export function installGriddedMethods(TargetClass) {
                 id: `g${view.groupCount}`,
                 kind,
                 tag: `${kind === 'point' ? 'P' : 'R'}${counters[kind]}`,
+                ...(pointMethod ? { method: pointMethod } : {}),
                 geometry,
                 where,
                 note,
@@ -2989,11 +3098,21 @@ export function installGriddedMethods(TargetClass) {
      * Put a place back on the map as the orange point or box, to extract
      * another variable or other levels there: the new series join its folder.
      */
+    /** How a point's value and a region's statistics are computed, on demand. */
+    proto._griddedShowMethodsHelp = function() {
+        Modal.alert(i18n.t('griddedMethodsHelpTitle'), `<div class="gridded-help-body">${i18n.t('griddedMethodsHelpBody')}</div>`, {
+            html: true,
+            icon: false,
+            className: 'gridded-help-dialog',
+        });
+    };
+
     proto._griddedReusePlace = function(view, id) {
         const group = (view.groups || []).find(item => item.id === id);
         if (!group) return;
         if (group.kind === 'point') {
             view.pendingPoint = { ...group.geometry };
+            view.pointMethod = group.method === 'bilinear' ? 'bilinear' : 'nearest';
             view.selected = { kind: 'pending-point' };
             this._griddedSetMode(view, 'point');
         } else {
@@ -3057,6 +3176,7 @@ export function installGriddedMethods(TargetClass) {
             },
             zoom: view.zoom ? { x: [...view.zoom.x], y: [...view.zoom.y] } : null,
             extractLevels: view.extractLevels?.length ? [...view.extractLevels] : null,
+            pointMethod: view.pointMethod === 'bilinear' ? 'bilinear' : 'nearest',
             resultsHidden: !!view.resultsHidden,
             plotPanelId: view.plotPanelId ?? null,
             counters: {
@@ -3070,6 +3190,7 @@ export function installGriddedMethods(TargetClass) {
                 id: group.id,
                 kind: group.kind,
                 tag: group.tag,
+                ...(group.method ? { method: group.method } : {}),
                 geometry: { ...group.geometry },
                 where: group.where,
                 note: group.note || '',
@@ -3147,6 +3268,7 @@ export function installGriddedMethods(TargetClass) {
             : null;
         view.extractLevels = Array.isArray(saved.extractLevels) && saved.extractLevels.length ? [...saved.extractLevels] : null;
         view.resultsHidden = !!saved.resultsHidden;
+        view.pointMethod = saved.pointMethod === 'bilinear' ? 'bilinear' : 'nearest';
         if (saved.plotPanelId !== null && saved.plotPanelId !== undefined) view.plotPanelId = saved.plotPanelId;
         const counters = saved.counters || {};
         view.groupCount = Number(counters.groupCount) || 0;
@@ -3160,6 +3282,7 @@ export function installGriddedMethods(TargetClass) {
                 id: saveGroup.id,
                 kind: saveGroup.kind === 'region' ? 'region' : 'point',
                 tag: saveGroup.tag,
+                ...(saveGroup.kind !== 'region' ? { method: saveGroup.method === 'bilinear' ? 'bilinear' : 'nearest' } : {}),
                 geometry: { ...saveGroup.geometry },
                 where: saveGroup.where || '',
                 note: saveGroup.note || '',
