@@ -707,6 +707,17 @@ try {
             width: document.querySelector('.gridded-help-dialog').getBoundingClientRect().width / window.innerWidth,
         }));
         assert.ok(help.width >= 0.69, `the help uses most of the window's width (${help.width})`);
+        // Each section whole in its column (its heading never alone at the
+        // foot of one), in its own colour.
+        const sections = await page.$$eval('.gridded-help-dialog section', nodes => nodes.map(node => ({
+            heading: node.querySelector('h4').getBoundingClientRect().left,
+            last: node.lastElementChild.getBoundingClientRect().left,
+            colour: getComputedStyle(node.querySelector('h4')).color,
+        })));
+        assert.equal(sections.length, 3, 'point, region, levels and time');
+        sections.forEach(section => assert.ok(Math.abs(section.heading - section.last) < 2, `a section stays in one column (${JSON.stringify(sections)})`));
+        assert.equal(new Set(sections.map(section => section.colour)).size, 3, 'each section has its colour');
+        assert.match(help.text, /cos\(latitude\)/, 'the mean says it is weighted by cos(latitude)');
         assert.match(help.text, /Bilinear interpolation/, 'the help explains the point methods');
         assert.match(help.text, /weighted by area/, 'and the region statistics');
         assert.match(help.blur, /blur/, 'over a blurred page');
