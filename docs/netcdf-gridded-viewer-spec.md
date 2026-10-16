@@ -1104,7 +1104,11 @@ resumen de buscador):
 - **Panel de análisis** a la derecha del mapa, que se lee como el flujo de
   trabajo (rediseñado tras la primera prueba con datos reales):
   1. **Extraer una serie temporal.** Tres modos:
-     - **Navegar:** arrastrar mueve el mapa.
+     - **Navegar:** arrastrar mueve el mapa (cursor de mano, que se cierra
+       al apretar). En un trackpad, dos dedos hacia arriba o abajo hacen zoom
+       y en cualquier otra dirección (de costado o en diagonal) mueven el
+       mapa; un gesto que empieza de costado sigue moviendo hasta soltar los
+       dedos, como en los gráficos de series.
      - **Punto:** un clic coloca un anillo naranja y llena latitud y
        longitud, que también se pueden escribir; el anillo se arrastra. El
        lugar sale del píxel del clic, no del hover de Plotly (que llega tarde

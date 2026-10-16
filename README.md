@@ -215,8 +215,9 @@ colour scale is fitted to the whole period and stays fixed while the time
 moves, so colours compare across steps. One "Color range" button holds it all:
 the two ends (typed by hand), the palette, and the fits (whole period, exact
 period, current step, visible area; optional percentile clipping and centring
-on zero), with the one in use marked in blue. The map opens in **Navigate** (drag or right-drag to pan,
-wheel or pinch to zoom); an analysis panel next to it turns it into series:
+on zero), with the one in use marked in blue. The map opens in **Navigate** (a hand: drag or right-drag to pan,
+wheel or pinch to zoom; on a trackpad, two fingers up or down zoom and in any
+other direction pan); an analysis panel next to it turns it into series:
 
 - **Point**: click the map (or drag the orange ring, or type a latitude and
   longitude), then extract the time series of the nearest grid cell, or one

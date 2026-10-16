@@ -233,6 +233,54 @@ function bindRightDragPan(div, state = {}, onEnd = null) {
     }, true);
 }
 
+/**
+ * Two fingers on a trackpad: a swipe up or down zooms (Plotly's wheel zoom,
+ * as a mouse wheel does), a swipe in any other direction pans the map, both
+ * ways at once. A swipe that starts sideways or diagonally latches into a pan
+ * until the fingers rest, so it can turn vertical without starting to zoom
+ * (Windows also locks a swipe to one axis, and the lift-and-replace that
+ * moves the other way lands within the latch). A pinch (ctrlKey) zooms.
+ * The same gesture as on the explorer's plots (_installWheelPan).
+ */
+function bindWheelPan(div) {
+    if (!div || div._griddedWheelPan) return;
+    div._griddedWheelPan = true;
+    const LATCH_MS = 800;
+    // Steeper than this, from the vertical, is a pan (about 20 degrees).
+    const PAN_SLOPE = 0.35;
+    const state = { panning: false, timer: 0, frame: 0, dx: 0, dy: 0 };
+    const flush = () => {
+        state.frame = 0;
+        const xa = div._fullLayout?.xaxis;
+        const ya = div._fullLayout?.yaxis;
+        if (!xa?._length || !ya?._length) return;
+        const sx = ((xa.range[1] - xa.range[0]) / xa._length) * state.dx;
+        // deltaY > 0 scrolls down: the map shows what is further south.
+        const sy = -((ya.range[1] - ya.range[0]) / ya._length) * state.dy;
+        state.dx = 0;
+        state.dy = 0;
+        Plotly.relayout(div, {
+            'xaxis.range': [xa.range[0] + sx, xa.range[1] + sx],
+            'yaxis.range': [ya.range[0] + sy, ya.range[1] + sy],
+        });
+    };
+    div.addEventListener('wheel', event => {
+        if (!state.panning) {
+            if (event.ctrlKey || Math.abs(event.deltaX) <= PAN_SLOPE * Math.abs(event.deltaY)) return;
+            state.panning = true;
+        }
+        clearTimeout(state.timer);
+        state.timer = setTimeout(() => { state.panning = false; }, LATCH_MS);
+        // Before Plotly's own wheel handler, which would zoom.
+        event.preventDefault();
+        event.stopPropagation();
+        const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (div.clientHeight || 800) : 1;
+        state.dx += event.deltaX * scale;
+        state.dy += event.deltaY * scale;
+        if (!state.frame) state.frame = requestAnimationFrame(flush);
+    }, { capture: true, passive: false });
+}
+
 // A drawn box or a click lands between pixels; two decimals of a degree is
 // about a kilometre, finer than any reanalysis grid.
 function roundCoordinate(value) {
@@ -1644,6 +1692,7 @@ export function installGriddedMethods(TargetClass) {
         root.querySelector('[data-form="point"]').hidden = view.mode !== 'point';
         root.querySelector('[data-form="region"]').hidden = view.mode !== 'region';
         const map = root.querySelector('[data-role="map"]');
+        map.classList.toggle('gridded-cursor-navigate', view.mode === 'navigate');
         map.classList.toggle('gridded-cursor-point', view.mode === 'point');
         map.classList.toggle('gridded-cursor-region', view.mode === 'region');
         this._griddedSyncLevels(view);
@@ -2244,8 +2293,16 @@ export function installGriddedMethods(TargetClass) {
         // The boxes take no pointer events (gridded.css), so the wheel always
         // reaches the plot, over a box too.
         div.addEventListener('wheel', () => { interaction.wheelAt = Date.now(); }, { capture: true, passive: true });
-        div.addEventListener('pointerdown', () => { interaction.pressed = true; }, { capture: true });
-        const release = () => { interaction.pressed = false; };
+        // Pressed, the open hand of Navigate closes (Plotly's drag cover
+        // takes the cursor of the plot at the press).
+        div.addEventListener('pointerdown', event => {
+            interaction.pressed = true;
+            if (event.button === 0) div.classList.add('gridded-pressed');
+        }, { capture: true });
+        const release = () => {
+            interaction.pressed = false;
+            div.classList.remove('gridded-pressed');
+        };
         window.addEventListener('pointerup', release, { capture: true });
         window.addEventListener('pointercancel', release, { capture: true });
         div.addEventListener('pointerdown', event => {
@@ -2360,6 +2417,7 @@ export function installGriddedMethods(TargetClass) {
         bindRightDragPan(div, interaction, pan => {
             if (!pan.moved && pan.menuAt) this._griddedOpenMenuAt(div, pan.menuAt);
         });
+        bindWheelPan(div);
         div.addEventListener('contextmenu', event => {
             const at = this._griddedEventCoords(div, event);
             if (!at) return;
