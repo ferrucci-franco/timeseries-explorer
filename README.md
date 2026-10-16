@@ -231,6 +231,13 @@ other direction pan); an analysis panel next to it turns it into series:
   and maximum for every time step. The box moves from inside and resizes from
   its edges.
 
+On a **phone** the map takes the width of the screen (the colour bar under
+it, upright) and is as tall as the grid needs; the time bar, the tools and the
+extractions scroll under it. A finger pans and pinches the map, a tap places
+the point, a finger draws or drags the box; once a point or a box is placed,
+"Extract" floats over the map, and holding a point or a box opens its menu
+(extract, reuse, remove).
+
 An **inspector** at the top of the panel reads the cell under the pointer: where
 it is, its row and column in the grid, its value with units, and the step and
 level on screen. "Copy" puts that reading on the clipboard as one line.
