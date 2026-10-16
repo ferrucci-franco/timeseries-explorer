@@ -359,15 +359,25 @@ proto._filterDesignRate = function() {
     const variable = sourceName ? data?.variables?.[sourceName] : null;
     if (!variable) return { ...blank, code: 'dataToolFilterDesignNoSource' };
     const time = this._resampleTimeContext?.(data);
-    const length = variable.data?.length || 0;
-    const values = time?.values && time.values.length === length ? time.values : null;
-
-    if (!values || time.kind === 'index') {
-        return { ...blank, ok: true, sampleRate: 1, unit: i18n.t('dataToolFilterDesignUnitCyclesPerSample'), kind: 'index', medianDt: 1 };
+    const perSample = { ...blank, ok: true, sampleRate: 1, unit: i18n.t('dataToolFilterDesignUnitCyclesPerSample'), kind: 'index', medianDt: 1 };
+    let info;
+    if (this._isDataToolLazyData?.(data)) {
+        // A lazy file's axis in memory is a sample of its rows, and its
+        // spacing says nothing about the file's: the step is measured over the
+        // whole file, by a pass of its own, once (_lazyAxisStepsNow). Until it
+        // is in, there is no rate to design against.
+        if (!time || time.kind === 'index') return perSample;
+        info = this._lazyAxisStepsNow(data);
+        if (!info?.timed) return info ? perSample : { ...blank, code: 'dataToolFilterDesignMeasuring', kind: time.kind };
+    } else {
+        const length = variable.data?.length || 0;
+        const values = time?.values && time.values.length === length ? time.values : null;
+        if (!values || time.kind === 'index') return perSample;
+        // Measured once per axis (`_axisStepInfo`): this runs on every sync of
+        // the panel, and on a long file the measurement is what the user
+        // waits for.
+        info = this._axisStepInfo(values);
     }
-    // Measured once per axis (`_axisStepInfo`): this runs on every sync of
-    // the panel, and on a long file the measurement is what the user waits for.
-    const info = this._axisStepInfo(values);
     if (!info.hasNominalStep || !(info.medianDt > 0)) {
         return {
             ...blank,
@@ -842,10 +852,18 @@ proto._filterAxisNote = function() {
     const variable = sourceName ? data?.variables?.[sourceName] : null;
     if (!variable) return '';
     const time = this._resampleTimeContext?.(data);
-    const values = time?.values;
-    if (!values || values.length !== variable.data?.length || time.kind === 'index') return '';
-
-    const info = this._axisStepInfo(values);
+    let info;
+    if (this._isDataToolLazyData?.(data)) {
+        // Measured over the whole file (see _filterDesignRate); nothing to say
+        // until it is.
+        if (!time || time.kind === 'index') return '';
+        info = this._lazyAxisStepsNow(data);
+        if (!info?.timed) return '';
+    } else {
+        const values = time?.values;
+        if (!values || values.length !== variable.data?.length || time.kind === 'index') return '';
+        info = this._axisStepInfo(values);
+    }
     if (!info.hasNominalStep) {
         return i18n.t(info.reason === 'nonMonotonic'
             ? 'dataToolFilterAxisBackwards'

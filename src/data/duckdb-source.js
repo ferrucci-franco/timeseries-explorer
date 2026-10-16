@@ -1106,37 +1106,168 @@ export default class DuckDbSource {
         };
     }
 
-    // An Arrow table of the first `n` buffered rows. The row number is an
-    // Int32 while it fits (DuckDB widens it to the BIGINT column); the values
-    // carry a validity bitmap with NaN as NULL.
+    // An Arrow table of the first `n` buffered rows: the row number, and the
+    // values with NaN as NULL.
     _sinkArrowTable(sink, rn, values, n) {
-        const last = n ? rn[n - 1] : 0;
-        let rnVector;
-        if (last < 2147483647) {
-            rnVector = arrow.makeVector(Int32Array.from(rn.subarray(0, n)));
-        } else {
-            const wide = new BigInt64Array(n);
-            for (let i = 0; i < n; i++) wide[i] = BigInt(rn[i]);
-            rnVector = arrow.makeVector(wide);
-        }
-        const columns = { [sink.rnColumn]: rnVector };
-        sink.columns.forEach((entry, c) => {
-            const data = values[c].subarray(0, n);
-            const bitmap = new Uint8Array(Math.ceil(n / 8));
-            let nullCount = 0;
-            for (let i = 0; i < n; i++) {
-                if (Number.isNaN(data[i])) nullCount++;
-                else bitmap[i >> 3] |= 1 << (i & 7);
-            }
-            columns[entry.column] = arrow.makeVector(arrow.makeData({
-                type: new arrow.Float64(),
-                length: n,
-                nullCount,
-                nullBitmap: nullCount ? bitmap : null,
-                data,
-            }));
-        });
+        const columns = { [sink.rnColumn]: this._rowNumberVector(rn, n) };
+        sink.columns.forEach((entry, c) => { columns[entry.column] = this._doubleVector(values[c], n); });
         return new arrow.Table(columns);
+    }
+
+    // ─── Work tables: a job's second pass ────────────────────────────────────
+    //
+    // A zero-phase filter runs forward over a stretch as long as the file, then
+    // backward over what the forward pass gave. The forward outputs of such a
+    // stretch go to a work table, `(rn, v)` rows appended in ascending order
+    // of the file position; the backward pass reads it back by ranges of
+    // `rn`, last range first, and replaces those rows of the sink with the
+    // final values. A work table is never joined to the file: rows only for
+    // the stretch's own samples, NaN kept as NaN. It counts against the budget
+    // and is dropped like a sink (dropSink), when the job ends or fails.
+
+    async createWorkTable(legacyData) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('createWorkTable: data is not DuckDB-backed (eager mode)');
+        await this.init();
+        const id = ++this._nextSinkId;
+        const table = `${meta.baseTableName || meta.tableName}_work_${id}`;
+        await this._withConnectionLock(() => this._conn.query(`CREATE TABLE ${table} (rn BIGINT, v DOUBLE)`));
+        const work = { table, rnColumn: 'rn', columns: [{ column: 'v' }], rows: 0, bytes: 0, work: true };
+        (meta.sinks ||= new Map()).set(table, work);
+        this._liveSinks.set(table, work);
+        return work;
+    }
+
+    /**
+     * Rows for a work table: `append(rows, values)` takes file positions in
+     * ascending order and their values. Inserted `chunkRows` at a time on a
+     * connection of the writer's own, held to the sinks' budget.
+     */
+    openWorkWriter(legacyData, work, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS } = {}) {
+        const bufferRows = Math.max(1, Math.round(Number(chunkRows) || STREAM_DEFAULT_CHUNK_ROWS));
+        let conn = null;
+        let rn = new Float64Array(bufferRows);
+        let values = new Float64Array(bufferRows);
+        let buffered = 0;
+        let closed = false;
+        const insert = async () => {
+            if (!buffered) return;
+            const budget = this.sinkBudget();
+            if (budget.used + this.sinkBytesFor(buffered, 1) > budget.limit) throw sinkBudgetError(budget);
+            conn ||= await this._openStreamConnection();
+            const table = new arrow.Table({
+                rn: this._rowNumberVector(rn, buffered),
+                v: arrow.makeVector(values.slice(0, buffered)),
+            });
+            await conn.insertArrowTable(table, { name: work.table, create: false });
+            work.rows += buffered;
+            work.bytes = this.sinkBytesFor(work.rows, 1);
+            buffered = 0;
+        };
+        return {
+            append: async (rows, column) => {
+                if (closed) throw new Error('work writer: append after close');
+                for (let i = 0; i < rows.length; i++) {
+                    rn[buffered] = rows[i];
+                    values[buffered] = column[i];
+                    buffered++;
+                    if (buffered === bufferRows) {
+                        await insert();
+                        rn = new Float64Array(bufferRows);
+                        values = new Float64Array(bufferRows);
+                    }
+                }
+            },
+            finish: async () => {
+                if (closed) return;
+                closed = true;
+                try {
+                    await insert();
+                } finally {
+                    await this._closeStreamConnection(conn);
+                    conn = null;
+                }
+            },
+            abort: async () => {
+                closed = true;
+                await this._closeStreamConnection(conn);
+                conn = null;
+            },
+        };
+    }
+
+    /**
+     * A job's second pass over a sink: `read(lo, hi)` gives the work table's
+     * rows with lo ≤ rn < hi, ascending — `{ rows, values }` — and
+     * `write(rows, values)` replaces those rows of the sink's first column
+     * (NaN stored as NULL, as the writer stores it). The rows of a sink are
+     * replaced where they are, so the sink keeps its order and still lines up
+     * with the file. `close()` compacts the sink.
+     */
+    async openSinkUpdater(legacyData, sink, work) {
+        const conn = await this._openStreamConnection();
+        const id = ++this._nextSinkId;
+        const scratch = `${sink.table}_update_${id}`;
+        const target = quoteIdent(sink.columns[0].column);
+        const rnColumn = `${sink.table}.${quoteIdent(sink.rnColumn)}`;
+        const lit = (v) => this._numericLiteral(v);
+        return {
+            read: async (lo, hi) => {
+                const result = await conn.query(
+                    `SELECT rn::DOUBLE AS rn, v FROM ${work.table} WHERE rn >= ${lit(lo)} AND rn < ${lit(hi)} ORDER BY rn`);
+                return {
+                    rows: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+                    values: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
+                };
+            },
+            write: async (rows, values) => {
+                if (!rows.length) return;
+                const table = new arrow.Table({
+                    rn: this._rowNumberVector(rows, rows.length),
+                    v: this._doubleVector(values, values.length),
+                });
+                await conn.insertArrowTable(table, { name: scratch, create: true });
+                try {
+                    await conn.query(`UPDATE ${sink.table} SET ${target} = u.v FROM ${scratch} u
+                        WHERE ${rnColumn} = u.rn AND ${rnColumn} BETWEEN ${lit(rows[0])} AND ${lit(rows[rows.length - 1])}`);
+                } finally {
+                    await conn.query(`DROP TABLE IF EXISTS ${scratch}`);
+                }
+            },
+            close: async () => {
+                try { await conn.query('CHECKPOINT'); } catch (_) { /* best effort */ }
+                await this._closeStreamConnection(conn);
+                this._clearRangeCacheForTable(legacyData?._duckdb?.tableName);
+            },
+        };
+    }
+
+    // The row numbers of `n` rows as an Arrow vector: Int32 while they fit
+    // (DuckDB widens them to BIGINT), BigInt64 beyond.
+    _rowNumberVector(rn, n) {
+        const last = n ? rn[n - 1] : 0;
+        if (last < 2147483647) return arrow.makeVector(Int32Array.from(rn.subarray(0, n)));
+        const wide = new BigInt64Array(n);
+        for (let i = 0; i < n; i++) wide[i] = BigInt(rn[i]);
+        return arrow.makeVector(wide);
+    }
+
+    // `n` doubles as an Arrow vector, NaN as NULL (the lazy convention).
+    _doubleVector(values, n) {
+        const data = values.subarray(0, n);
+        const bitmap = new Uint8Array(Math.ceil(n / 8));
+        let nullCount = 0;
+        for (let i = 0; i < n; i++) {
+            if (Number.isNaN(data[i])) nullCount++;
+            else bitmap[i >> 3] |= 1 << (i & 7);
+        }
+        return arrow.makeVector(arrow.makeData({
+            type: new arrow.Float64(),
+            length: n,
+            nullCount,
+            nullBitmap: nullCount ? bitmap : null,
+            data,
+        }));
     }
 
     // Whether a sink still exists: a reload or a closed file drops them.
