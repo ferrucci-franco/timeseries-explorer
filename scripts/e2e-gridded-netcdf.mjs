@@ -880,6 +880,12 @@ try {
         await page.click('#gridded-view [data-action="autofit-menu"]');
         const menuBox = await page.$eval('#gridded-view [data-role="autofit-menu"]', el => { const rect = el.getBoundingClientRect(); return [rect.left, rect.right]; });
         assert.ok(menuBox[0] >= 0 && menuBox[1] <= 390, `the colour menu fits the phone (${menuBox})`);
+        // Its options are the app's switches, whose knob shows when off too.
+        const knob = await page.$eval('#gridded-view [data-scale-option="robust"]', el => {
+            const after = getComputedStyle(el, '::after');
+            return { checked: el.checked, visibility: after.visibility, width: after.width, background: after.backgroundColor };
+        });
+        assert.deepEqual(knob, { checked: false, visibility: 'visible', width: '22px', background: 'rgb(255, 255, 255)' }, 'an option that is off shows the knob of its switch');
         await page.click('#gridded-view [data-action="autofit-menu"]');
         // On its side the phone is short of height: the bar goes back beside the map.
         await page.setViewportSize({ width: 844, height: 390 });
