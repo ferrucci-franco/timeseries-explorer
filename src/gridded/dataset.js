@@ -689,29 +689,70 @@ export class GriddedDataset {
     }
 
     /**
-     * The time series of the cell nearest (lat, lon) at the selected level —
-     * or, with `levels` (indices of the level axis), at each of them:
-     * `byLevel: [{ index, values }]`, read together.
+     * The four grid cells around (lat, lon) and their bilinear weights, as
+     * file row and column indices. Across the seam of a global grid the pair
+     * of columns wraps (last, first); outside a regional grid, or beyond the
+     * outermost latitude, the value of the edge is kept (weights on one side).
      */
-    async pointSeries(key, selection, lat, lon, job = {}, { levels = null } = {}) {
-        const variable = this._variable(key);
-        const grid = this._grid(variable);
-        const { row, column } = this._nearest(grid, lat, lon);
+    _bilinearCells(grid, lat, lon) {
+        const rows = Array.from(grid.lat, (value, index) => ({ value, index })).sort((a, b) => a.value - b.value);
+        let low = 0;
+        while (low < rows.length - 2 && rows[low + 1].value <= lat) low += 1;
+        const south = rows[low];
+        const north = rows[Math.min(low + 1, rows.length - 1)];
+        const ty = north.value === south.value ? 0 : Math.max(0, Math.min(1, (lat - south.value) / (north.value - south.value)));
+        const lons = grid.lonDisplay;
+        const last = lons.length - 1;
+        let x = lon;
+        if (lons[last] > 180 && x < 0) x += 360;
+        if (lons[0] < 0 && x > 180) x -= 360;
+        const step = last > 0 ? (lons[last] - lons[0]) / last : 360;
+        const global = last > 0 && Math.abs(lons[last] - lons[0] + step - 360) < step / 2;
+        let west;
+        let east;
+        let tx;
+        if (x >= lons[0] && x <= lons[last]) {
+            west = 0;
+            while (west < last - 1 && lons[west + 1] <= x) west += 1;
+            east = Math.min(west + 1, last);
+            tx = lons[east] === lons[west] ? 0 : (x - lons[west]) / (lons[east] - lons[west]);
+        } else if (global) {
+            west = last;
+            east = 0;
+            const span = lons[0] + 360 - lons[last];
+            tx = ((x < lons[0] ? x + 360 : x) - lons[last]) / span;
+        } else {
+            west = x < lons[0] ? 0 : last;
+            east = west;
+            tx = 0;
+        }
+        const column = display => grid.xOrder[display];
+        return [
+            { row: south.index, column: column(west), weight: (1 - ty) * (1 - tx) },
+            { row: south.index, column: column(east), weight: (1 - ty) * tx },
+            { row: north.index, column: column(west), weight: ty * (1 - tx) },
+            { row: north.index, column: column(east), weight: ty * tx },
+        ].filter(cell => cell.weight > 0);
+    }
+
+    /**
+     * The series of one grid cell at each level asked for (or the selected
+     * level): one Float64Array per level, every time step, read in blocks.
+     * `progress(fraction)` reports this cell's share of the work.
+     */
+    async _cellSeries(key, variable, grid, selection, row, column, plan, job, progress) {
         const tAxis = variable.roles.indexOf('t');
         const yAxis = variable.roles.indexOf('y');
         const xAxis = variable.roles.indexOf('x');
-        const cell = { lat: grid.lat[row], lon: grid.lon[column] > 180 ? grid.lon[column] - 360 : grid.lon[column] };
-        const plan = this._levelPlan(variable, levels);
         const levelList = plan ? plan.indices : [null];
-        const atLevel = index => (index === null ? selection : { ...selection, [variable.dimNames[plan.zAxis]]: index });
         if (tAxis < 0) {
+            const atLevel = index => (index === null ? selection : { ...selection, [variable.dimNames[plan.zAxis]]: index });
             const displayRow = grid.yOrder.indexOf(row);
             const displayColumn = grid.xOrder.indexOf(column);
-            const byLevel = levelList.map(index => {
+            return levelList.map(index => {
                 const map = this.readMap(key, atLevel(index));
-                return { index, values: Float64Array.of(map.values[displayRow * map.nx + displayColumn]) };
+                return Float64Array.of(map.values[displayRow * map.nx + displayColumn]);
             });
-            return plan ? { byLevel, cell } : { values: byLevel[0].values, cell };
         }
         const levelCount = plan ? plan.stop - plan.start : 1;
         const chunkSteps = Number(variable.segments[0].descriptor.chunks?.[tAxis]) || 1;
@@ -739,11 +780,68 @@ export class GriddedDataset {
                     for (let step = 0; step < steps; step++) outs[position][block.globalStart + step] = values[offset + step * tStride];
                 });
             }
-            job.onProgress?.((index + 1) / blocks.length);
+            progress?.((index + 1) / blocks.length);
             await tick();
         }
-        if (!plan) return { values: outs[0], cell };
-        return { byLevel: plan.indices.map((level, position) => ({ index: level, values: outs[position] })), cell };
+        return outs;
+    }
+
+    /**
+     * The time series at (lat, lon) at the selected level — or, with
+     * `levels` (indices of the level axis), at each of them:
+     * `byLevel: [{ index, values }]`, read together.
+     *
+     * `method: 'nearest'` (the default) takes the grid cell nearest the
+     * point; `cell` is that cell. `method: 'bilinear'` interpolates between
+     * the four cells around it, weighted by distance along latitude and
+     * longitude; `cell` is then the point itself and `neighbours` lists the
+     * four cells and their weights. A neighbour without data at a time step
+     * (a land cell for a sea variable) is left out and the others' weights
+     * renormalised; with none, the step is missing.
+     */
+    async pointSeries(key, selection, lat, lon, job = {}, { levels = null, method = 'nearest' } = {}) {
+        const variable = this._variable(key);
+        const grid = this._grid(variable);
+        const plan = this._levelPlan(variable, levels);
+        const displayLon = value => (value > 180 ? value - 360 : value);
+        let cells;
+        let cell;
+        let neighbours;
+        if (method === 'bilinear') {
+            cells = this._bilinearCells(grid, lat, lon);
+            cell = { lat, lon: displayLon(lon) };
+            neighbours = cells.map(item => ({ lat: grid.lat[item.row], lon: displayLon(grid.lon[item.column]), weight: item.weight }));
+        } else {
+            const { row, column } = this._nearest(grid, lat, lon);
+            cells = [{ row, column, weight: 1 }];
+            cell = { lat: grid.lat[row], lon: displayLon(grid.lon[column]) };
+        }
+        const series = [];
+        for (const [position, item] of cells.entries()) {
+            series.push(await this._cellSeries(key, variable, grid, selection, item.row, item.column, plan, job,
+                fraction => job.onProgress?.((position + fraction) / cells.length)));
+        }
+        const levelCount = plan ? plan.indices.length : 1;
+        const combined = Array.from({ length: levelCount }, (_, level) => {
+            if (cells.length === 1) return series[0][level];
+            const length = series[0][level].length;
+            const out = new Float64Array(length);
+            for (let step = 0; step < length; step++) {
+                let sum = 0;
+                let weights = 0;
+                cells.forEach((item, position) => {
+                    const value = series[position][level][step];
+                    if (!Number.isFinite(value)) return;
+                    sum += value * item.weight;
+                    weights += item.weight;
+                });
+                out[step] = weights > 0 ? sum / weights : NaN;
+            }
+            return out;
+        });
+        const extra = neighbours ? { method: 'bilinear', neighbours } : { method: 'nearest' };
+        if (!plan) return { values: combined[0], cell, ...extra };
+        return { byLevel: plan.indices.map((level, position) => ({ index: level, values: combined[position] })), cell, ...extra };
     }
 
     /**
