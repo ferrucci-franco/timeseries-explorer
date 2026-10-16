@@ -934,12 +934,170 @@
     }
 }
 
+/* ── Phones (the app's compact layout). The map takes the whole width (no
+   axis titles, the colour bar under it, gridded-methods.js) and is as tall
+   as the grid needs; the rest scrolls under it: time bar, then the tools,
+   the extractions and, last, the inspector, which a finger rarely feeds. */
 html.compact .gridded-toolbar {
     font-size: 0.75rem;
+    gap: 0.3rem 0.4rem;
+    padding: 0.3rem 0.5rem;
+}
+
+/* The app bar already names the file. */
+html.compact .gridded-title {
+    display: none;
+}
+
+/* Row 1: the variable, as wide as it can be, then export and close;
+   row 2: level and colour range. */
+html.compact .gridded-toolbar > .gridded-field:not(.gridded-scale) {
+    order: 1;
+    flex: 1 1 45%;
+    min-width: 0;
+}
+
+html.compact .gridded-toolbar > .gridded-field:not(.gridded-scale) > span {
+    display: none;
+}
+
+html.compact .gridded-toolbar [data-role="variable"] {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+}
+
+html.compact .gridded-toolbar-end {
+    order: 2;
+}
+
+html.compact .gridded-dims {
+    order: 3;
+    gap: 0.4rem;
+}
+
+html.compact .gridded-scale {
+    order: 4;
+}
+
+html.compact .gridded-main {
+    flex-direction: column;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+html.compact .gridded-map-column {
+    flex: none;
+    min-height: 0;
+}
+
+/* Sized by _griddedFitPhoneHeight. */
+html.compact .gridded-body {
+    flex: none;
+    height: 60vh;
+}
+
+html.compact .gridded-status:empty {
+    display: none;
+}
+
+/* Buttons and speed on one row, the slider under them across the width. */
+html.compact .gridded-timebar {
+    flex-wrap: wrap;
+    gap: 0.3rem 0.35rem;
+    padding: 0.35rem 0.5rem;
+}
+
+html.compact .gridded-timebar input[type="range"] {
+    order: 10;
+    flex: 1 1 100%;
+    min-width: 0;
+    margin: 0.35rem 0 0.15rem;
 }
 
 html.compact .gridded-time-label {
+    flex: 1 1 0;
     min-width: 0;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+html.compact .gridded-view .gridded-step {
+    width: 2.1rem;
+    height: 2rem;
+}
+
+/* The preview of the extractions under the map, at a fixed height (the
+   column has none to share), without the splitter. */
+html.compact .gridded-splitter {
+    display: none;
+}
+
+html.compact .gridded-preview {
+    height: 200px;
+}
+
+html.compact .gridded-panel {
+    width: auto;
+    flex-shrink: 0;
+    overflow: visible;
+    border-left: none;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.85rem;
+}
+
+html.compact .gridded-panel > .gridded-results {
+    order: 1;
+}
+
+html.compact .gridded-panel > .gridded-inspector {
+    order: 2;
+}
+
+/* Fingers: taller tool buttons and fields. */
+html.compact .gridded-modes button,
+html.compact .gridded-form-actions button,
+html.compact .gridded-plot-btn {
+    min-height: 2.4rem;
+}
+
+html.compact .gridded-menu {
+    width: min(19rem, calc(100vw - 16px));
+}
+
+/* The row buttons of the extractions (reuse, remove) at finger size. */
+html.compact .gridded-results .gridded-remove {
+    min-width: 2.2rem;
+    min-height: 2.2rem;
+}
+
+/* Extract or compute, over the map, once a point or a box is placed: the
+   button of the panel is a scroll away. Phones only. */
+.gridded-map-action {
+    display: none;
+}
+
+html.compact .gridded-map-action:not([hidden]) {
+    display: inline-flex;
+    align-items: center;
+    position: absolute;
+    right: 0.6rem;
+    bottom: 5rem;
+    z-index: 5;
+    padding: 0.5rem 0.9rem;
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+/* On its side, the colour bar is on the right: the button goes above the
+   map, beside the title. */
+html.compact.compact-landscape .gridded-map-action:not([hidden]) {
+    top: 0.2rem;
+    bottom: auto;
+    right: 6.5rem;
+    padding: 0.3rem 0.8rem;
 }
 
 /* The right-button menu on a point or a box of the map. */

@@ -803,6 +803,92 @@ try {
         await context.close();
     }
 
+    // 1c. A phone, upright and on its side: the map takes the width, the
+    // colour bar lies under it, the tools scroll under the map; a placed
+    // point is extracted from a button over the map, and a finger held on a
+    // place opens its menu without scrolling the map away.
+    {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+        await context.addInitScript(() => localStorage.setItem('omv_touch_hint_seen', '1'));
+        const page = await context.newPage();
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        await page.goto(baseUrl);
+        await page.waitForFunction(() => window.app?.plotManager, null, { timeout: 60000 });
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'era5-like-new-cds.nc'));
+        await mapShown(page);
+        await page.waitForTimeout(1000);
+        const layout = await page.evaluate(() => {
+            const rect = selector => document.querySelector(selector).getBoundingClientRect();
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const label = document.querySelector('#gridded-view [data-role="time-label"]');
+            return {
+                compact: document.documentElement.classList.contains('compact'),
+                map: rect('#gridded-view .gridded-map'),
+                plot: { width: div._fullLayout.xaxis._length, height: div._fullLayout.yaxis._length },
+                colorbar: div.data[0].colorbar.orientation,
+                axisTitle: div._fullLayout.xaxis.title.text,
+                toolbar: rect('#gridded-view .gridded-toolbar').height,
+                labelHeight: label.getBoundingClientRect().height,
+                pageWidth: document.documentElement.scrollWidth,
+                help: document.querySelector('#gridded-view [data-role="mode-help"]').textContent,
+            };
+        });
+        assert.equal(layout.compact, true, 'a phone gets the compact layout');
+        assert.equal(layout.pageWidth, 390, 'nothing is wider than the phone');
+        assert.equal(layout.colorbar, 'h', 'the colour bar lies under the map');
+        assert.equal(layout.axisTitle, '', 'without axis titles');
+        assert.ok(layout.plot.width > 390 * 0.8, `the map takes the width of the phone (${layout.plot.width}px)`);
+        assert.ok(layout.map.height < 844 * 0.65 && Math.abs(layout.plot.height - layout.plot.width / 2) < 12, `as tall as a world map needs (${JSON.stringify(layout)})`);
+        assert.ok(layout.toolbar < 90, `the toolbar is two rows (${layout.toolbar}px)`);
+        assert.ok(layout.labelHeight < 24, `the time stays on one line (${layout.labelHeight}px)`);
+        assert.match(layout.help, /pinch/, 'the help speaks of fingers');
+        // The ring, then extract from over the map.
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
+        const phoneAt = (lon, lat) => page.evaluate(([lon, lat]) => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const rect = div.getBoundingClientRect();
+            const { xaxis, yaxis } = div._fullLayout;
+            return [rect.left + xaxis._offset + xaxis.l2p(lon), rect.top + yaxis._offset + yaxis.l2p(lat)];
+        }, [lon, lat]);
+        assert.equal(await page.isVisible('#gridded-view [data-action="map-extract"]'), false, 'no button over the map before a point is placed');
+        await page.touchscreen.tap(...await phoneAt(45, 15));
+        await page.waitForSelector('#gridded-view [data-action="map-extract"]:visible');
+        await page.click('#gridded-view [data-action="map-extract"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 1, null, { timeout: 60000 });
+        await page.waitForTimeout(600);
+        // A finger held on P1: its menu, and the map stays where it is.
+        const cdp = await context.newCDPSession(page);
+        const p1 = await phoneAt(45, 15);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p1[0], y: p1[1], id: 1 }] });
+        await page.waitForTimeout(800);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await page.waitForTimeout(300);
+        const held = await page.evaluate(() => ({
+            menu: [...document.querySelectorAll('.gridded-context-menu button')].map(button => button.textContent),
+            scrolled: document.querySelector('#gridded-view .gridded-main').scrollTop,
+            groups: window.app._griddedVisibleView().groups.length,
+            point: window.app._griddedVisibleView().pendingPoint,
+        }));
+        assert.ok(held.menu.some(text => /Remove P1/.test(text)), `holding a place opens its menu (${JSON.stringify(held)})`);
+        assert.equal(held.scrolled, 0, 'and does not scroll the map away');
+        assert.equal(held.groups, 1);
+        await page.click('.gridded-context-menu button:last-child');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 0);
+        // The colour menu stays on the screen.
+        await page.click('#gridded-view [data-action="autofit-menu"]');
+        const menuBox = await page.$eval('#gridded-view [data-role="autofit-menu"]', el => { const rect = el.getBoundingClientRect(); return [rect.left, rect.right]; });
+        assert.ok(menuBox[0] >= 0 && menuBox[1] <= 390, `the colour menu fits the phone (${menuBox})`);
+        await page.click('#gridded-view [data-action="autofit-menu"]');
+        // On its side the phone is short of height: the bar goes back beside the map.
+        await page.setViewportSize({ width: 844, height: 390 });
+        await page.waitForFunction(() => document.querySelector('#gridded-view .gridded-map').data[0].colorbar.orientation !== 'h', null, { timeout: 10000 });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 844);
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
     // 2. The CDS ZIP, opened as one dataset.
     {
         const { context, page, errors } = await openApp();

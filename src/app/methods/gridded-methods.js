@@ -281,6 +281,21 @@ function bindWheelPan(div) {
     }, { capture: true, passive: false });
 }
 
+/**
+ * A drop-down menu opened next to its button, moved sideways just enough to
+ * stay on screen (on a phone the colour menu is wider than the space to the
+ * left of its button).
+ */
+function keepOnScreen(menu, gap = 8) {
+    menu.style.transform = '';
+    menu.style.maxWidth = `${window.innerWidth - 2 * gap}px`;
+    const rect = menu.getBoundingClientRect();
+    let shift = 0;
+    if (rect.left < gap) shift = gap - rect.left;
+    else if (rect.right > window.innerWidth - gap) shift = window.innerWidth - gap - rect.right;
+    if (shift) menu.style.transform = `translateX(${Math.round(shift)}px)`;
+}
+
 // A drawn box or a click lands between pixels; two decimals of a degree is
 // about a kilometre, finer than any reanalysis grid.
 function roundCoordinate(value) {
@@ -891,7 +906,10 @@ export function installGriddedMethods(TargetClass) {
             </div>
             <div class="gridded-main">
                 <div class="gridded-map-column">
-                    <div class="gridded-body"><div class="gridded-map" data-role="map"></div></div>
+                    <div class="gridded-body">
+                        <div class="gridded-map" data-role="map"></div>
+                        <button type="button" class="gridded-primary gridded-map-action" data-action="map-extract" hidden></button>
+                    </div>
                     <div class="gridded-status" data-role="status" aria-live="polite"></div>
                     <div class="gridded-timebar" data-role="timebar">
                         <button type="button" class="gridded-step" data-step="first">${STEP_ICONS.first}</button>
@@ -1005,6 +1023,16 @@ export function installGriddedMethods(TargetClass) {
                 for (const entry of entries) {
                     if (entry.target._fullLayout && entry.contentRect.width > 0 && entry.contentRect.height > 0) {
                         Plotly.Plots.resize(entry.target);
+                        // Turned to or from a phone's width: the colour bar
+                        // and the margins change sides, the height its fit.
+                        const view = entry.target.dataset.role === 'map' && this._griddedVisibleView();
+                        const narrow = this._griddedNarrowMap(entry.target);
+                        if (view) this._griddedFitPhoneHeight(view, entry.target);
+                        if (view && narrow !== entry.target._griddedNarrow) {
+                            entry.target._griddedNarrow = narrow;
+                            this._griddedSyncMode(view);
+                            this._griddedDrawMap(view);
+                        }
                     }
                 }
             });
@@ -1073,6 +1101,7 @@ export function installGriddedMethods(TargetClass) {
             event.stopPropagation();
             menu.hidden = !menu.hidden;
             menuButton.setAttribute('aria-expanded', String(!menu.hidden));
+            if (!menu.hidden) keepOnScreen(menu);
         });
         document.addEventListener('click', event => {
             if (!menu.hidden && !event.target.closest('.gridded-autofit')) closeMenu();
@@ -1120,6 +1149,7 @@ export function installGriddedMethods(TargetClass) {
             event.stopPropagation();
             levelsMenu.hidden = !levelsMenu.hidden;
             levelsButton.setAttribute('aria-expanded', String(!levelsMenu.hidden));
+            if (!levelsMenu.hidden) keepOnScreen(levelsMenu);
         });
         document.addEventListener('click', event => {
             if (!levelsMenu.hidden && !event.target.closest('.gridded-levels-picker')) closeLevels();
@@ -1208,6 +1238,10 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'cancel' && current.job) griddedClient().cancel(current.job.id);
             else if (action === 'extract-point') this._griddedExtractPoint(current);
             else if (action === 'extract-region') this._griddedExtractRegion(current);
+            else if (action === 'map-extract') {
+                if (target.dataset.kind === 'point') this._griddedExtractPoint(current);
+                else if (target.dataset.kind === 'region') this._griddedExtractRegion(current);
+            }
             else if (action === 'clear-point') this._griddedClearPending(current, 'point');
             else if (action === 'clear-region') this._griddedClearPending(current, 'region');
             else if (action === 'remove-group') this._griddedRemoveGroup(current, target.closest('[data-group]')?.dataset.group);
@@ -1696,8 +1730,11 @@ export function installGriddedMethods(TargetClass) {
         map.classList.toggle('gridded-cursor-point', view.mode === 'point');
         map.classList.toggle('gridded-cursor-region', view.mode === 'region');
         this._griddedSyncLevels(view);
-        const help = { navigate: 'griddedHelpNavigate', point: 'griddedHelpPoint', region: 'griddedHelpRegion' }[view.mode];
-        this._griddedEl('mode-help').textContent = i18n.t(help || 'griddedHelpNavigate');
+        // A finger has no right button, Delete key or wheel: on a phone or a
+        // tablet the help says what to do with it instead.
+        const touch = document.documentElement.classList.contains('compact') || !!window.matchMedia?.('(pointer: coarse)').matches;
+        const help = { navigate: 'griddedHelpNavigate', point: 'griddedHelpPoint', region: 'griddedHelpRegion' }[view.mode] || 'griddedHelpNavigate';
+        this._griddedEl('mode-help').textContent = i18n.t(touch ? `${help}Touch` : help);
         this._griddedSyncActions(view);
     };
 
@@ -1748,6 +1785,23 @@ export function installGriddedMethods(TargetClass) {
         root.querySelector('[data-action="plot"]').disabled = !checked;
         root.querySelector('[data-action="export-series"]').disabled = !(view.groups || []).length;
         root.querySelector('[data-action="remove-all"]').disabled = !(view.groups || []).length;
+        this._griddedSyncMapAction(view);
+    };
+
+    /**
+     * On a phone the extract button of the panel is a scroll away from the
+     * map: once a point or a box is placed, the same action floats over the
+     * map (gridded.css shows it in the compact layout only).
+     */
+    proto._griddedSyncMapAction = function(view) {
+        const button = document.querySelector('#gridded-view [data-action="map-extract"]');
+        if (!button) return;
+        const kind = view.mode === 'point' && view.pendingPoint ? 'point'
+            : view.mode === 'region' && view.pendingBox ? 'region' : null;
+        button.hidden = !kind;
+        button.dataset.kind = kind || '';
+        button.disabled = !!view.job;
+        if (kind) button.textContent = i18n.t(kind === 'point' ? 'griddedExtractPoint' : 'griddedExtractRegion');
     };
 
     proto._griddedClearPending = function(view, kind) {
@@ -2059,6 +2113,44 @@ export function installGriddedMethods(TargetClass) {
         return { traces, shapes, annotations };
     };
 
+    /**
+     * A narrow map (an upright phone, or a window a phone wide) gives the
+     * width to the map: no axis titles, and the colour bar lies under it
+     * instead of beside it. A phone on its side is short of height, not of
+     * width, and keeps the bar beside the map.
+     */
+    proto._griddedNarrowMap = function(div) {
+        return (div?.clientWidth || 800) < 600;
+    };
+
+    proto._griddedMapMargins = function(narrow) {
+        return narrow ? { l: 40, r: 12, t: 26, b: 74 } : { l: 56, r: 96, t: 30, b: 44 };
+    };
+
+    /**
+     * On a phone the map column is not a fixed share of the screen: the map
+     * is as tall as the whole grid needs at the width of the phone (a world
+     * map is half as tall as wide), within bounds, and the tools follow
+     * right under it rather than below a band of empty paper.
+     */
+    proto._griddedFitPhoneHeight = function(view, div) {
+        const body = div?.parentElement;
+        if (!body) return;
+        if (!document.documentElement.classList.contains('compact') || !view.map) {
+            if (body.style.height) body.style.height = '';
+            return;
+        }
+        const map = view.map;
+        const half = (values, index) => (values.length > 1 ? Math.abs(values[1] - values[0]) / 2 : 0.5);
+        const spanX = Math.abs(map.lon[map.lon.length - 1] - map.lon[0]) + 2 * half(map.lon);
+        const spanY = Math.abs(map.lat[map.lat.length - 1] - map.lat[0]) + 2 * half(map.lat);
+        const margin = this._griddedMapMargins(this._griddedNarrowMap(body));
+        const width = Math.max(1, body.clientWidth - margin.l - margin.r);
+        const wanted = width * Math.min(spanY / spanX, 1.4) + margin.t + margin.b;
+        const height = Math.round(Math.max(240, Math.min(wanted, window.innerHeight * 0.62)));
+        if (Math.abs(body.offsetHeight - height) > 2) body.style.height = `${height}px`;
+    };
+
     proto._griddedDrawMap = async function(view, { theme = this.theme, transparent = false, target = null } = {}) {
         const div = target || this._griddedEl('map');
         const map = view.map;
@@ -2076,6 +2168,15 @@ export function installGriddedMethods(TargetClass) {
             // The ranges on screen, not the ones remembered at the last event.
             if (view.zoom && div._fullLayout) view.zoom = this._griddedShownRanges(div);
         }
+        if (!target) {
+            this._griddedFitPhoneHeight(view, div);
+            div._griddedNarrow = this._griddedNarrowMap(div);
+            this._griddedSyncMapAction(view);
+        }
+        // An exported image is laid out for its own size, not the screen's.
+        const narrow = this._griddedNarrowMap(div);
+        // On a phone, even on its side, the degrees say what the axes are.
+        const phone = !target && document.documentElement.classList.contains('compact');
         const variable = this._griddedVariable(view);
         const colors = this._griddedColors(theme);
         const grid = drawableGrid(map, view.zoom?.x, view.zoom?.y);
@@ -2101,7 +2202,14 @@ export function installGriddedMethods(TargetClass) {
             // Title above the bar and a bounded tick format, inside a right
             // margin that is already wide enough: the bar never pushes the map
             // as its labels change from one time step to the next.
-            colorbar: {
+            colorbar: narrow ? {
+                // Under the map, at the bottom of the figure: the map keeps
+                // the whole width of a phone.
+                orientation: 'h', title: { text: variable?.units || '', side: 'right', font: { size: 11 } },
+                thickness: 10, len: 0.92, outlinewidth: 0, x: 0.5, xanchor: 'center',
+                yref: 'container', y: 0, yanchor: 'bottom', ypad: 8,
+                tickformat: '.4~g', nticks: 6, tickfont: { color: colors.font, size: 10 },
+            } : {
                 title: { text: variable?.units || '', side: 'top', font: { size: 11 } },
                 thickness: 12, len: 0.9, outlinewidth: 0, x: 1.01, xanchor: 'left', xpad: 6,
                 tickformat: '.4~g', nticks: 8, tickfont: { color: colors.font, size: 10 },
@@ -2132,14 +2240,14 @@ export function installGriddedMethods(TargetClass) {
             paper_bgcolor: paper,
             plot_bgcolor: paper,
             font: { color: colors.font, size: 11, family: 'system-ui, sans-serif' },
-            margin: { l: 56, r: 96, t: 30, b: 44 },
+            margin: this._griddedMapMargins(narrow),
             showlegend: false,
             dragmode: view.mode === 'region' ? 'drawrect' : 'pan',
             title: { text: titleText, font: { size: 12 }, x: 0.01, xanchor: 'left' },
             xaxis: {
                 // Copies: Plotly writes into the range arrays it is given.
                 range: [...ranges.x],
-                title: { text: i18n.t('griddedLongitude') },
+                title: { text: narrow || phone ? '' : i18n.t('griddedLongitude') },
                 gridcolor: colors.grid,
                 zeroline: false,
                 ticksuffix: '°',
@@ -2149,7 +2257,7 @@ export function installGriddedMethods(TargetClass) {
             },
             yaxis: {
                 range: [...ranges.y],
-                title: { text: i18n.t('griddedLatitude') },
+                title: { text: narrow || phone ? '' : i18n.t('griddedLatitude') },
                 gridcolor: colors.grid,
                 zeroline: false,
                 ticksuffix: '°',
@@ -2244,8 +2352,9 @@ export function installGriddedMethods(TargetClass) {
         const dy = map.lat.length > 1 ? Math.abs(map.lat[1] - map.lat[0]) / 2 : 0.5;
         let x = [map.lon[0] - dx, map.lon[map.lon.length - 1] + dx];
         let y = [map.lat[0] - dy, map.lat[map.lat.length - 1] + dy];
-        const width = Math.max(1, (div?.clientWidth || 800) - 56 - 96);
-        const height = Math.max(1, (div?.clientHeight || 500) - 30 - 44);
+        const margin = this._griddedMapMargins(this._griddedNarrowMap(div));
+        const width = Math.max(1, (div?.clientWidth || 800) - margin.l - margin.r);
+        const height = Math.max(1, (div?.clientHeight || 500) - margin.t - margin.b);
         const spanX = x[1] - x[0];
         const spanY = y[1] - y[0];
         const grow = (range, span, limits) => {
@@ -2386,6 +2495,37 @@ export function installGriddedMethods(TargetClass) {
             window.addEventListener('touchend', stop, { capture: true });
             window.addEventListener('touchcancel', stop, { capture: true });
         }, { capture: true, passive: false });
+        // A finger held still on a point or a box opens its menu (extract,
+        // reuse, delete), as the right button does: a phone has neither a
+        // right button nor a Delete key.
+        const LONG_PRESS_MS = 550;
+        const endPress = () => {
+            clearTimeout(interaction.longPress?.timer);
+            interaction.longPress = null;
+        };
+        div.addEventListener('touchstart', event => {
+            endPress();
+            if (event.touches.length !== 1) return;
+            const start = { clientX: event.touches[0].clientX, clientY: event.touches[0].clientY, target: event.target };
+            interaction.longPress = {
+                start,
+                timer: setTimeout(() => {
+                    interaction.longPress = null;
+                    const view = this._griddedVisibleView();
+                    const at = view && this._griddedEventCoords(div, start);
+                    if (!at || !this._griddedHitTest(view, at, start, { inside: true })) return;
+                    interaction.longPressedAt = Date.now();
+                    this._griddedOpenMenuAt(div, start);
+                }, LONG_PRESS_MS),
+            };
+        }, { capture: true, passive: true });
+        window.addEventListener('touchmove', event => {
+            const press = interaction.longPress;
+            const touch = event.touches[0];
+            if (press && (event.touches.length !== 1 || Math.hypot(touch.clientX - press.start.clientX, touch.clientY - press.start.clientY) > 10)) endPress();
+        }, { capture: true, passive: true });
+        window.addEventListener('touchend', endPress, { capture: true, passive: true });
+        window.addEventListener('touchcancel', endPress, { capture: true, passive: true });
         // A click (not the end of a drag) selects what is under it; in the
         // point tool, a click on empty map places the point there. The place
         // comes from the pixel clicked, not from Plotly's hover, which lags
@@ -2393,6 +2533,8 @@ export function installGriddedMethods(TargetClass) {
         div.addEventListener('click', event => {
             const down = interaction.down;
             if (event.button !== 0 || (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4)) return;
+            // The tap that ends a long press opened a menu: it places nothing.
+            if (Date.now() - (interaction.longPressedAt || 0) < 1000) return;
             const view = this._griddedVisibleView();
             const at = view && this._griddedEventCoords(div, event);
             if (!at) return;
@@ -2687,7 +2829,9 @@ export function installGriddedMethods(TargetClass) {
         document.querySelectorAll('#gridded-view .gridded-result').forEach(row => {
             const selected = row.dataset.group === id;
             row.classList.toggle('selected', selected);
-            if (selected) row.scrollIntoView({ block: 'nearest' });
+            // On a phone the list is under the map, in the same scroll:
+            // bringing the row into view would take the map off the screen.
+            if (selected && !document.documentElement.classList.contains('compact')) row.scrollIntoView({ block: 'nearest' });
         });
     };
 
@@ -3556,13 +3700,17 @@ export function installGriddedMethods(TargetClass) {
             line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: set.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
             hovertemplate: `${variable.displayName}<br>%{y:.5~g}${variable.units ? ` ${variable.units}` : ''}<extra></extra>`,
         }));
+        // On a phone the legend goes above the curves, which keep the width.
+        const narrow = chart.clientWidth < 600;
         Plotly.react(chart, traces, {
             paper_bgcolor: colors.bg,
             plot_bgcolor: colors.bg,
             font: { color: colors.font, size: 10, family: 'system-ui, sans-serif' },
-            margin: { l: 56, r: mixed ? 148 : 96, t: 6, b: 28 },
+            margin: narrow ? { l: 48, r: mixed ? 48 : 12, t: 24, b: 28 } : { l: 56, r: mixed ? 148 : 96, t: 6, b: 28 },
             showlegend: true,
-            legend: { x: mixed ? 1.13 : 1.01, xanchor: 'left', y: 1, font: { size: 10 } },
+            legend: narrow
+                ? { orientation: 'h', x: 0, xanchor: 'left', y: 1, yanchor: 'bottom', font: { size: 10 } }
+                : { x: mixed ? 1.13 : 1.01, xanchor: 'left', y: 1, font: { size: 10 } },
             xaxis: { gridcolor: colors.grid, type: datetime ? 'date' : 'linear', title: { text: datetime ? '' : (time.units || time.displayName) } },
             yaxis: { gridcolor: colors.grid, title: { text: units[0] || '' } },
             yaxis2: {

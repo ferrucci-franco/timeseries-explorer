@@ -1101,6 +1101,19 @@ resumen de buscador):
   - slider con reproducción y teclado (← → espacio);
   - decimación de dibujo por encima de 400.000 celdas (el zoom lee la
     resolución completa).
+- **En el celular** (el layout compacto de la app): el mapa ocupa todo el
+  ancho, sin títulos de ejes, con la barra de colores debajo cuando el mapa
+  mide menos de 600 px de ancho (de costado vuelve al lado: falta alto, no
+  ancho), y es tan alto como lo pide la grilla (un mapa del mundo, la mitad
+  del ancho), entre 240 px y el 62 % de la pantalla. Debajo, en un mismo
+  desplazamiento: barra de tiempo (botones arriba, el deslizador a todo el
+  ancho), herramientas, extracciones y al final el inspector. La barra de
+  arriba queda en dos filas (variable, exportar y cerrar; nivel y rango de
+  colores) y los menús no se salen de la pantalla. Con un punto o un recuadro
+  puesto, "Extraer" / "Calcular" flota sobre el mapa; mantener apretado un
+  punto o un recuadro abre su menú (no hay botón derecho ni Supr), y
+  seleccionar no desplaza la página (el mapa quedaría fuera de la vista). La
+  ayuda de cada herramienta habla de dedos.
 - **Panel de análisis** a la derecha del mapa, que se lee como el flujo de
   trabajo (rediseñado tras la primera prueba con datos reales):
   1. **Extraer una serie temporal.** Tres modos:
