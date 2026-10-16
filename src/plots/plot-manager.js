@@ -2338,9 +2338,12 @@ class PlotManager {
                 if (plot.heatmapDiv) Plotly.purge(plot.heatmapDiv);
                 Plotly.purge(plot.div);
                 heatmapContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.heatmapOptionsEl?.remove();
                 plot.div = null;
                 plot.heatmapDiv = null;
                 plot.heatmapContainer = null;
+                plot.heatmapOptionsEl = null;
             } else if (histContainer) {
                 if (plot.histogramDiv) Plotly.purge(plot.histogramDiv);
                 Plotly.purge(plot.div);

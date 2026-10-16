@@ -20,6 +20,15 @@ import {
     shouldUseCompactLayout,
 } from '../../ui/compact-layout.js';
 import { button, el, section } from './compact-dom.js';
+import {
+    COMPACT_ANALYSES,
+    COMPACT_ANALYSIS_PANES,
+    COMPACT_ANALYSIS_PANE_MODE,
+    COMPACT_FIT_MODES,
+    COMPACT_SIGNAL_LIST_MODES,
+    COMPACT_WINDOW_ZOOM_MODES,
+    compactAnalysis,
+} from './compact-analyses.js';
 
 const SVG = {
     data: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
@@ -78,13 +87,9 @@ const MENU_GROUPS = [
 // Desktop-only items: an application to download, folders of a local tool.
 const MENU_HIDDEN = new Set(['extraStandalone', 'extraOnlineVersion', 'extraPhoneLayout', 'openOpenModelicaTemp', 'openDymolaDirectory']);
 
-// Modes whose plots carry the fit buttons: the ones the phone layout drives.
-const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft', 'histogram', 'temporal-profile', 'integral']);
-// An analysis's own pane, next to its time pane: which mode draws it. (The
-// integral's pie has no axes to fit.)
-const ANALYSIS_PANE_MODE = { spectrum: 'fft', bars: 'histogram', profile: 'temporal-profile', integral: 'integral' };
-// Where a slow double tap draws a window: the modes with a time axis.
-const WINDOW_ZOOM_MODES = new Set(['timeseries', 'fft', 'histogram', 'temporal-profile', 'integral']);
+// Modes whose plots carry the fit buttons: the analyses the phone layout
+// drives (compact-analyses.js), and the 2D plot, which is not one.
+const FIT_BUTTON_MODES = new Set([...COMPACT_FIT_MODES, 'phase2d']);
 
 const NAV_ITEMS = [
     { id: 'data', labelKey: 'compactNavData' },
@@ -92,20 +97,6 @@ const NAV_ITEMS = [
     { id: 'analyze', labelKey: 'compactNavAnalyze' },
     { id: 'more', labelKey: 'compactNavMore' },
 ];
-
-// Modes the phone layout drives for now. A panel in any other mode is shown,
-// but its controls stay on the desktop layout until they are migrated.
-const COMPACT_ANALYSES = [
-    { mode: 'timeseries', labelKey: 'compactAnalysisNone' },
-    { mode: 'fft', labelKey: 'analysisItemFft' },
-    { mode: 'histogram', labelKey: 'analysisItemHistogram' },
-    { mode: 'temporal-profile', labelKey: 'analysisItemProfile' },
-    { mode: 'integral', labelKey: 'analysisItemIntegral' },
-];
-
-// The analyses whose signals the phone layout lists and edits like a time
-// series: a tap in Data adds or removes one.
-const SIGNAL_LIST_MODES = new Set(['timeseries', 'fft', 'histogram', 'temporal-profile', 'integral']);
 
 // Plot types the phone layout sets up end to end.
 const COMPACT_PLOT_TYPES = [
@@ -653,10 +644,11 @@ export function installCompactMethods(ViewerClass) {
     proto._compactPlotForDiv = function(div) {
         for (const [panelId, plot] of this.plotManager.plots) {
             if (plot.div === div) return { panelId, plot, pane: 'main' };
-            if (plot.fftDiv === div) return { panelId, plot, pane: 'spectrum' };
-            if (plot.histogramDiv === div) return { panelId, plot, pane: 'bars' };
-            if (plot.temporalProfileDiv === div) return { panelId, plot, pane: 'profile' };
-            if (plot.integralDiv === div) return { panelId, plot, pane: 'integral' };
+            // The pane an analysis draws beside its time series, named by its
+            // own entry in compact-analyses.js.
+            for (const pane of COMPACT_ANALYSIS_PANES) {
+                if (plot[pane.div] === div) return { panelId, plot, pane: pane.name };
+            }
         }
         return null;
     };
@@ -665,10 +657,9 @@ export function installCompactMethods(ViewerClass) {
         if (!this._compact?.active) return;
         for (const plot of this.plotManager.plots.values()) {
             if (plot.div) this._compactSyncFitButtons(plot.div);
-            if (plot.fftDiv) this._compactSyncFitButtons(plot.fftDiv);
-            if (plot.histogramDiv) this._compactSyncFitButtons(plot.histogramDiv);
-            if (plot.temporalProfileDiv) this._compactSyncFitButtons(plot.temporalProfileDiv);
-            if (plot.integralDiv) this._compactSyncFitButtons(plot.integralDiv);
+            for (const pane of COMPACT_ANALYSIS_PANES) {
+                if (plot[pane.div]) this._compactSyncFitButtons(plot[pane.div]);
+            }
         }
     };
 
@@ -691,16 +682,18 @@ export function installCompactMethods(ViewerClass) {
             div._touchWindowZoom = () => {
                 const current = this._compactPlotForDiv(div);
                 if (!this._compact.active || !current) return null;
-                if (!WINDOW_ZOOM_MODES.has(current.plot.mode)) return null;
-                // The integral's bars are per period, not a time axis to window.
-                if (current.pane === 'integral') return null;
+                if (!COMPACT_WINDOW_ZOOM_MODES.has(current.plot.mode)) return null;
+                // An analysis pane says whether a window means anything on it
+                // (the integral's bars are per period, not a time axis).
+                const analysisPane = compactAnalysis(current.plot.mode)?.pane;
+                if (analysisPane?.name === current.pane && !analysisPane.windowZoom) return null;
                 return { hint: i18n.t('compactWindowZoomHint') };
             };
         }
         let group = div._compactFitGroup;
         const wanted = !!owner
             && FIT_BUTTON_MODES.has(owner.plot.mode)
-            && (owner.pane === 'main' || ANALYSIS_PANE_MODE[owner.pane] === owner.plot.mode)
+            && (owner.pane === 'main' || COMPACT_ANALYSIS_PANE_MODE[owner.pane] === owner.plot.mode)
             && this.plotManager._hasContent(owner.plot)
             && !!div._fullLayout;
         if (!wanted) {
@@ -718,6 +711,12 @@ export function installCompactMethods(ViewerClass) {
             div._compactFitGroup = group;
         }
         group.hidden = false;
+        // A pane with nothing to fit on one axis (the Heatmap's calendar rows)
+        // does not offer that button, as the desktop toolbar does not either.
+        const analysisPane = compactAnalysis(owner.plot.mode)?.pane;
+        const noFitY = analysisPane?.name === owner.pane && analysisPane.fitY === false;
+        const yBtn = group.querySelector('[data-axis="y"]');
+        if (yBtn) yBtn.hidden = noFitY;
         this._compactSyncCursorButton(group, owner);
         // The corner of the plotting area, not of the div: clear of the axis
         // labels on the right and of a legend placed above the plot.
@@ -732,28 +731,14 @@ export function installCompactMethods(ViewerClass) {
         const pm = this.plotManager;
         const { panelId, plot, pane } = owner;
         const relayout = (update) => (update && Object.keys(update).length ? Plotly.relayout(div, update) : Promise.resolve());
+        const analysis = compactAnalysis(plot.mode);
         let work;
-        if (plot.mode === 'fft' && pane === 'spectrum') {
-            // The spectrum alone: its own limits (fMin/fMax, yMin/yMax) still
-            // hold, as they do for its desktop reset.
-            work = axis === 'all'
-                ? () => pm._applyFftAxisLimits(plot)
-                : () => relayout(pm._fftAxisLimitUpdate(plot, axis, { visibleOnly: true }));
-        } else if (plot.mode === 'histogram' && pane === 'bars') {
-            // The bars: values on X, counts (or %, density) on Y.
-            work = axis === 'all'
-                ? () => Plotly.relayout(div, { 'xaxis.autorange': true, 'yaxis.autorange': true })
-                : () => pm._autoScaleHistogramAxis(plot, axis);
-        } else if (plot.mode === 'temporal-profile' && pane === 'profile') {
-            // X goes back to the whole period (0–24 h, a week…), Y fits.
-            work = axis === 'all'
-                ? () => pm._resetTemporalProfileAnalysisView(plot)
-                : () => pm._autoScaleTemporalProfileAxis(plot, axis);
-        } else if (plot.mode === 'integral' && pane === 'integral') {
-            work = axis === 'all'
-                ? () => pm._resetIntegralAnalysisView(plot)
-                : () => pm._autoScaleIntegralAxis(plot, axis);
-        } else if (plot.mode === 'fft' || plot.mode === 'histogram' || plot.mode === 'temporal-profile' || plot.mode === 'integral') {
+        if (analysis?.pane?.name === pane && analysis.pane.fit) {
+            // The analysis's own pane: each has its own axis conventions, which
+            // its entry in compact-analyses.js states.
+            const ctx = { pm, panelId, plot, div, relayout };
+            work = () => analysis.pane.fit(ctx, axis);
+        } else if (analysis?.pane) {
             // The time pane beside the analysis is the timeseries chart.
             work = axis === 'all'
                 ? () => pm._autoScalePlotTimeOnly(plot)
@@ -1194,19 +1179,16 @@ export function installCompactMethods(ViewerClass) {
             await this._compactToggleStateVar(panelId, panelEl, plot, varName, ownerId);
             return;
         }
-        const removing = !!plot && index >= 0 && SIGNAL_LIST_MODES.has(plot.mode);
+        const removing = !!plot && index >= 0 && COMPACT_SIGNAL_LIST_MODES.has(plot.mode);
         if (removing) {
-            if (plot.mode === 'timeseries') pm.removeTrace(panelId, varName, ownerId);
-            else if (plot.mode === 'fft') pm._removeFftTraceFromLegend(panelId, plot, plot.traces[index]);
-            else if (plot.mode === 'histogram') pm._removeHistogramTraceFromLegend(panelId, plot, plot.traces[index]);
-            else if (plot.mode === 'integral') pm._removeIntegralTraceFromLegend(panelId, plot, plot.traces[index]);
-            else pm._removeTemporalProfileTraceFromLegend(panelId, plot, plot.traces[index]);
+            // How this analysis takes a signal off, from its own entry.
+            compactAnalysis(plot.mode).removeTrace({ pm, panelId, plot }, plot.traces[index]);
         } else {
             await pm._handleVariableDrop(panelId, [varName], panelEl, { fileId });
         }
         // Say what happened, and to which plot. A 2D plot has its banner.
         const after = pm.plots.get(panelId);
-        if (after && SIGNAL_LIST_MODES.has(after.mode)) {
+        if (after && COMPACT_SIGNAL_LIST_MODES.has(after.mode)) {
             const nowOn = (after.traces || []).some(trace => trace.varName === varName && trace.fileId === ownerId);
             if (nowOn !== removing) {
                 const n = this._compactPanelIds().indexOf(panelId) + 1;
@@ -1534,14 +1516,16 @@ export function installCompactMethods(ViewerClass) {
             pm._runWithEagerDetailLoading(panelId, work);
         };
         const mode = plot?.mode || 'timeseries';
-        if (mode === 'fft') {
-            viewRow.appendChild(button('compact-secondary-btn', i18n.t('fftResetLabel'), () => pm._resetFftView(panelId), { title: i18n.t('fftResetView') }));
-        } else if (mode === 'histogram') {
-            viewRow.appendChild(button('compact-secondary-btn', i18n.t('fftResetLabel'), () => pm._resetHistogramView(panelId), { title: i18n.t('fftResetView') }));
-        } else if (mode === 'temporal-profile') {
-            viewRow.appendChild(button('compact-secondary-btn', i18n.t('temporalProfileReset'), () => pm._resetTemporalProfileView(panelId), { title: i18n.t('temporalProfileResetTip') }));
-        } else if (mode === 'integral') {
-            viewRow.appendChild(button('compact-secondary-btn', i18n.t('integralReset'), () => pm._resetIntegralView(panelId), { title: i18n.t('integralResetTip') }));
+        const analysisReset = compactAnalysis(mode)?.reset;
+        if (analysisReset) {
+            // An analysis fits its panes from its own reset, which puts back
+            // the limits and the scope its options hold.
+            viewRow.appendChild(button(
+                'compact-secondary-btn',
+                i18n.t(analysisReset.labelKey),
+                () => analysisReset.run({ pm, panelId, plot, refresh: () => this._renderCompactSheetContent() }),
+                { title: i18n.t(analysisReset.titleKey) },
+            ));
         } else if (mode !== 'timeseries') {
             // Fitting X and Y apart means nothing in a phase plot or a 3D scene.
             const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
@@ -1563,7 +1547,7 @@ export function installCompactMethods(ViewerClass) {
             this._buildCompactPhasePairs(signals, panelId, plot);
         } else if (mode === 'state-anim') {
             this._buildCompactStateSlots(signals, panelId, plot);
-        } else if (!SIGNAL_LIST_MODES.has(mode)) {
+        } else if (!COMPACT_SIGNAL_LIST_MODES.has(mode)) {
             // Phase plots and animations pair their signals in roles (x, y,
             // z, dx/dt) that the phone layout does not edit yet.
             const summary = this._compactPanelSummary(panelId);
@@ -1736,88 +1720,32 @@ export function installCompactMethods(ViewerClass) {
     // ─── Analyze ──────────────────────────────────────────────────
 
     // What an analysis offers in the Analyze sheet: the buttons of its own
-    // top bar (hidden on the plot), and its options panel, lent here.
+    // top bar (hidden on the plot), and its options panel, lent here. Both
+    // come from the analysis's entry in compact-analyses.js, which is the one
+    // place that describes an analysis on a phone (§11).
     proto._compactAnalysisControls = function(mode, panelId, plot) {
-        const pm = this.plotManager;
-        if (mode === 'fft') {
-            return {
-                titleKey: 'compactFftOptions',
-                options: () => pm._fftOptionsPanel(plot),
-                actions: [
-                    { label: i18n.t('fftResetLabel'), title: i18n.t('fftResetView'), run: () => pm._resetFftView(panelId) },
-                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
-                        const current = pm._ensureFftState(plot).layout;
-                        pm._setFftLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
-                    } },
-                    { label: i18n.t('hideTimeSeries'), title: i18n.t('hideTimeSeriesTooltip'), pressed: !!pm._ensureFftState(plot).timeSeriesHidden, run: () => {
-                        pm._toggleFftTimeSeries(panelId);
-                        this._renderCompactSheetContent();
-                    } },
-                ],
-            };
-        }
-        if (mode === 'histogram') {
-            const state = pm._ensureHistogramState(plot);
-            return {
-                titleKey: 'compactHistogramOptions',
-                options: () => pm._histogramOptionsPanel(plot),
-                actions: [
-                    { label: i18n.t('fftResetLabel'), title: i18n.t('fftResetView'), run: () => pm._resetHistogramView(panelId) },
-                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
-                        const current = pm._ensureHistogramState(plot).layout;
-                        pm._setHistogramLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
-                    } },
-                    { label: i18n.t('hideTimeSeries'), title: i18n.t('hideTimeSeriesTooltip'), pressed: !!state.timeSeriesHidden, run: () => {
-                        pm._toggleHistogramTimeSeries(panelId);
-                        this._renderCompactSheetContent();
-                    } },
-                    // On the desktop, in the View menu, which the phone has not.
-                    { label: i18n.t('viewLogCounts'), title: i18n.t('viewLogCountsTitle'), pressed: state.yScale === 'log', run: () => {
-                        pm._toggleHistogramLogY(panelId);
-                        this._renderCompactSheetContent();
-                    } },
-                ],
-            };
-        }
-        if (mode === 'temporal-profile') {
-            const hidden = !!pm._ensureTemporalProfileState(plot).timeSeriesHidden;
-            const timeLabel = i18n.t(hidden ? 'temporalProfileShowTime' : 'temporalProfileHideTime');
-            return {
-                titleKey: 'compactProfileOptions',
-                options: () => pm._temporalProfileOptionsPanel(plot),
-                actions: [
-                    { label: i18n.t('temporalProfileReset'), title: i18n.t('temporalProfileResetTip'), run: () => pm._resetTemporalProfileView(panelId) },
-                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
-                        const current = pm._ensureTemporalProfileState(plot).layout;
-                        pm._setTemporalProfileLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
-                    } },
-                    { label: timeLabel, title: timeLabel, pressed: hidden, run: () => {
-                        pm._toggleTemporalProfileTimeSeries(panelId);
-                        this._renderCompactSheetContent();
-                    } },
-                ],
-            };
-        }
-        if (mode === 'integral') {
-            const hidden = !!pm._ensureIntegralState(plot).timeSeriesHidden;
-            const timeLabel = i18n.t(hidden ? 'integralShowTime' : 'integralHideTime');
-            return {
-                titleKey: 'compactIntegralOptions',
-                options: () => pm._integralOptionsPanel(plot),
-                actions: [
-                    { label: i18n.t('integralReset'), title: i18n.t('integralResetTip'), run: () => pm._resetIntegralView(panelId) },
-                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
-                        const current = pm._ensureIntegralState(plot).layout;
-                        pm._setIntegralLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
-                    } },
-                    { label: timeLabel, title: timeLabel, pressed: hidden, run: () => {
-                        pm._toggleIntegralTimeSeries(panelId);
-                        this._renderCompactSheetContent();
-                    } },
-                ],
-            };
-        }
-        return null;
+        const entry = compactAnalysis(mode);
+        if (!entry?.options) return null;
+        const ctx = {
+            pm: this.plotManager,
+            panelId,
+            plot,
+            refresh: () => this._renderCompactSheetContent(),
+        };
+        const resolve = (action) => ({
+            label: action.label ?? i18n.t(action.labelKey),
+            title: action.title ?? (action.titleKey ? i18n.t(action.titleKey) : ''),
+            pressed: action.pressed,
+            run: () => action.run(ctx),
+        });
+        const actions = [];
+        if (entry.reset) actions.push(resolve(entry.reset));
+        for (const action of entry.actions?.(ctx) || []) actions.push(resolve(action));
+        return {
+            titleKey: entry.optionsTitleKey,
+            options: () => entry.options(ctx),
+            actions,
+        };
     };
 
     proto._buildCompactAnalyzePage = function() {

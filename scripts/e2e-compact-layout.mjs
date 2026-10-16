@@ -954,6 +954,53 @@ try {
         await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
         await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
         assert.deepEqual(await profilePlot(), { mode: 'histogram', traces: ['temp'] }, 'a tap takes a signal off the histogram');
+
+        // The Heatmap, the same way: chosen in Analyze, its options lent to the
+        // sheet, and the buttons of its own top bar there.
+        await profilePage.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+        await profilePage.locator('.compact-radio', { hasText: 'Calendar heatmap' }).click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'heatmap');
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return !!plot?.heatmapOptionsEl && document.querySelector('.compact-sheet')?.contains(plot.heatmapOptionsEl);
+        }, null, { timeout: 15000 });
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return plot?.heatmapDiv?.data?.length > 0;
+        }, null, { timeout: 30000 });
+        assert.equal(await profilePage.locator('.heatmap-container .heatmap-topbar-group').first().isVisible(), false,
+            'the Heatmap\'s own buttons are in the sheet, not over the plot');
+        assert.ok(await profilePage.locator('.compact-page-analyze .compact-secondary-btn', { hasText: 'V/H' }).isVisible(), 'its layout switch is');
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.compact-sheet .heatmap-summary')?.textContent.trim()), true,
+            'the Heatmap\'s summary updates while its options are in the sheet');
+        assert.deepEqual(await sizeProblems(profilePage), [], 'the Heatmap options are phone-sized');
+        assert.deepEqual(await sidewaysProblems(profilePage), [], 'and fit the width');
+        await shot(profilePage, 'analyze-heatmap');
+        await profilePage.locator('.compact-sheet-close').click();
+        await profilePage.waitForFunction(() => window.app._compact.sheet === null);
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.heatmap-workspace > .heatmap-options')), true,
+            'closing the sheet gives the Heatmap its options panel back');
+        await profilePage.waitForTimeout(400);
+        assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
+            'the time pane and the calendar each have their fit buttons');
+        assert.deepEqual(
+            await profilePage.evaluate(() => {
+                const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+                const axes = div => [...div.querySelectorAll('.compact-fit-btn[data-axis]')].filter(btn => !btn.hidden).map(btn => btn.dataset.axis);
+                return { time: axes(plot.div), calendar: axes(plot.heatmapDiv) };
+            }),
+            { time: ['x', 'y', 'all'], calendar: ['x', 'all'] },
+            'the calendar\'s rows are a fixed axis: nothing to fit vertically there',
+        );
+        await shot(profilePage, 'heatmap');
+        await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
+        assert.deepEqual(await profilePlot(), { mode: 'heatmap', traces: ['temp', 'load'] }, 'a tap adds to the Heatmap');
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="temp"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
+        assert.deepEqual(await profilePlot(), { mode: 'heatmap', traces: ['load'] }, 'and takes one off it');
+
         assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
         await profileContext.close();
     }

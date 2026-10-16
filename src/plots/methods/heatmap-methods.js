@@ -522,6 +522,10 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
     plot.div = timeDiv;
     plot.heatmapDiv = heatmapDiv;
     plot.heatmapContainer = container;
+    // Kept on the plot, not looked up through the container: the phone's
+    // Analyze sheet borrows this panel, and while it is lent out it is no
+    // longer a child of the workspace.
+    plot.heatmapOptionsEl = options;
     plot._calendarHeatmapModels = [];
     this._renderCalendarHeatmapOptionsPanel(panelId, plot);
 
@@ -1538,7 +1542,7 @@ proto._setCalendarHeatmapStatus = function(plot, message, kind = 'muted') {
 };
 
 proto._syncCalendarHeatmapMessage = function(plot) {
-    const box = plot?.heatmapContainer?.querySelector('.heatmap-message');
+    const box = this._calendarHeatmapOptionsPanel(plot)?.querySelector('.heatmap-message');
     if (!box) return;
     const message = plot._calendarHeatmapStatusMessage || '';
     const kind = plot._calendarHeatmapStatusKind || 'muted';
@@ -1588,7 +1592,7 @@ proto._toggleCalendarHeatmapOptions = function(panelId) {
     const state = this._ensureCalendarHeatmapState(plot);
     state.optionsVisible = !state.optionsVisible;
     syncEdgeToggle(plot.heatmapContainer, !state.optionsVisible);
-    const options = plot.heatmapContainer.querySelector('.heatmap-options');
+    const options = this._calendarHeatmapOptionsPanel(plot);
     if (options) options.hidden = !state.optionsVisible;
     const button = plot.heatmapContainer.querySelector('.heatmap-options-btn');
     if (button) {
@@ -1711,9 +1715,13 @@ proto._refreshDirtyCalendarHeatmap = function(panelId) {
     this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
 };
 
+proto._calendarHeatmapOptionsPanel = function(plot) {
+    return plot?.heatmapOptionsEl || plot?.heatmapContainer?.querySelector('.heatmap-options') || null;
+};
+
 proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
     const state = this._ensureCalendarHeatmapState(plot);
-    const options = plot?.heatmapContainer?.querySelector('.heatmap-options');
+    const options = this._calendarHeatmapOptionsPanel(plot);
     if (!options) return;
     options.innerHTML = '';
     const message = document.createElement('div');
@@ -1996,7 +2004,7 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
 };
 
 proto._syncCalendarHeatmapOptionsPanel = function(plot) {
-    const options = plot?.heatmapContainer?.querySelector('.heatmap-options');
+    const options = this._calendarHeatmapOptionsPanel(plot);
     if (!options) return;
     const [lower, upper] = this._activeCalendarHeatmapRange(plot);
     const values = { x1: lower, x2: upper };
@@ -2009,7 +2017,7 @@ proto._syncCalendarHeatmapOptionsPanel = function(plot) {
 };
 
 proto._syncCalendarHeatmapSummary = function(plot) {
-    const summary = plot?.heatmapContainer?.querySelector('.heatmap-summary');
+    const summary = this._calendarHeatmapOptionsPanel(plot)?.querySelector('.heatmap-summary');
     if (!summary) return;
     const models = plot._calendarHeatmapModels || [];
     if (!models.length) {

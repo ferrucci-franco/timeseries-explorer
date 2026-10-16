@@ -13,10 +13,11 @@ Built:
 - one plot at a time, with the plot list in the Plot sheet;
 - the Data sheet, with tap-to-plot and the per-file page;
 - the Plot sheet: view and signals;
-- the Analyze sheet: time series, FFT, histogram, temporal profile and integral, each
-  analysis with its options lent to the sheet and its top-bar buttons (reset, V/H,
-  hide the time series) as buttons there; the histogram's log counts, in the View
-  menu on the desktop, is a button there too;
+- the Analyze sheet: time series, FFT, histogram, calendar heatmap, temporal profile
+  and integral, each analysis with its options lent to the sheet and its top-bar
+  buttons (reset, V/H, hide the time series) as buttons there; the histogram's log
+  counts, in the View menu on the desktop, is a button there too, and the heatmap's
+  **Update** appears while appended data is waiting to be folded in;
 - 2D (x–y), 2D + t (x–y along time) and 3D (x–y–z) plots: the plot type in the Plot
   sheet, x then y (then z) by tapping in Data, the curves listed with removal, the
   1:1 aspect in 2D, and the 3D scene's gestures (pan with a slow double tap) in
@@ -35,6 +36,7 @@ Built:
 - help full screen, and the bottom bar's icons each in their own colour.
 
 The code is in `src/app/methods/compact-methods.js`,
+`src/app/methods/compact-analyses.js` (what each analysis is on a phone, §11),
 `src/app/methods/compact-cursor-methods.js`, `src/ui/compact-layout.js`,
 `src/utils/cursor-handles.js` and `src/styles/compact.css`. The tests are
 `npm run test:compact-layout`, `npm run test:cursor-handles` and
@@ -42,7 +44,7 @@ The code is in `src/app/methods/compact-methods.js`,
 
 Not built yet:
 
-- the other analyses (heatmap, correlation);
+- correlation, the analysis of the 2D/pair family;
 - View and Marks;
 - tap readouts beyond Plotly's own;
 - export through Web Share;
@@ -526,6 +528,17 @@ design document or PR:
 
 This rule is what keeps "compact mode of the same app" from decaying into a second,
 neglected UI.
+
+For an **analysis** of the time-series family the rule is enforced in code. Its
+placement is one entry in `src/app/methods/compact-analyses.js`: the radio in the
+Analyze sheet, whether a tap in Data adds a signal to it, the pane it draws beside
+its time series (and how that pane's axes are fitted), its reset, the rest of its
+top bar, and the options panel it lends to the sheet. Nothing else in the compact
+layout names an analysis mode — the sets it reads are derived from those entries —
+and `npm run test:compact-layout` fails when the desktop Analysis menu offers an
+analysis that file does not describe. The CSS side is three selectors: the
+analysis's top-bar groups, its options panel and its edge rail, hidden in
+`src/styles/compact.css` so only its status stays on the plot.
 
 ## 12. Delivery
 
