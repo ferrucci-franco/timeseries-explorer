@@ -338,6 +338,15 @@
     cursor: crosshair !important;
 }
 
+/* Navigate drags the map: an open hand, closed while it is pressed. */
+.gridded-map.gridded-cursor-navigate .nsewdrag {
+    cursor: grab !important;
+}
+
+.gridded-map.gridded-cursor-navigate.gridded-pressed .nsewdrag {
+    cursor: grabbing !important;
+}
+
 /* Over something that can be picked (a point, a box's edge, the orange
    ring), a hand; while the ring is dragged, a closed hand. */
 .gridded-map.gridded-over-item .nsewdrag {
@@ -1030,10 +1039,30 @@ html.compact .gridded-time-label {
     min-width: 0;
 }
 
+/* The help takes most of the window (at least 70% of its width) and lays
+   its sections out in columns, so it reads at a glance instead of scrolling
+   down a narrow strip. */
+.modal-dialog.gridded-help-dialog {
+    width: min(calc(100vw - 32px), max(70vw, 480px));
+    max-width: none;
+}
+
 .gridded-help-dialog .gridded-help-body {
     text-align: left;
     font-size: 0.85rem;
     line-height: 1.45;
+    column-width: 22rem;
+    column-gap: 2rem;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.gridded-help-dialog .gridded-help-body h4 {
+    break-after: avoid;
+}
+
+.gridded-help-dialog .gridded-help-body p {
+    break-inside: avoid;
 }
 
 .gridded-help-dialog .gridded-help-body h4 {

@@ -373,6 +373,55 @@ try {
             if (index) assert.ok(span <= zoom.spans[index - 1] + 1e-9, `zooming in never widens the view (${zoom.spans.join(', ')})`);
         });
         assert.equal(zoom.sameDrawing, true, `a small grid is not redrawn for a zoom (${JSON.stringify(zoom.drawn)})`);
+        // Two fingers on a trackpad: sideways or diagonally the map pans
+        // (the span stays), up or down it zooms, as the wheel did above.
+        const ranges = () => page.evaluate(() => {
+            const { xaxis, yaxis } = document.querySelector('#gridded-view .gridded-map')._fullLayout;
+            return { x: [...xaxis.range], y: [...yaxis.range] };
+        });
+        const swipe = async (dx, dy) => {
+            for (let step = 0; step < 6; step++) {
+                await page.mouse.wheel(dx, dy);
+                await page.waitForTimeout(30);
+            }
+            await page.waitForTimeout(900);
+        };
+        const beforeSwipe = await ranges();
+        await swipe(40, 0);
+        const sideways = await ranges();
+        const span = range => range[1] - range[0];
+        assert.ok(sideways.x[0] > beforeSwipe.x[0] + 1, `a sideways swipe pans east (${beforeSwipe.x} → ${sideways.x})`);
+        assert.ok(Math.abs(span(sideways.x) - span(beforeSwipe.x)) < 1e-6 && Math.abs(sideways.y[0] - beforeSwipe.y[0]) < 1e-6, 'without zooming or moving north');
+        await swipe(-30, 30);
+        const diagonal = await ranges();
+        assert.ok(diagonal.x[0] < sideways.x[0] - 1 && diagonal.y[0] < sideways.y[0] - 1, `a diagonal swipe pans both ways (${JSON.stringify([sideways, diagonal])})`);
+        assert.ok(Math.abs(span(diagonal.x) - span(sideways.x)) < 1e-6, 'still without zooming');
+        await swipe(0, 40);
+        const vertical = await ranges();
+        assert.ok(span(vertical.x) > span(diagonal.x) * 1.05, `up or down zooms (${span(diagonal.x)} → ${span(vertical.x)})`);
+        // Navigate shows an open hand, closed while pressed (away from the
+        // region drawn above, which shows the pointer of what can be picked).
+        const corner = await page.$eval('#gridded-view .gridded-map .nsewdrag', el => {
+            const rect = el.getBoundingClientRect();
+            return { x: rect.x + rect.width * 0.03, y: rect.y + rect.height * 0.97 };
+        });
+        await page.mouse.move(corner.x, corner.y);
+        await page.waitForFunction(() => ![...document.querySelector('#gridded-view .gridded-map').classList].some(name => name.startsWith('gridded-over-')));
+        const cursorNow = () => page.$eval('#gridded-view .gridded-map .nsewdrag', el => getComputedStyle(el).cursor);
+        assert.equal(await cursorNow(), 'grab', 'Navigate shows a hand');
+        // A short drag, not a click, which would select the region the
+        // zoomed view may lie in.
+        await page.mouse.down();
+        assert.equal(await cursorNow(), 'grabbing', 'that closes while pressed');
+        await page.mouse.move(corner.x + 20, corner.y - 10, { steps: 4 });
+        await page.mouse.up();
+        assert.equal(await cursorNow(), 'grab');
+        // Back to the view the checks below were written for.
+        await page.evaluate(async restore => {
+            const { default: Plotly } = await import('/src/vendor/plotly.js');
+            await Plotly.relayout(document.querySelector('#gridded-view .gridded-map'), { 'xaxis.range': restore.x, 'yaxis.range': restore.y });
+        }, beforeSwipe);
+        await page.waitForTimeout(400);
 
         // The coastlines and borders stay inside the axes. They are SVG
         // traces — the WebGL layer is one canvas over the whole figure, and
@@ -655,7 +704,9 @@ try {
         const help = await page.evaluate(() => ({
             text: document.querySelector('.gridded-help-dialog').innerText,
             blur: getComputedStyle(document.querySelector('.modal-overlay')).backdropFilter,
+            width: document.querySelector('.gridded-help-dialog').getBoundingClientRect().width / window.innerWidth,
         }));
+        assert.ok(help.width >= 0.69, `the help uses most of the window's width (${help.width})`);
         assert.match(help.text, /Bilinear interpolation/, 'the help explains the point methods');
         assert.match(help.text, /weighted by area/, 'and the region statistics');
         assert.match(help.blur, /blur/, 'over a blurred page');
