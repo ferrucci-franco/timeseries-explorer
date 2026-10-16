@@ -16,7 +16,10 @@
 //     its rows, and the engine's memory before and after (the sink's bytes per
 //     row, which the budget estimates);
 //   · a zoom and an overview refresh that read the sink, and a zoom on the
-//     file alone to read them against.
+//     file alone to read them against;
+//   · the digital filter of 4b-2: the step of the time axis, a forward filter,
+//     and a zero-phase one over a file with no hole — one stretch as long as
+//     the file, done in two passes.
 //
 // docs/any-size-files.md §10 says what had to be measured before choosing
 // where the database lives; the numbers are recorded there. One thread, this
@@ -173,6 +176,25 @@ try {
                 });
                 await step('overview refresh with the sink', async () => { await source.refreshOverview(data); return {}; });
             }
+            // Phase 4b-2: the digital filter. The step of the time axis is
+            // measured once per file, and cached for the filters after it.
+            const filter = (mode) => ({ source: 'manual', b: [0.2, 0.3], a: [1, -0.5], mode, advance: 0, restartGap: 0, init: 'steady', initState: [] });
+            await step('time-axis step over the whole file (4b-2)', async () => {
+                const steps = await app._lazyAxisSteps(data);
+                return { hasNominalStep: steps.hasNominalStep };
+            });
+            await step('filter, forward (4b-2)', async () => {
+                const result = await app._applyLazyDataToolCreateMode(context('filter', 'a', 'ff'), { tool: 'filter', params: filter('forward') }, { silent: true });
+                if (!result) throw new Error('not created');
+                return { rows: result.count };
+            });
+            const beforeZero = await memory();
+            await step('filter, zero phase: one stretch as long as the file, two passes (4b-2)', async () => {
+                const result = await app._applyLazyDataToolCreateMode(context('filter', 'a', 'fz'), { tool: 'filter', params: filter('zeroPhase') }, { silent: true });
+                if (!result) throw new Error('not created');
+                return { rows: result.count };
+            });
+            out['engine memory after the zero-phase filter'] = { beforeMB: Math.round(beforeZero / 1e6), afterMB: Math.round(await memory() / 1e6) };
             return out;
         }, ROWS);
         for (const [label, value] of Object.entries(results)) show(label, value);

@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b-1 implementadas (sección "Implementado (fase 4b-1)"); Parquet sin red resuelto (§8); el resto de la 4b diseñado (sección "Diseño (fase 4b)"); la base de DuckDB sigue en memoria, con OPFS medido y dejado para la 4b-4 (§10, "Decidido en la 4b-1"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a, 4b-1 y 4b-2 implementadas (secciones "Implementado (fase 4b-1)" y "Implementado (fase 4b-2)"); Parquet sin red resuelto (§8); el resto de la 4b diseñado (sección "Diseño (fase 4b)"); la base de DuckDB sigue en memoria, con OPFS medido y dejado para la 4b-4 (§10, "Decidido en la 4b-1"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -70,7 +70,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 
 | Función | En lazy | Cadena |
 |---|---|---|
-| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b**, ~~integral~~ en la 4a (salvo *interpolar*), ~~media móvil y detrend por media móvil~~ en la **4b-1** | `dataToolLazyDisabled` |
+| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b**, ~~integral~~ en la 4a (salvo *interpolar*), ~~media móvil y detrend por media móvil~~ en la **4b-1**, ~~filtro~~ en la **4b-2** | `dataToolLazyDisabled` |
 | Outliers por picos | deshabilitados (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | `dataToolLazyBoundsOnly` |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
@@ -221,8 +221,8 @@ puede correr sobre trozos. Tres familias:
 | Detrend media / lineal / polinomio (`computeDetrend`) | global (ajuste) + puntual (aplicar) | agregados SQL (`fsum` de potencias), resolver en JS, aplicar como SQL, **hecho (3b)** | El ajuste coincide al redondeo; la resta, bit a bit. |
 | Detrend por primera muestra | puntual | **hecho (3b)** | — |
 | Detrend por media móvil | como media móvil | **4b-1** | — |
-| Filtro IIR hacia adelante (`applyFilter`) | estado | forma incremental con estado, **4b-2** | El umbral de huecos es la pasada de la 4a; el avance `D` retrasa la emisión. |
-| Filtro IIR de fase cero | dos pasadas, la segunda **al revés** | ida a un sumidero de trabajo; vuelta leyéndolo por rangos de `rn` en orden inverso, **4b-2** | Leer un CSV al revés en SQL es `ORDER BY t DESC` = sort completo. Un trozo del sumidero al revés cuesta 11 ms (medido). |
+| Filtro IIR hacia adelante (`applyFilter`) | estado | forma incremental con estado, **hecho (4b-2)** | El paso del eje es la pasada de la 4a, sobre el archivo entero; el avance `D` retiene las últimas `D` salidas de cada tramo. Bit a bit. |
+| Filtro IIR de fase cero | dos pasadas, la segunda **al revés** | tramos cortos en memoria; los largos, ida a una tabla de trabajo y vuelta leyéndola por rangos de `rn` en orden inverso, que corrige el sumidero en su lugar, **hecho (4b-2)** | Leer un CSV al revés en SQL es `ORDER BY t DESC` = sort completo. Un trozo del sumidero al revés cuesta 11 ms (medido). |
 | Rellenar faltantes (`fillMissingValues`) | vecinos a ambos lados del hueco | trozos con solape, mirada hacia adelante hasta la próxima muestra finita con tope, en workers, **4b-3** | Los 7 métodos son locales (`data-tool-sampling.md` §2). Un hueco más largo que el tope se omite, como uno más largo que `maxGap`. |
 | Remuestreo (`runResample`) | bucket (estado en el borde) | forma incremental con cursor; la salida es un **dataset lazy** cuya tabla es el sumidero, **4b-4** | Precedente: *Resample* ya produce **un archivo nuevo**. El tope de 20 M puntos no aplica: la grilla no se materializa. |
 | Colapsar timestamps repetidos (`runCollapseRepeats`) | racha (estado) | forma incremental; dataset lazy, **4b-4** | — |
@@ -285,7 +285,7 @@ En orden de valor visible por esfuerzo:
 | 2 | **Exportación exacta** para lazy sobre el stream (CSV; Parquet vía `COPY` directo) | 1 día | bajo; cierra el defecto §1.6 del blueprint, visible al usuario desde el primer día |
 | 3 | Herramientas puntuales y de ventana como **columnas virtuales SQL**: derivada, IQR, detrend (tras su pasada de agregados) | 1–2 días + paridad eager/lazy por herramienta | medio: semántica de no finitos y Δt = 0 |
 | 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
-| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
+| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
 | 5 | Proyecto por definición para archivos lazy | 2–3 días | medio: formato de sesión, compatibilidad hacia atrás |
 | 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
 
@@ -565,7 +565,7 @@ de multiplicar por 0,001. El e2e crea una integral desde el panel.
 
 ### Diseño (fase 4b): las herramientas que no se escriben en SQL
 
-**Estado: diseño; la 4b-1 está implementada (sección "Implementado (fase 4b-1)", con lo que cambió respecto de este diseño).** Lo que queda después de la 4a son las
+**Estado: diseño; la 4b-1 y la 4b-2 están implementadas (secciones "Implementado (fase 4b-1)" y "Implementado (fase 4b-2)", con lo que cambió respecto de este diseño).** Lo que queda después de la 4a son las
 herramientas cuya salida no es una expresión sobre la fila y sus vecinas
 inmediatas: media móvil (y el detrend por media móvil), filtro digital (hacia
 adelante y de fase cero), picos, rellenar faltantes, las políticas *interpolar*
@@ -1037,6 +1037,130 @@ Lo que dicen:
   funcionaba: el escaneo del CSV y las pasadas de la 3b y la 4a dan los
   mismos tiempos (±10 %). El que falla es uno mínimo (61 MiB). Ver §10 para lo
   que eso decide.
+
+### Implementado (fase 4b-2): el filtro digital
+
+**Filtro digital** en archivos lazy — hacia adelante y de fase cero, con
+coeficientes escritos a mano o diseñados —, sobre todas las filas del
+archivo, bit a bit con el kernel en memoria. Corre por el ejecutor y el
+sumidero de la 4b-1; lo nuevo es el kernel incremental, una segunda pasada en
+el ejecutor y la medición del eje de tiempo sobre el archivo entero.
+
+**El kernel, en su forma incremental** (`src/compute/kernels/iir.js`):
+`createForwardFilter` y `createZeroPhaseFilter`, con `push(trozo, tiempos,
+final)` y `flush()` como la media móvil; `applyFilter` es el conductor de un
+solo `push`. Entre trozos se lleva el estado de cada sección y la fila y el
+tiempo de la última muestra finita, que deciden si un hueco reinicia el filtro (`expectedBetween`: las
+filas que faltan o, con eje de tiempo, el tiempo del hueco sobre el paso
+nominal, contra `restartGap`). Antes de reemplazar el kernel se comparó con el
+`iir.js` anterior en 2775 casos, sin una diferencia; los tests que ya había
+(`test:detrend-filter`, `test:filter-design`, `test:filter-echo`) pasan sin
+tocarlos. Lo que el diseño no había previsto:
+
+- **El paso del eje es el del archivo entero.** `expectedBetween` necesita
+  `medianDt` y saber si el eje tiene paso nominal. `_lazyStepStats` es la
+  pasada de `_lazySamplingGapThreshold` de la 4a generalizada a lo que
+  devuelve `detectSamplingGaps`: el paso (una mediana exacta), si hay paso
+  nominal, la razón si no lo hay (`tooFewSamples`, `nonMonotonic`,
+  `irregularStep`), y los huecos con sus muestras faltantes. `_lazyAxisSteps`
+  la guarda por archivo (tabla, filas agregadas en vivo, eje): un archivo la
+  paga una vez. El filtro hacia adelante lee además el tiempo de cada fila del
+  trozo (`withTime`); el de fase cero no, porque solo corta en las muestras no
+  finitas.
+- **El avance `D` es una etapa aparte** (`createAdvanceStage`). Con
+  adelanto retiene las últimas `D` salidas de cada tramo hasta saber si el
+  tramo sigue (salen corridas `D` filas) o se corta (salen NaN, como en
+  memoria); con retraso es un anillo de `D` salidas. Retiene `D` muestras, nada
+  más.
+- **En fase cero solo los tramos largos van en dos pasadas.** Un tramo
+  (muestras finitas contiguas) de hasta `LAZY_FILTER_MEMORY_ROWS` = 2²⁰
+  muestras se junta y se filtra entero en memoria, con el mismo
+  `filterSegmentZeroPhase` que el kernel en memoria (en el peor caso, el
+  tramo de 8 MB y las copias que hace el kernel: ~50 MB de pico). Uno más largo — un archivo sin NaN es uno solo — hace la ida en
+  streaming: el relleno `oddExtend` del frente sale de sus primeras
+  `3 × orden + 1` muestras (las únicas que espera), el del final de un anillo
+  de las últimas, y las salidas de la ida vuelven marcadas `deferred`. Con el
+  cierre del tramo queda lo que la vuelta necesita para empezar: la ida sobre
+  el relleno del final (`longStretches[s].forwardEnd`).
+
+**El ejecutor, segunda pasada.** Las salidas `deferred` van a una **tabla de
+trabajo** `<archivo>_work_<n>(rn, v)` (`createWorkTable`, `openWorkWriter`;
+cuenta contra el presupuesto de los sumideros) y el sumidero recibe NaN en
+esas filas mientras tanto. Al terminar la lectura, por cada tramo largo,
+`kernel.backward(s)` recibe la ida del tramo de la última fila a la primera,
+leída de la tabla de trabajo por rangos de `rn` de un trozo (262 144 filas)
+en orden descendente (`openSinkUpdater.read`: un `ORDER BY rn` del rango,
+dado vuelta en JS), y sus salidas reemplazan esas filas del sumidero con un
+`UPDATE … FROM` acotado al rango (`write`). Distinto del diseño, que proponía
+que la vuelta escribiera el resultado al revés: **la vuelta corrige el
+sumidero en su lugar**, así que el orden físico de sus filas — del que depende
+la unión posicional — no cambia, y un test lo vigila. La tabla de trabajo se
+borra al terminar, al cancelar y al fallar. El overlay muestra la vuelta con su
+propio texto (*Pasada hacia atrás: {n} de {total} filas*).
+
+**El diseñador de filtros** en un archivo lazy diseña contra la frecuencia de
+muestreo del archivo entero, no la del resumen en memoria: el resumen es una
+muestra de filas y su espaciado no es el del archivo. La primera vez que el
+panel la pide se mide en segundo plano (`_lazyAxisStepsNow`); mientras tanto
+el panel dice que está midiendo el eje (`dataToolFilterDesignMeasuring`) y se
+vuelve a sincronizar cuando llega. La nota sobre huecos o un eje irregular
+(`_filterAxisNote`) sale de la misma medición.
+
+**En la app** (`lazy-data-tools-methods.js`): el selector ofrece el filtro en
+archivos lazy; el panel informa tramos, reinicios y muestras filtradas como en
+memoria (los conteos del kernel quedan en el registro del sumidero y en
+`dataTool`, `_lazyFilterDataTool`). La sesión, la cola, la firma, el
+presupuesto y el ciclo de vida son los de la 4b-1.
+
+Pruebas:
+
+- `scripts/test-filter-chunks.mjs`: hacia adelante y de fase cero en trozos
+  de 1, 3, 64 y 1000 muestras y de tamaños al azar, contra `applyFilter`, bit a
+  bit y con los conteos que informa el panel: huecos de filas y de tiempo,
+  reinicios, los tres estados iniciales, adelanto y retraso, desborde, las
+  secciones de un Butterworth y un eco disperso de orden 150. Fase cero con
+  `memoryRows` ∞, 1, 50 y 700 (1625 tramos en dos pasadas) y la vuelta también
+  en trozos de todos los tamaños.
+- `scripts/test-lazy-filter.mjs` (DuckDB-WASM en Node): `_lazyStepStats`
+  contra `detectSamplingGaps` (eje regular con caídas, irregular, hacia
+  atrás); 24 filtros hacia adelante y de fase cero creados como los crea el
+  panel, contra el kernel en memoria; las dos pasadas por `runChunkedJob` con
+  `memoryRows` y `chunkRows` chicos (297 tramos largos), el sumidero alineado y
+  ninguna tabla de trabajo que quede; un Cancelar en la segunda pasada que
+  borra el sumidero y la tabla de trabajo; un archivo con filtro de filas y uno
+  con eje generado; la frecuencia del diseñador, la del archivo entero.
+- `scripts/e2e-lazy-data-tools.mjs` (Chromium): un filtro diseñado
+  (Butterworth pasabajos de 5 Hz a 100 Hz de muestreo, hacia adelante) y uno
+  escrito a mano de fase cero, creados desde el panel, con el zoom exacto.
+
+Medido en Chromium con el bundle de la app (`node bench/lazy-sink-job.mjs
+--configs memory`; el mismo CSV de 20 M filas de la 4b-1, sin huecos: la fase
+cero es un tramo del largo del archivo, en dos pasadas):
+
+| Qué | Segundos |
+|---|---|
+| Paso del eje sobre el archivo entero (una vez por archivo) | 21,4 |
+| Filtro hacia adelante (primer orden), el trabajo entero | 23,0 |
+| Filtro de fase cero, ida y vuelta | 39,0 |
+| *Para comparar:* media móvil, ventana 101 | 20,5 |
+| *Para comparar:* umbral de huecos de la integral (4a) | 20,1 |
+
+Memoria del motor: 291 MB antes del filtro de fase cero (la media móvil y el
+filtro hacia adelante), 442 MB después: 151 MB, su sumidero; la tabla de
+trabajo ya no está.
+
+Lo que dicen:
+
+- **El filtro hacia adelante cuesta lo que la media móvil**: una pasada de
+  lectura del CSV (~0,9 M filas/s). El kernel no se nota (1,3 s por 20 M
+  filas, §"Hechos medidos").
+- **La vuelta de fase cero agrega ~16 s** a la ida: escribir 20 M filas a la
+  tabla de trabajo, leerlas por rangos al revés y corregir el sumidero en su
+  lugar. Es menos que una segunda lectura del CSV, que es lo que habría costado
+  leer el archivo al revés.
+- **El paso del eje se paga una vez por archivo** (lo guarda
+  `_lazyAxisSteps`): el segundo filtro, y el diseñador, ya no lo miden. Es una
+  pasada como el umbral de la integral, que mide lo mismo.
 
 ## 8. Riesgos y decisiones abiertas
 

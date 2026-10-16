@@ -63,7 +63,7 @@ export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
 export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 // What a lazy file offers (see _isDataToolAvailableForData).
-const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'detrend']);
+const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'detrend', 'filter']);
 const LAZY_OUTLIER_METHODS = new Set(['bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
@@ -1361,8 +1361,8 @@ proto._renameDataToolVariable = function(fileId, data, oldName, newName, options
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {
     // The derivative, IQR and detrend are SQL over the file, the moving
-    // average a job writing to a sink (lazy-data-tools-methods.js); hard
-    // bounds keep the path below.
+    // average and the filter jobs writing to a sink
+    // (lazy-data-tools-methods.js); hard bounds keep the path below.
     if (this._isLazySqlToolConfig(config)) return this._applyLazySqlToolCreateMode(context, config, options);
     if (this._isLazySinkToolConfig(config)) return this._applyLazySinkToolCreateMode(context, config, options);
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
@@ -2763,8 +2763,9 @@ proto._isDataToolAvailableForData = function(tool, data) {
     if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool) || FILE_DATA_TOOLS.has(tool);
     // A lazy file's variables are DuckDB expressions, not arrays: only the tools
     // written as SQL over the file (hard bounds, IQR, derivative, integral,
-    // detrend) and those the chunked executor runs (moving average) work on
-    // one. The rest wait for the later sub-phases (docs/any-size-files.md).
+    // detrend) and those the chunked executor runs (moving average, filter)
+    // work on one. The rest wait for the later sub-phases
+    // (docs/any-size-files.md).
     return LAZY_DATA_TOOLS.has(tool);
 };
 

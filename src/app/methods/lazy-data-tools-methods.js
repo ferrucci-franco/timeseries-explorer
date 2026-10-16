@@ -21,6 +21,7 @@
 import i18n from '../../i18n/index.js';
 import { runChunkedJob } from '../../data/chunk-executor.js';
 import { createMovingAverage } from '../../compute/kernels/moving-average.js';
+import { createForwardFilter, createZeroPhaseFilter } from '../../compute/kernels/iir.js';
 import {
     derivativeWindows,
     detrendAnchorSql,
@@ -53,6 +54,9 @@ import { iqrFences, interpolatedQuantile } from '../../compute/kernels/outliers.
 const LAZY_SQL_DETREND_METHODS = new Set(['mean', 'linear', 'polynomial', 'firstSample']);
 // Every detrend method a lazy file offers.
 export const LAZY_DETREND_METHODS = new Set([...LAZY_SQL_DETREND_METHODS, 'movingAverage']);
+// A stretch of a zero-phase filter up to this many samples is filtered in
+// memory; a longer one in two passes over the file (createZeroPhaseFilter).
+export const LAZY_FILTER_MEMORY_ROWS = 1 << 20;
 
 export function installLazyDataToolsMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -75,7 +79,7 @@ proto._isLazySqlToolConfig = function(config) {
 // Whether the chunked executor computes this configuration into a sink.
 proto._isLazySinkToolConfig = function(config) {
     if (!config) return false;
-    if (config.tool === 'movingAverage') return true;
+    if (config.tool === 'movingAverage' || config.tool === 'filter') return true;
     if (config.tool === 'detrend') return (config.params?.method ?? config.method) === 'movingAverage';
     return false;
 };
@@ -160,31 +164,94 @@ proto._computeLazyToolStats = async function(data, definition) {
 // detectSamplingGaps (src/utils/sampling-gaps.js) over the whole time axis:
 // the nominal step is the median positive step, it holds when at least 80 % of
 // the steps agree with it to 10 %, and a step above 1.5 of it is a gap. The
-// median is an exact order statistic, so the threshold is the kernel's.
-proto._lazySamplingGapThreshold = async function(data, timeSql, timeWindows = []) {
+// median is an exact order statistic, so the step and the threshold are the
+// kernel's. Returns what detectSamplingGaps returns that a tool reads —
+// `{ medianDt, hasNominalStep, reason, count, totalMissing }` — with the same
+// reasons when there is no nominal step.
+proto._lazyStepStats = async function(data, timeSql, timeWindows = [], { signal } = {}) {
     const source = data._duckdb.source;
     const time = windowColumn(timeSql, timeWindows);
     const t = quoteIdent(time.column);
     const step = windowColumn(`CASE WHEN LAG(TRUE, 1, FALSE) OVER () THEN ${t} - LAG(${t}) OVER () END`, [...timeWindows, time]);
     const d = quoteIdent(step.column);
     const pass = source.passSql(data, [{ _duckdbWindows: mergeWindows(timeWindows, [time, step]) }], `CASE WHEN ${d} > 0 THEN ${d} END`);
-    const none = { gapThreshold: null, hasNominalStep: false };
+    const none = (reason, medianDt = NaN) => ({ medianDt, hasNominalStep: false, reason, count: 0, totalMissing: 0 });
     const counts = await source.aggregateOver(pass, [
         'COUNT(*)::BIGINT AS n',
         `COUNT(*) FILTER (WHERE ${d} < 0 AND isfinite(${d}))::BIGINT AS neg`,
         `COUNT(*) FILTER (WHERE ${d} > 0 AND isfinite(${d}))::BIGINT AS pos`,
-    ].join(', '));
-    if (counts.n < 3 || counts.neg > 0 || counts.pos < 2) return none;
+    ].join(', '), { signal });
+    if (counts.n < 3) return none('tooFewSamples');
+    if (counts.neg > 0) return none('nonMonotonic');
+    if (counts.pos < 2) return none('tooFewSamples');
     const mid = counts.pos >> 1;
     const ranks = counts.pos % 2 ? [mid] : [mid - 1, mid];
-    const { values } = await source.exactOrderStatisticsOver(pass, ranks);
+    const { values } = await source.exactOrderStatisticsOver(pass, ranks, { signal });
     const median = counts.pos % 2 ? values.get(mid) : (values.get(mid - 1) + values.get(mid)) / 2;
-    if (!Number.isFinite(median) || median <= 0) return none;
+    if (!Number.isFinite(median) || median <= 0) return none('irregularStep', median);
     const band = median * GAP_STEP_TOLERANCE;
-    const { agree } = await source.aggregateOver(pass,
-        `COUNT(*) FILTER (WHERE ${d} > 0 AND isfinite(${d}) AND abs(${d} - ${doubleLiteral(median)}) <= ${doubleLiteral(band)})::BIGINT AS agree`);
-    if (counts.pos >= GAP_STEP_MIN_SAMPLES && agree / counts.pos < GAP_STEP_MIN_AGREEMENT) return none;
-    return { gapThreshold: median * GAP_THRESHOLD_FACTOR, hasNominalStep: true };
+    const threshold = median * GAP_THRESHOLD_FACTOR;
+    const { agree, gaps, missing } = await source.aggregateOver(pass, [
+        `COUNT(*) FILTER (WHERE ${d} > 0 AND isfinite(${d}) AND abs(${d} - ${doubleLiteral(median)}) <= ${doubleLiteral(band)})::BIGINT AS agree`,
+        // A gap counts its missing samples as the kernel does: the steps it
+        // spans, less one, at least one.
+        `COUNT(*) FILTER (WHERE ${d} > ${doubleLiteral(threshold)})::BIGINT AS gaps`,
+        `COALESCE(SUM(GREATEST(1, round(${d} / ${doubleLiteral(median)}) - 1)) FILTER (WHERE ${d} > ${doubleLiteral(threshold)}), 0) AS missing`,
+    ].join(', '), { signal });
+    if (counts.pos >= GAP_STEP_MIN_SAMPLES && agree / counts.pos < GAP_STEP_MIN_AGREEMENT) return none('irregularStep', median);
+    return { medianDt: median, hasNominalStep: true, reason: null, count: gaps, totalMissing: missing };
+};
+
+// The integral's gap threshold: 1.5 × the nominal step, when there is one.
+proto._lazySamplingGapThreshold = async function(data, timeSql, timeWindows = []) {
+    const steps = await this._lazyStepStats(data, timeSql, timeWindows);
+    return steps.hasNominalStep
+        ? { gapThreshold: steps.medianDt * GAP_THRESHOLD_FACTOR, hasNominalStep: true }
+        : { gapThreshold: null, hasNominalStep: false };
+};
+
+// The step of a lazy file's time axis, measured over the whole file — the
+// overview in memory is a sample of the rows, and its spacing says nothing
+// about the file's. `{ timed, medianDt, hasNominalStep, reason, count,
+// totalMissing }`; `timed` is false for an index axis (a generated one, or
+// one the user reads in samples), which has no step to measure. Measured once
+// per file and axis: a reload is a new table, rows appended live a new count.
+proto._lazyAxisSteps = async function(data, { signal } = {}) {
+    const axis = this._lazyToolTimeAxis(data);
+    if (!axis.timeSql) return { timed: false, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis', count: 0, totalMissing: 0 };
+    const key = this._lazyAxisStepsKey(data, axis);
+    if (!this._lazyAxisStepCache) this._lazyAxisStepCache = new Map();
+    const cached = this._lazyAxisStepCache.get(key);
+    if (cached) return cached;
+    const steps = { timed: true, ...await this._lazyStepStats(data, axis.timeSql, [], { signal }) };
+    this._lazyAxisStepCache.set(key, steps);
+    while (this._lazyAxisStepCache.size > 8) this._lazyAxisStepCache.delete(this._lazyAxisStepCache.keys().next().value);
+    return steps;
+};
+
+proto._lazyAxisStepsKey = function(data, axis) {
+    const meta = data._duckdb;
+    return JSON.stringify([meta.tableName, Number(meta.appendRows) || 0, axis.kind, axis.timeSql]);
+};
+
+// The same, for a panel that cannot wait: the measurement when there is one;
+// otherwise null, with the measurement started in the background and the
+// panel synced again when it is in.
+proto._lazyAxisStepsNow = function(data) {
+    const axis = this._lazyToolTimeAxis(data);
+    if (!axis.timeSql) return { timed: false, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis', count: 0, totalMissing: 0 };
+    const key = this._lazyAxisStepsKey(data, axis);
+    const cached = this._lazyAxisStepCache?.get(key);
+    if (cached) return cached;
+    if (!this._lazyAxisStepRuns) this._lazyAxisStepRuns = new Map();
+    if (!this._lazyAxisStepRuns.has(key)) {
+        const run = this._lazyAxisSteps(data)
+            .then(() => this._syncDataTools?.())
+            .catch(err => console.warn('[duckdb] could not measure the time axis:', err?.message || err))
+            .finally(() => this._lazyAxisStepRuns.delete(key));
+        this._lazyAxisStepRuns.set(key, run);
+    }
+    return null;
 };
 
 // The integral's gap threshold, and what the panel reports about the holes
@@ -318,6 +385,7 @@ proto._lazySqlToolVariable = function(data, name, definition) {
                 ? { replacement: 'nan', outlierCount: stats?.count ?? null }
                 : {}),
             ...(definition.tool === 'movingAverage' ? { window: definition.params?.window } : {}),
+            ...(definition.tool === 'filter' ? this._lazyFilterDataTool(definition.params || {}, sink?.report) : {}),
             ...(definition.tool === 'detrend'
                 ? { order: stats?.order ?? null, slope: stats?.slope ?? null, fitPoints: stats?.fitPoints ?? null }
                 : {}),
@@ -493,11 +561,44 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
     this.plotManager.updateFileData(fileId, data);
     this._renderFilteredTree();
     this._syncDataTools();
-    const result = { variable, count: 0, tool, name: outputName, warning: '' };
+    const report = definition.lazySink.report;
+    const note = tool === 'filter' && report ? () => this._filterNote(report) : null;
+    const result = {
+        variable,
+        count: report?.filteredCount ?? 0,
+        tool,
+        name: outputName,
+        warning: note && note() ? note : '',
+    };
     if (!options.silent) {
         this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName, dependents.length);
     }
     return result;
+};
+
+// What a filter's output carries on `dataTool`, as _buildFilterResult writes
+// it for a file in memory.
+proto._lazyFilterDataTool = function(params, report) {
+    return {
+        mode: params.mode,
+        source: params.source || 'manual',
+        b: [...(params.b || [])],
+        a: [...(params.a || [])],
+        sos: params.sos ? params.sos.map(section => [...section]) : undefined,
+        design: params.design ? this._cloneDataToolParams(params.design) : undefined,
+        advance: params.advance,
+        advanceA: params.advanceA,
+        advanceB: params.advanceB,
+        init: params.init,
+        initState: [...(params.initState || [])],
+        restartGap: params.restartGap,
+        segments: report?.segments ?? null,
+        restarts: report?.restarts ?? null,
+        carriedBreaks: report?.carriedBreaks ?? null,
+        filteredCount: report?.filteredCount ?? null,
+        skippedCount: report?.skippedCount ?? null,
+        irregular: report?.irregular ?? null,
+    };
 };
 
 // What a sink was computed from: the source (its SQL, the time axis, the rows
@@ -517,17 +618,44 @@ proto._lazySinkRecord = function(run, signature) {
         rows: run.rows,
         // The moving-average detrend's fit points (see computeDetrend).
         fitPoints: run.fitPoints,
+        // A filter's counts (see applyFilter): what the panel says about holes.
+        report: run.report || null,
     };
 };
 
 // The kernel a job runs: the incremental form of the tool's own kernel, fed
-// the source column of each chunk.
-proto._lazySinkKernel = function(definition) {
+// the source column of each chunk. A filter also reads the time of each
+// sample (forward, when the axis has one: a stretch of time with no rows is a
+// hole) or runs a second pass (zero phase); `axis` is the step of the whole
+// time axis (_lazyAxisSteps).
+proto._lazySinkKernel = function(definition, { axis = null } = {}) {
     const params = definition.params || {};
-    const kernel = definition.tool === 'detrend' ? createMovingAverageDetrend(params) : createMovingAverage(params);
     const sourceName = definition.sourceName;
+    const column = chunk => chunk.yByVar.get(sourceName);
+    if (definition.tool === 'filter') {
+        if (params.mode === 'zeroPhase') {
+            const kernel = createZeroPhaseFilter(params, { axis, memoryRows: LAZY_FILTER_MEMORY_ROWS });
+            return {
+                push: chunk => kernel.push(column(chunk)),
+                flush: () => kernel.flush(),
+                backward: s => kernel.backward(s),
+                longStretches: kernel.longStretches,
+                report: () => kernel.report(),
+                withTime: false,
+            };
+        }
+        const kernel = createForwardFilter(params, { axis });
+        const timed = !!axis?.timed;
+        return {
+            push: chunk => kernel.push(column(chunk), timed ? chunk.x : null),
+            flush: () => kernel.flush(),
+            report: () => kernel.report(),
+            withTime: timed,
+        };
+    }
+    const kernel = definition.tool === 'detrend' ? createMovingAverageDetrend(params) : createMovingAverage(params);
     return {
-        push: chunk => kernel.push(chunk.yByVar.get(sourceName)),
+        push: chunk => kernel.push(column(chunk)),
         flush: () => kernel.flush(),
         get used() { return kernel.used; },
     };
@@ -583,22 +711,39 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
     };
     const overlayTimer = overlayDelayMs > 0 ? setTimeout(openOverlay, overlayDelayMs) : null;
     if (!overlayTimer) openOverlay();
-    const kernel = this._lazySinkKernel(definition);
+    const progress = ({ rows: done, totalRows: total, pass }) => {
+        if (pass === 2) {
+            overlay?.progress(i18n.t('dataToolSinkBackwardProgress')
+                .replace('{done}', i18n.formatNumber(done))
+                .replace('{total}', i18n.formatNumber(total)));
+            return;
+        }
+        overlay?.progress(total
+            ? i18n.t('csvExportProgress')
+                .replace('{done}', i18n.formatNumber(Math.min(done, total)))
+                .replace('{total}', i18n.formatNumber(total))
+            : i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(done)));
+    };
     try {
+        // A filter needs the step of the whole time axis first: a pass of its
+        // own, once per file.
+        let axis = null;
+        if (definition.tool === 'filter') {
+            overlay?.progress(i18n.t('dataToolSinkMeasuringAxis'));
+            axis = await this._lazyAxisSteps(data, { signal: controller.signal });
+        }
+        const kernel = this._lazySinkKernel(definition, { axis });
         const sink = await source.createSink(data);
         const { rows } = await runChunkedJob({
             data,
             sourceNames: [definition.sourceName],
             kernel,
             sink,
+            withTime: !!kernel.withTime,
             signal: controller.signal,
-            onProgress: ({ rows: done, totalRows: total }) => overlay?.progress(total
-                ? i18n.t('csvExportProgress')
-                    .replace('{done}', i18n.formatNumber(Math.min(done, total)))
-                    .replace('{total}', i18n.formatNumber(total))
-                : i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(done))),
+            onProgress: progress,
         });
-        return { sink, rows, fitPoints: kernel.used };
+        return { sink, rows, fitPoints: kernel.used, report: kernel.report?.() || null };
     } catch (err) {
         if (controller.signal.aborted || err?.name === 'AbortError') return null;
         throw new Error(this._lazySinkErrorMessage(definition.name, err));
@@ -616,7 +761,10 @@ proto._lazySinkErrorMessage = function(name, err) {
             .replace('{limit}', size(err.limit))
             .replace('{used}', size(err.used));
     }
-    return i18n.t('dataToolSinkFailed').replace('{name}', name).replace('{error}', err?.message || String(err));
+    // A kernel's own refusal (an unstable filter) is a code with a sentence.
+    const translated = err?.code ? i18n.t(err.code) : '';
+    const detail = translated && translated !== err.code ? translated : (err?.message || String(err));
+    return i18n.t('dataToolSinkFailed').replace('{name}', name).replace('{error}', detail);
 };
 
 // Rebuild the output from its definition, synchronously (session restore, a
