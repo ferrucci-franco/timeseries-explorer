@@ -609,8 +609,36 @@ try {
         await page.selectOption('#gridded-view [data-role="point-method"]', 'bilinear');
         await page.fill('#gridded-view [data-input="lat"]', '30');
         await page.fill('#gridded-view [data-input="lon"]', '22.5');
+        // Under the ring, the cells the point is read from: the four cell
+        // centres around it, joined and marked; one cell's edges for nearest.
+        const stencil = () => page.evaluate(() => {
+            const trace = (document.querySelector('#gridded-view [data-role="map"]')?.data || []).find(item => item.name === 'pending-stencil');
+            const map = window.app._griddedVisibleView().map;
+            return trace ? {
+                mode: trace.mode, x: Array.from(trace.x), y: Array.from(trace.y),
+                lons: Array.from(map.lon), lats: Array.from(map.lat),
+            } : null;
+        });
+        await page.waitForFunction(() => (document.querySelector('#gridded-view [data-role="map"]')?.data || []).some(item => item.name === 'pending-stencil' && item.mode === 'lines+markers'));
+        const corners = await stencil();
+        assert(corners.x.every(value => corners.lons.includes(value)) && corners.y.every(value => corners.lats.includes(value)), 'bilinear corners are cell centres');
+        assert(Math.min(...corners.x) < 22.5 && Math.max(...corners.x) > 22.5 && Math.min(...corners.y) <= 30 && Math.max(...corners.y) > 30, 'and surround the point');
+        await page.selectOption('#gridded-view [data-role="point-method"]', 'nearest');
+        await page.waitForFunction(() => (document.querySelector('#gridded-view [data-role="map"]')?.data || []).some(item => item.name === 'pending-stencil' && item.mode === 'lines'));
+        const cell = await stencil();
+        assert(Math.min(...cell.x) <= 22.5 && Math.max(...cell.x) >= 22.5 && Math.min(...cell.y) <= 30 && Math.max(...cell.y) >= 30, 'nearest outlines the cell holding the point');
+        assert(!cell.x.some(value => cell.lons.includes(value)), 'by its edges, not its centre');
+        await page.selectOption('#gridded-view [data-role="point-method"]', 'bilinear');
         await page.click('#gridded-view [data-action="extract-point"]');
         await page.waitForFunction(count => window.app._griddedVisibleView().groups.length === count, groupsBeforeBilinear + 1, { timeout: 60000 });
+        await page.waitForFunction(() => (document.querySelector('#gridded-view [data-role="map"]')?.data || []).some(item => Array.isArray(item.marker?.symbol) && item.marker.symbol.includes('diamond')));
+        const symbols = await page.evaluate(() => {
+            const view = window.app._griddedVisibleView();
+            const trace = document.querySelector('#gridded-view [data-role="map"]').data.find(item => Array.isArray(item.marker?.symbol));
+            const points = view.groups.filter(group => group.kind === 'point');
+            return points.map((group, index) => [group.method || 'nearest', trace.marker.symbol[index]]);
+        });
+        symbols.forEach(([method, symbol]) => assert.equal(symbol, method === 'bilinear' ? 'diamond' : 'circle', `a ${method} point is drawn as a ${symbol}`));
         const interpolated = (await extractions(page)).filter(item => /\(bilinear\)$/.test(item.folder));
         assert.equal(interpolated.length, 1, 'one bilinear place');
         assert.match(interpolated[0].folder, /^P\d+ · 30°N 22\.5°E \(bilinear\)$/, 'the place is the point itself, marked bilinear');

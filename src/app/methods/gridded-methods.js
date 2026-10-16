@@ -114,6 +114,60 @@ export function drawableGrid(map, xRange = null, yRange = null, maxCells = MAX_D
     };
 }
 
+/**
+ * The cells a point at (lat, lon) is read from, as a closed outline on the
+ * map: for "nearest", the edges of that one cell; for "bilinear", the square
+ * joining the centres of its four neighbours (fewer at the edge of a regional
+ * grid or beyond the outermost latitude), whose corners are marked. Mirrors
+ * GriddedDataset._bilinearCells, in the map's display longitudes.
+ */
+function pointStencil(map, lat, lon, method) {
+    const lats = map?.lat;
+    const lons = map?.lon;
+    if (!lats?.length || !lons?.length || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const last = lons.length - 1;
+    let x = lon;
+    if (lons[last] > 180 && x < 0) x += 360;
+    if (lons[0] < 0 && x > 180) x -= 360;
+    const outline = (west, east, south, north) => ({
+        x: [west, east, east, west, west], y: [south, south, north, north, south],
+    });
+    const sortedLats = Array.from(lats).sort((a, b) => a - b);
+    if (method !== 'bilinear') {
+        const nearest = (values, target) => values.reduce((best, value, index) => (Math.abs(value - target) < Math.abs(values[best] - target) ? index : best), 0);
+        const half = (values, index) => (values.length < 2 ? 0.5 : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
+        const row = nearest(lats, lat);
+        const column = nearest(lons, x);
+        const dy = half(lats, row);
+        const dx = half(lons, column);
+        return { ...outline(lons[column] - dx, lons[column] + dx, lats[row] - dy, lats[row] + dy), corners: false };
+    }
+    let low = 0;
+    while (low < sortedLats.length - 2 && sortedLats[low + 1] <= lat) low += 1;
+    let south = sortedLats[low];
+    let north = sortedLats[Math.min(low + 1, sortedLats.length - 1)];
+    // Beyond the outermost latitude only the edge row is read.
+    if (lat <= sortedLats[0]) north = south;
+    if (lat >= sortedLats[sortedLats.length - 1]) south = north = sortedLats[sortedLats.length - 1];
+    const step = last > 0 ? (lons[last] - lons[0]) / last : 360;
+    const global = last > 0 && Math.abs(lons[last] - lons[0] + step - 360) < step / 2;
+    let west;
+    let east;
+    if (x >= lons[0] && x <= lons[last]) {
+        let index = 0;
+        while (index < last - 1 && lons[index + 1] <= x) index += 1;
+        west = lons[index];
+        east = lons[Math.min(index + 1, last)];
+    } else if (global) {
+        // Across the seam: the last column and the first, one turn apart.
+        west = x < lons[0] ? lons[last] - 360 : lons[last];
+        east = x < lons[0] ? lons[0] : lons[0] + 360;
+    } else {
+        west = east = x < lons[0] ? lons[0] : lons[last];
+    }
+    return { ...outline(west, east, south, north), corners: true };
+}
+
 // How close to the orange box's edge a pointer resizes it rather than moving
 // it, in pixels: a mouse is precise, a finger is not.
 const BOX_EDGE_PX = { mouse: 6, touch: 16 };
@@ -1001,7 +1055,10 @@ export function installGriddedMethods(TargetClass) {
         });
         root.querySelector('[data-role="point-method"]').addEventListener('change', event => {
             const current = view();
-            if (current) current.pointMethod = event.target.value === 'bilinear' ? 'bilinear' : 'nearest';
+            if (!current) return;
+            current.pointMethod = event.target.value === 'bilinear' ? 'bilinear' : 'nearest';
+            // The outline under the ring shows the cells the new method reads.
+            if (current.pendingPoint) this._griddedDrawMap(current);
         });
         // The levels an extraction reads: the map's by default, or any set
         // of them, all read together.
@@ -1880,8 +1937,10 @@ export function installGriddedMethods(TargetClass) {
                 type: 'scatter', mode: 'markers',
                 x: points.map(group => group.geometry.lon), y: points.map(group => group.geometry.lat),
                 marker: {
-                    symbol: 'circle',
-                    size: points.map(group => (group.id === selectedId ? 15 : 11)),
+                    // A diamond for a value interpolated between cells, a
+                    // circle for the value of one cell.
+                    symbol: points.map(group => (group.method === 'bilinear' ? 'diamond' : 'circle')),
+                    size: points.map(group => (group.id === selectedId ? 15 : 11) + (group.method === 'bilinear' ? 2 : 0)),
                     color: points.map(group => group.color),
                     line: { color: points.map(group => (group.id === selectedId ? colors.selected : '#ffffff')), width: points.map(group => (group.id === selectedId ? 3 : 2)) },
                 },
@@ -1926,6 +1985,17 @@ export function installGriddedMethods(TargetClass) {
         // (A shape sized in pixels would drag by itself, but once one has
         // been on the map Plotly converts the next rectangle drawn wrongly.)
         if (view.pendingPoint) {
+            // The cell or cells the point will be read from, under the ring.
+            const stencil = pointStencil(view.map, view.pendingPoint.lat, view.pendingPoint.lon, view.pointMethod);
+            if (stencil) {
+                traces.push({
+                    type: 'scatter', mode: stencil.corners ? 'lines+markers' : 'lines', name: 'pending-stencil',
+                    x: stencil.x, y: stencil.y,
+                    line: { color: colors.pending, width: 1.5, dash: 'dot' },
+                    marker: { size: 6, color: colors.pending, line: { color: '#ffffff', width: 1 } },
+                    hoverinfo: 'skip', showlegend: false,
+                });
+            }
             traces.push({
                 type: 'scatter', mode: 'markers', name: 'pending-point',
                 x: [view.pendingPoint.lon], y: [view.pendingPoint.lat],
@@ -2412,11 +2482,17 @@ export function installGriddedMethods(TargetClass) {
         };
         if (target.kind === 'ring') {
             const trace = (div.data || []).findIndex(item => item.name === 'pending-point');
+            const stencilTrace = (div.data || []).findIndex(item => item.name === 'pending-stencil');
             return {
                 move: at => {
                     view.pendingPoint = { lat: roundCoordinate(Math.max(-90, Math.min(90, at.lat))), lon: roundCoordinate(at.lon) };
                     const { lat, lon } = view.pendingPoint;
-                    if (trace >= 0) schedule(() => Plotly.restyle(div, { x: [[lon]], y: [[lat]] }, [trace]));
+                    const stencil = stencilTrace >= 0 ? pointStencil(view.map, lat, lon, view.pointMethod) : null;
+                    if (trace >= 0) {
+                        schedule(() => (stencil
+                            ? Plotly.restyle(div, { x: [[lon], stencil.x], y: [[lat], stencil.y] }, [trace, stencilTrace])
+                            : Plotly.restyle(div, { x: [[lon]], y: [[lat]] }, [trace])));
+                    }
                     this._griddedSyncInputs(view);
                 },
                 end: () => finish('pending-point'),

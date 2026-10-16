@@ -220,7 +220,10 @@ wheel or pinch to zoom); an analysis panel next to it turns it into series:
 
 - **Point**: click the map (or drag the orange ring, or type a latitude and
   longitude), then extract the time series of the nearest grid cell, or one
-  interpolated bilinearly between the four cells around the point.
+  interpolated bilinearly between the four cells around the point. A dotted
+  outline under the ring shows the cells the value comes from (the edges of
+  the nearest cell, or the square joining the four cell centres); extracted
+  bilinear points are drawn as diamonds, nearest-cell points as circles.
 - **Region**: draw a box or type its North/West/East/South limits (as in the
   Copernicus CDS form), adjust it on the map, then compute the area-weighted
   (cos latitude, or cell area when the file has latitude bounds) mean, minimum

@@ -1304,6 +1304,11 @@ resumen de buscador):
 - Un lugar bilineal es el punto mismo ("30°N 22.5°E (bilineal)") y es otro
   lugar que uno de celda más cercana en las mismas coordenadas; el método se
   guarda con el lugar y en la sesión.
+- En el mapa: bajo el anillo naranja, un contorno punteado muestra de dónde
+  sale el valor (los bordes de la celda más cercana, o el cuadrado que une los
+  centros de las cuatro vecinas, marcados con puntos); sigue al anillo al
+  arrastrarlo y cambia con el método. Un punto extraído bilineal se dibuja
+  como rombo, uno de celda más cercana como círculo.
 - La región no cambia: media ponderada por área (cos φ o área de celda con
   `lat_bnds`), celdas enteras si su centro cae en el recuadro (como CDO
   `sellonlatbox` y `xarray.sel`), mínimo y máximo sin ponderar. Las fracciones
