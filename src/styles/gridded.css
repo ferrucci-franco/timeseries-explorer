@@ -432,8 +432,32 @@ html:not(.compact) .gridded-menu input[type="checkbox"]:focus-visible {
     display: none;
 }
 
+/* Drawn, not the browser's own: Safari's is a hairline. */
 .gridded-progress progress {
     flex: 1;
+    min-width: 4rem;
+    height: 0.55rem;
+    -webkit-appearance: none;
+    appearance: none;
+    border: none;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--border-color);
+}
+
+.gridded-progress progress::-webkit-progress-bar {
+    background: var(--border-color);
+    border-radius: 999px;
+}
+
+.gridded-progress progress::-webkit-progress-value {
+    background: var(--primary-color);
+    border-radius: 999px;
+}
+
+.gridded-progress progress::-moz-progress-bar {
+    background: var(--primary-color);
+    border-radius: 999px;
 }
 
 .gridded-splitter {
@@ -1016,6 +1040,18 @@ html.compact .gridded-tools { order: 5; }
 html.compact .gridded-preview { order: 6; }
 html.compact .gridded-results { order: 7; }
 html.compact .gridded-inspector { order: 8; }
+
+/* On a phone the label has the first line, the bar and Cancel the second:
+   beside a long label the bar was a sliver. */
+html.compact .gridded-progress {
+    flex-wrap: wrap;
+    gap: 0.3rem 0.6rem;
+}
+
+html.compact .gridded-progress [data-role="progress-label"] {
+    flex: 1 1 100%;
+    min-width: 0;
+}
 
 html.compact .gridded-status,
 html.compact .gridded-progress,
