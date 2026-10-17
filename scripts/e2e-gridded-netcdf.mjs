@@ -884,6 +884,30 @@ try {
         await page.setViewportSize({ width: 390, height: 844 });
         await page.evaluate(() => window.app._griddedDrawMap(window.app._griddedVisibleView()));
         await page.waitForTimeout(300);
+        // The Data sheet: its Map button closes the sheet onto the map, and a
+        // map sized while the sheet took half the screen gets its height back
+        // when the sheet goes (it stayed short until the next gesture).
+        {
+            const sized = () => page.evaluate(() => ({
+                sheet: window.app._compact.sheet,
+                body: Math.round(document.querySelector('#gridded-view .gridded-body').getBoundingClientRect().height),
+            }));
+            const full = await sized();
+            await page.evaluate(() => window.app._openCompactSheet('data'));
+            await page.waitForTimeout(600);
+            await page.click('.file-entry-map.active');
+            await page.waitForTimeout(300);
+            await page.click('.file-entry-map');
+            await page.waitForTimeout(1200);
+            const reopened = await sized();
+            assert.ok(reopened.sheet === null && Math.abs(reopened.body - full.body) <= 2, `Map in the Data sheet closes it onto a whole map (${JSON.stringify({ full, reopened })})`);
+            await page.evaluate(() => window.app._openCompactSheet('data'));
+            await page.waitForTimeout(800);
+            await page.evaluate(() => window.app._closeCompactSheet());
+            await page.waitForTimeout(1200);
+            const back = await sized();
+            assert.ok(Math.abs(back.body - full.body) <= 2, `the sheet gone, the map is as tall as before (${JSON.stringify({ full, back })})`);
+        }
         // Fingers, in every tool: one pans, two pinch, and the pinch keeps
         // the map's size (scaled per axis, Plotly shrank it to keep the
         // degrees equal, a little more at every pinch). In Region a finger
