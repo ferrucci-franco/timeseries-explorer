@@ -420,14 +420,9 @@ function grib2Fields(source, offset, head) {
     return { fields, length };
 }
 
-/**
- * The fields of a GRIB file, from a byte source ({size, read(offset, length)}),
- * reading only section headers.
- */
-export function scanGrib(source) {
-    const fields = [];
+// The messages one after another: each one's edition and fields.
+function* gribMessages(source) {
     let offset = 0;
-    let editions = new Set();
     while (offset + 16 <= source.size) {
         let head = source.read(offset, 16);
         if (!(head[0] === GRIB[0] && head[1] === GRIB[1] && head[2] === GRIB[2] && head[3] === GRIB[3])) {
@@ -437,21 +432,57 @@ export function scanGrib(source) {
             head = source.read(offset, 16);
         }
         const edition = head[7];
-        editions.add(edition);
         if (edition === 1) {
             const found = grib1Fields(source, offset, head);
-            fields.push(...found);
+            yield { edition, fields: found };
             offset += found[0].length;
         } else if (edition === 2) {
             const found = grib2Fields(source, offset, head);
-            fields.push(...found.fields);
+            yield { edition, fields: found.fields };
             offset += found.length;
         } else {
             throw new GribUnsupportedError(`GRIB edition ${edition} is not supported.`);
         }
     }
+}
+
+function scanned(fields, editions) {
     if (!fields.length) throw new GribUnsupportedError('No GRIB message could be read from this file.');
     return { fields, editions: [...editions].sort() };
+}
+
+/**
+ * The fields of a GRIB file, from a byte source ({size, read(offset, length)}),
+ * reading only section headers.
+ */
+export function scanGrib(source) {
+    const fields = [];
+    const editions = new Set();
+    for (const message of gribMessages(source)) {
+        editions.add(message.edition);
+        fields.push(...message.fields);
+    }
+    return scanned(fields, editions);
+}
+
+/**
+ * scanGrib, stopping every `everyMs` to await `pause()`: a file of tens of
+ * thousands of messages takes a while to walk, and the worker only hears a
+ * cancel between tasks. `pause` throws to stop the walk.
+ */
+export async function scanGribAsync(source, pause, everyMs = 50) {
+    const fields = [];
+    const editions = new Set();
+    let paused = Date.now();
+    for (const message of gribMessages(source)) {
+        editions.add(message.edition);
+        fields.push(...message.fields);
+        if (Date.now() - paused >= everyMs) {
+            await pause();
+            paused = Date.now();
+        }
+    }
+    return scanned(fields, editions);
 }
 
 // ---- Decoding one field ---------------------------------------------------
@@ -601,8 +632,8 @@ function levelLabel(level) {
  * latitude, longitude), coordinates as one-dimensional variables, each
  * variable reading its hyperslabs field by field.
  */
-export function openGrib(source) {
-    const { fields, editions } = scanGrib(source);
+export function openGrib(source, scan = scanGrib(source)) {
+    const { fields, editions } = scan;
     const descriptors = [];
     const coordinate = (path, values, userAttrs) => ({
         path, name: path.slice(1), group: '/', shape: [values.length], attrs: userAttrs, userAttrs,

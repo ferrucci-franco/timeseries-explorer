@@ -1017,8 +1017,19 @@ html.compact .gridded-timebar input[type="range"] {
     margin: 0.35rem 0 0.15rem;
 }
 
+/* Buttons and speed on the first row; the stride and the time on the second,
+   where the time has room to be read whole; the slider under them. */
+html.compact .gridded-speed {
+    order: 1;
+}
+
+html.compact .gridded-stride {
+    order: 2;
+}
+
 html.compact .gridded-time-label {
-    flex: 1 1 0;
+    order: 3;
+    flex: 1 1 55%;
     min-width: 0;
     font-size: 0.72rem;
     white-space: nowrap;

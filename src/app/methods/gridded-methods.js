@@ -18,6 +18,7 @@ import { formatUnitPowers } from '../../utils/unit-superscripts.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
 import { coastlineTrace, coastlineWindow, insideCoastlineWindow } from '../../gridded/coastlines.js';
 import { copyTextToClipboard } from '../../utils/clipboard.js';
+import { strideIndex, strideOptions } from '../../gridded/time-stride.js';
 
 const GRIDDED_EXTENSIONS = new Set(['.nc', '.nc4', '.netcdf', '.cdf', '.zip', ...GRIB_EXTENSIONS]);
 // What the gridded reader opens: netCDF (3, 4, CDF-5) and GRIB.
@@ -26,7 +27,7 @@ const GRIDDED_READABLE_KINDS = new Set([...NETCDF_READABLE_KINDS, 'cdf5', 'grib'
 // reads the full resolution of what is visible.
 const MAX_DRAWN_CELLS = 400 * 1000;
 const PALETTES = ['Viridis', 'Cividis', 'Turbo', 'RdBu', 'Greys'];
-const PLAY_SPEEDS = [1, 2, 4, 8];
+const PLAY_SPEEDS = [1, 2, 4, 8, 16, 30];
 const COASTLINE_FILES = { coarse: 'geo/natural-earth-110m.json', fine: 'geo/natural-earth-50m.json' };
 // Zoomed in past this longitude span, the 1:50m coastline replaces the 1:110m one.
 const FINE_COAST_SPAN_DEGREES = 70;
@@ -402,16 +403,37 @@ export function installGriddedMethods(TargetClass) {
         return sniffNetcdfContainer(head).kind;
     };
 
+    // The loading overlay over opening a gridded file. Opening reads only its
+    // structure, but a GRIB has no index and is walked message by message, so
+    // on a long file or a slow disk this is a wait like any load. It carries
+    // the batch's token: Cancel and Escape stop the opening itself, and the
+    // batch overlay that follows reuses it.
+    proto._griddedShowOpening = async function(name, size, loadToken = null) {
+        this._showFileLoadingOverlay?.(1, loadToken);
+        this._updateFileLoadingOverlay?.(1, 1, name, size);
+        await this._waitForNextPaint?.();
+    };
+
+    // A question asked while opening (ZIP entries, joining files, an error)
+    // takes the overlay down first: Escape pressed to close the dialog would
+    // otherwise also reach the overlay and cancel the whole batch.
+    proto._griddedAsk = function(ask) {
+        this._hideFileLoadingOverlay?.();
+        return ask();
+    };
+
     /**
-     * Load-batch step, before the loading overlay: ZIP archives are listed and
+     * Load-batch step, before the batch loop: ZIP archives are listed and
      * the chosen entries extracted; files that are not data at all are
      * reported in words; gridded files are opened (header only) so that
      * several of them can be offered as one dataset joined in time.
      */
-    proto._expandNetcdfEntries = async function(entries) {
+    proto._expandNetcdfEntries = async function(entries, loadToken = null) {
         const expanded = [];
         const opened = [];
+        const cancelled = () => loadToken?.cancelled === true;
         for (const item of entries || []) {
+            if (cancelled()) break;
             const fileHandle = item?.fileHandle || null;
             let file = item?.file || (fileHandle ? null : item);
             const sourceName = file?.name || fileHandle?.name || '';
@@ -423,6 +445,7 @@ export function installGriddedMethods(TargetClass) {
             try {
                 if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
                 if (!file) continue;
+                await this._griddedShowOpening(file.name, file.size, loadToken);
                 const kind = await this._sniffFileHead(file);
                 if (kind === 'zip') {
                     const listed = (await listZipEntries(file)).filter(entry => isNetcdfEntryName(entry.name));
@@ -432,14 +455,15 @@ export function installGriddedMethods(TargetClass) {
                             expanded.push(item);
                             continue;
                         }
-                        await Modal.alert(i18n.t('errorLoading'), i18n.t('griddedZipNoNetcdf').replace('{file}', file.name), { icon: '🗜️' });
+                        await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), i18n.t('griddedZipNoNetcdf').replace('{file}', file.name), { icon: '🗜️' }));
                         continue;
                     }
-                    const members = await this._griddedPickZipEntries(file, listed);
+                    const members = await this._griddedPickZipEntries(file, listed, loadToken);
                     if (!members) continue;
                     if (members.files.length > 1 && members.together) {
+                        await this._griddedShowOpening(file.name, file.size, loadToken);
                         const options = { mode: 'merge-variables', title: this._fileBaseName(file.name) };
-                        const result = await this._griddedProbe(members.files, options);
+                        const result = await this._griddedProbe(members.files, options, loadToken);
                         if (result?.gridded) {
                             opened.push({ files: members.files, result, options, title: this._fileBaseName(file.name) });
                             continue;
@@ -453,21 +477,28 @@ export function installGriddedMethods(TargetClass) {
                         expanded.push(item);
                         continue;
                     }
-                    await Modal.alert(i18n.t('errorLoading'), this._griddedContainerMessage(kind, file.name), { icon: '🌐' });
+                    await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), this._griddedContainerMessage(kind, file.name), { icon: '🌐' }));
                     continue;
                 }
-                const result = await this._griddedProbe([file], {});
+                const result = await this._griddedProbe([file], {}, loadToken);
                 if (result?.gridded) {
                     opened.push({ files: [file], result, title: this._fileBaseName(file.name), fileHandle, localPath: item?.localPath || '' });
                     continue;
                 }
                 expanded.push({ ...(item?.file || item?.fileHandle ? item : {}), file, fileHandle, netcdfProbed: true });
             } catch (error) {
+                if (cancelled()) break;
                 console.error('Error opening netCDF file:', error);
-                await Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, file?.name || sourceName), { icon: '🌐' });
+                await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, file?.name || sourceName), { icon: '🌐' }));
             }
         }
-        const joined = await this._griddedOfferJoin(opened);
+        const joined = cancelled() ? opened : await this._griddedOfferJoin(opened, loadToken);
+        // Cancelled: what was opened is closed again and nothing is loaded,
+        // the files of the batch that are not gridded included.
+        if (cancelled()) {
+            for (const group of joined) griddedClient().close(group.result.datasetId);
+            return [];
+        }
         for (const group of joined) expanded.push({ griddedOpen: group, file: group.files[0], fileHandle: group.fileHandle || null, localPath: group.localPath || '' });
         return expanded;
     };
@@ -480,14 +511,14 @@ export function installGriddedMethods(TargetClass) {
         return error?.message || String(error);
     };
 
-    /** Opens the files in the gridded worker; returns null when it cannot be used. */
-    proto._griddedProbe = async function(files, options) {
+    /** Opens the files in the gridded worker; a cancelled `loadToken` stops it. */
+    proto._griddedProbe = async function(files, options, loadToken = null) {
         const datasetId = nextDatasetId();
-        const result = await griddedClient().open(datasetId, files, options);
+        const result = await griddedClient().open(datasetId, files, options, { signal: loadToken?.signal || null });
         return { ...result, datasetId };
     };
 
-    proto._griddedPickZipEntries = async function(file, entries) {
+    proto._griddedPickZipEntries = async function(file, entries, loadToken = null) {
         let chosen = entries;
         let together = false;
         if (entries.length > 1) {
@@ -497,7 +528,7 @@ export function installGriddedMethods(TargetClass) {
             checkbox.type = 'checkbox';
             checkbox.checked = true;
             body.append(checkbox, document.createTextNode(` ${i18n.t('griddedZipTogether')}`));
-            const picked = await Modal.checklist(i18n.t('griddedZipMessage').replace('{file}', file.name), {
+            const picked = await this._griddedAsk(() => Modal.checklist(i18n.t('griddedZipMessage').replace('{file}', file.name), {
                 title: i18n.t('griddedZipTitle'),
                 icon: '🗜️',
                 className: 'modal-dialog-gridded-zip',
@@ -509,27 +540,25 @@ export function installGriddedMethods(TargetClass) {
                     note: this._formatBytes(entry.size),
                     checked: true,
                 })),
-            });
+            }));
             if (!picked?.length) return null;
             chosen = picked.map(value => entries[Number(value)]);
             together = checkbox.checked && chosen.length > 1;
         }
-        this._showFileLoadingOverlay?.(1);
-        this._updateFileLoadingOverlay?.(1, 1, file.name, file.size);
-        await this._waitForNextPaint?.();
-        try {
-            const files = [];
-            for (const entry of chosen) files.push(await extractZipEntry(file, entry));
-            return { files, together };
-        } finally {
-            this._hideFileLoadingOverlay?.();
+        // Extracting is a load too; the overlay stays up for what follows.
+        await this._griddedShowOpening(file.name, file.size, loadToken);
+        const files = [];
+        for (const entry of chosen) {
+            if (loadToken?.cancelled) return null;
+            files.push(await extractZipEntry(file, entry));
         }
+        return loadToken?.cancelled ? null : { files, together };
     };
 
     // Several gridded files picked together that hold the same variables on
     // the same grid are usually consecutive downloads (one per month): offer
     // to read them as one dataset along time.
-    proto._griddedOfferJoin = async function(opened) {
+    proto._griddedOfferJoin = async function(opened, loadToken = null) {
         if (opened.length < 2) return opened;
         const signature = result => {
             const model = result.model;
@@ -538,21 +567,24 @@ export function installGriddedMethods(TargetClass) {
         };
         const first = signature(opened[0].result);
         if (!opened[0].result.model.primaryTimeDim || !opened.every(group => signature(group.result) === first)) return opened;
-        const join = await Modal.confirm(i18n.t('griddedJoinMessage').replace('{count}', String(opened.length)), {
+        const join = await this._griddedAsk(() => Modal.confirm(i18n.t('griddedJoinMessage').replace('{count}', String(opened.length)), {
             title: i18n.t('griddedJoinTitle'),
             icon: '🌐',
             confirmText: i18n.t('griddedJoinYes'),
             cancelText: i18n.t('griddedJoinNo'),
-        });
+        }));
         if (!join) return opened;
         const files = opened.flatMap(group => group.files);
         try {
             const options = { mode: 'concat-time', title: `${opened[0].title} (+${opened.length - 1})` };
-            const result = await this._griddedProbe(files, options);
+            await this._griddedShowOpening(options.title, files.reduce((total, file) => total + (file.size || 0), 0), loadToken);
+            const result = await this._griddedProbe(files, options, loadToken);
             for (const group of opened) griddedClient().close(group.result.datasetId);
             return [{ files, result, options, title: options.title }];
         } catch (error) {
-            await Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, ''), { icon: '🌐' });
+            // Cancelled: the caller closes what was opened.
+            if (loadToken?.cancelled) return opened;
+            await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, ''), { icon: '🌐' }));
             return opened;
         }
     };
@@ -781,6 +813,9 @@ export function installGriddedMethods(TargetClass) {
             groupCount: 0,
             playing: false,
             speed: 2,
+            // How far Play and ◀ ▶ move: one step of the file, or a time
+            // (6 h, a day, a month…). See time-stride.js.
+            stride: 'step',
             map: null,
             zoom: null,
             requestedMap: null,
@@ -923,6 +958,7 @@ export function installGriddedMethods(TargetClass) {
                         <button type="button" class="gridded-step" data-step="last">${STEP_ICONS.last}</button>
                         <input type="range" min="0" max="0" step="1" value="0" data-role="time">
                         <span class="gridded-time-label" data-role="time-label"></span>
+                        <select data-role="stride" class="gridded-speed gridded-stride"></select>
                         <select data-role="speed" class="gridded-speed"></select>
                     </div>
                     <div class="gridded-progress" data-role="progress" hidden>
@@ -1216,6 +1252,10 @@ export function installGriddedMethods(TargetClass) {
         root.querySelectorAll('.gridded-step').forEach(button => {
             button.addEventListener('click', () => this._griddedStep(button.dataset.step));
         });
+        root.querySelector('[data-role="stride"]').addEventListener('change', event => {
+            const current = view();
+            if (current) current.stride = event.target.value || 'step';
+        });
         root.querySelector('[data-role="speed"]').addEventListener('change', event => {
             const current = view();
             if (current) current.speed = Number(event.target.value) || 2;
@@ -1425,6 +1465,7 @@ export function installGriddedMethods(TargetClass) {
         set('[data-step="next"]', 'griddedNextStep', 'title');
         set('[data-step="last"]', 'griddedLastStep', 'title');
         set('[data-role="speed"]', 'griddedSpeed', 'title');
+        set('[data-role="stride"]', 'griddedStride', 'title');
         const palette = root.querySelector('[data-role="palette"]');
         palette.innerHTML = '';
         for (const name of PALETTES) palette.add(new Option(name, name));
@@ -1529,6 +1570,7 @@ export function installGriddedMethods(TargetClass) {
         this._griddedSyncScale(view);
         root.querySelector('[data-role="speed"]').value = String(view.speed);
         const timeDim = variable?.timeDim;
+        this._griddedSyncStride(view, timeDim ? model.axes[timeDim] : null);
         const timebar = root.querySelector('[data-role="timebar"]');
         const slider = root.querySelector('[data-role="time"]');
         const size = timeDim ? model.axes[timeDim]?.size || 1 : 1;
@@ -1841,8 +1883,11 @@ export function installGriddedMethods(TargetClass) {
             if (view.playing) this._griddedPlayLoop(view);
             return;
         }
+        // One stride; past either end, the end itself.
+        const strided = step === 'next' || step === 'prev'
+            ? this._griddedStrideFrom(view, current, step === 'next' ? 1 : -1) : null;
         const next = step === 'first' ? 0 : step === 'last' ? size - 1
-            : step === 'next' ? Math.min(size - 1, current + 1) : Math.max(0, current - 1);
+            : step === 'next' ? (strided < 0 ? size - 1 : strided) : (strided < 0 ? 0 : strided);
         if (next === current) return;
         view.stepDirection = next < current ? -1 : 1;
         view.selection[dim] = next;
@@ -1851,13 +1896,39 @@ export function installGriddedMethods(TargetClass) {
         this._griddedRequestMap(view);
     };
 
+    // The stride's options for this axis, in the user's language; the view's
+    // stride kept when the axis offers it, one step of the file otherwise.
+    proto._griddedSyncStride = function(view, axis) {
+        const select = this._griddedEl('stride');
+        if (!select) return;
+        const options = axis ? strideOptions(axis) : [{ id: 'step', label: { key: 'step', n: 1 } }];
+        const keys = {
+            step: 'griddedStrideStep', steps: 'griddedStrideSteps', minutes: 'griddedStrideMinutes', hours: 'griddedStrideHours',
+            day: 'griddedStrideDay', days: 'griddedStrideDays', week: 'griddedStrideWeek', month: 'griddedStrideMonth', year: 'griddedStrideYear',
+        };
+        select.innerHTML = '';
+        for (const option of options) {
+            select.add(new Option(i18n.t(keys[option.label.key]).replace('{n}', String(option.label.n)), option.id));
+        }
+        if (!options.some(option => option.id === view.stride)) view.stride = 'step';
+        select.value = view.stride;
+    };
+
+    proto._griddedStrideFrom = function(view, index, direction) {
+        const dim = this._griddedTimeDim(view);
+        const axis = dim ? view.model.axes[dim] : null;
+        return axis ? strideIndex(axis, index, view.stride, direction) : -1;
+    };
+
     proto._griddedPlayLoop = async function(view) {
         const dim = this._griddedTimeDim(view);
         while (view.playing && dim && this._griddedVisibleView() === view) {
             const started = performance.now();
             const size = view.model.axes[dim].size;
             view.stepDirection = 1;
-            view.selection[dim] = ((view.selection[dim] || 0) + 1) % size;
+            // One stride on; past the end, back to the start.
+            const next = this._griddedStrideFrom(view, view.selection[dim] || 0, 1);
+            view.selection[dim] = next < 0 || next >= size ? 0 : next;
             const slider = this._griddedEl('time');
             if (slider) slider.value = String(view.selection[dim]);
             this._griddedSyncTimeLabel(view);
@@ -1926,8 +1997,8 @@ export function installGriddedMethods(TargetClass) {
         if (!dim || view.job || !request?.variable) return;
         const size = view.model.axes[dim]?.size || 0;
         const current = Number(request.selection?.[dim]) || 0;
-        let next = current + (view.stepDirection || 1);
-        if (view.playing) next = ((next % size) + size) % size;
+        let next = this._griddedStrideFrom(view, current, view.stepDirection || 1);
+        if (view.playing && next < 0) next = 0;
         if (next < 0 || next >= size || next === current) return;
         const ahead = { variable: request.variable, selection: { ...request.selection, [dim]: next } };
         const key = mapKey(view, ahead);

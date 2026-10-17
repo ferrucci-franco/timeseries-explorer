@@ -297,10 +297,20 @@ export class GriddedClient {
         }
     }
 
-    async open(datasetId, files, options = {}) {
+    /** `signal` aborts the open: the worker stops walking the file and the promise rejects as cancelled. */
+    async open(datasetId, files, options = {}, { signal = null } = {}) {
         this._closeOnHelpers(datasetId);
         const inputs = files.map(file => ({ file, filename: file.name }));
-        const result = await this.request('open', { datasetId, inputs, options }).promise;
+        if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { name: 'AbortError', cancelled: true });
+        const request = this.request('open', { datasetId, inputs, options });
+        const onAbort = () => this.cancel(request.id);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        let result;
+        try {
+            result = await request.promise;
+        } finally {
+            signal?.removeEventListener('abort', onAbort);
+        }
         if (result?.gridded && !this.inline) {
             const bytes = files.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
             this.datasets.set(datasetId, { files, options, model: result.model, bytes });
