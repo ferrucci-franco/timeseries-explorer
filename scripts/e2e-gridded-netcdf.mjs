@@ -750,6 +750,32 @@ try {
         assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'pause');
         await page.click('#gridded-view [data-step="play"]');
         assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'play');
+        // Moving the map pauses Play: a drag (the right button pans in every
+        // tool) and a turn of the wheel.
+        {
+            const playing = () => page.evaluate(() => window.app._griddedVisibleView().playing);
+            const centre = await page.evaluate(() => {
+                const div = document.querySelector('#gridded-view .gridded-map');
+                const { xaxis, yaxis } = div._fullLayout;
+                const rect = div.getBoundingClientRect();
+                return [rect.left + xaxis._offset + xaxis._length / 2, rect.top + yaxis._offset + yaxis._length / 2];
+            });
+            await page.click('#gridded-view [data-step="play"]');
+            assert.equal(await playing(), true);
+            await page.mouse.move(...centre);
+            await page.mouse.down({ button: 'right' });
+            await page.mouse.move(centre[0] + 60, centre[1] + 20, { steps: 6 });
+            assert.equal(await playing(), false, 'a pan pauses Play, while the map still moves');
+            await page.mouse.up({ button: 'right' });
+            assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'play', 'and the button says so');
+            await page.click('#gridded-view [data-step="play"]');
+            assert.equal(await playing(), true);
+            await page.mouse.move(...centre);
+            await page.mouse.wheel(0, -200);
+            await page.waitForFunction(() => !window.app._griddedVisibleView().playing, null, { timeout: 3000 });
+            await page.dblclick('#gridded-view .gridded-map .nsewdrag');
+            await page.waitForTimeout(400);
+        }
 
         // Reload reopens the dataset on its map; it is never reparsed as series.
         await page.evaluate(() => window.app.reloadActiveFile());
@@ -963,6 +989,15 @@ try {
             const framed = await mapState();
             sameSize(framed, 'a double tap');
             assert.ok(Math.abs(framed.x[0] - whole.x[0]) < 1e-6 && Math.abs(framed.y[0] - whole.y[0]) < 1e-6, 'a double tap frames the whole map again');
+            // A finger that pans pauses Play.
+            await page.evaluate(() => document.querySelector('#gridded-view [data-step="play"]').click());
+            assert.equal(await page.evaluate(() => window.app._griddedVisibleView().playing), true);
+            await swipe(at(framed, 0.5, 0.5), at(framed, 0.6, 0.55));
+            assert.equal(await page.evaluate(() => window.app._griddedVisibleView().playing), false, 'a finger that pans pauses Play');
+            await tapAt(at(framed, 0.5, 0.5));
+            await page.waitForTimeout(120);
+            await tapAt(at(framed, 0.5, 0.5));
+            await page.waitForTimeout(900);
             await page.click('#gridded-view [data-mode="region"]');
             await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
             await page.waitForTimeout(300);
@@ -992,7 +1027,8 @@ try {
             await page.setViewportSize({ width: 844, height: 390 });
             await page.waitForTimeout(1200);
             const side = await mapState();
-            assert.ok(side.size[0] > 400 && side.size[1] > 100, `on its side the map fills its area (${JSON.stringify(side.size)})`);
+            // Beside the tools' panel: about half of the 768 px beside the rail.
+            assert.ok(side.size[0] > 230 && side.size[1] > 100, `on its side the map fills its area (${JSON.stringify(side.size)})`);
             await page.setViewportSize({ width: 390, height: 844 });
             await page.waitForTimeout(1200);
             sameSize(await mapState(), 'turned back upright');
@@ -1071,6 +1107,36 @@ try {
         await page.setViewportSize({ width: 844, height: 390 });
         await page.waitForFunction(() => document.querySelector('#gridded-view .gridded-map').data[0].colorbar.orientation !== 'h', null, { timeout: 10000 });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 844);
+        // And the tools leave the column under the map for a panel beside
+        // it, which the toolbar shows and hides: the map and its time bar
+        // take the whole height, nothing to scroll to.
+        {
+            const sides = () => page.evaluate(() => {
+                const rect = selector => document.querySelector(selector).getBoundingClientRect();
+                const main = rect('#gridded-view .gridded-main');
+                const panel = document.querySelector('#gridded-view [data-role="panel"]');
+                return {
+                    main: { right: Math.round(main.right), bottom: Math.round(main.bottom) },
+                    map: rect('#gridded-view .gridded-body').width,
+                    timebarBottom: Math.round(rect('#gridded-view [data-role="timebar"]').bottom),
+                    panel: panel.offsetWidth ? { left: Math.round(panel.getBoundingClientRect().left), right: Math.round(panel.getBoundingClientRect().right) } : null,
+                    preview: document.querySelector('#gridded-view [data-role="preview"]').parentElement === panel,
+                    pressed: document.querySelector('#gridded-view [data-action="toggle-panel"]').getAttribute('aria-pressed'),
+                };
+            });
+            await page.waitForTimeout(800);
+            const shown = await sides();
+            assert.ok(shown.panel && shown.panel.right === shown.main.right && shown.panel.left > 300 && shown.preview && shown.pressed === 'true',
+                `on its side, the tools and the preview are in a panel beside the map (${JSON.stringify(shown)})`);
+            assert.ok(Math.abs(shown.timebarBottom - shown.main.bottom) <= 1, `the time bar at the foot of the screen (${JSON.stringify(shown)})`);
+            await page.click('#gridded-view [data-action="toggle-panel"]');
+            await page.waitForTimeout(800);
+            const hidden = await sides();
+            assert.ok(!hidden.panel && hidden.pressed === 'false' && hidden.map > shown.map + 250, `hidden, the map takes the width (${JSON.stringify(hidden)})`);
+            await page.click('#gridded-view [data-action="toggle-panel"]');
+            await page.waitForTimeout(500);
+            assert.ok((await sides()).panel, 'and the panel comes back');
+        }
         assert.deepEqual(errors, []);
         await context.close();
     }
