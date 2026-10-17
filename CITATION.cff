@@ -13,10 +13,10 @@ url: "https://www.unditas.com/"
 license: MIT
 abstract: >-
   Browser and desktop application to explore time series locally: MATLAB .mat
-  (including OpenModelica and Dymola results), CSV, Excel, Parquet, netCDF,
-  pandas pickle, Micro-Cap and audio files, with time, frequency, distribution,
-  correlation and phase-space views. Files are processed on the user's computer
-  and never uploaded.
+  (including OpenModelica and Dymola results), CSV, Excel, Parquet, netCDF and
+  GRIB (ERA5, CMIP on a map), pandas pickle, Micro-Cap and audio files, with
+  time, frequency, distribution, correlation and phase-space views. Files are
+  processed on the user's computer and never uploaded.
 keywords:
   - time series
   - data visualization

@@ -1,6 +1,6 @@
 # Time Series Explorer
 
-Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, generic and PyPSA netCDF, small pandas pickle result files, Micro-Cap numeric output, and audio recordings.
+Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, netCDF and GRIB (ERA5 and CMIP grids on a map, station series, PyPSA networks), small pandas pickle result files, Micro-Cap numeric output, and audio recordings.
 
 **▶ [Open the app in your browser](https://www.unditas.com/)** — the live version, running now, with
 nothing to install and nothing to clone. Your files are never uploaded: parsing and
@@ -120,7 +120,7 @@ output path.
 - `public`: files copied as-is into the final build
 - `src/app`: top-level application orchestration
 - `src/plots`: plot lifecycle, modes, interactions, Plotly integration
-- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, generic/PyPSA netCDF, pandas pickle, Micro-Cap numeric output, and audio inputs
+- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, series netCDF (stations, PyPSA), pandas pickle, Micro-Cap numeric output, and audio inputs
 - `src/ui`: layout engine and modal helpers
 - `src/i18n`: translations and DOM localization
 - `src/styles`: split CSS source files
