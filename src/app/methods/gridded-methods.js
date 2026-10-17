@@ -402,8 +402,19 @@ export function installGriddedMethods(TargetClass) {
         return sniffNetcdfContainer(head).kind;
     };
 
+    // The loading overlay over opening a gridded file. Opening reads only its
+    // structure, but a GRIB has no index and is walked message by message, so
+    // on a long file or a slow disk this is a wait like any load. The batch
+    // overlay that follows reuses it; the questions asked meanwhile (ZIP
+    // entries, joining files, errors) are modals, drawn above it.
+    proto._griddedShowOpening = async function(name, size) {
+        this._showFileLoadingOverlay?.(1);
+        this._updateFileLoadingOverlay?.(1, 1, name, size);
+        await this._waitForNextPaint?.();
+    };
+
     /**
-     * Load-batch step, before the loading overlay: ZIP archives are listed and
+     * Load-batch step, before the batch loop: ZIP archives are listed and
      * the chosen entries extracted; files that are not data at all are
      * reported in words; gridded files are opened (header only) so that
      * several of them can be offered as one dataset joined in time.
@@ -423,6 +434,7 @@ export function installGriddedMethods(TargetClass) {
             try {
                 if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
                 if (!file) continue;
+                await this._griddedShowOpening(file.name, file.size);
                 const kind = await this._sniffFileHead(file);
                 if (kind === 'zip') {
                     const listed = (await listZipEntries(file)).filter(entry => isNetcdfEntryName(entry.name));
@@ -438,6 +450,7 @@ export function installGriddedMethods(TargetClass) {
                     const members = await this._griddedPickZipEntries(file, listed);
                     if (!members) continue;
                     if (members.files.length > 1 && members.together) {
+                        await this._griddedShowOpening(file.name, file.size);
                         const options = { mode: 'merge-variables', title: this._fileBaseName(file.name) };
                         const result = await this._griddedProbe(members.files, options);
                         if (result?.gridded) {
@@ -548,6 +561,7 @@ export function installGriddedMethods(TargetClass) {
         const files = opened.flatMap(group => group.files);
         try {
             const options = { mode: 'concat-time', title: `${opened[0].title} (+${opened.length - 1})` };
+            await this._griddedShowOpening(options.title, files.reduce((total, file) => total + (file.size || 0), 0));
             const result = await this._griddedProbe(files, options);
             for (const group of opened) griddedClient().close(group.result.datasetId);
             return [{ files, result, options, title: options.title }];

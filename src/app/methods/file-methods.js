@@ -407,8 +407,19 @@ proto.loadFiles = async function(items = []) {
     const matEntries = await this._expandMatEntries(excelEntries);
     // netCDF: ZIP archives listed, non-data files explained, gridded files
     // opened (header only) and offered as one dataset when they belong together.
-    const entries = await this._expandNetcdfEntries(matEntries);
-    if (!entries.length) return [];
+    // Opening one puts the overlay up already (_griddedShowOpening); the batch
+    // below reuses it, and when nothing is left to load it comes down here.
+    let entries;
+    try {
+        entries = await this._expandNetcdfEntries(matEntries);
+    } catch (err) {
+        this._hideFileLoadingOverlay();
+        throw err;
+    }
+    if (!entries.length) {
+        this._hideFileLoadingOverlay();
+        return [];
+    }
 
     const loaded = [];
     const loadToken = createLoadToken();
@@ -1984,13 +1995,23 @@ proto._openResultFilesFromUser = async function() {
             const paths = await desktopPicker({ title: 'Select result files' });
             if (!paths?.length) return;
             const picked = [];
-            for (const localPath of paths) {
+            for (const [index, localPath] of paths.entries()) {
+                // netCDF, GRIB and the CDS ZIP are copied whole from the local
+                // server before anything else (_readLocalResultPath), which on
+                // a large file is the longest wait of the open: the overlay
+                // goes up for it, and loadFiles takes it over or down.
+                if (this._isDesktopFetchedByPartsExtension(this._fileExtension(localPath))) {
+                    this._showFileLoadingOverlay(paths.length);
+                    this._updateFileLoadingOverlay(index + 1, paths.length, String(localPath).split(/[\\/]/).filter(Boolean).pop() || '');
+                    await this._waitForNextPaint();
+                }
                 const file = await this._readLocalResultPath(localPath);
                 picked.push({ file, fileHandle: null, localPath });
             }
             await this.loadFiles(picked);
             return;
         } catch (err) {
+            this._hideFileLoadingOverlay();
             console.warn('Desktop file picker failed; using browser file picker fallback.', err);
         }
     }
