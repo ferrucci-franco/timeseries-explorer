@@ -34,6 +34,10 @@ export async function handleGriddedRequest({ GriddedDataset, datasets }, op, pay
         const map = dataset().readMap(payload.variable, payload.selection || {});
         return { result: map, transfer: transferOf(map.values) };
     }
+    case 'maps': {
+        const maps = dataset().readMaps(payload.variable, payload.selection || {}, payload.indices || []);
+        return { result: { maps }, transfer: transferOf(...maps.map(item => item.map.values)) };
+    }
     case 'point': {
         const series = await dataset().pointSeries(payload.variable, payload.selection || {}, payload.lat, payload.lon, job, { levels: payload.levels, method: payload.method, timeRange: payload.timeRange });
         const parts = series.byLevel || [series];

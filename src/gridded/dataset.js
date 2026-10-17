@@ -65,6 +65,16 @@ function flatNumbers(value) {
     return flatten(value);
 }
 
+function gcd(a, b) {
+    while (b) [a, b] = [b, a % b];
+    return Math.abs(a);
+}
+
+// readMaps reads a strided slab only while it holds at most this many times
+// the maps wanted: months of hours share a stride of a day, 30 maps read for
+// each one kept, which still costs less than the chunks decompressed again.
+const MAX_STRIDED_WASTE = 32;
+
 function tick() {
     return new Promise(resolve => setTimeout(resolve, 0));
 }
@@ -504,8 +514,6 @@ export class GriddedDataset {
         if (!variable.mapable) throw new Error(`${variable.name} is not a map.`);
         const grid = this._grid(variable);
         const tAxis = variable.roles.indexOf('t');
-        const yAxis = variable.roles.indexOf('y');
-        const xAxis = variable.roles.indexOf('x');
         const overrides = {};
         let segment = variable.segments[0];
         if (tAxis >= 0) {
@@ -514,25 +522,78 @@ export class GriddedDataset {
             overrides[tAxis] = [found.local, found.local + 1];
         }
         const ranges = this._ranges(variable, selection, overrides);
-        const raw = flatNumbers(segment.descriptor.read(ranges));
-        const decoded = decodeNumeric(raw, segment.descriptor.userAttrs);
+        const decoded = decodeNumeric(flatNumbers(segment.descriptor.read(ranges)), segment.descriptor.userAttrs);
+        return this._mapFromSlab(variable, grid, decoded, ranges, 0);
+    }
+
+    /**
+     * Several maps, at the time indices given (the steps Play is about to
+     * show), as [{ index, map }]. A file chunked along time (the new CDS
+     * writes four months of hours per chunk) decompresses those chunks whole
+     * for any map read from them, so a map at a time cost the whole chunk
+     * each time: about 2 s a step on a year of hourly Argentina. Here the
+     * steps of one segment come from one read, strided by the greatest
+     * common divisor of their gaps (a day, or the hours between months), the
+     * steps between them read and dropped; a reader that cannot stride, or a
+     * slab far larger than what is wanted, reads map by map.
+     */
+    readMaps(key, selection = {}, indices = []) {
+        const variable = this._variable(key);
+        if (!variable.mapable) throw new Error(`${variable.name} is not a map.`);
+        const tAxis = variable.roles.indexOf('t');
+        const wanted = [...new Set(indices.map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+        const single = index => ({ index, map: this.readMap(key, { ...selection, [variable.timeDim]: index }) });
+        if (tAxis < 0) return wanted.slice(0, 1).map(index => ({ index, map: this.readMap(key, selection) }));
+        const grid = this._grid(variable);
+        const bySegment = new Map();
+        for (const index of wanted) {
+            const { segment, local } = this._segmentFor(variable, index);
+            if (!bySegment.has(segment)) bySegment.set(segment, []);
+            bySegment.get(segment).push({ index, local });
+        }
+        const out = [];
+        for (const [segment, items] of bySegment) {
+            let step = 0;
+            for (let k = 1; k < items.length; k++) step = gcd(step, items[k].local - items[k - 1].local);
+            const count = items.length > 1 ? (items.at(-1).local - items[0].local) / step + 1 : 1;
+            if (items.length < 2 || !segment.descriptor.supportsStep || count > items.length * MAX_STRIDED_WASTE) {
+                for (const item of items) out.push(single(item.index));
+                continue;
+            }
+            const ranges = this._ranges(variable, selection, { [tAxis]: [items[0].local, items.at(-1).local + 1, step] });
+            const decoded = decodeNumeric(flatNumbers(segment.descriptor.read(ranges)), segment.descriptor.userAttrs);
+            for (const item of items) out.push({ index: item.index, map: this._mapFromSlab(variable, grid, decoded, ranges, (item.local - items[0].local) / step) });
+        }
+        return out;
+    }
+
+    // One map out of a slab read with `ranges` ([start, stop] or [start,
+    // stop, step] per axis; every axis but y, x and time of length 1): the
+    // one at position `tPosition` along time, in display order.
+    _mapFromSlab(variable, grid, decoded, ranges, tPosition) {
+        const tAxis = variable.roles.indexOf('t');
+        const yAxis = variable.roles.indexOf('y');
+        const xAxis = variable.roles.indexOf('x');
         const ny = grid.lat.length;
         const nx = grid.lon.length;
-        // Strides of the y and x axes inside the slab just read (every other axis has length 1).
-        const counts = ranges.map(([start, stop]) => stop - start);
+        // Strides of the axes inside the slab just read.
+        const counts = ranges.map(([start, stop, step = 1]) => Math.ceil((stop - start) / step));
         let yStride = 1;
         let xStride = 1;
+        let tStride = 0;
         for (let axis = counts.length - 1, stride = 1; axis >= 0; axis--) {
             if (axis === yAxis) yStride = stride;
             if (axis === xAxis) xStride = stride;
+            if (axis === tAxis) tStride = stride;
             stride *= counts[axis];
         }
+        const base = tPosition * tStride;
         const values = new Float32Array(ny * nx);
         let min = Infinity;
         let max = -Infinity;
         let valid = 0;
         for (let row = 0; row < ny; row++) {
-            const fileRow = grid.yOrder[row] * yStride;
+            const fileRow = base + grid.yOrder[row] * yStride;
             for (let column = 0; column < nx; column++) {
                 const value = decoded[fileRow + grid.xOrder[column] * xStride];
                 values[row * nx + column] = value;

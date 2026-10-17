@@ -28,4 +28,7 @@ netCDF4), asserted by `scripts/test-gridded-dataset.mjs` and
   instantaneous and accumulated requests.
 - `cmip-noleap.nc`: a `noleap` calendar.
 - `cdf5-grid.nc`: netCDF3 64-bit data (CDF-5), uint16.
+- `era5-like-time-chunked.nc`: the new CDS layout chunked along time, as a
+  long hourly request comes: 96 hourly steps in chunks of 48 steps by a
+  quarter of the grid, so one map spans four chunks.
 

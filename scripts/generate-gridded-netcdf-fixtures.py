@@ -18,6 +18,10 @@ They copy the layouts that broke the viewer, at a few KB each:
 - cmip-noleap.nc              netCDF3 classic, `days since 2000-01-01` in the
                               `noleap` calendar.
 - cdf5-grid.nc                netCDF3 64-bit data (CDF-5).
+- era5-like-time-chunked.nc   the new CDS layout as it comes for a long hourly
+                              request: chunks of many steps along time (the
+                              CDS writes 2920, four months of hours) by a part
+                              of the grid, so one map spans several chunks.
 
 Regenerate with:  python3 scripts/generate-gridded-netcdf-fixtures.py
 (needs numpy and netCDF4)
@@ -171,8 +175,46 @@ def cdf5(path):
     ds.close()
 
 
+def time_chunked(path, nt=96, chunk=48):
+    lat = np.array([75.0, 45.0, 15.0, -15.0, -45.0, -75.0])
+    lon = np.arange(0.0, 360.0, 45.0)
+    ds = nc.Dataset(path, 'w', format='NETCDF4')
+    ds.Conventions = 'CF-1.7'
+    ds.history = 'Time Series Explorer test fixture (new CDS layout, chunked along time)'
+    ds.createDimension('valid_time', nt)
+    ds.createDimension('pressure_level', 1)
+    ds.createDimension('latitude', len(lat))
+    ds.createDimension('longitude', len(lon))
+    t = ds.createVariable('valid_time', 'i8', ('valid_time',))
+    t.units = 'seconds since 1970-01-01'
+    t.calendar = 'proleptic_gregorian'
+    t.standard_name = 'time'
+    t[:] = 1704067200 + 3600 * np.arange(nt)
+    level = ds.createVariable('pressure_level', 'f8', ('pressure_level',))
+    level.units = 'hPa'
+    level.standard_name = 'air_pressure'
+    level[:] = [850.0]
+    la = ds.createVariable('latitude', 'f8', ('latitude',))
+    la.units = 'degrees_north'
+    la.standard_name = 'latitude'
+    la[:] = lat
+    lo = ds.createVariable('longitude', 'f8', ('longitude',))
+    lo.units = 'degrees_east'
+    lo.standard_name = 'longitude'
+    lo[:] = lon
+    v = ds.createVariable('t', 'f4', ('valid_time', 'pressure_level', 'latitude', 'longitude'),
+                          zlib=True, shuffle=True, complevel=1, fill_value=np.float32(np.nan),
+                          chunksizes=(chunk, 1, 3, 4))
+    v.units = 'K'
+    v.long_name = 'Temperature'
+    v.standard_name = 'air_temperature'
+    v[:] = field(nt, lat, lon)[:, None, :, :]
+    ds.close()
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    time_chunked(os.path.join(OUT, 'era5-like-time-chunked.nc'))
     new_cds(os.path.join(OUT, 'era5-like-new-cds.nc'), [
         ('t', 'Temperature', 'K', 0.0, True),
         ('t2m', '2 metre temperature', 'K', 5.0, False),
