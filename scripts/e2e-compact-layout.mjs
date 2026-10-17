@@ -307,7 +307,13 @@ try {
     // The line shape, a segmented choice where the desktop has a radio row.
     await menuItem('line-hv').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?._fullData?.[0]?.line?.shape === 'hv');
-    assert.equal(await menuItem('line-hv').getAttribute('aria-checked'), 'true', 'and says which one is on');
+    // The sheet redraws its rows just after the plot, so the choice says which
+    // one is on a moment later.
+    await page.waitForFunction(
+        () => document.querySelector('.compact-page-plot [data-menu-item="line-hv"]')?.getAttribute('aria-checked') === 'true',
+        null,
+        { timeout: 10000 },
+    );
     await menuItem('line-auto').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?._fullData?.[0]?.line?.shape !== 'hv');
     // Marks, the second menu, as switches of their own section.
@@ -333,12 +339,15 @@ try {
     );
     await page.locator('.gaps-panel-close').click();
     await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
-    // Back to a plain plot for what follows.
-    for (const key of ['nan', 'gaps', 'stack', 'ylog']) await menuItem(key).click();
-    await page.waitForFunction(() => {
-        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
-        return !plot.showNaN && !plot.showGaps && !plot.timeseriesStacked && !plot.timeseriesYLog;
-    });
+    // Back to a plain plot for what follows, one switch at a time: each redraws
+    // the rows the next one is tapped on.
+    for (const [key, flag] of [['nan', 'showNaN'], ['gaps', 'showGaps'], ['stack', 'timeseriesStacked'], ['ylog', 'timeseriesYLog']]) {
+        await menuItem(key).click();
+        await page.waitForFunction(
+            (name) => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.[name],
+            flag,
+        );
+    }
 
     await page.locator('.compact-add-signals-btn').click();
     await page.waitForFunction(() => window.app._compact.sheet === 'data');
@@ -816,7 +825,11 @@ try {
     await page.waitForFunction(() => window.app._compact.sheet === null);
     assert.equal(await page.evaluate(() => !!document.querySelector('.correlation-container .fft-workspace > .correlation-options')), true,
         'closing the sheet gives correlation its options panel back');
-    await page.waitForTimeout(400);
+    await page.waitForFunction(
+        () => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?.querySelector('.compact-fit-group:not([hidden])'),
+        null,
+        { timeout: 15000 },
+    );
     assert.deepEqual(
         await page.evaluate(() => {
             const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
@@ -881,7 +894,15 @@ try {
     await page.waitForFunction(() => window.app._compact.sheet === null);
     assert.equal(await page.evaluate(() => !!document.querySelector('.phase2d-fit-container .fft-workspace > .phase2d-fit-options')), true,
         'closing the sheet gives the fit its drawer back');
-    await page.waitForTimeout(500);
+    await page.waitForFunction(
+        () => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return !!plot?.div?.querySelector('.compact-fit-group:not([hidden])')
+                && !!plot?.phase2dFitTimeDiv?.querySelector('.compact-fit-group:not([hidden])');
+        },
+        null,
+        { timeout: 15000 },
+    );
     assert.deepEqual(
         await page.evaluate(() => {
             const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
@@ -1165,7 +1186,11 @@ try {
         await profilePage.waitForFunction(() => window.app._compact.sheet === null);
         assert.equal(await profilePage.evaluate(() => !!document.querySelector('.heatmap-workspace > .heatmap-options')), true,
             'closing the sheet gives the Heatmap its options panel back');
-        await profilePage.waitForTimeout(400);
+        await profilePage.waitForFunction(
+            () => document.querySelectorAll('.compact-active-panel .compact-fit-group:not([hidden])').length === 2,
+            null,
+            { timeout: 15000 },
+        );
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the calendar each have their fit buttons');
         assert.deepEqual(
