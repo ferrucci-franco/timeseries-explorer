@@ -1476,7 +1476,7 @@ resumen de buscador):
   - el diálogo "¿mapa de estaciones o series?" para archivos ambiguos
     (§4.4.0, paso 3) no existe: un archivo de estaciones va al lector de
     series sin preguntar, y el mapa de estaciones no está en la fase 1.
-- La herramienta activa (Navegar / Punto / Región) y el punto o el recuadro
-  naranja a medio poner no se guardan en la sesión: un mapa restaurado abre
-  en Navegar, con lo ya extraído.
+- (Resuelto.) La herramienta activa (Navegar / Punto / Región) y el punto o
+  el recuadro a medio poner viajan con la sesión: un proyecto guardado a mitad
+  de camino reabre a mitad de camino, con los campos de coordenadas llenos.
 

@@ -3466,6 +3466,11 @@ export function installGriddedMethods(TargetClass) {
             zoom: view.zoom ? { x: [...view.zoom.x], y: [...view.zoom.y] } : null,
             extractLevels: view.extractLevels?.length ? [...view.extractLevels] : null,
             pointMethod: view.pointMethod === 'bilinear' ? 'bilinear' : 'nearest',
+            // The tool in hand and the place not yet extracted: a project
+            // saved mid-way reopens mid-way.
+            mode: ['point', 'region'].includes(view.mode) ? view.mode : 'navigate',
+            pendingPoint: view.pendingPoint ? { ...view.pendingPoint } : null,
+            pendingBox: view.pendingBox ? { ...view.pendingBox } : null,
             resultsHidden: !!view.resultsHidden,
             plotPanelId: view.plotPanelId ?? null,
             counters: {
@@ -3558,6 +3563,17 @@ export function installGriddedMethods(TargetClass) {
         view.extractLevels = Array.isArray(saved.extractLevels) && saved.extractLevels.length ? [...saved.extractLevels] : null;
         view.resultsHidden = !!saved.resultsHidden;
         view.pointMethod = saved.pointMethod === 'bilinear' ? 'bilinear' : 'nearest';
+        const coordinate = (value, limit) => Number.isFinite(value) && Math.abs(value) <= limit;
+        const point = saved.pendingPoint;
+        if (point && coordinate(point.lat, 90) && coordinate(point.lon, 360)) {
+            view.pendingPoint = { lat: point.lat, lon: point.lon };
+        }
+        const box = saved.pendingBox;
+        if (box && [box.latMin, box.latMax].every(value => coordinate(value, 90)) && [box.lonMin, box.lonMax].every(value => coordinate(value, 360))
+            && box.latMin <= box.latMax && box.lonMin <= box.lonMax) {
+            view.pendingBox = { lonMin: box.lonMin, lonMax: box.lonMax, latMin: box.latMin, latMax: box.latMax };
+        }
+        view.mode = ['point', 'region'].includes(saved.mode) ? saved.mode : 'navigate';
         if (saved.plotPanelId !== null && saved.plotPanelId !== undefined) view.plotPanelId = saved.plotPanelId;
         const counters = saved.counters || {};
         view.groupCount = Number(counters.groupCount) || 0;
@@ -3636,6 +3652,8 @@ export function installGriddedMethods(TargetClass) {
         this._griddedCommitData(view, data);
         if (this._griddedState().visibleFileId === fileId) {
             this._griddedRenderControls(view);
+            this._griddedSetMode(view, view.mode);
+            this._griddedSyncInputs(view);
             this._griddedRequestMap(view);
             this._griddedDrawPreview(view);
         }
