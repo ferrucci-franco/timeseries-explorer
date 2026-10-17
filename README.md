@@ -327,6 +327,8 @@ The portable web package supports two offline modes:
 
 The local browser mode bundles the Node runtime from the platform that built the zip, starts a localhost-only server, and opens the browser without requiring users to install Python, Node, npm, or internet access. Live Update belongs to the Full Desktop app.
 
+Opened with a double click, the page is on `file://`, where browsers do not start a worker from a script URL. The build therefore bundles each worker (parsing, gridded maps, compute, FFT) on its own into `workers/<name>.js` as a string, and the app starts it from a Blob. Large netCDF and GRIB files are then read by parts, as on the web: a 1.67 GB ERA5 month shows its map in about 1 s, with about 160 MB in the tab, instead of 20 s and 1.9 GB. `npm run e2e:portable-file` builds the page into a temporary folder, opens it from `file://`, and checks this.
+
 ## Privacy
 
 Time-series files are never uploaded: parsing and plotting happen in your

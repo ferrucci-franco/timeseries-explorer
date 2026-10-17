@@ -1086,8 +1086,9 @@ resumen de buscador):
 - **Lectura en un Worker**, que mantiene abiertos los archivos por partes:
   - h5wasm sobre WORKERFS para netCDF4;
   - el lector propio para netCDF3.
-  - Sin Worker (build portable en `file://`), las mismas operaciones corren en
-    la página, sobre el archivo en memoria.
+  - Sin Worker (un navegador que no los tiene), las mismas operaciones corren
+    en la página, sobre el archivo en memoria. El build portable abierto con
+    doble clic (`file://`) sí los tiene: ver más abajo.
 - **Modelo del dataset:**
   - roles de ejes (T/Z/Y/X) por `axis`, `standard_name`, unidades y nombre;
   - latitud descendente presentada ascendente;
@@ -1383,8 +1384,7 @@ resumen de buscador):
   | Región global | 39–41 s | 12,5–13 s |
   | Cambiar de instante (mapa) | 0,4 s | 0,2–0,4 s |
 
-- Con archivos en bloques chicos las series son más rápidas todavía; el
-  build portable (`file://`, sin Workers) sigue leyendo en la página.
+- Con archivos en bloques chicos las series son más rápidas todavía.
 - **Cambio de instante.** Medido con más precisión, un paso costaba 160–200 ms
   (leer el mapa 50–180 ms, dibujarlo ~100 ms; los 0,4 s de antes eran el
   primer paso en frío). Ahora el instante siguiente, en la dirección en que se
@@ -1411,7 +1411,7 @@ resumen de buscador):
 - Medido con un archivo de estaciones de 573 MB (150 000 instantes × 1000
   estaciones): antes, aviso por tamaño y, aceptando, 18 s y +2,1 GB de
   memoria; ahora, sin aviso (carga 64 series, 77 MB), 4,6 s y +350 MB.
-- Sin Worker (build portable en `file://`) sigue el camino anterior.
+- Sin Worker sigue el camino anterior.
 
 **GRIB en el mapa** (`src/gridded/grib-reader.js`).
 
@@ -1436,19 +1436,36 @@ resumen de buscador):
   global a 0,25° (350 MB): abre en 3 s, un paso en 0,2 s, una serie de 168
   pasos en 2,5 s.
 
+**Build portable abierto con doble clic** (`scripts/build-portable.mjs`,
+`src/core/worker-pool.js`).
+
+- Una página en `file://` no puede arrancar un Worker desde la URL de un
+  script, así que el portable leía todo en la página: un ERA5 de 1,67 GB
+  tardaba 20 s en mostrar el mapa y dejaba 1,9 GB en la memoria de la
+  pestaña.
+- Ahora el build empaqueta cada worker (parseo, grilla, cálculo, FFT) por
+  separado y lo deja como texto en `workers/<nombre>.js`, que un `<script>`
+  común sí carga. `spawnWorker` arranca el worker desde un Blob de ese texto,
+  que `file://` permite, y dentro de él `FileReaderSync` lee el archivo por
+  partes como en la web.
+- El mismo ERA5: mapa en 1 s, 157 MB en la pestaña; la serie de un punto
+  (744 pasos) en 10 s.
+- El texto de h5wasm lleva su WebAssembly como bytes crudos; se escribe como
+  literal de JS escapando solo lo que lo cortaría (`JSON.stringify` duplicaba
+  el tamaño). Cada worker con h5wasm pesa ~7 MB.
+- `scripts/e2e-portable-file.mjs` arma el portable en una carpeta temporal,
+  lo abre desde `file://` y comprueba que el mapa y un archivo de estaciones
+  se leen en sus workers.
+
 **Pendiente de esta parte:**
 
 - No probado dentro de Electron mismo: el camino del renderer sí, contra el
   servidor de archivos de Electron.
 - "Abrir como series" se retiró del panel (§4.4.0); un archivo de grilla
   ya no se abre como series.
-- Fase 0, punto 5 (WORKERFS en lugar de `FS.writeFile`) está hecho en el
-  camino grillado (`src/gridded/dataset.js`), no en el lector de series
-  (`src/parsers/netcdf-parser.js`), que sigue recibiendo el archivo entero en
-  un `ArrayBuffer` y copiándolo al FS de Emscripten. Lo que motivaba R2 —los
-  ERA5 grandes— ya no pasa por ahí: un archivo de grilla se abre en el
-  worker y se lee por partes. Cambiarlo obligaría a mandar el `File` al
-  worker de parseo y a tocar el camino PyPSA, que este documento deja fuera.
+- Fase 0, punto 5 (WORKERFS en lugar de `FS.writeFile`) está hecho en los
+  dos caminos: el grillado y el de series (`src/gridded/hdf5-input.js`, que
+  usan los dos lectores).
 - Del detalle de §4.4, fuera de lo que pide la fase 1 en §8:
   - el slider de tiempo no tiene saltos de día, mes y año ni la mini-serie de
     fondo con la media del dominio;

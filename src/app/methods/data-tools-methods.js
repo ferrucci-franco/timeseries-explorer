@@ -1,7 +1,7 @@
 import i18n from '../../i18n/index.js';
 import { renameFormulaReference, variableNameProblem } from './derived-methods.js';
 import { emphasize, emphasizeList, emphasizedToPlain, setEmphasizedText } from '../../ui/emphasis.js';
-import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
+import WorkerPool, { canUseWorkers, spawnWorker } from '../../core/worker-pool.js';
 import {
     applyFilter,
     computeDerivative,
@@ -74,12 +74,12 @@ const INTEGRAL_GAP_POLICIES = kernelShared.INTEGRAL_GAP_POLICIES;
 // test harness (which has no Worker) costs nothing.
 let computePool = null;
 export function getComputePool() {
-    if (!canUseWorkers()) return null;
+    if (!canUseWorkers('compute')) return null;
     if (!computePool) {
         computePool = new WorkerPool(
             // The `new URL(..., import.meta.url)` form is what lets Vite find
             // and emit the worker chunk; it must stay literal and inline.
-            () => new Worker(new URL('../../workers/compute-worker.js', import.meta.url), { type: 'module' }),
+            () => spawnWorker('compute', () => new Worker(new URL('../../workers/compute-worker.js', import.meta.url), { type: 'module' })),
             { name: 'compute', size: 2 },
         );
     }

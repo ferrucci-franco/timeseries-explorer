@@ -23,7 +23,7 @@ import {
     decodedAudioBytes,
 } from '../../parsers/audio-limits.js';
 
-import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
+import WorkerPool, { canUseWorkers, spawnWorker } from '../../core/worker-pool.js';
 import { checkDecodedAudioLimit, checkFullLoadLimit, checkLoadedNetcdfLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
 import {
@@ -48,10 +48,10 @@ const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 // ceiling of ~4 GB. Concurrent file drops queue instead.
 let parsePool = null;
 function getParsePool() {
-    if (!canUseWorkers()) return null;
+    if (!canUseWorkers('parse')) return null;
     if (!parsePool) {
         parsePool = new WorkerPool(
-            () => new Worker(new URL('../../workers/parse-worker.js', import.meta.url), { type: 'module' }),
+            () => spawnWorker('parse', () => new Worker(new URL('../../workers/parse-worker.js', import.meta.url), { type: 'module' })),
             { name: 'parse', size: 1 },
         );
     }
@@ -2133,7 +2133,16 @@ proto._parseMicroCapResultBuffer = async function(filename, buffer, _options = {
 };
 
 proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options = {}, file = null) {
-    if (!buffer && file && this._canParseNetcdfByParts(file)) return this._parseNetcdfFileByParts(filename, file, options);
+    if (!buffer && file && this._canParseNetcdfByParts(file)) {
+        try {
+            return await this._parseNetcdfFileByParts(filename, file, options);
+        } catch (err) {
+            // The browser refused the worker after all (a portable page on
+            // file:// where Blob workers are blocked): read the file whole.
+            if (!err?.workerUnavailable) throw err;
+            buffer = await file.arrayBuffer();
+        }
+    }
     // The reader enforces a ceiling of its own, so both "the user chose to
     // proceed" and "there is no limit" have to reach it — see readerFileCeiling
     // for why neither can travel as the number the app holds.
@@ -2508,7 +2517,7 @@ proto._canParseFromFile = function(file, extension = this._fileExtension(file?.n
 // File itself and is read there by parts, never copied whole: its size no
 // longer matters, only the series it loads (see _parsePypsaNetcdfResultBuffer).
 proto._canParseNetcdfByParts = function(file, extension = this._fileExtension(file?.name || '')) {
-    return !!file && this._isPypsaNetcdfExtension(extension) && canUseWorkers();
+    return !!file && this._isPypsaNetcdfExtension(extension) && canUseWorkers('parse');
 };
 
 proto._fileFingerprint = function(file) {
