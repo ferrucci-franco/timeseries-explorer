@@ -11,6 +11,7 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import Plotly from '../../vendor/plotly.js';
 import { griddedClient, nextDatasetId } from '../../gridded/gridded-client.js';
+import { GRIB_EXTENSIONS } from '../constants.js';
 import { extractZipEntry, isNetcdfEntryName, listZipEntries } from '../../gridded/zip-reader.js';
 import { NETCDF_READABLE_KINDS, sniffNetcdfContainer } from '../../parsers/netcdf-sniff.js';
 import { formatUnitPowers } from '../../utils/unit-superscripts.js';
@@ -18,7 +19,9 @@ import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
 import { coastlineTrace, coastlineWindow, insideCoastlineWindow } from '../../gridded/coastlines.js';
 import { copyTextToClipboard } from '../../utils/clipboard.js';
 
-const GRIDDED_EXTENSIONS = new Set(['.nc', '.nc4', '.netcdf', '.cdf', '.zip']);
+const GRIDDED_EXTENSIONS = new Set(['.nc', '.nc4', '.netcdf', '.cdf', '.zip', ...GRIB_EXTENSIONS]);
+// What the gridded reader opens: netCDF (3, 4, CDF-5) and GRIB.
+const GRIDDED_READABLE_KINDS = new Set([...NETCDF_READABLE_KINDS, 'cdf5', 'grib']);
 // Above this many cells a map is drawn decimated to the screen; zooming in
 // reads the full resolution of what is visible.
 const MAX_DRAWN_CELLS = 400 * 1000;
@@ -445,7 +448,7 @@ export function installGriddedMethods(TargetClass) {
                     for (const member of members.files) expanded.push({ file: member, fileHandle: null, localPath: '' });
                     continue;
                 }
-                if (!NETCDF_READABLE_KINDS.has(kind) && kind !== 'cdf5') {
+                if (!GRIDDED_READABLE_KINDS.has(kind)) {
                     if (extension === '.zip') {
                         expanded.push(item);
                         continue;
@@ -473,6 +476,7 @@ export function installGriddedMethods(TargetClass) {
         if (error?.containerKind) return this._griddedContainerMessage(error.containerKind, fileName);
         if (error?.code === 'GRIDDED_INCOMPATIBLE') return `${i18n.t('griddedErrorIncompatible')}\n\n${error.message}`;
         if (error?.code === 'ZIP_DAMAGED') return i18n.t('griddedErrorZipDamaged').replace('{file}', fileName || '');
+        if (error?.code === 'GRIB_UNSUPPORTED') return `${i18n.t('griddedErrorGribUnsupported').replace('{file}', fileName || '')}\n\n${error.message}`;
         return error?.message || String(error);
     };
 
@@ -581,7 +585,7 @@ export function installGriddedMethods(TargetClass) {
             }, options);
         }
         const kind = await this._sniffFileHead(file);
-        if (!NETCDF_READABLE_KINDS.has(kind) && kind !== 'cdf5') {
+        if (!GRIDDED_READABLE_KINDS.has(kind)) {
             if (extension === '.zip') return null;
             throw Object.assign(new Error(this._griddedContainerMessage(kind, file.name)), { containerKind: kind });
         }

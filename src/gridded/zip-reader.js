@@ -86,7 +86,7 @@ export async function listZipEntries(file) {
 }
 
 export function isNetcdfEntryName(name) {
-    return /\.(nc|nc4|netcdf|cdf|h5|hdf5|he5)$/i.test(String(name || ''));
+    return /\.(nc|nc4|netcdf|cdf|h5|hdf5|he5|grib|grb|grib1|grib2|grb2)$/i.test(String(name || ''));
 }
 
 /** Extracts one entry as a File (named after the entry, without its folder). */

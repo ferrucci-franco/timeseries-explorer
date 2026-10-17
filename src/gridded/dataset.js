@@ -14,6 +14,7 @@
 // that wraps the antimeridian) stays here.
 
 import { openHdf5 } from './hdf5-input.js';
+import { openGrib } from './grib-reader.js';
 import NetcdfParser from '../parsers/netcdf-parser.js';
 import { netcdfContainerError, sniffNetcdfContainer } from '../parsers/netcdf-sniff.js';
 import {
@@ -106,6 +107,12 @@ async function openMember(input, parser) {
     if (kind === 'netcdf3-classic' || kind === 'netcdf3-64-bit-offset' || kind === 'cdf5') {
         const source = input.buffer ? new BufferByteSource(input.buffer) : new FileByteSource(input.file);
         const opened = openNetcdf3(source);
+        return { filename, storageFormat: opened.storageFormat, pypsa: false, globalAttrs: opened.globalAttrs, descriptors: opened.descriptors, close() {} };
+    }
+    if (kind === 'grib') {
+        // Its messages listed by their headers; a field is decoded when read.
+        const source = input.buffer ? new BufferByteSource(input.buffer) : new FileByteSource(input.file);
+        const opened = openGrib(source);
         return { filename, storageFormat: opened.storageFormat, pypsa: false, globalAttrs: opened.globalAttrs, descriptors: opened.descriptors, close() {} };
     }
     throw netcdfContainerError(kind);

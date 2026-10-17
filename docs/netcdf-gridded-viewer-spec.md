@@ -147,7 +147,7 @@ archivo) es entre 1.000 y 5.000 veces más rápido que leer punto a punto.
 | R3 | **Lectura punto a punto** de datos con compresión por bloques | `_readSeries` | 75 s para 3,6 MB. Cada punto vuelve a descomprimir todos los bloques |
 | R4 | `_descriptorIsNumeric` y `readFlat` leen **variables enteras como `Array` JS** (números en caja) solo para saber si son numéricas, y las cachean | `_descriptorIsNumeric`, `readFlat` | ~8–16× la memoria del `Float32Array` original. El tipo ya está en `dtype` |
 | R5 | No se reconoce el **ZIP** del nuevo CDS | detección por magia | Error genérico. El usuario cree que el archivo está roto |
-| R6 | **GRIB** no soportado | `RESULT_FILE_EXTENSIONS`, parser | El formato recomendado por ECMWF no abre |
+| R6 | **GRIB** no soportado (resuelto: §11, GRIB en el mapa) | `RESULT_FILE_EXTENSIONS`, parser | El formato recomendado por ECMWF no abre |
 | R7 | Coordenada X candidata exige longitud > 1 | `_coordinateAxisCandidate` | Un archivo de un instante elige `latitude` como X; el tiempo queda como entero crudo |
 | R8 | Calendarios no estándar (`noleap`, `360_day`, `all_leap`) quedan numéricos | `_axisFromCoordinate` | CMIP y modelos climáticos sin fechas |
 | R9 | netCDF3 sin lectura parcial (`netcdfjs` exige el buffer completo); CDF-5 sin soporte | `_parseNetcdf3` | Archivos legacy grandes y salidas de WRF/MPAS en CDF-5 |
@@ -1412,6 +1412,29 @@ resumen de buscador):
   estaciones): antes, aviso por tamaño y, aceptando, 18 s y +2,1 GB de
   memoria; ahora, sin aviso (carga 64 series, 77 MB), 4,6 s y +350 MB.
 - Sin Worker (build portable en `file://`) sigue el camino anterior.
+
+**GRIB en el mapa** (`src/gridded/grib-reader.js`).
+
+- ERA5 es GRIB de origen y es lo que el CDS manda por defecto. El lector
+  recorre el archivo leyendo solo los encabezados de cada mensaje (por partes,
+  como netCDF) y arma las mismas variables: una por parámetro y tipo de nivel
+  (tiempo, nivel si hay varios, latitud, longitud), con coordenadas CF
+  (`time` en segundos desde 1970, `pressure_level` en hPa de arriba hacia
+  abajo como el netCDF de ERA5). Un campo se decodifica cuando un mapa o una
+  serie lo necesita (bloque = un mensaje, así que valen la lectura por
+  bloques y el reparto entre Workers).
+- Cubre GRIB1 y GRIB2 en grilla lat/lon regular, empaquetado simple, complejo
+  con o sin diferencias espaciales e IEEE, máscara de bits, mensajes GRIB1 de
+  más de 8 MB (convención de ECMWF) y varios campos por mensaje GRIB2.
+  Nombres de parámetros de la tabla 128/228 de ECMWF (GRIB1) y de las tablas
+  WMO (GRIB2: `2t`, `10u`, `msl`, `tp`, `t`, `u`, `z`…).
+- JPEG 2000, PNG y CCSDS, campos espectrales y grillas gaussianas o rotadas se
+  rechazan con un mensaje que dice cuál y cómo convertir (`grib_set -r -s
+  packingType=grid_simple`, `cdo remapbil`, `cdo -f nc4 copy`).
+- Verificado contra ecCodes 2.50: valores idénticos en todos los casos de
+  prueba (incluido un mensaje GRIB1 de 13 MB a 0,1°) y en una semana horaria
+  global a 0,25° (350 MB): abre en 3 s, un paso en 0,2 s, una serie de 168
+  pasos en 2,5 s.
 
 **Pendiente de esta parte:**
 
