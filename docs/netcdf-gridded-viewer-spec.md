@@ -1333,6 +1333,37 @@ resumen de buscador):
 - Un "?" junto a "1 · Extraer una serie temporal" abre un recuadro (fondo
   difuminado) que explica todo esto.
 
+**Archivos grandes: una lectura por bloque de tiempo.**
+
+- Las celdas de un punto bilineal se leen juntas, como la ventana que las
+  contiene, en una sola pasada por el archivo (antes, una pasada por celda:
+  cuatro veces el costo).
+- Los tramos de columnas que caen en los mismos bloques comprimidos del
+  archivo se leen como uno: un recuadro que cruza el meridiano 0 de una grilla
+  0..360 (Europa en ERA5), o un punto bilineal sobre el meridiano, ya no
+  descomprime dos veces el mismo bloque. Tramos en bloques propios (bloques
+  chicos, o netCDF3 sin bloques) siguen separados y leen solo lo necesario
+  (`_columnReads`).
+- Medido en el navegador con un mes horario global a 0,25° (744 × 721 × 1440,
+  1,67 GB, un bloque por instante como el nuevo CDS):
+
+  | Operación | Antes | Ahora |
+  |---|---:|---:|
+  | Abrir hasta ver el mapa | 2,6 s | 2,6 s |
+  | Cambiar de instante | 0,4 s | 0,4 s |
+  | Punto, celda más cercana | 15 s | 15 s |
+  | Punto, bilineal | 57 s | 14 s |
+  | Región Europa (cruza el meridiano 0) | 28,5 s | 16–17 s |
+  | Región sin cruzar (Sudamérica) | — | 15–16 s |
+  | Región global | 38 s | 39–41 s |
+
+  Memoria del navegador: unos 200–280 MB sobre la app vacía con el archivo
+  abierto; el archivo no se carga entero. Valores verificados contra numpy
+  (bilineal y medias ponderadas por cos φ: diferencias < 1e-10).
+- El piso de unos 15 s por serie con este archivo es descomprimir los 744
+  mapas (un bloque por instante): solo baja repartiendo los instantes entre
+  varios Workers. Con archivos en bloques chicos, las series son más rápidas.
+
 **Pendiente de esta parte:**
 
 - No probado dentro de Electron mismo: el camino del renderer sí, contra el
