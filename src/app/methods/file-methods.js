@@ -407,22 +407,24 @@ proto.loadFiles = async function(items = []) {
     const matEntries = await this._expandMatEntries(excelEntries);
     // netCDF: ZIP archives listed, non-data files explained, gridded files
     // opened (header only) and offered as one dataset when they belong together.
-    // Opening one puts the overlay up already (_griddedShowOpening); the batch
-    // below reuses it, and when nothing is left to load it comes down here.
+    // Opening one puts the overlay up already, with this batch's token so it
+    // can be cancelled (_griddedShowOpening); the batch below reuses it, and
+    // when nothing is left to load, or the opening was cancelled, it comes
+    // down here.
+    const loadToken = createLoadToken();
     let entries;
     try {
-        entries = await this._expandNetcdfEntries(matEntries);
+        entries = await this._expandNetcdfEntries(matEntries, loadToken);
     } catch (err) {
         this._hideFileLoadingOverlay();
         throw err;
     }
-    if (!entries.length) {
+    if (loadToken.cancelled || !entries.length) {
         this._hideFileLoadingOverlay();
         return [];
     }
 
     const loaded = [];
-    const loadToken = createLoadToken();
     this._showFileLoadingOverlay(entries.length, loadToken);
     await this._yieldToBrowser();
     try {
@@ -1865,7 +1867,7 @@ proto._createDesktopLocalHttpFile = function(filePath, info) {
     };
 };
 
-proto._readLocalResultPath = async function(filePath) {
+proto._readLocalResultPath = async function(filePath, { signal = null } = {}) {
     const desktopStat = globalThis.omvDesktop?.statFile;
     if (
         this.capabilities?.isDesktop
@@ -1898,7 +1900,7 @@ proto._readLocalResultPath = async function(filePath) {
     if (this.capabilities?.isDesktop && this._isDesktopFetchedByPartsExtension(this._fileExtension(filePath))) {
         try {
             const origin = globalThis.location?.origin || '';
-            const response = await fetch(`${origin}${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`, { cache: 'no-store' });
+            const response = await fetch(`${origin}${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`, { cache: 'no-store', signal });
             if (response.ok) {
                 const blob = await response.blob();
                 const name = String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'dataset.nc';
@@ -1907,6 +1909,8 @@ proto._readLocalResultPath = async function(filePath) {
                 return new File([blob], name, { lastModified, type });
             }
         } catch (err) {
+            // Cancelled, not failed: no second read through IPC.
+            if (signal?.aborted) throw err;
             console.warn('[netcdf] local fetch failed, reading through IPC instead:', err?.message || err);
         }
     }
@@ -1995,18 +1999,29 @@ proto._openResultFilesFromUser = async function() {
             const paths = await desktopPicker({ title: 'Select result files' });
             if (!paths?.length) return;
             const picked = [];
-            for (const [index, localPath] of paths.entries()) {
-                // netCDF, GRIB and the CDS ZIP are copied whole from the local
-                // server before anything else (_readLocalResultPath), which on
-                // a large file is the longest wait of the open: the overlay
-                // goes up for it, and loadFiles takes it over or down.
-                if (this._isDesktopFetchedByPartsExtension(this._fileExtension(localPath))) {
-                    this._showFileLoadingOverlay(paths.length);
-                    this._updateFileLoadingOverlay(index + 1, paths.length, String(localPath).split(/[\\/]/).filter(Boolean).pop() || '');
-                    await this._waitForNextPaint();
+            // netCDF, GRIB and the CDS ZIP are copied whole from the local
+            // server before anything else (_readLocalResultPath), which on a
+            // large file is the longest wait of the open: the overlay goes up
+            // for it, and Cancel or Escape stops the copy where it is.
+            const copyToken = createLoadToken();
+            try {
+                for (const [index, localPath] of paths.entries()) {
+                    if (copyToken.cancelled) return;
+                    if (this._isDesktopFetchedByPartsExtension(this._fileExtension(localPath))) {
+                        this._showFileLoadingOverlay(paths.length, copyToken);
+                        this._updateFileLoadingOverlay(index + 1, paths.length, String(localPath).split(/[\\/]/).filter(Boolean).pop() || '');
+                        await this._waitForNextPaint();
+                    }
+                    const file = await this._readLocalResultPath(localPath, { signal: copyToken.signal });
+                    picked.push({ file, fileHandle: null, localPath });
                 }
-                const file = await this._readLocalResultPath(localPath);
-                picked.push({ file, fileHandle: null, localPath });
+            } catch (err) {
+                if (copyToken.cancelled) return;
+                throw err;
+            } finally {
+                // Down before loadFiles: a sheet or variable picker it may
+                // open first would otherwise share Escape with this overlay.
+                this._hideFileLoadingOverlay();
             }
             await this.loadFiles(picked);
             return;

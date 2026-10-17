@@ -404,13 +404,21 @@ export function installGriddedMethods(TargetClass) {
 
     // The loading overlay over opening a gridded file. Opening reads only its
     // structure, but a GRIB has no index and is walked message by message, so
-    // on a long file or a slow disk this is a wait like any load. The batch
-    // overlay that follows reuses it; the questions asked meanwhile (ZIP
-    // entries, joining files, errors) are modals, drawn above it.
-    proto._griddedShowOpening = async function(name, size) {
-        this._showFileLoadingOverlay?.(1);
+    // on a long file or a slow disk this is a wait like any load. It carries
+    // the batch's token: Cancel and Escape stop the opening itself, and the
+    // batch overlay that follows reuses it.
+    proto._griddedShowOpening = async function(name, size, loadToken = null) {
+        this._showFileLoadingOverlay?.(1, loadToken);
         this._updateFileLoadingOverlay?.(1, 1, name, size);
         await this._waitForNextPaint?.();
+    };
+
+    // A question asked while opening (ZIP entries, joining files, an error)
+    // takes the overlay down first: Escape pressed to close the dialog would
+    // otherwise also reach the overlay and cancel the whole batch.
+    proto._griddedAsk = function(ask) {
+        this._hideFileLoadingOverlay?.();
+        return ask();
     };
 
     /**
@@ -419,10 +427,12 @@ export function installGriddedMethods(TargetClass) {
      * reported in words; gridded files are opened (header only) so that
      * several of them can be offered as one dataset joined in time.
      */
-    proto._expandNetcdfEntries = async function(entries) {
+    proto._expandNetcdfEntries = async function(entries, loadToken = null) {
         const expanded = [];
         const opened = [];
+        const cancelled = () => loadToken?.cancelled === true;
         for (const item of entries || []) {
+            if (cancelled()) break;
             const fileHandle = item?.fileHandle || null;
             let file = item?.file || (fileHandle ? null : item);
             const sourceName = file?.name || fileHandle?.name || '';
@@ -434,7 +444,7 @@ export function installGriddedMethods(TargetClass) {
             try {
                 if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
                 if (!file) continue;
-                await this._griddedShowOpening(file.name, file.size);
+                await this._griddedShowOpening(file.name, file.size, loadToken);
                 const kind = await this._sniffFileHead(file);
                 if (kind === 'zip') {
                     const listed = (await listZipEntries(file)).filter(entry => isNetcdfEntryName(entry.name));
@@ -444,15 +454,15 @@ export function installGriddedMethods(TargetClass) {
                             expanded.push(item);
                             continue;
                         }
-                        await Modal.alert(i18n.t('errorLoading'), i18n.t('griddedZipNoNetcdf').replace('{file}', file.name), { icon: '🗜️' });
+                        await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), i18n.t('griddedZipNoNetcdf').replace('{file}', file.name), { icon: '🗜️' }));
                         continue;
                     }
-                    const members = await this._griddedPickZipEntries(file, listed);
+                    const members = await this._griddedPickZipEntries(file, listed, loadToken);
                     if (!members) continue;
                     if (members.files.length > 1 && members.together) {
-                        await this._griddedShowOpening(file.name, file.size);
+                        await this._griddedShowOpening(file.name, file.size, loadToken);
                         const options = { mode: 'merge-variables', title: this._fileBaseName(file.name) };
-                        const result = await this._griddedProbe(members.files, options);
+                        const result = await this._griddedProbe(members.files, options, loadToken);
                         if (result?.gridded) {
                             opened.push({ files: members.files, result, options, title: this._fileBaseName(file.name) });
                             continue;
@@ -466,21 +476,28 @@ export function installGriddedMethods(TargetClass) {
                         expanded.push(item);
                         continue;
                     }
-                    await Modal.alert(i18n.t('errorLoading'), this._griddedContainerMessage(kind, file.name), { icon: '🌐' });
+                    await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), this._griddedContainerMessage(kind, file.name), { icon: '🌐' }));
                     continue;
                 }
-                const result = await this._griddedProbe([file], {});
+                const result = await this._griddedProbe([file], {}, loadToken);
                 if (result?.gridded) {
                     opened.push({ files: [file], result, title: this._fileBaseName(file.name), fileHandle, localPath: item?.localPath || '' });
                     continue;
                 }
                 expanded.push({ ...(item?.file || item?.fileHandle ? item : {}), file, fileHandle, netcdfProbed: true });
             } catch (error) {
+                if (cancelled()) break;
                 console.error('Error opening netCDF file:', error);
-                await Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, file?.name || sourceName), { icon: '🌐' });
+                await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, file?.name || sourceName), { icon: '🌐' }));
             }
         }
-        const joined = await this._griddedOfferJoin(opened);
+        const joined = cancelled() ? opened : await this._griddedOfferJoin(opened, loadToken);
+        // Cancelled: what was opened is closed again and nothing is loaded,
+        // the files of the batch that are not gridded included.
+        if (cancelled()) {
+            for (const group of joined) griddedClient().close(group.result.datasetId);
+            return [];
+        }
         for (const group of joined) expanded.push({ griddedOpen: group, file: group.files[0], fileHandle: group.fileHandle || null, localPath: group.localPath || '' });
         return expanded;
     };
@@ -493,14 +510,14 @@ export function installGriddedMethods(TargetClass) {
         return error?.message || String(error);
     };
 
-    /** Opens the files in the gridded worker; returns null when it cannot be used. */
-    proto._griddedProbe = async function(files, options) {
+    /** Opens the files in the gridded worker; a cancelled `loadToken` stops it. */
+    proto._griddedProbe = async function(files, options, loadToken = null) {
         const datasetId = nextDatasetId();
-        const result = await griddedClient().open(datasetId, files, options);
+        const result = await griddedClient().open(datasetId, files, options, { signal: loadToken?.signal || null });
         return { ...result, datasetId };
     };
 
-    proto._griddedPickZipEntries = async function(file, entries) {
+    proto._griddedPickZipEntries = async function(file, entries, loadToken = null) {
         let chosen = entries;
         let together = false;
         if (entries.length > 1) {
@@ -510,7 +527,7 @@ export function installGriddedMethods(TargetClass) {
             checkbox.type = 'checkbox';
             checkbox.checked = true;
             body.append(checkbox, document.createTextNode(` ${i18n.t('griddedZipTogether')}`));
-            const picked = await Modal.checklist(i18n.t('griddedZipMessage').replace('{file}', file.name), {
+            const picked = await this._griddedAsk(() => Modal.checklist(i18n.t('griddedZipMessage').replace('{file}', file.name), {
                 title: i18n.t('griddedZipTitle'),
                 icon: '🗜️',
                 className: 'modal-dialog-gridded-zip',
@@ -522,27 +539,25 @@ export function installGriddedMethods(TargetClass) {
                     note: this._formatBytes(entry.size),
                     checked: true,
                 })),
-            });
+            }));
             if (!picked?.length) return null;
             chosen = picked.map(value => entries[Number(value)]);
             together = checkbox.checked && chosen.length > 1;
         }
-        this._showFileLoadingOverlay?.(1);
-        this._updateFileLoadingOverlay?.(1, 1, file.name, file.size);
-        await this._waitForNextPaint?.();
-        try {
-            const files = [];
-            for (const entry of chosen) files.push(await extractZipEntry(file, entry));
-            return { files, together };
-        } finally {
-            this._hideFileLoadingOverlay?.();
+        // Extracting is a load too; the overlay stays up for what follows.
+        await this._griddedShowOpening(file.name, file.size, loadToken);
+        const files = [];
+        for (const entry of chosen) {
+            if (loadToken?.cancelled) return null;
+            files.push(await extractZipEntry(file, entry));
         }
+        return loadToken?.cancelled ? null : { files, together };
     };
 
     // Several gridded files picked together that hold the same variables on
     // the same grid are usually consecutive downloads (one per month): offer
     // to read them as one dataset along time.
-    proto._griddedOfferJoin = async function(opened) {
+    proto._griddedOfferJoin = async function(opened, loadToken = null) {
         if (opened.length < 2) return opened;
         const signature = result => {
             const model = result.model;
@@ -551,22 +566,24 @@ export function installGriddedMethods(TargetClass) {
         };
         const first = signature(opened[0].result);
         if (!opened[0].result.model.primaryTimeDim || !opened.every(group => signature(group.result) === first)) return opened;
-        const join = await Modal.confirm(i18n.t('griddedJoinMessage').replace('{count}', String(opened.length)), {
+        const join = await this._griddedAsk(() => Modal.confirm(i18n.t('griddedJoinMessage').replace('{count}', String(opened.length)), {
             title: i18n.t('griddedJoinTitle'),
             icon: '🌐',
             confirmText: i18n.t('griddedJoinYes'),
             cancelText: i18n.t('griddedJoinNo'),
-        });
+        }));
         if (!join) return opened;
         const files = opened.flatMap(group => group.files);
         try {
             const options = { mode: 'concat-time', title: `${opened[0].title} (+${opened.length - 1})` };
-            await this._griddedShowOpening(options.title, files.reduce((total, file) => total + (file.size || 0), 0));
-            const result = await this._griddedProbe(files, options);
+            await this._griddedShowOpening(options.title, files.reduce((total, file) => total + (file.size || 0), 0), loadToken);
+            const result = await this._griddedProbe(files, options, loadToken);
             for (const group of opened) griddedClient().close(group.result.datasetId);
             return [{ files, result, options, title: options.title }];
         } catch (error) {
-            await Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, ''), { icon: '🌐' });
+            // Cancelled: the caller closes what was opened.
+            if (loadToken?.cancelled) return opened;
+            await this._griddedAsk(() => Modal.alert(i18n.t('errorLoading'), this._griddedErrorText(error, ''), { icon: '🌐' }));
             return opened;
         }
     };

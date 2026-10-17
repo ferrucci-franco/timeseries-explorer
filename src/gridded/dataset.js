@@ -14,7 +14,7 @@
 // that wraps the antimeridian) stays here.
 
 import { openHdf5 } from './hdf5-input.js';
-import { openGrib } from './grib-reader.js';
+import { openGrib, scanGribAsync } from './grib-reader.js';
 import NetcdfParser from '../parsers/netcdf-parser.js';
 import { netcdfContainerError, sniffNetcdfContainer } from '../parsers/netcdf-sniff.js';
 import {
@@ -83,7 +83,7 @@ function readHead(input) {
 }
 
 /** Opens one file and lists its variables as reader-neutral descriptors. */
-async function openMember(input, parser) {
+async function openMember(input, parser, job = null) {
     const filename = input.filename || input.file?.name || 'dataset.nc';
     const { kind } = sniffNetcdfContainer(readHead(input));
     if (kind === 'hdf5') {
@@ -111,8 +111,12 @@ async function openMember(input, parser) {
     }
     if (kind === 'grib') {
         // Its messages listed by their headers; a field is decoded when read.
+        // A long file is walked in turns, so that a cancel is heard.
         const source = input.buffer ? new BufferByteSource(input.buffer) : new FileByteSource(input.file);
-        const opened = openGrib(source);
+        const opened = openGrib(source, await scanGribAsync(source, async () => {
+            await tick();
+            if (job?.cancelled) throw new CancelledError();
+        }));
         return { filename, storageFormat: opened.storageFormat, pypsa: false, globalAttrs: opened.globalAttrs, descriptors: opened.descriptors, close() {} };
     }
     throw netcdfContainerError(kind);
@@ -201,11 +205,14 @@ export class GriddedDataset {
      * @param {Array<{file?: File, buffer?: ArrayBuffer, filename?: string}>} inputs
      * @param {{mode?: 'single'|'concat-time'|'merge-variables', title?: string}} options
      */
-    static async open(inputs, options = {}) {
+    static async open(inputs, options = {}, job = null) {
         const parser = new NetcdfParser();
         const members = [];
         try {
-            for (const input of inputs) members.push(await openMember(input, parser));
+            for (const input of inputs) {
+                if (job?.cancelled) throw new CancelledError();
+                members.push(await openMember(input, parser, job));
+            }
         } catch (error) {
             for (const member of members) member.close();
             throw error;

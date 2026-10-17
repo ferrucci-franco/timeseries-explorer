@@ -20,7 +20,7 @@ export async function handleGriddedRequest({ GriddedDataset, datasets }, op, pay
     };
     switch (op) {
     case 'open': {
-        const opened = await GriddedDataset.open(payload.inputs || [], payload.options || {});
+        const opened = await GriddedDataset.open(payload.inputs || [], payload.options || {}, job);
         const model = opened.model();
         if (!opened.gridded) {
             opened.close();
