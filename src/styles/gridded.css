@@ -938,8 +938,9 @@ html:not(.compact) .gridded-menu input[type="checkbox"]:focus-visible {
 
 /* ── Phones (the app's compact layout). The map takes the whole width (no
    axis titles, the colour bar under it, gridded-methods.js) and is as tall
-   as the grid needs; the rest scrolls under it: time bar, then the tools,
-   the extractions and, last, the inspector, which a finger rarely feeds. */
+   as the grid needs, short enough to leave the time bar on screen under
+   it; the rest scrolls under that: the tools, the extractions and, last,
+   the inspector, which a finger rarely feeds. */
 html.compact .gridded-toolbar {
     font-size: 0.75rem;
     gap: 0.3rem 0.4rem;

@@ -857,6 +857,26 @@ try {
         assert.ok(layout.toolbar < 90, `the toolbar is two rows (${layout.toolbar}px)`);
         assert.ok(layout.labelHeight < 24, `the time stays on one line (${layout.labelHeight}px)`);
         assert.match(layout.help, /pinch/, 'the help speaks of fingers');
+        // A map taller than wide (Argentina: 35° of latitude by 30° of
+        // longitude) pushed the time bar under the app's bottom bar, on a
+        // phone of Safari's height (664 px of page on an iPhone 13). Sized
+        // for one, the map leaves the slider on screen above that bar.
+        // Measured as it is sized: a redraw of the world map may follow.
+        await page.setViewportSize({ width: 390, height: 664 });
+        await page.waitForTimeout(300);
+        const tall = await page.evaluate(() => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const steps = (from, to, step) => Float64Array.from({ length: Math.round((to - from) / step) + 1 }, (_, index) => from + index * step);
+            window.app._griddedFitPhoneHeight({ map: { lon: steps(-80, -50, 0.25), lat: steps(-55, -20, 0.25) } }, div);
+            const slider = document.querySelector('#gridded-view [data-role="time"]').getBoundingClientRect();
+            const nav = document.querySelector('.compact-nav').getBoundingClientRect();
+            return { sliderBottom: Math.round(slider.bottom), navTop: Math.round(nav.top), mapHeight: Math.round(div.parentElement.getBoundingClientRect().height) };
+        });
+        assert.ok(tall.sliderBottom <= tall.navTop, `a tall map leaves the time slider above the bottom bar (${JSON.stringify(tall)})`);
+        assert.ok(tall.mapHeight >= 300, `and is still a map, not a strip (${JSON.stringify(tall)})`);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.evaluate(() => window.app._griddedDrawMap(window.app._griddedVisibleView()));
+        await page.waitForTimeout(300);
         // The ring, then extract from over the map.
         await page.click('#gridded-view [data-mode="point"]');
         await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });

@@ -2407,7 +2407,17 @@ export function installGriddedMethods(TargetClass) {
         const margin = this._griddedMapMargins(this._griddedNarrowMap(body));
         const width = Math.max(1, body.clientWidth - margin.l - margin.r);
         const wanted = width * Math.min(spanY / spanX, 1.4) + margin.t + margin.b;
-        const height = Math.round(Math.max(240, Math.min(wanted, window.innerHeight * 0.62)));
+        // No taller than what leaves the time bar on screen under it: a map
+        // taller than wide (Argentina, Chile) pushed it under the app's
+        // bottom bar. The scrolling area is what is left between the toolbar
+        // and that bar; the status line and the time bar come out of it.
+        const main = body.closest('.gridded-main');
+        const timebar = main?.querySelector('[data-role="timebar"]');
+        const status = main?.querySelector('[data-role="status"]');
+        const room = main?.clientHeight
+            ? main.clientHeight - (timebar?.offsetHeight || 0) - (status?.offsetHeight || 0) - 4
+            : window.innerHeight * 0.62;
+        const height = Math.round(Math.max(200, Math.min(wanted, room)));
         if (Math.abs(body.offsetHeight - height) > 2) body.style.height = `${height}px`;
     };
 
