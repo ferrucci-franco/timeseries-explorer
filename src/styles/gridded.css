@@ -1205,41 +1205,63 @@ html.compact.compact-landscape .gridded-map-action:not([hidden]) {
     min-width: 0;
 }
 
-/* The help takes most of the window (at least 70% of its width) and lays
-   its sections out in columns, so it reads at a glance instead of scrolling
-   down a narrow strip. */
+/* The help takes most of the window (at least 70% of its width). Its
+   sections (point, region, levels and time) sit side by side, each whole in
+   its column: three on a wide screen, two, or one under the other on a
+   phone; a section never leaves its heading at the foot of a column. Each
+   has its own colour, on the heading, the names it explains and a rule on
+   its side, so what belongs to the point reads apart from the region. */
 .modal-dialog.gridded-help-dialog {
     width: min(calc(100vw - 32px), max(70vw, 480px));
     max-width: none;
 }
 
 .gridded-help-dialog .gridded-help-body {
+    --help-point: #b85400;
+    --help-region: #0a7a6c;
+    --help-time: #6f3fbf;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+    gap: 1rem 1.6rem;
+    align-items: start;
     text-align: left;
     font-size: 0.85rem;
     line-height: 1.45;
-    column-width: 22rem;
-    column-gap: 2rem;
     max-height: 70vh;
     overflow-y: auto;
 }
 
+/* Lighter shades on the dark theme, for the same contrast. */
+.theme-dark .gridded-help-dialog .gridded-help-body {
+    --help-point: #f0883e;
+    --help-region: #2ec4ad;
+    --help-time: #ab8cf0;
+}
+
+.gridded-help-dialog .gridded-help-body section {
+    --help-accent: var(--text-primary);
+    padding-left: 0.7rem;
+    border-left: 3px solid var(--help-accent);
+}
+
+.gridded-help-dialog .gridded-help-body .gridded-help-point { --help-accent: var(--help-point); }
+.gridded-help-dialog .gridded-help-body .gridded-help-region { --help-accent: var(--help-region); }
+.gridded-help-dialog .gridded-help-body .gridded-help-time { --help-accent: var(--help-time); }
+
 .gridded-help-dialog .gridded-help-body h4 {
-    break-after: avoid;
+    margin: 0 0 0.35rem;
+    font-size: 0.95rem;
+    color: var(--help-accent);
 }
 
-.gridded-help-dialog .gridded-help-body p {
-    break-inside: avoid;
-}
-
-.gridded-help-dialog .gridded-help-body h4 {
-    margin: 0.8rem 0 0.25rem;
-    font-size: 0.9rem;
-}
-
-.gridded-help-dialog .gridded-help-body h4:first-child {
-    margin-top: 0;
+.gridded-help-dialog .gridded-help-body section b {
+    color: var(--help-accent);
 }
 
 .gridded-help-dialog .gridded-help-body p {
     margin: 0 0 0.45rem;
+}
+
+.gridded-help-dialog .gridded-help-body p:last-child {
+    margin-bottom: 0;
 }

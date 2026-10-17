@@ -231,6 +231,10 @@ other direction pan); an analysis panel next to it turns it into series:
   and maximum for every time step. The box moves from inside and resizes from
   its edges.
 
+Large files are read by parts, never whole: a global hourly ERA5 month at
+0.25° (1.7 GB) opens in about 2 s, and a point or region series over its 744
+steps takes about 5 s on 4 cores, split along time between several workers.
+
 On a **phone** the map takes the width of the screen (the colour bar under
 it, upright) and is as tall as the grid needs; the time bar, the tools and the
 extractions scroll under it. A finger pans and pinches the map, a tap places

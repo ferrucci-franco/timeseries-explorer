@@ -424,6 +424,9 @@ export class GriddedDataset {
             shape: variable.dimNames.map(name => this.axes.get(name)?.size ?? 0),
             mapable: variable.mapable,
             timeDim: variable.timeDim,
+            // Time steps per compressed chunk, so a parallel read can split
+            // the time axis on chunk boundaries (no chunk read twice).
+            timeChunk: variable.timeDim ? Number(variable.segments[0].descriptor.chunks?.[variable.roles.indexOf('t')]) || 1 : 1,
         }));
         return {
             title: this.title,
@@ -575,19 +578,24 @@ export class GriddedDataset {
         return { row, column };
     }
 
-    _timeBlocks(variable, valuesPerStep, chunkSteps) {
+    _timeBlocks(variable, valuesPerStep, chunkSteps, timeRange = null) {
         const total = this.axes.get(variable.timeDim)?.size || 1;
+        // A slice of the time axis (one worker's share of a parallel read):
+        // only the blocks inside it, cut to its ends.
+        const [first, stop] = timeRange ? [Math.max(0, timeRange[0]), Math.min(total, timeRange[1])] : [0, total];
         let block = Math.max(1, Math.floor(BLOCK_VALUE_TARGET / Math.max(1, valuesPerStep)));
         block = Math.min(block, Math.max(1, Math.ceil(total / MIN_PROGRESS_BLOCKS)));
         if (chunkSteps > 1 && block > chunkSteps) block = Math.floor(block / chunkSteps) * chunkSteps;
         const blocks = [];
         for (const segment of variable.segments) {
             const count = segment.tCount ?? segment.descriptor.shape[variable.roles.indexOf('t')];
-            for (let start = 0; start < count; start += block) {
-                blocks.push({ segment, localStart: start, localStop: Math.min(count, start + block), globalStart: segment.tStart + start });
+            const from = Math.max(0, first - segment.tStart);
+            const to = Math.min(count, stop - segment.tStart);
+            for (let start = from; start < to; start += block) {
+                blocks.push({ segment, localStart: start, localStop: Math.min(to, start + block), globalStart: segment.tStart + start });
             }
         }
-        return { total, blocks };
+        return { total, blocks, first, length: Math.max(0, stop - first) };
     }
 
     /**
@@ -736,48 +744,89 @@ export class GriddedDataset {
     }
 
     /**
-     * The series of one grid cell at each level asked for (or the selected
-     * level): one Float64Array per level, every time step, read in blocks.
-     * `progress(fraction)` reports this cell's share of the work.
+     * The reads that cover a set of file columns: one per run of contiguous
+     * columns, except that runs sharing the file's compressed chunks along
+     * the longitude axis are read as one span. A chunk is decompressed whole
+     * on every read that touches it, so two runs in the same chunk (a box or
+     * a bilinear pair across the seam of a 0..360 grid, in an ERA5 file
+     * chunked one map per step) would decompress it twice; runs in chunks of
+     * their own (small chunks, or contiguous storage) stay apart and read
+     * only what they need. Returns [[start, stop, columns]], `columns` being
+     * the asked-for columns inside that read.
      */
-    async _cellSeries(key, variable, grid, selection, row, column, plan, job, progress) {
+    _columnReads(variable, columns) {
+        const sorted = [...new Set(columns)].sort((a, b) => a - b);
+        const runs = [];
+        for (const column of sorted) {
+            const last = runs.at(-1);
+            if (last && column === last[1]) last[1] = column + 1;
+            else runs.push([column, column + 1]);
+        }
+        const xAxis = variable.roles.indexOf('x');
+        const chunk = Number(variable.segments[0].descriptor.chunks?.[xAxis]) || 0;
+        const reads = [];
+        for (const run of runs) {
+            const last = reads.at(-1);
+            // The chunk index of the previous read's last column and of this
+            // run's first: the same chunk means the gap costs no extra decompression.
+            if (last && chunk > 0 && Math.floor((last[1] - 1) / chunk) === Math.floor(run[0] / chunk)) last[1] = run[1];
+            else reads.push([run[0], run[1]]);
+        }
+        return reads.map(([start, stop]) => [start, stop, sorted.filter(column => column >= start && column < stop)]);
+    }
+
+    /**
+     * The series of a few grid cells at each level asked for (or the
+     * selected level): `[cell][level]` Float64Arrays over every time step.
+     * Every time block is read once, as the window that holds all the cells
+     * (the four of a bilinear point read together, not one after the other).
+     * `progress(fraction)` reports the share of the work done.
+     */
+    async _cellsSeries(key, variable, grid, selection, cells, plan, job, progress, timeRange = null) {
         const tAxis = variable.roles.indexOf('t');
         const yAxis = variable.roles.indexOf('y');
         const xAxis = variable.roles.indexOf('x');
         const levelList = plan ? plan.indices : [null];
         if (tAxis < 0) {
             const atLevel = index => (index === null ? selection : { ...selection, [variable.dimNames[plan.zAxis]]: index });
-            const displayRow = grid.yOrder.indexOf(row);
-            const displayColumn = grid.xOrder.indexOf(column);
-            return levelList.map(index => {
-                const map = this.readMap(key, atLevel(index));
-                return Float64Array.of(map.values[displayRow * map.nx + displayColumn]);
+            const maps = levelList.map(index => this.readMap(key, atLevel(index)));
+            return cells.map(({ row, column }) => {
+                const displayRow = grid.yOrder.indexOf(row);
+                const displayColumn = grid.xOrder.indexOf(column);
+                return maps.map(map => Float64Array.of(map.values[displayRow * map.nx + displayColumn]));
             });
         }
+        const rowStart = Math.min(...cells.map(cell => cell.row));
+        const rowStop = Math.max(...cells.map(cell => cell.row)) + 1;
+        const reads = this._columnReads(variable, cells.map(cell => cell.column));
         const levelCount = plan ? plan.stop - plan.start : 1;
+        const width = reads.reduce((sum, [start, stop]) => sum + stop - start, 0);
         const chunkSteps = Number(variable.segments[0].descriptor.chunks?.[tAxis]) || 1;
-        const { total, blocks } = this._timeBlocks(variable, levelCount, chunkSteps);
-        const outs = levelList.map(() => new Float64Array(total));
+        const { blocks, first, length } = this._timeBlocks(variable, levelCount * (rowStop - rowStart) * width, chunkSteps, timeRange);
+        const outs = cells.map(() => levelList.map(() => new Float64Array(length)));
         for (const [index, block] of blocks.entries()) {
             if (job.cancelled) throw new CancelledError();
-            const overrides = {
-                [tAxis]: [block.localStart, block.localStop],
-                [yAxis]: [row, row + 1],
-                [xAxis]: [column, column + 1],
-            };
-            if (plan) overrides[plan.zAxis] = [plan.start, plan.stop];
-            const ranges = this._ranges(variable, selection, overrides);
-            const values = decodeNumeric(flatNumbers(block.segment.descriptor.read(ranges)), block.segment.descriptor.userAttrs);
-            if (!plan) {
-                outs[0].set(values, block.globalStart);
-            } else {
-                // Only t and z are longer than one in this slab.
-                const tStride = plan.zAxis > tAxis ? levelCount : 1;
-                const zStride = plan.zAxis > tAxis ? 1 : block.localStop - block.localStart;
-                const steps = block.localStop - block.localStart;
-                plan.indices.forEach((level, position) => {
-                    const offset = (level - plan.start) * zStride;
-                    for (let step = 0; step < steps; step++) outs[position][block.globalStart + step] = values[offset + step * tStride];
+            const steps = block.localStop - block.localStart;
+            for (const [readStart, readStop] of reads) {
+                const overrides = {
+                    [tAxis]: [block.localStart, block.localStop],
+                    [yAxis]: [rowStart, rowStop],
+                    [xAxis]: [readStart, readStop],
+                };
+                if (plan) overrides[plan.zAxis] = [plan.start, plan.stop];
+                const ranges = this._ranges(variable, selection, overrides);
+                const counts = ranges.map(([start, stop]) => stop - start);
+                const strides = new Array(counts.length).fill(1);
+                for (let axis = counts.length - 2; axis >= 0; axis--) strides[axis] = strides[axis + 1] * counts[axis + 1];
+                const values = decodeNumeric(flatNumbers(block.segment.descriptor.read(ranges)), block.segment.descriptor.userAttrs);
+                cells.forEach(({ row, column }, position) => {
+                    if (column < readStart || column >= readStop) return;
+                    const cellBase = (row - rowStart) * strides[yAxis] + (column - readStart) * strides[xAxis];
+                    levelList.forEach((level, levelPosition) => {
+                        const out = outs[position][levelPosition];
+                        const base = cellBase + (plan ? (level - plan.start) * strides[plan.zAxis] : 0);
+                        for (let step = 0; step < steps; step++) out[block.globalStart - first + step] = values[base + step * strides[tAxis]];
+                    });
                 });
             }
             progress?.((index + 1) / blocks.length);
@@ -799,7 +848,7 @@ export class GriddedDataset {
      * (a land cell for a sea variable) is left out and the others' weights
      * renormalised; with none, the step is missing.
      */
-    async pointSeries(key, selection, lat, lon, job = {}, { levels = null, method = 'nearest' } = {}) {
+    async pointSeries(key, selection, lat, lon, job = {}, { levels = null, method = 'nearest', timeRange = null } = {}) {
         const variable = this._variable(key);
         const grid = this._grid(variable);
         const plan = this._levelPlan(variable, levels);
@@ -816,11 +865,7 @@ export class GriddedDataset {
             cells = [{ row, column, weight: 1 }];
             cell = { lat: grid.lat[row], lon: displayLon(grid.lon[column]) };
         }
-        const series = [];
-        for (const [position, item] of cells.entries()) {
-            series.push(await this._cellSeries(key, variable, grid, selection, item.row, item.column, plan, job,
-                fraction => job.onProgress?.((position + fraction) / cells.length)));
-        }
+        const series = await this._cellsSeries(key, variable, grid, selection, cells, plan, job, fraction => job.onProgress?.(fraction), timeRange);
         const levelCount = plan ? plan.indices.length : 1;
         const combined = Array.from({ length: levelCount }, (_, level) => {
             if (cells.length === 1) return series[0][level];
@@ -849,7 +894,7 @@ export class GriddedDataset {
      * The box is in display coordinates (longitude -180..180 for global
      * grids); a box crossing the antimeridian has lonMin > lonMax.
      */
-    async regionStats(key, selection, box, job = {}, { levels = null } = {}) {
+    async regionStats(key, selection, box, job = {}, { levels = null, timeRange = null } = {}) {
         const variable = this._variable(key);
         const grid = this._grid(variable);
         const latMin = Math.min(box.latMin, box.latMax);
@@ -866,14 +911,9 @@ export class GriddedDataset {
         if (!rows.length || !columns.length) {
             throw Object.assign(new Error('The box does not contain any grid cell.'), { code: 'GRIDDED_EMPTY_REGION' });
         }
-        // Contiguous runs of file columns: one read each (two when the box
-        // straddles the seam of a 0..360 grid).
-        const runs = [];
-        for (const column of columns) {
-            const last = runs.at(-1);
-            if (last && column === last[1]) last[1] = column + 1;
-            else runs.push([column, column + 1]);
-        }
+        // Contiguous runs of file columns, joined where they share chunks
+        // (a box across the seam of a 0..360 grid): see _columnReads.
+        const reads = this._columnReads(variable, columns);
         const rowStart = rows[0];
         const rowStop = rows.at(-1) + 1;
         const plan = this._levelPlan(variable, levels);
@@ -883,11 +923,11 @@ export class GriddedDataset {
         const xAxis = variable.roles.indexOf('x');
         const weights = grid.weights.values;
         const totalCells = rows.length * columns.length;
-        const valuesPerStep = (rowStop - rowStart) * columns.length * levelCount;
+        const valuesPerStep = (rowStop - rowStart) * reads.reduce((sum, [start, stop]) => sum + stop - start, 0) * levelCount;
         const chunkSteps = tAxis >= 0 ? Number(variable.segments[0].descriptor.chunks?.[tAxis]) || 1 : 1;
-        const { total, blocks } = tAxis >= 0
-            ? this._timeBlocks(variable, valuesPerStep, chunkSteps)
-            : { total: 1, blocks: [{ segment: variable.segments[0], localStart: 0, localStop: 1, globalStart: 0 }] };
+        const { blocks, first, length: total } = tAxis >= 0
+            ? this._timeBlocks(variable, valuesPerStep, chunkSteps, timeRange)
+            : { first: 0, length: 1, blocks: [{ segment: variable.segments[0], localStart: 0, localStop: 1, globalStart: 0 }] };
         const stats = () => ({
             mean: new Float64Array(total).fill(NaN),
             min: new Float64Array(total).fill(NaN),
@@ -907,8 +947,8 @@ export class GriddedDataset {
         for (const [blockIndex, block] of blocks.entries()) {
             if (job.cancelled) throw new CancelledError();
             const steps = block.localStop - block.localStart;
-            for (const [runStart, runStop] of runs) {
-                const overrides = { [yAxis]: [rowStart, rowStop], [xAxis]: [runStart, runStop] };
+            for (const [readStart, readStop, readColumns] of reads) {
+                const overrides = { [yAxis]: [rowStart, rowStop], [xAxis]: [readStart, readStop] };
                 if (tAxis >= 0) overrides[tAxis] = [block.localStart, block.localStop];
                 if (plan) overrides[plan.zAxis] = [plan.start, plan.stop];
                 const ranges = this._ranges(variable, selection, overrides);
@@ -920,13 +960,13 @@ export class GriddedDataset {
                     const result = perLevel[position];
                     const levelBase = plan ? (level - plan.start) * strides[plan.zAxis] : 0;
                     for (let step = 0; step < steps; step++) {
-                        const t = block.globalStart + step;
+                        const t = block.globalStart - first + step;
                         const base = levelBase + (tAxis >= 0 ? step * strides[tAxis] : 0);
                         for (const row of rows) {
                             const w = weights[row];
                             const rowBase = base + (row - rowStart) * strides[yAxis];
-                            for (let column = runStart; column < runStop; column++) {
-                                const value = decoded[rowBase + (column - runStart) * strides[xAxis]];
+                            for (const column of readColumns) {
+                                const value = decoded[rowBase + (column - readStart) * strides[xAxis]];
                                 if (!Number.isFinite(value)) continue;
                                 result.valid[t] += 1;
                                 result.sum[t] += value * w;

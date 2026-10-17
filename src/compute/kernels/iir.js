@@ -965,54 +965,376 @@ function filterAxis(values, time) {
     };
 }
 
-function expectedBetween(axis, from, to) {
+// How many sample positions between two usable values carry no usable value:
+// the rows between them, or — when the axis has a nominal step — the steps the
+// time between them spans, whichever is more. `fromTime`/`toTime` are the axis
+// values of the two samples (NaN without an axis).
+function expectedBetween(axis, from, to, fromTime, toTime) {
     const rows = to - from - 1;
-    if (!axis.hasNominalStep || !axis.x) return rows;
-    const dt = axis.x[to] - axis.x[from];
+    if (!axis.hasNominalStep || !axis.timed) return rows;
+    const dt = toTime - fromTime;
     if (!Number.isFinite(dt) || !(axis.medianDt > 0)) return rows;
     // Rounded to the nearest whole number of steps: ordinary jitter must not be
     // read as a fraction of a missing sample.
     return Math.max(rows, Math.max(0, Math.round(dt / axis.medianDt) - 1));
 }
 
+// What the run reports about the axis it ran on.
+function axisReport(axis) {
+    return {
+        // A series with no nominal step has no meaningful sample rate, so the
+        // filter's cut-off is not a frequency in the data's own units. The panel
+        // warns; it does not refuse, because a slightly irregular axis is still
+        // worth filtering and only the user knows whether it is.
+        irregular: !axis.hasNominalStep,
+        irregularReason: axis.hasNominalStep ? '' : (axis.reason || ''),
+        medianDt: axis.medianDt,
+    };
+}
+
+// The axis a streamed run is told about: the step measured over the whole
+// series beforehand (a file too large to hold is measured by a pass of its
+// own), and whether time values will come with the samples.
+function streamAxis(axis) {
+    return {
+        timed: !!axis?.timed,
+        hasNominalStep: !!axis?.hasNominalStep,
+        medianDt: Number(axis?.medianDt),
+        reason: axis?.reason ?? (axis?.timed ? '' : 'noTimeAxis'),
+    };
+}
+
 /**
- * The advance, applied to a finished forward pass: out[i] takes what the
- * recursion emitted D samples later, so b₀ ends up multiplying x[n+D].
+ * The advance, applied to the forward pass as it comes out: out[i] takes what
+ * the recursion emitted D samples later, so b₀ ends up multiplying x[n+D].
  *
- * Run by run, never across the whole array. A hole splits the output into
+ * Run by run, never across the whole series. A hole splits the output into
  * stretches that are separate signals as far as the recursion is concerned (the
  * state may or may not have survived it — see restartGap — but the SAMPLES
  * between them do not exist), and sliding a value backwards over a hole would
- * move it by D positions that are not D samples of anything. So each stretch
- * slides within itself and its own last D outputs go missing.
+ * move it by D positions that are not D samples of anything. So each stretch —
+ * consecutive finite outputs — slides within itself and its own last D outputs
+ * go missing; a non-finite output is left as it is.
  *
- * @returns {number} how many samples the advance emptied
+ * A stage fed the outputs in order: `push(outputs, final)` returns the ones
+ * it can already settle. A lead holds the last D outputs of the current
+ * stretch until the stretch goes on (they take later values) or ends (they go
+ * missing); a delay settles every output at once.
  */
-function applyAdvance(out, advance) {
-    const n = out.length;
+function createAdvanceStage(advance, report) {
     const step = Math.abs(advance);
-    let dropped = 0;
-    let i = 0;
-    while (i < n) {
-        if (!Number.isFinite(out[i])) { i++; continue; }
-        let end = i;
-        while (end < n && Number.isFinite(out[end])) end++;
-        const length = end - i;
-        const kept = Math.max(0, length - step);
-        if (advance > 0) {
-            // Sliding towards the start: ascending, so every slot is read before
-            // it is overwritten, and the run's last outputs go missing.
-            for (let k = 0; k < kept; k++) out[i + k] = out[i + k + step];
-            for (let k = kept; k < length; k++) out[i + k] = NaN;
-        } else {
-            // A delay slides the other way, and so must the loop.
-            for (let k = length - 1; k >= step; k--) out[i + k] = out[i + k - step];
-            for (let k = 0; k < Math.min(step, length); k++) out[i + k] = NaN;
-        }
-        dropped += length - kept;
-        i = end;
+    if (!step) return null;
+    if (advance > 0) {
+        // Positions of the current stretch still waiting for their value; they
+        // are always its last ones, and the oldest takes the value that
+        // arrives `step` positions after it.
+        let held = 0;
+        return {
+            push(raw, final) {
+                const out = new Float64Array(held + raw.length);
+                let k = 0;
+                for (let i = 0; i < raw.length; i++) {
+                    const value = raw[i];
+                    if (Number.isFinite(value)) {
+                        if (held === step) { out[k++] = value; held--; }
+                        held++;
+                    } else {
+                        for (; held > 0; held--) { out[k++] = NaN; report.advanceDropped++; }
+                        out[k++] = value;
+                    }
+                }
+                if (final) for (; held > 0; held--) { out[k++] = NaN; report.advanceDropped++; }
+                return out.subarray(0, k);
+            },
+        };
     }
-    return dropped;
+    // A delay: each output of a stretch takes the value `step` positions
+    // before it, and the first `step` of the stretch go missing.
+    const recent = new Float64Array(step);
+    let run = 0;
+    return {
+        push(raw) {
+            const out = new Float64Array(raw.length);
+            for (let i = 0; i < raw.length; i++) {
+                const value = raw[i];
+                if (!Number.isFinite(value)) {
+                    out[i] = value;
+                    run = 0;
+                    continue;
+                }
+                const slot = run % step;
+                if (run < step) {
+                    out[i] = NaN;
+                    report.advanceDropped++;
+                } else {
+                    out[i] = recent[slot];
+                }
+                recent[slot] = value;
+                run++;
+            }
+            return out;
+        },
+    };
+}
+
+/**
+ * The forward (causal) filter as an object fed a series in order, a chunk at a
+ * time — what applyFilter runs over an array in one push, and the chunked
+ * executor (src/data/chunk-executor.js) over a file too large to hold.
+ *
+ *   const filter = createForwardFilter(params, { axis });
+ *   for (const chunk of chunks) emit(filter.push(chunk.values, chunk.times));
+ *   emit(filter.flush());
+ *   filter.report();
+ *
+ * `push` returns the outputs it can settle, in order — all of them, unless an
+ * advance holds the last D of a stretch back — and the concatenated outputs
+ * are what one push of the whole series gives, bit for bit, however it was
+ * cut: the recursion carries its state from one chunk to the next.
+ *
+ * `axis`: `{ timed, hasNominalStep, medianDt, reason }`, the step measured over
+ * the WHOLE series (applyFilter measures the array; a lazy file is measured
+ * with a pass of its own). With `timed`, every push comes with the time of
+ * each sample, and a stretch of time with no rows counts as a hole.
+ */
+export function createForwardFilter(params = {}, { axis = null } = {}) {
+    const advance = normalizeFilterAdvance(params.advance);
+    const sections = resolveSections(params);
+    const init = normalizeFilterInit(params);
+    const tolerance = normalizeFilterRestartGap(params.restartGap);
+    const zis = cascadeInitialState(sections);
+    const steps = streamAxis(axis);
+    const counts = {
+        segments: 0, restarts: 0, carriedBreaks: 0,
+        filteredCount: 0, skippedCount: 0, advance, advanceDropped: 0,
+    };
+    const shift = createAdvanceStage(advance, counts);
+    let states = null;
+    let lastValid = -1;
+    let lastTime = NaN;
+    let received = 0;
+    let done = false;
+
+    function push(chunk, times = null, final = false) {
+        if (done) throw new Error('filter: push after flush');
+        const values = chunk ? asFloat64(chunk) : new Float64Array(0);
+        const raw = new Float64Array(values.length);
+        for (let k = 0; k < values.length; k++) {
+            const i = received + k;
+            const x = values[k];
+            if (!Number.isFinite(x)) { counts.skippedCount++; raw[k] = NaN; continue; }
+            const time = steps.timed ? times[k] : NaN;
+            const hole = lastValid < 0 ? 0 : expectedBetween(steps, lastValid, i, lastTime, time);
+            if (states === null || hole > tolerance) {
+                states = startingStates(zis, x, init, sections);
+                counts.restarts++;
+                counts.segments++;
+            } else if (hole > 0) {
+                counts.carriedBreaks++;
+            }
+            raw[k] = stepCascade(sections, states, x);
+            counts.filteredCount++;
+            lastValid = i;
+            lastTime = time;
+        }
+        received += values.length;
+        const out = shift ? shift.push(raw, final) : raw;
+        if (final) done = true;
+        return out;
+    }
+
+    return {
+        push,
+        flush: () => push(null, null, true),
+        // filteredCount is what the OUTPUT carries, not what the recursion
+        // computed: the samples the advance emptied are not filtered data.
+        report: () => ({
+            ...counts,
+            filteredCount: counts.filteredCount - counts.advanceDropped,
+            ...axisReport(steps),
+        }),
+    };
+}
+
+/**
+ * The zero-phase filter as an object fed a series in order, a chunk at a time.
+ *
+ * Each stretch of finite samples is filtered forward and then backward, padded
+ * at both ends (filterSegmentZeroPhase). A stretch up to `memoryRows` samples
+ * is held and done in one go. A longer one — a file without a hole is one
+ * stretch as long as the file — cannot be held, and is done in two passes:
+ *
+ *   1. the forward pass runs as the samples arrive; `push` hands its outputs
+ *      out flagged `deferred`, for the caller to keep somewhere (the chunked
+ *      executor writes them to a table), and keeps only what the backward pass
+ *      starts from: the forward pass over the end padding;
+ *   2. `backward(s)` then takes stretch s's forward outputs from its last
+ *      sample to its first and gives the final values, in that order.
+ *
+ * The arithmetic is filterSegmentZeroPhase's, step for step, so a long stretch
+ * gives the same doubles as a short one would. `push` returns
+ * `{ values, deferred }`: the outputs it can settle, in order, and — when a
+ * long stretch is under way — which of them are forward outputs (1) rather
+ * than final values (0). `longStretches` lists the long stretches in order.
+ */
+export function createZeroPhaseFilter(params = {}, { axis = null, memoryRows = Infinity } = {}) {
+    const sections = resolveSections(params);
+    const zis = cascadeInitialState(sections);
+    let totalOrder = 0;
+    for (const zi of zis) totalOrder += zi.length;
+    const fullPad = 3 * Math.max(1, totalOrder);
+    // A stretch is held whole up to this many samples; past it the padding is
+    // always the full one.
+    const limit = Math.max(Number(memoryRows) || 0, fullPad + 1);
+    const steps = streamAxis(axis);
+    const counts = {
+        segments: 0, restarts: 0, carriedBreaks: 0,
+        filteredCount: 0, skippedCount: 0, advance: 0, advanceDropped: 0,
+    };
+    const longStretches = [];
+
+    // The stretch being read: held whole while short…
+    let held = [];
+    let heldLength = 0;
+    // …or, once long, run forward as it comes, keeping its last fullPad + 1
+    // samples for the end padding.
+    let long = null;
+    let done = false;
+
+    function heldValues() {
+        const out = new Float64Array(heldLength);
+        let at = 0;
+        for (const part of held) { out.set(part, at); at += part.length; }
+        return out;
+    }
+
+    function goLong(emit) {
+        const segment = heldValues();
+        held = [];
+        heldLength = 0;
+        // The start padding, oddExtend's, and the forward pass over it.
+        const front = new Float64Array(fullPad);
+        for (let i = 0; i < fullPad; i++) front[i] = 2 * segment[0] - segment[fullPad - i];
+        const states = zis.map(zi => makeRunningState(zi, front[0]));
+        for (let i = 0; i < fullPad; i++) stepCascade(sections, states, front[i]);
+        long = { states, length: 0, tail: new Float64Array(fullPad + 1), tailAt: 0 };
+        for (let i = 0; i < segment.length; i++) emit(stepLong(segment[i]), 1);
+    }
+
+    function stepLong(x) {
+        long.tail[long.tailAt] = x;
+        long.tailAt = long.tailAt + 1 === long.tail.length ? 0 : long.tailAt + 1;
+        long.length++;
+        return stepCascade(sections, long.states, x);
+    }
+
+    // The stretch ends: a short one is done in one go, a long one runs its
+    // forward pass over the end padding and waits for its backward pass.
+    function closeStretch(emit) {
+        if (long) {
+            // tail holds the last fullPad + 1 samples, oldest at tailAt.
+            const size = long.tail.length;
+            const back = (i) => long.tail[(long.tailAt + size - 1 - i) % size];  // seg[n-1-i]
+            const forwardEnd = new Float64Array(fullPad);
+            for (let i = 0; i < fullPad; i++) {
+                forwardEnd[i] = stepCascade(sections, long.states, 2 * back(0) - back(i + 1));
+            }
+            longStretches.push({ length: long.length, forwardEnd });
+            counts.filteredCount += long.length;
+            long = null;
+        } else if (heldLength) {
+            const out = filterSegmentZeroPhase(sections, zis, heldValues());
+            for (let i = 0; i < out.length; i++) emit(out[i], 0);
+            counts.filteredCount += heldLength;
+            held = [];
+            heldLength = 0;
+        } else {
+            return;
+        }
+        counts.segments++;
+        counts.restarts++;
+    }
+
+    function push(chunk, times = null, final = false) {
+        if (done) throw new Error('filter: push after flush');
+        const values = chunk ? asFloat64(chunk) : new Float64Array(0);
+        let out = new Float64Array(Math.max(16, values.length));
+        let flags = null;
+        let k = 0;
+        const emit = (value, deferred) => {
+            if (k === out.length) {
+                const grown = new Float64Array(out.length * 2);
+                grown.set(out);
+                out = grown;
+                if (flags) {
+                    const wider = new Uint8Array(grown.length);
+                    wider.set(flags);
+                    flags = wider;
+                }
+            }
+            if (deferred && !flags) flags = new Uint8Array(out.length);
+            if (flags) flags[k] = deferred;
+            out[k++] = value;
+        };
+        let runStart = -1;
+        const holdRun = (end) => {
+            if (runStart < 0) return;
+            const part = values.slice(runStart, end);
+            held.push(part);
+            heldLength += part.length;
+            runStart = -1;
+        };
+        for (let i = 0; i < values.length; i++) {
+            const x = values[i];
+            if (!Number.isFinite(x)) {
+                holdRun(i);
+                closeStretch(emit);
+                counts.skippedCount++;
+                emit(NaN, 0);
+                continue;
+            }
+            if (long) {
+                emit(stepLong(x), 1);
+                continue;
+            }
+            if (runStart < 0) runStart = i;
+            if (heldLength + (i - runStart + 1) > limit) {
+                holdRun(i + 1);
+                goLong(emit);
+            }
+        }
+        holdRun(values.length);
+        if (final) {
+            closeStretch(emit);
+            done = true;
+        }
+        return { values: out.subarray(0, k), deferred: flags ? flags.subarray(0, k) : null };
+    }
+
+    return {
+        push,
+        flush: () => push(null, null, true),
+        longStretches,
+        /**
+         * The backward pass of long stretch `s`, after the forward pass is
+         * done: an object whose `push(forwardOutputs)` takes the stretch's
+         * forward outputs from its last sample towards its first, and returns
+         * the final values in the same order.
+         */
+        backward(s) {
+            const { forwardEnd } = longStretches[s];
+            const states = zis.map(zi => makeRunningState(zi, forwardEnd[forwardEnd.length - 1]));
+            for (let i = forwardEnd.length - 1; i >= 0; i--) stepCascade(sections, states, forwardEnd[i]);
+            return {
+                push(forward) {
+                    const out = new Float64Array(forward.length);
+                    for (let i = 0; i < forward.length; i++) out[i] = stepCascade(sections, states, forward[i]);
+                    return out;
+                },
+            };
+        },
+        report: () => ({ ...counts, ...axisReport(steps) }),
+    };
 }
 
 /**
@@ -1037,6 +1359,9 @@ function applyAdvance(out, advance) {
  * direction already reads the whole signal, and sliding that result would only
  * put back the delay it exists to remove.
  *
+ * One push of the whole array through createForwardFilter or
+ * createZeroPhaseFilter: the same code a file too large to hold runs in chunks.
+ *
  * @returns {{
  *   values: Float64Array, segments: number, restarts: number, carriedBreaks: number,
  *   filteredCount: number, skippedCount: number, advance: number, advanceDropped: number,
@@ -1045,67 +1370,13 @@ function applyAdvance(out, advance) {
  */
 export function applyFilter(sourceValues, params = {}) {
     const mode = FILTER_MODES.has(params.mode) ? params.mode : 'forward';
-    const advance = mode === 'zeroPhase' ? 0 : normalizeFilterAdvance(params.advance);
-    const sections = resolveSections(params);
-    const init = normalizeFilterInit(params);
-    const tolerance = normalizeFilterRestartGap(params.restartGap);
     const values = asFloat64(sourceValues);
-    const n = values.length;
-    const out = new Float64Array(n).fill(NaN);
-    const zis = cascadeInitialState(sections);
     const axis = filterAxis(values, params.time);
-
-    const report = {
-        values: out,
-        segments: 0, restarts: 0, carriedBreaks: 0,
-        filteredCount: 0, skippedCount: 0, advance, advanceDropped: 0,
-        // A series with no nominal step has no meaningful sample rate, so the
-        // filter's cut-off is not a frequency in the data's own units. The panel
-        // warns; it does not refuse, because a slightly irregular axis is still
-        // worth filtering and only the user knows whether it is.
-        irregular: !axis.hasNominalStep,
-        irregularReason: axis.hasNominalStep ? '' : (axis.reason || ''),
-        medianDt: axis.medianDt,
-    };
-    if (!n) return report;
-
+    const steps = { timed: !!axis.x, hasNominalStep: axis.hasNominalStep, medianDt: axis.medianDt, reason: axis.reason };
     if (mode === 'zeroPhase') {
-        let i = 0;
-        while (i < n) {
-            if (!Number.isFinite(values[i])) { report.skippedCount++; i++; continue; }
-            let end = i;
-            while (end < n && Number.isFinite(values[end])) end++;
-            out.set(filterSegmentZeroPhase(sections, zis, values.subarray(i, end)), i);
-            report.segments++;
-            report.restarts++;
-            report.filteredCount += end - i;
-            i = end;
-        }
-        return report;
+        const filter = createZeroPhaseFilter(params, { axis: steps });
+        return { values: filter.push(values, null, true).values, ...filter.report() };
     }
-
-    let states = null;
-    let lastValid = -1;
-    for (let i = 0; i < n; i++) {
-        const x = values[i];
-        if (!Number.isFinite(x)) { report.skippedCount++; continue; }
-        const hole = lastValid < 0 ? 0 : expectedBetween(axis, lastValid, i);
-        if (states === null || hole > tolerance) {
-            states = startingStates(zis, x, init, sections);
-            report.restarts++;
-            report.segments++;
-        } else if (hole > 0) {
-            report.carriedBreaks++;
-        }
-        out[i] = stepCascade(sections, states, x);
-        report.filteredCount++;
-        lastValid = i;
-    }
-    if (advance !== 0) {
-        report.advanceDropped = applyAdvance(out, advance);
-        // filteredCount is what the OUTPUT carries, not what the recursion
-        // computed: the samples the advance emptied are not filtered data.
-        report.filteredCount -= report.advanceDropped;
-    }
-    return report;
+    const filter = createForwardFilter(params, { axis: steps });
+    return { values: filter.push(values, axis.x, true), ...filter.report() };
 }

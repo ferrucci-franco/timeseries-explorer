@@ -3,13 +3,15 @@
 //
 // A 12 MB CSV (above the 10 MB full-load limit set here) opens lazily. Through
 // the panel's own controls: the tool picker offers derivative, detrend,
-// integral, moving average and outliers and nothing else; the outlier method
-// is hard bounds; the integral leaves out interpolating across holes; every
-// detrend method is offered. A derivative, an integral, a linear detrend, a
-// moving average and a moving-average detrend are created with "Create and
-// plot", and each is drawn from the file (a zoom returns full resolution),
-// with no page error. The moving average runs as a job behind an overlay that
-// counts the rows; cancelled, it leaves no variable and no sink.
+// integral, moving average, filter and outliers and nothing else; the outlier
+// method is hard bounds; the integral leaves out interpolating across holes;
+// every detrend method is offered. A derivative, an integral, a linear
+// detrend, a moving average, a moving-average detrend, a designed filter and
+// a zero-phase one are created with "Create and plot", and each is drawn from
+// the file (a zoom returns full resolution), with no page error. The moving
+// average runs as a job behind an overlay that counts the rows; cancelled, it
+// leaves no variable and no sink. The filter designer reads the sample rate of
+// the whole file (100 Hz), measured once, not of the overview in memory.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:lazy-data-tools`.
 // Not part of test:release, which stays offline and browser-free.
@@ -70,8 +72,8 @@ try {
 
     const picker = await page.evaluate(() => Object.fromEntries(
         [...document.querySelectorAll('#data-tool-select option')].filter(o => o.value).map(o => [o.value, !o.disabled])));
-    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'integrate', 'movingAverage', 'removeOutliers'],
-        'a lazy file offers the tools written as SQL and the moving average');
+    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'filter', 'integrate', 'movingAverage', 'removeOutliers'],
+        'a lazy file offers the tools written as SQL, the moving average and the filter');
 
     await createAndPlot(page, 'derivative', 'a', 'da', () => pick(page, 'derivative-method', 'centered'));
 
@@ -128,6 +130,28 @@ try {
         await page.locator('#detrend-window').dispatchEvent('change');
     });
 
+    // A designed filter: the sample rate is measured over the whole file
+    // first (the overview in memory is a sample of the rows), then designed
+    // against.
+    await createAndPlot(page, 'filter', 'a', 'fd', async () => {
+        await pick(page, 'filter-source', 'design');
+        await page.waitForFunction(() => /100/.test(document.getElementById('filter-design-rate')?.textContent || ''), null, { timeout: 120000 });
+        await pick(page, 'filter-design-family', 'butterworth');
+        await pick(page, 'filter-design-response', 'lowpass');
+        await page.locator('#filter-design-cutoff').fill('5');
+        await page.locator('#filter-design-cutoff').dispatchEvent('input');
+        await pick(page, 'filter-mode', 'forward');
+    });
+    // Typed coefficients, forward and back.
+    await createAndPlot(page, 'filter', 'b', 'fz', async () => {
+        await pick(page, 'filter-source', 'manual');
+        await page.locator('#filter-b').fill('0.2 0.3');
+        await page.locator('#filter-b').dispatchEvent('input');
+        await page.locator('#filter-a').fill('1 -0.5');
+        await page.locator('#filter-a').dispatchEvent('input');
+        await pick(page, 'filter-mode', 'zeroPhase');
+    });
+
     // Cancelled as soon as it starts: nothing is created, nothing is left.
     const cancelled = await page.evaluate(async () => {
         const source = [...window.app.plotManager.files.values()][0].data._duckdb.source;
@@ -172,20 +196,20 @@ try {
         const data = [...window.app.plotManager.files.values()][0].data;
         const source = data._duckdb.source;
         const out = {};
-        for (const name of ['da', 'ia', 'lb', 'ma', 'hb']) {
+        for (const name of ['da', 'ia', 'lb', 'ma', 'hb', 'fd', 'fz']) {
             const raw = await source.getRawColumnsRange(data, [name], 1000, 1010, 1e6);
             out[name] = { rows: raw.x.length, finite: [...raw.yByVar.get(name)].filter(Number.isFinite).length };
         }
         const traced = [...window.app.plotManager.plots.values()].flatMap(p => p.traces.map(t => t.varName));
         return { out, traced, message: document.getElementById('outlier-message')?.textContent || '' };
     });
-    for (const name of ['da', 'ia', 'lb', 'ma', 'hb']) {
+    for (const name of ['da', 'ia', 'lb', 'ma', 'hb', 'fd', 'fz']) {
         assert.equal(zoom.out[name].rows, 1001, `${name}: a 10 s zoom returns all 1001 rows`);
         assert.ok(zoom.out[name].finite > 990, `${name}: with values`);
         assert.ok(zoom.traced.includes(name), `${name} is plotted`);
     }
     assert.deepEqual(errors, [], 'no page error');
-    console.log('e2e lazy data tools: derivative, integral, detrend and moving averages created from the panel on a lazy file');
+    console.log('e2e lazy data tools: derivative, integral, detrend, moving averages and filters created from the panel on a lazy file');
 } finally {
     await browser.close();
     await server.close();

@@ -707,6 +707,17 @@ try {
             width: document.querySelector('.gridded-help-dialog').getBoundingClientRect().width / window.innerWidth,
         }));
         assert.ok(help.width >= 0.69, `the help uses most of the window's width (${help.width})`);
+        // Each section whole in its column (its heading never alone at the
+        // foot of one), in its own colour.
+        const sections = await page.$$eval('.gridded-help-dialog section', nodes => nodes.map(node => ({
+            heading: node.querySelector('h4').getBoundingClientRect().left,
+            last: node.lastElementChild.getBoundingClientRect().left,
+            colour: getComputedStyle(node.querySelector('h4')).color,
+        })));
+        assert.equal(sections.length, 3, 'point, region, levels and time');
+        sections.forEach(section => assert.ok(Math.abs(section.heading - section.last) < 2, `a section stays in one column (${JSON.stringify(sections)})`));
+        assert.equal(new Set(sections.map(section => section.colour)).size, 3, 'each section has its colour');
+        assert.match(help.text, /cos\(latitude\)/, 'the mean says it is weighted by cos(latitude)');
         assert.match(help.text, /Bilinear interpolation/, 'the help explains the point methods');
         assert.match(help.text, /weighted by area/, 'and the region statistics');
         assert.match(help.blur, /blur/, 'over a blurred page');
@@ -891,6 +902,80 @@ try {
         await page.setViewportSize({ width: 844, height: 390 });
         await page.waitForFunction(() => document.querySelector('#gridded-view .gridded-map').data[0].colorbar.orientation !== 'h', null, { timeout: 10000 });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 844);
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
+    // 1d. A long series split along time between workers (forced here on a
+    // small file): the helpers open the same file and each reads a slice;
+    // the joined series equals the one a single worker reads, and a
+    // cancelled split series stops every slice.
+    {
+        const { context, page, errors } = await openApp();
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'era5-like-new-cds.nc'));
+        await mapShown(page);
+        await page.waitForTimeout(500);
+        const compared = await page.evaluate(async () => {
+            const { griddedClient } = await import('/src/gridded/gridded-client.js');
+            const client = griddedClient();
+            const datasetId = window.app._griddedVisibleView().datasetId;
+            const run = async (op, payload) => {
+                const progress = [];
+                const result = await client.request(op, { datasetId, ...payload }, { onProgress: value => progress.push(value) }).promise;
+                return { result, progress };
+            };
+            const requests = [
+                ['point', { variable: '/t2m', selection: {}, lat: 44, lon: 92 }],
+                ['point', { variable: '/t2m', selection: {}, lat: -30, lon: -22.5, method: 'bilinear' }],
+                ['point', { variable: '/t', selection: {}, lat: 44, lon: 92, levels: [0, 1] }],
+                ['region', { variable: '/t2m', selection: {}, box: { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 } }],
+                ['region', { variable: '/t', selection: {}, box: { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 }, levels: [0, 1] }],
+            ];
+            client.parallel = { minBytes: Infinity, minSteps: Infinity, maxWorkers: 1 };
+            const single = [];
+            for (const [op, payload] of requests) single.push((await run(op, payload)).result);
+            client.parallel = { minBytes: 0, minSteps: 2, maxWorkers: 3 };
+            Object.defineProperty(navigator, 'hardwareConcurrency', { value: 4, configurable: true });
+            const split = [];
+            let lastProgress = 0;
+            for (const [op, payload] of requests) {
+                const { result, progress } = await run(op, payload);
+                split.push(result);
+                lastProgress = progress.at(-1);
+            }
+            const plain = value => JSON.parse(JSON.stringify(value, (key, item) => (ArrayBuffer.isView(item) ? Array.from(item) : item)));
+            // Cancelling a split series cancels it.
+            const pending = client.request('region', { datasetId, variable: '/t2m', selection: {}, box: { latMin: -90, latMax: 90, lonMin: -180, lonMax: 180 } });
+            client.cancel(pending.id);
+            const cancelled = await pending.promise.then(() => false, error => !!error.cancelled);
+            return {
+                same: JSON.stringify(plain(single)) === JSON.stringify(plain(split)),
+                workers: client.slots.filter(Boolean).length,
+                lastProgress,
+                cancelled,
+                firstValues: plain(split[0]).values,
+            };
+        });
+        assert.equal(compared.same, true, 'the joined series equal the series one worker reads, point and region, one level or several');
+        assert.equal(compared.workers, 3, 'two helpers joined the first worker');
+        assert.ok(Math.abs(compared.lastProgress - 1) < 1e-9, `progress ends at 1 (${compared.lastProgress})`);
+        assert.equal(compared.cancelled, true, 'a split series can be cancelled');
+        compared.firstValues.forEach((value, step) => assert(Math.abs(value - field(45, 90, step, 5)) < 1e-3, `split point value at step ${step}`));
+        // Picking a tool starts the helpers ahead of the series; closing the
+        // last dataset stops them.
+        const lifecycle = await page.evaluate(async () => {
+            const { griddedClient } = await import('/src/gridded/gridded-client.js');
+            const client = griddedClient();
+            const datasetId = window.app._griddedVisibleView().datasetId;
+            for (const [index, slot] of client.slots.entries()) if (index > 0 && slot) { slot.worker.terminate(); client.slots[index] = null; }
+            document.querySelector('#gridded-view [data-mode="point"]').click();
+            const started = client.slots.filter(Boolean).length;
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const opened = client.slots.slice(1).filter(slot => slot?.open.has(datasetId)).length;
+            await client.close(datasetId);
+            return { started, opened, after: client.slots.filter(Boolean).length };
+        });
+        assert.deepEqual(lifecycle, { started: 3, opened: 2, after: 1 }, 'helpers start with the tool, open the dataset, and stop once nothing is open');
         assert.deepEqual(errors, []);
         await context.close();
     }
