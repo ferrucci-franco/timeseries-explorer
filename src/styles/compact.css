@@ -1083,6 +1083,66 @@ html.compact .compact-switch-row input[type="checkbox"]:not(.modal-checklist-box
     padding-top: 6px;
 }
 
+/* A desktop panel menu's settings, as rows of a sheet (View, Marks): a choice
+   keeps its caption above the buttons, where a dropdown had it beside them. */
+.compact-menu-choice {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.compact-menu-choice-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
+.compact-menu-choice .compact-action-row {
+    margin: 0;
+}
+
+html.compact .compact-number-input {
+    width: 96px;
+    flex: 0 0 auto;
+    min-height: 44px;
+    box-sizing: border-box;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 16px;
+    text-align: right;
+}
+
+/* A setting that is off cannot be set: say so rather than letting a finger
+   find out. */
+html.compact .compact-switch-row:has(input:disabled),
+html.compact .compact-menu-choice:has(button:disabled) {
+    opacity: 0.5;
+}
+
+/* The gaps settings (Marks → ⚙), the one panel that opens on the plot rather
+   than in a sheet: it is already drawn inside the panel and clamped to it, so
+   only its controls grow to a finger's. */
+html.compact .gaps-panel {
+    font-size: 14px;
+}
+
+html.compact .gaps-panel-row input,
+html.compact .gaps-panel-row select,
+html.compact .gaps-panel-auto {
+    min-height: 40px;
+    font-size: 16px;
+}
+
+html.compact .gaps-panel-close {
+    min-width: 40px;
+    min-height: 40px;
+}
+
 /* ── Lent desktop pieces, restyled for the sheet ─────────────────────── */
 
 /* The sidebar, as the Data sheet. Only files and variables for now; the

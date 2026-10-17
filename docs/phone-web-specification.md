@@ -13,7 +13,12 @@ Built:
 - sheets with Back integration;
 - one plot at a time, with the plot list in the Plot sheet;
 - the Data sheet, with tap-to-plot and the per-file page;
-- the Plot sheet: view and signals;
+- the Plot sheet: view and signals, and the desktop's two panel menus as rows of
+  it — **View** (last view, log axes, stack, Y2, line shape; 2D display, 1:1 and its
+  log axes; a 3D scene's projection, camera presets and rotations) and **Marks**
+  (NaN, gaps, repeated, samples), with the gaps settings opening their panel on the
+  plot. Both are built from the same models the desktop dropdowns are drawn from, so
+  a new item in either menu reaches the phone with no work;
 - the Analyze sheet: time series, FFT, histogram, calendar heatmap, temporal profile,
   integral, correlation and the 2D curve fit, each analysis with its options lent to
   the sheet and its
@@ -53,7 +58,6 @@ The code is in `src/app/methods/compact-methods.js`,
 
 Not built yet:
 
-- View and Marks;
 - tap readouts beyond Plotly's own;
 - export through Web Share;
 - derived variables and data tools on the phone;
@@ -548,7 +552,13 @@ entry: the plot mode it lives on, how it is recognised on a plot, and how it is
 turned on and off. The phone asks the plot which analysis it carries, never the mode
 alone. Nothing else in the compact layout names an analysis — the sets it reads are
 derived from those entries — and `npm run test:compact-layout` fails when the desktop
-Analysis menu offers an analysis that file does not describe. The CSS side is three
+Analysis menu offers an analysis that file does not describe.
+
+A new item in the **View** or **Marks** menu needs nothing at all: the Plot sheet
+builds its rows from the same models the desktop dropdowns are drawn from
+(`_viewMenuModel` and `_marksMenuModel` in `src/plots/methods/marks-methods.js`), so
+an item added there arrives on the phone as a switch, a segmented choice, a numeric
+field or a button, by its kind. The CSS side is three
 selectors: the analysis's top-bar groups, its options panel and its edge rail, hidden
 in `src/styles/compact.css` so only its status stays on the plot (an analysis built
 on the FFT shell, as correlation and the fit are, is covered by its selectors

@@ -1066,7 +1066,7 @@ export function installCompactMethods(ViewerClass) {
             before?.();
             pm._setMode(panelId, mode, mode === 'state-anim' ? (stateAnimDim || 2) : null);
         }
-        this._compactAfterAnalysisChange();
+        this._compactAfterPlotChange();
     };
 
     // Picking an analysis in the Analyze sheet. Most are a mode of their own;
@@ -1085,7 +1085,7 @@ export function installCompactMethods(ViewerClass) {
         const ctx = { pm, panelId, plot, refresh: () => this._renderCompactSheetContent() };
         if (plot.mode === entry.onMode) {
             entry.turnOn(ctx);
-            this._compactAfterAnalysisChange();
+            this._compactAfterPlotChange();
             return;
         }
         await this._compactSetPlotMode(entry.onMode, null, { before: () => entry.turnOn(ctx) });
@@ -1100,13 +1100,13 @@ export function installCompactMethods(ViewerClass) {
         if (!plot) return;
         if (entry?.turnOff) {
             entry.turnOff({ pm, panelId, plot, refresh: () => this._renderCompactSheetContent() });
-            this._compactAfterAnalysisChange();
+            this._compactAfterPlotChange();
             return;
         }
         await this._compactSetPlotMode(entry?.offMode || 'timeseries');
     };
 
-    proto._compactAfterAnalysisChange = function() {
+    proto._compactAfterPlotChange = function() {
         this._compactSyncTreeMarks();
         this._compactUpdateAppBar();
         // The new chart is built asynchronously.
@@ -1607,8 +1607,34 @@ export function installCompactMethods(ViewerClass) {
             const yBtn = button('compact-secondary-btn', i18n.t('autoScaleYTitle'), () => run(() => pm._autoScalePlotAxis(panelId, pm.plots.get(panelId), 'y')));
             [autoBtn, xBtn, yBtn].forEach(btn => { btn.disabled = !hasContent; viewRow.appendChild(btn); });
         }
+        // How the plot reads its data — the desktop's View menu — as rows of
+        // the same section: its one-shot actions (Last view) join the buttons
+        // above, its settings follow as switches, segmented choices and
+        // numbers.
+        const viewItems = pm._viewMenuModel(panelId, plot) || [];
+        for (const item of viewItems) {
+            if (!item.action) continue;
+            const btn = button('compact-secondary-btn', '↶ ' + i18n.t(item.label), () => {
+                item.run();
+                this._compactAfterPlotChange();
+            }, { title: i18n.t(item.title) });
+            btn.disabled = !!item.disabled;
+            viewRow.appendChild(btn);
+        }
         view.appendChild(viewRow);
+        this._buildCompactMenuRows(view, viewItems.filter(item => !item.action));
         node.appendChild(view);
+
+        // Marks: NaN, gaps, repeated and samples, the desktop's second menu.
+        // It applies to a time series with data, so the section is there only
+        // when there is something to mark.
+        const markItems = pm._marksMenuModel(panelId, plot) || [];
+        if (markItems.some(item => !item.disabled)) {
+            const marks = section(i18n.t('marksMenuLabel'));
+            this._buildCompactMenuRows(marks, markItems, panelId);
+            node.appendChild(marks);
+        }
+
         this._buildCompactCursorSection(node, plot);
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
@@ -1670,6 +1696,117 @@ export function installCompactMethods(ViewerClass) {
         return { title: i18n.t('compactNavPlot'), node };
     };
 
+    // The rows of a desktop panel menu (View, Marks), as a phone reads them.
+    // The menus hand the same model to both layouts (_renderPanelMenuItems
+    // draws the desktop dropdown from it), so what each item means is decided
+    // once, in src/plots/methods/marks-methods.js: a checked item is a switch,
+    // a radio a segmented choice, a number a numeric field, and a row of
+    // one-shot actions a row of buttons. Dividers belong to a dropdown, not to
+    // a sheet, and are left out.
+    proto._buildCompactMenuRows = function(container, items, panelId = null) {
+        const pm = this.plotManager;
+        const after = () => this._compactAfterPlotChange();
+        for (const item of items) {
+            if (item.divider) continue;
+            if (item.radio) {
+                const wrap = el('div', 'compact-menu-choice');
+                wrap.appendChild(el('span', 'compact-menu-choice-label', i18n.t(item.label)));
+                const row = el('div', 'compact-segmented');
+                row.setAttribute('role', 'radiogroup');
+                row.setAttribute('aria-label', i18n.t(item.label));
+                // The line shape is the one radio whose options the menu does
+                // not carry; the desktop renderer defaults them the same way.
+                const options = item.options || [
+                    ['auto', 'lineShapeAuto', 'lineShapeAutoTitle'],
+                    ['linear', 'lineShapeLinear', 'lineShapeLinearTitle'],
+                    ['hv', 'lineShapeStairs', 'lineShapeStairsTitle'],
+                ];
+                const select = item.onSelect || ((value) => pm._setPanelLineShape(panelId ?? this._compactActivePanelId(), value));
+                for (const [value, key, title] of options) {
+                    const selected = item.value === value;
+                    const btn = button(`compact-segment${selected ? ' is-active' : ''}`, i18n.t(key), () => {
+                        select(value);
+                        after();
+                    }, { title: title ? i18n.t(title) : '' });
+                    btn.dataset.menuItem = `${item.key}-${value}`;
+                    btn.setAttribute('role', 'radio');
+                    btn.setAttribute('aria-checked', String(selected));
+                    btn.disabled = !!item.disabled;
+                    row.appendChild(btn);
+                }
+                wrap.appendChild(row);
+                container.appendChild(wrap);
+                continue;
+            }
+            if (item.number) {
+                const row = el('label', 'compact-switch-row');
+                const input = el('input');
+                input.type = 'number';
+                input.className = 'compact-number-input';
+                input.min = String(item.min);
+                input.max = String(item.max);
+                input.step = String(item.step);
+                input.value = String(item.value);
+                input.disabled = !!item.disabled;
+                input.dataset.menuItem = item.key;
+                input.setAttribute('aria-label', i18n.t(item.label));
+                input.addEventListener('change', () => {
+                    item.onChange(input.value);
+                    after();
+                });
+                row.append(el('span', '', i18n.t(item.label)), input);
+                container.appendChild(row);
+                continue;
+            }
+            if (item.actions) {
+                const wrap = el('div', 'compact-menu-choice');
+                wrap.appendChild(el('span', 'compact-menu-choice-label', i18n.t(item.label)));
+                const row = el('div', 'compact-action-row');
+                for (const action of item.actions) {
+                    const btn = button('compact-secondary-btn', action.text, () => {
+                        action.run();
+                        after();
+                    }, { title: action.title });
+                    btn.dataset.menuItem = `${item.key}-${action.id}`;
+                    btn.disabled = !!item.disabled;
+                    row.appendChild(btn);
+                }
+                wrap.appendChild(row);
+                container.appendChild(wrap);
+                continue;
+            }
+            // A setting that is on or off: a switch, and — where the desktop
+            // menu has a ⚙ beside it — the button that opens its settings.
+            const row = el('label', 'compact-switch-row');
+            row.title = i18n.t(item.title);
+            const text = el('span', '', i18n.t(item.label));
+            const input = el('input');
+            input.type = 'checkbox';
+            input.checked = !!item.checked;
+            input.disabled = !!item.disabled;
+            input.dataset.menuItem = item.key;
+            input.addEventListener('change', () => {
+                item.run();
+                after();
+            });
+            row.append(text, input);
+            container.appendChild(row);
+            if (item.settings) {
+                const extra = el('div', 'compact-action-row');
+                const btn = button('compact-secondary-btn', '⚙ ' + i18n.t('timeseriesGapsSettings'), () => {
+                    // A sheet and a panel of its own never stack: the plot is
+                    // shown with its settings on it.
+                    this._closeCompactSheet();
+                    item.settings();
+                });
+                btn.dataset.menuItem = `${item.key}-settings`;
+                btn.disabled = !!item.disabled;
+                extra.appendChild(btn);
+                container.appendChild(extra);
+            }
+        }
+    };
+
     // A 2D plot's curves are x–y pairs: listed with a way to remove each, the
     // X still waiting for its Y, the 1:1 aspect, and the way to add a pair.
     proto._buildCompactPhasePairs = function(container, panelId, plot) {
@@ -1718,16 +1855,8 @@ export function installCompactMethods(ViewerClass) {
             }));
         }
         container.appendChild(actions);
-        if (pairs.length && plot.mode === 'phase2d') {
-            const aspect = el('label', 'compact-switch-row');
-            const input = el('input');
-            input.type = 'checkbox';
-            input.checked = !!plot.equalAspect2D;
-            input.disabled = !pm._equalAspectAllowed(plot);
-            input.addEventListener('change', () => pm._toggleEqualAspect2D(panelId));
-            aspect.append(el('span', '', i18n.t('viewEqualAspect')), input);
-            container.appendChild(aspect);
-        }
+        // 1:1 is a View setting, and View now carries it for every mode that
+        // has one.
     };
 
     // An animation's state variables, each with its role and a way off; then

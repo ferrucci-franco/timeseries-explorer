@@ -281,6 +281,65 @@ try {
     const rowLines = await page.evaluate(() => [...document.querySelectorAll('.compact-sheet .compact-action-row')]
         .filter(row => getComputedStyle(row).backgroundImage !== 'none').length);
     assert.equal(rowLines, 0, 'no divider line between the plot sheet buttons');
+    // ── View and Marks: the desktop's two menus, as rows of this sheet ──────
+    const viewState = () => page.evaluate(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return {
+            logY: !!plot.timeseriesYLog,
+            stacked: !!plot.timeseriesStacked,
+            y2: !!plot.timeseriesY2Enabled,
+            shape: plot.div?._fullData?.[0]?.line?.shape ?? null,
+            nan: !!plot.showNaN,
+            gaps: !!plot.showGaps,
+        };
+    });
+    const menuItem = (key) => page.locator(`.compact-page-plot [data-menu-item="${key}"]`);
+    assert.equal(await menuItem('y2log').isDisabled(), true, 'Log Y2 is off while there is no second axis');
+    await menuItem('ylog').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.timeseriesYLog === true);
+    await menuItem('stack').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.timeseriesStacked === true);
+    assert.deepEqual(
+        { logY: (await viewState()).logY, stacked: (await viewState()).stacked },
+        { logY: true, stacked: true },
+        'the View switches read the plot and change it',
+    );
+    // The line shape, a segmented choice where the desktop has a radio row.
+    await menuItem('line-hv').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?._fullData?.[0]?.line?.shape === 'hv');
+    assert.equal(await menuItem('line-hv').getAttribute('aria-checked'), 'true', 'and says which one is on');
+    await menuItem('line-auto').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?._fullData?.[0]?.line?.shape !== 'hv');
+    // Marks, the second menu, as switches of their own section.
+    await menuItem('nan').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.showNaN === true);
+    await menuItem('gaps').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.showGaps === true);
+    assert.deepEqual({ nan: (await viewState()).nan, gaps: (await viewState()).gaps }, { nan: true, gaps: true }, 'NaN and gaps are marked');
+    await shot(page, 'view-marks');
+    // The gaps settings are a panel on the plot, so the sheet gets out of the way.
+    await menuItem('gaps-settings').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null && !!document.querySelector('.gaps-panel'));
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const r = document.querySelector('.gaps-panel').getBoundingClientRect();
+            const problems = [];
+            if (r.left < 0 || r.right > window.innerWidth) problems.push(`the gaps panel runs from ${Math.round(r.left)} to ${Math.round(r.right)}`);
+            if (document.documentElement.scrollWidth > window.innerWidth + 1) problems.push('the page scrolls sideways');
+            return problems;
+        }),
+        [],
+        'and it fits the screen',
+    );
+    await page.locator('.gaps-panel-close').click();
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    // Back to a plain plot for what follows.
+    for (const key of ['nan', 'gaps', 'stack', 'ylog']) await menuItem(key).click();
+    await page.waitForFunction(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return !plot.showNaN && !plot.showGaps && !plot.timeseriesStacked && !plot.timeseriesYLog;
+    });
+
     await page.locator('.compact-add-signals-btn').click();
     await page.waitForFunction(() => window.app._compact.sheet === 'data');
     await page.locator('.compact-sheet-close').click();
