@@ -40,6 +40,7 @@ import {
 import { largestClearInterval } from '../../utils/largest-clear-interval.js';
 import { detectNaNRuns, detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import Plotly from '../../vendor/plotly.js';
+import { canUseWorkers, spawnWorker } from '../../core/worker-pool.js';
 
 const FFT_LAYOUTS = new Set(['horizontal', 'vertical']);
 const FFT_AXIS_LIMIT_KEYS = new Set(['fMin', 'fMax', 'yMin', 'yMax']);
@@ -1899,7 +1900,7 @@ proto._computeFftSpectrumInWorker = function(plot, input) {
     const id = `fft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let worker;
     try {
-        worker = new Worker(new URL('../../workers/fft-worker.js', import.meta.url), { type: 'module' });
+        worker = spawnWorker('fft', () => new Worker(new URL('../../workers/fft-worker.js', import.meta.url), { type: 'module' }));
     } catch (err) {
         const unavailable = new Error(err?.message || 'FFT worker unavailable');
         unavailable.name = 'WorkerUnavailableError';
@@ -1952,9 +1953,7 @@ proto._abortFftWorkerJob = function(plot, reason = 'FFT worker job superseded') 
 };
 
 proto._canUseFftWorker = function() {
-    return typeof window !== 'undefined'
-        && typeof Worker !== 'undefined'
-        && window.location?.protocol !== 'file:';
+    return canUseWorkers('fft');
 };
 
 proto._fftComputationMaxNfft = function() {

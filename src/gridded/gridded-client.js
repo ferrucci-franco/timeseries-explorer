@@ -11,7 +11,7 @@
 // build opened from file://), the same requests run in the page on the whole
 // file in memory: slower and bounded by memory, but the view works.
 
-import { canUseWorkers } from '../core/worker-pool.js';
+import { canUseWorkers, spawnWorker } from '../core/worker-pool.js';
 import { handleGriddedRequest } from './gridded-protocol.js';
 
 let sequence = 0;
@@ -86,7 +86,7 @@ export class GriddedClient {
         this.pending = new Map();
         this.composites = new Map();
         this.requestId = 0;
-        this.inline = !canUseWorkers();
+        this.inline = !canUseWorkers('gridded');
         this.inlineDatasets = new Map();
         this.inlineJobs = new Map();
         // What each open dataset was opened from, so a helper can open it too.
@@ -103,7 +103,7 @@ export class GriddedClient {
     }
 
     _spawn(index) {
-        const worker = new Worker(new URL('../workers/gridded-worker.js', import.meta.url), { type: 'module' });
+        const worker = spawnWorker('gridded', () => new Worker(new URL('../workers/gridded-worker.js', import.meta.url), { type: 'module' }));
         const slot = { worker, open: new Set(), index };
         worker.addEventListener('message', event => {
             const { id, ok, result, error, progress } = event.data || {};
@@ -172,7 +172,19 @@ export class GriddedClient {
         }
         const ranges = (op === 'point' || op === 'region') ? this._parallelRanges(payload) : null;
         if (ranges) return this._requestParallel(op, payload, ranges, onProgress);
-        return this._post(this._slot(0), op, payload, { onProgress, transfer });
+        let slot;
+        try {
+            slot = this._slot(0);
+        } catch (error) {
+            // The browser refused the worker (a portable page on file:// where
+            // Blob workers are blocked). Before any dataset is open in it, the
+            // page can read instead, as without workers.
+            if (this.datasets.size) throw error;
+            console.warn('[gridded] no worker, reading in the page:', error?.message || error);
+            this.inline = true;
+            return this.request(op, payload, { onProgress, transfer });
+        }
+        return this._post(slot, op, payload, { onProgress, transfer });
     }
 
     _workerCount() {

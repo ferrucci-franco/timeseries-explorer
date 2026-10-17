@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import { build } from 'esbuild';
 import AdmZip from 'adm-zip';
@@ -88,22 +88,78 @@ async function buildPortableBundle(packageDir) {
     bundle: true,
     format: 'iife',
     platform: 'browser',
-    target: ['es2019'],
+    target: ['es2020'],
     define: {
       'globalThis.__OMV_PORTABLE__': 'true',
     },
     plugins: [portableDuckDbStubPlugin()],
+    // The `new Worker(new URL(..., import.meta.url))` forms are kept for Vite;
+    // here they never run, since every worker starts from its bundled text.
+    logOverride: { 'empty-import-meta': 'silent' },
     sourcemap: false,
     minify: false,
   });
 }
 
-async function buildPortableHtml(packageDir) {
+// The workers the app starts. Opened with a double click the page is on
+// file://, where a worker cannot load a script by URL; so each one is bundled on
+// its own and shipped as a string in workers/<name>.js, which a plain <script>
+// can load. src/core/worker-pool.js starts it from a Blob of that string. With
+// them a large netCDF is read by parts in the gridded worker, as on the web,
+// instead of whole in the page.
+const PORTABLE_WORKERS = ['parse', 'gridded', 'compute', 'fft'];
+
+// h5wasm carries its WebAssembly as a string of raw bytes, close to a million of
+// them control characters. JSON.stringify writes each as \u00XX and doubles the
+// file; a JS string literal takes them as they are, so only what would end or
+// break the literal is escaped.
+function escapeForStringLiteral(text) {
+  return text.replace(/[\\"\n\r\u2028\u2029]/g, (c) => ({
+    '\\': '\\\\',
+    '"': '\\"',
+    '\n': '\\n',
+    '\r': '\\r',
+    '\u2028': '\\u2028',
+    '\u2029': '\\u2029',
+  })[c]);
+}
+
+async function buildPortableWorkers(packageDir) {
+  const workersDir = path.join(packageDir, 'workers');
+  await ensureDir(workersDir);
+  for (const name of PORTABLE_WORKERS) {
+    const result = await build({
+      entryPoints: [path.join(projectRoot, 'src', 'workers', `${name}-worker.js`)],
+      bundle: true,
+      write: false,
+      format: 'iife',
+      platform: 'browser',
+      // The parse worker reads int64 with BigInt literals.
+      target: ['es2020'],
+      define: {
+        'globalThis.__OMV_PORTABLE__': 'true',
+      },
+      plugins: [portableDuckDbStubPlugin()],
+      sourcemap: false,
+      minify: false,
+      logLevel: 'error',
+    });
+    const code = result.outputFiles[0].text;
+    const script = 'var __omvWorkers = globalThis.__OMV_WORKER_SOURCES__ = globalThis.__OMV_WORKER_SOURCES__ || {};\n'
+      + `__omvWorkers[${JSON.stringify(name)}] = "${escapeForStringLiteral(code)}";\n`;
+    await fs.writeFile(path.join(workersDir, `${name}.js`), script, 'utf8');
+  }
+  return PORTABLE_WORKERS.map(name => `workers/${name}.js`);
+}
+
+async function buildPortableHtml(packageDir, workerScripts) {
   const sourceHtml = await fs.readFile(path.join(projectRoot, 'index.html'), 'utf8');
-  const portableHtml = sourceHtml.replace(
-    '<script type="module" src="app.js"></script>',
-    '<script src="app.bundle.js"></script>'
-  );
+  const scripts = [...workerScripts, 'app.bundle.js']
+    .map(src => `<script src="${src}" charset="utf-8"></script>`)
+    .join('\n    ');
+  const moduleScript = '<script type="module" src="app.js"></script>';
+  if (!sourceHtml.includes(moduleScript)) throw new Error(`index.html no longer has ${moduleScript}`);
+  const portableHtml = sourceHtml.replace(moduleScript, scripts);
   await fs.writeFile(path.join(packageDir, 'index.html'), portableHtml, 'utf8');
 }
 
@@ -209,6 +265,18 @@ async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
   await fs.writeFile(path.join(downloadsRoot, 'standalone.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
 
+// What opens with a double click: the page, its scripts and styles, and the
+// examples. scripts/e2e-portable-file.mjs builds this alone and opens it from
+// file://.
+export async function buildPortableApp(packageDir) {
+  await buildPortableBundle(packageDir);
+  const workerScripts = await buildPortableWorkers(packageDir);
+  await buildPortableHtml(packageDir, workerScripts);
+  await copyFileInto(path.join(projectRoot, 'styles.css'), path.join(packageDir, 'styles.css'));
+  await copyDirInto(path.join(projectRoot, 'src', 'styles'), path.join(packageDir, 'src', 'styles'));
+  await copyDirInto(path.join(projectRoot, 'public', 'examples'), path.join(packageDir, 'public', 'examples'));
+}
+
 async function main() {
   const commit = getCommitShort();
   // The zip carries a Node binary for one platform, so its name says which. The
@@ -222,11 +290,7 @@ async function main() {
   await removeIfExists(zipPath);
   await ensureDir(outputRoot);
 
-  await buildPortableBundle(packageDir);
-  await buildPortableHtml(packageDir);
-  await copyFileInto(path.join(projectRoot, 'styles.css'), path.join(packageDir, 'styles.css'));
-  await copyDirInto(path.join(projectRoot, 'src', 'styles'), path.join(packageDir, 'src', 'styles'));
-  await copyDirInto(path.join(projectRoot, 'public', 'examples'), path.join(packageDir, 'public', 'examples'));
+  await buildPortableApp(packageDir);
   const launcherName = await copyPortableLauncher(packageDir);
   await writeOfflineReadme(packageDir, folderName, launcherName);
   await createZip(packageDir, zipPath, folderName);
@@ -236,7 +300,9 @@ async function main() {
   console.log(`Portable zip: ${zipPath}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

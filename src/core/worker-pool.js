@@ -47,12 +47,44 @@ export class WorkerDiedError extends Error {
     }
 }
 
-// Workers are unavailable under file:// on most browsers, and in any non-DOM
-// context (the Node test harnesses import these modules directly).
-export function canUseWorkers() {
+// A page opened from file:// cannot start a worker from a script URL. The
+// portable build ships each worker already bundled, as a string a <script>
+// puts in globalThis.__OMV_WORKER_SOURCES__, and starts it from a Blob of
+// that text, which file:// allows.
+function portableWorkerSource(name) {
+    return globalThis.__OMV_WORKER_SOURCES__?.[name] || null;
+}
+
+// Workers are unavailable under file:// unless the portable build brought
+// them along, and in any non-DOM context (the Node test harnesses import these
+// modules directly).
+export function canUseWorkers(name) {
     return typeof Worker !== 'undefined'
         && typeof window !== 'undefined'
-        && window.location?.protocol !== 'file:';
+        && (window.location?.protocol !== 'file:' || !!portableWorkerSource(name));
+}
+
+const portableWorkerUrls = new Map();
+
+/**
+ * Starts the worker `name`: from the portable build's bundled text when the
+ * page carries it, otherwise with `spawnModule`, which holds the literal
+ * `new Worker(new URL(...), { type: 'module' })` the bundler looks for.
+ * @param {string} name
+ * @param {() => Worker} spawnModule
+ */
+export function spawnWorker(name, spawnModule) {
+    const source = portableWorkerSource(name);
+    if (!source) return spawnModule();
+    // One Blob URL per worker kind, kept for the page's life: a worker reads
+    // its script after the constructor returns, so revoking it at once could
+    // pull the script out from under it.
+    let url = portableWorkerUrls.get(name);
+    if (!url) {
+        url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        portableWorkerUrls.set(name, url);
+    }
+    return new Worker(url);
 }
 
 export default class WorkerPool {
@@ -75,7 +107,7 @@ export default class WorkerPool {
     }
 
     get available() {
-        return !this._disabled && canUseWorkers();
+        return !this._disabled && canUseWorkers(this._name);
     }
 
     /**
