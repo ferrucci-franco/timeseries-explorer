@@ -35,12 +35,12 @@ export async function handleGriddedRequest({ GriddedDataset, datasets }, op, pay
         return { result: map, transfer: transferOf(map.values) };
     }
     case 'point': {
-        const series = await dataset().pointSeries(payload.variable, payload.selection || {}, payload.lat, payload.lon, job, { levels: payload.levels, method: payload.method });
+        const series = await dataset().pointSeries(payload.variable, payload.selection || {}, payload.lat, payload.lon, job, { levels: payload.levels, method: payload.method, timeRange: payload.timeRange });
         const parts = series.byLevel || [series];
         return { result: series, transfer: transferOf(...parts.map(part => part.values)) };
     }
     case 'region': {
-        const stats = await dataset().regionStats(payload.variable, payload.selection || {}, payload.box, job, { levels: payload.levels });
+        const stats = await dataset().regionStats(payload.variable, payload.selection || {}, payload.box, job, { levels: payload.levels, timeRange: payload.timeRange });
         const parts = stats.byLevel || [stats];
         return { result: stats, transfer: transferOf(...parts.flatMap(part => [part.mean, part.min, part.max, part.validFraction])) };
     }

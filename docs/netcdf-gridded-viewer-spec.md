@@ -1360,9 +1360,31 @@ resumen de buscador):
   Memoria del navegador: unos 200–280 MB sobre la app vacía con el archivo
   abierto; el archivo no se carga entero. Valores verificados contra numpy
   (bilineal y medias ponderadas por cos φ: diferencias < 1e-10).
-- El piso de unos 15 s por serie con este archivo es descomprimir los 744
-  mapas (un bloque por instante): solo baja repartiendo los instantes entre
-  varios Workers. Con archivos en bloques chicos, las series son más rápidas.
+- **Varios Workers.** El piso de unos 15 s era descomprimir los 744 mapas en
+  un solo Worker. Ahora una serie de punto o de región sobre un dataset
+  grande (≥ 64 MB y ≥ 32 instantes) se reparte a lo largo del tiempo entre el
+  Worker principal y hasta tres auxiliares (según los núcleos, máximo 4 en
+  total). Cada auxiliar abre los mismos archivos por partes (no se copian),
+  lee su tramo de instantes cortado en bordes de bloque (ningún bloque se
+  descomprime dos veces) y el cliente une los tramos en orden. Cada instante
+  se calcula igual en cualquier Worker: el resultado es idéntico, bit a bit,
+  al de uno solo. El progreso suma los tramos y cancelar los cancela a todos;
+  si un auxiliar falla, la serie se lee entera en el Worker principal.
+- Los auxiliares arrancan y abren el dataset al elegir Punto o Región (antes
+  de la primera serie) y se cierran cuando no queda ningún dataset abierto.
+  Cuestan unos 350 MB de memoria mientras viven.
+- Mismo mes, en 4 núcleos:
+
+  | Operación | Un Worker | Varios Workers |
+  |---|---:|---:|
+  | Punto, celda más cercana | 15 s | 5 s |
+  | Punto, bilineal | 14 s | 5 s |
+  | Región Europa | 16–17 s | 6 s |
+  | Región global | 39–41 s | 12,5–13 s |
+  | Cambiar de instante (mapa) | 0,4 s | 0,2–0,4 s |
+
+- Con archivos en bloques chicos las series son más rápidas todavía; el
+  build portable (`file://`, sin Workers) sigue leyendo en la página.
 
 **Pendiente de esta parte:**
 
