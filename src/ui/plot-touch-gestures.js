@@ -20,18 +20,27 @@
 //                              click, and two of them its own reset
 //   tap, then     window       where the plot asks for it: the second touch
 //   touch again   zoom         draws a horizontal window and zooms to it (see
-//                              utils/touch-plot-gestures.js for its timing)
+//                              utils/touch-plot-gestures.js for its timing);
+//                              or, where the plot asks for a box, draws a
+//                              rectangle and hands it over (the map's regions)
+//
+// A plot can ask for more (the gridded map does): `div._touchUniformPinch`
+// scales both axes by one factor, the spread of the fingers, for axes that
+// must keep their proportion; `div._touchOwnsEveryDrag` keeps these gestures
+// whatever Plotly's dragmode, so a mouse can draw rectangles while a finger
+// still pans and pinches.
 //
 // The arithmetic is in utils/pinch-zoom.js; what is here is the plumbing: who
 // the touches belong to, which axes they are over, and how often the plot is
 // asked to redraw.
 
-import { panZoomRange, pinchScales } from '../utils/pinch-zoom.js';
+import { panZoomRange, pinchScaleUniform, pinchScales } from '../utils/pinch-zoom.js';
 import {
     QUICK_DOUBLE_TAP_MS,
     TAP_MAX_DURATION_MS,
     WINDOW_ZOOM_ARMED_MS,
     WINDOW_ZOOM_HOLD_MS,
+    WINDOW_ZOOM_MIN_WIDTH_PX,
     gestureCentre,
     isFollowUpTap,
     movedBeyondSlop,
@@ -152,7 +161,9 @@ function axisValueAt(axis, clientPixel, rect, vertical = false) {
 /**
  * A plot that wants the window zoom says so with `div._touchWindowZoom`: a
  * function answering, at the moment of the touch, null (not now) or
- * `{ hint }`, the line shown while it waits for the drag.
+ * `{ hint }`, the line shown while it waits for the drag. With
+ * `{ hint, box: true, onBox }` the drag draws a rectangle instead, and
+ * `onBox({ x0, x1, y0, y1 })` gets its corners in the axes' linear units.
  *
  * @param {HTMLElement} div a Plotly graph div
  * @param {{relayout: Function}} plotly
@@ -242,7 +253,7 @@ export function installTouchPlotGestures(div, plotly) {
     // plot's height), up or down a span of Y (a band its width). Which one is
     // read from the drag so far, so a hand that starts one way and means the
     // other is not held to its first few pixels.
-    const startWindow = (clientX, clientY) => {
+    const startWindow = (clientX, clientY, options = null) => {
         clearHold();
         disarm();
         followUp = null;
@@ -253,7 +264,9 @@ export function installTouchPlotGestures(div, plotly) {
         const band = document.createElement('div');
         band.className = WINDOW_BAND_CLASS;
         document.body.appendChild(band);
-        windowSel = { area, from: { x, y }, to: { x, y }, axis: 'x', band };
+        const box = options?.box === true && typeof options.onBox === 'function';
+        windowSel = { area, from: { x, y }, to: { x, y }, axis: 'x', band, box, options };
+        band.classList.toggle('is-box', box);
         drawWindow();
         // Whatever pan had begun under this finger stops where it is.
         flush();
@@ -264,9 +277,14 @@ export function installTouchPlotGestures(div, plotly) {
     };
 
     const drawWindow = () => {
-        const { area, from, to, axis, band } = windowSel;
-        band.classList.toggle('is-vertical', axis === 'y');
-        if (axis === 'y') {
+        const { area, from, to, axis, band, box } = windowSel;
+        band.classList.toggle('is-vertical', !box && axis === 'y');
+        if (box) {
+            band.style.left = `${Math.min(from.x, to.x)}px`;
+            band.style.top = `${Math.min(from.y, to.y)}px`;
+            band.style.width = `${Math.abs(to.x - from.x)}px`;
+            band.style.height = `${Math.abs(to.y - from.y)}px`;
+        } else if (axis === 'y') {
             band.style.left = `${area.left}px`;
             band.style.width = `${area.width}px`;
             band.style.top = `${Math.min(from.y, to.y)}px`;
@@ -299,6 +317,18 @@ export function installTouchPlotGestures(div, plotly) {
         settle(true);
         if (!commit) return;
         const { area, from, to, axis } = selection;
+        if (selection.box) {
+            // Too small to be meant: a tap that wobbled.
+            if (Math.abs(to.x - from.x) < WINDOW_ZOOM_MIN_WIDTH_PX || Math.abs(to.y - from.y) < WINDOW_ZOOM_MIN_WIDTH_PX) return;
+            const x = pixel => area.xa.p2l(pixel - area.left);
+            const y = pixel => area.ya.p2l(pixel - area.top);
+            try {
+                selection.options.onBox({ x0: x(from.x), x1: x(to.x), y0: y(from.y), y1: y(to.y) });
+            } catch (error) {
+                console.warn('[touch] box not taken:', error);
+            }
+            return;
+        }
         if (axis === 'y') {
             const update = {};
             const put = (key, ax) => {
@@ -412,7 +442,7 @@ export function installTouchPlotGestures(div, plotly) {
 
     const onTouchStart = (event) => {
         if (!onPlotSurface(event.target)) return;
-        if (!touchGestureOwnsDrag(div._fullLayout?.dragmode)) { gesture = null; return; }
+        if (div._touchOwnsEveryDrag !== true && !touchGestureOwnsDrag(div._fullLayout?.dragmode)) { gesture = null; return; }
         // Something on this plot may want this touch for itself: a finger that
         // landed on a measurement cursor is grabbing it, not panning the plot.
         // It is not Plotly's either — a second finger arriving mid-drag would
@@ -443,13 +473,13 @@ export function installTouchPlotGestures(div, plotly) {
             if (options && armedUntil && time < armedUntil) {
                 // The drag a slow double tap was waiting for.
                 event.preventDefault();
-                if (startWindow(point.x, point.y)) return;
+                if (startWindow(point.x, point.y, options)) return;
             } else if (options && isFollowUpTap(lastTap, { time, ...point })) {
-                followUp = { x: point.x, y: point.y, gap: time - lastTap.time };
+                followUp = { x: point.x, y: point.y, gap: time - lastTap.time, options };
                 clearHold();
                 holdTimer = setTimeout(() => {
                     holdTimer = 0;
-                    if (followUp && gesture && !gesture.moved) startWindow(followUp.x, followUp.y);
+                    if (followUp && gesture && !gesture.moved) startWindow(followUp.x, followUp.y, followUp.options);
                 }, WINDOW_ZOOM_HOLD_MS);
             }
             lastTap = null;
@@ -480,7 +510,7 @@ export function installTouchPlotGestures(div, plotly) {
         // A second touch that drags draws the window instead of panning.
         if (!gesture.moved && followUp && points.length === 1) {
             event.preventDefault();
-            if (startWindow(followUp.x, followUp.y)) {
+            if (startWindow(followUp.x, followUp.y, followUp.options)) {
                 updateWindow(points[0].x, points[0].y);
                 return;
             }
@@ -495,7 +525,9 @@ export function installTouchPlotGestures(div, plotly) {
         const centre = gestureCentre(points);
         if (!centre) return;
         // One finger is a pinch that does not spread: same arithmetic, scale 1.
-        const scales = points.length === 2 ? pinchScales(gesture.points, points) : { x: 1, y: 1 };
+        const scales = points.length === 2
+            ? (div._touchUniformPinch === true ? pinchScaleUniform : pinchScales)(gesture.points, points)
+            : { x: 1, y: 1 };
         const { x, y, y2 } = axes();
         const update = {};
         const fractionOf = (axis, pixel, vertical) => {

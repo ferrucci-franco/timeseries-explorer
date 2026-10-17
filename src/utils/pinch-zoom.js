@@ -9,7 +9,8 @@
 // Per axis, independently, because these are not a map: a plot's x and y mean
 // different things, and a reader pinching horizontally is asking about time,
 // not about amplitude. An axis whose fingers barely separate is left alone
-// rather than scaled by a ratio of two small numbers.
+// rather than scaled by a ratio of two small numbers. A map, whose axes must
+// keep their proportion, asks for one scale instead (pinchScaleUniform).
 
 export const PINCH_MIN_SEPARATION_PX = 24;
 // Every frame of a pinch is measured against where the fingers STARTED, not
@@ -40,6 +41,24 @@ export function pinchScales(start, end, { minSeparationPx = PINCH_MIN_SEPARATION
         return clampScale(to / from);
     };
     return { x: axis('x'), y: axis('y') };
+}
+
+/**
+ * How much the fingers spread, as one scale for both axes: the ratio of their
+ * distances. For a plot whose axes must keep their proportion (a map, equal
+ * degrees on both), where scaling each axis by its own spread made Plotly
+ * shrink the drawing to keep the proportion, a little more at every pinch.
+ *
+ * @returns {{x: number|null, y: number|null}} null when the fingers are too
+ *   close together to say anything
+ */
+export function pinchScaleUniform(start, end, { minSeparationPx = PINCH_MIN_SEPARATION_PX } = {}) {
+    const distance = points => Math.hypot(Number(points?.[0]?.x) - Number(points?.[1]?.x), Number(points?.[0]?.y) - Number(points?.[1]?.y));
+    const from = distance(start);
+    const to = distance(end);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from < minSeparationPx || to < minSeparationPx) return { x: null, y: null };
+    const scale = clampScale(to / from);
+    return { x: scale, y: scale };
 }
 
 /**

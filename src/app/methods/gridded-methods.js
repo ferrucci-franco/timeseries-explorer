@@ -1059,21 +1059,32 @@ export function installGriddedMethods(TargetClass) {
         // The map shares the column with the preview, which comes and goes:
         // Plotly only follows window resizes on its own.
         if (typeof ResizeObserver === 'function') {
+            let mapFrame = 0;
             const observer = new ResizeObserver(entries => {
                 for (const entry of entries) {
-                    if (entry.target._fullLayout && entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+                    if (!entry.target._fullLayout || !(entry.contentRect.width > 0) || !(entry.contentRect.height > 0)) continue;
+                    if (entry.target.dataset.role !== 'map') {
                         Plotly.Plots.resize(entry.target);
-                        // Turned to or from a phone's width: the colour bar
-                        // and the margins change sides, the height its fit.
-                        const view = entry.target.dataset.role === 'map' && this._griddedVisibleView();
-                        const narrow = this._griddedNarrowMap(entry.target);
-                        if (view) this._griddedFitPhoneHeight(view, entry.target);
-                        if (view && narrow !== entry.target._griddedNarrow) {
-                            entry.target._griddedNarrow = narrow;
-                            this._griddedSyncMode(view);
-                            this._griddedDrawMap(view);
-                        }
+                        continue;
                     }
+                    // The map is drawn at its size (_griddedDrawMap), so any
+                    // change of it is a redraw, once the size has settled:
+                    // its height follows its width on a phone. Turned to or
+                    // from a phone's width, the colour bar and the margins
+                    // change sides too.
+                    const view = this._griddedVisibleView();
+                    if (!view) continue;
+                    this._griddedFitPhoneHeight(view, entry.target);
+                    const narrow = this._griddedNarrowMap(entry.target);
+                    if (narrow !== entry.target._griddedNarrow) {
+                        entry.target._griddedNarrow = narrow;
+                        this._griddedSyncMode(view);
+                    }
+                    cancelAnimationFrame(mapFrame);
+                    mapFrame = requestAnimationFrame(() => {
+                        const current = this._griddedVisibleView();
+                        if (current) this._griddedDrawMap(current);
+                    });
                 }
             });
             observer.observe(root.querySelector('[data-role="map"]'));
@@ -2456,11 +2467,17 @@ export function installGriddedMethods(TargetClass) {
         const coastScale = this._griddedCoastScale(view);
         const coast = await loadCoastlines(coastScale) || await loadCoastlines('coarse');
         if (!target && this._griddedVisibleView() !== view) return;
-        const ranges = view.zoom || this._griddedFittedRanges(map, div);
+        const ranges = view.zoom ? this._griddedAspectRanges(view.zoom, div) : this._griddedFittedRanges(map, div);
         const coastWindow = coastlineWindow(ranges);
         const units = variable?.units ? ` ${variable.units}` : '';
         const traces = [{
             type: 'heatmap',
+            // A colour bar that turns (under the map on a phone upright,
+            // beside it on its side) is a new one: Plotly, asked to turn the
+            // same bar, kept its axis lying flat, 340 px of labels in a row
+            // beside the map, and squeezed the map to a strip; back upright,
+            // to less than nothing.
+            uid: narrow ? 'field-under' : 'field-beside',
             x: grid.x,
             y: grid.y,
             z: grid.z,
@@ -2507,6 +2524,11 @@ export function installGriddedMethods(TargetClass) {
             ? `${this._griddedMapTitle(view)}  <span style="font-size:10px;opacity:0.7">(${i18n.t('griddedDecimatedShort').replace('{stride}', String(grid.stride))})</span>`
             : this._griddedMapTitle(view);
         const layout = {
+            // The size the ranges were fitted to, said: left to find it out,
+            // Plotly kept the size before a phone was turned, drew the new
+            // ranges in it and, to keep the degrees equal, shrank the map to a
+            // strip, then to nothing ("Something went wrong with axis scaling").
+            ...(div.clientWidth > 0 && div.clientHeight > 0 ? { width: div.clientWidth, height: div.clientHeight } : {}),
             paper_bgcolor: paper,
             plot_bgcolor: paper,
             font: { color: colors.font, size: 11, family: 'system-ui, sans-serif' },
@@ -2522,8 +2544,12 @@ export function installGriddedMethods(TargetClass) {
                 zeroline: false,
                 ticksuffix: '°',
                 // Equal degrees on both axes by shrinking the drawing area,
-                // never by stretching the latitude axis past the poles.
+                // never by stretching the latitude axis past the poles. The
+                // ranges are fitted to the area (_griddedFittedRanges,
+                // _griddedAspectRanges), so this is a guard; the domain is
+                // given whole every time, or a shrink would carry over.
                 constrain: 'domain',
+                domain: [0, 1],
             },
             yaxis: {
                 range: [...ranges.y],
@@ -2534,6 +2560,7 @@ export function installGriddedMethods(TargetClass) {
                 scaleanchor: 'x',
                 scaleratio: 1,
                 constrain: 'domain',
+                domain: [0, 1],
             },
             newshape: { line: { color: colors.pending, width: 2.5 }, fillcolor: 'rgba(216,67,21,0.10)' },
             shapes: overlays.shapes,
@@ -2545,6 +2572,11 @@ export function installGriddedMethods(TargetClass) {
             scrollZoom: true,
             responsive: true,
             edits: { shapePosition: true },
+            // A double click or a double tap frames the whole map here
+            // (plotly_doubleclick, _griddedBindPlot): Plotly's own reset went
+            // back to the ranges of the first drawing, made for another size
+            // of the plot, and with the degrees kept equal shrank the map.
+            doubleClick: false,
         };
         const first = !div._fullLayout;
         if (!target) this._griddedDeactivateShape(div);
@@ -2617,14 +2649,42 @@ export function installGriddedMethods(TargetClass) {
      * round the globe a second time. What cannot be filled is left to
      * Plotly's `constrain: 'domain'`, which shrinks the drawing area instead.
      */
+    // The plotting area of the map div, in pixels.
+    proto._griddedPlotArea = function(div) {
+        const margin = this._griddedMapMargins(this._griddedNarrowMap(div));
+        return {
+            width: Math.max(1, (div?.clientWidth || 800) - margin.l - margin.r),
+            height: Math.max(1, (div?.clientHeight || 500) - margin.t - margin.b),
+        };
+    };
+
+    /**
+     * A zoomed view's ranges for the area the map has now: the same centre
+     * and the same degrees per pixel (the larger of the two, so all that was
+     * in view stays in view), spread over the whole area. After a turn of
+     * the phone, or a panel opening beside it, the zoom keeps its place
+     * instead of Plotly shrinking the map to keep the old proportion.
+     */
+    proto._griddedAspectRanges = function(zoom, div) {
+        const { width, height } = this._griddedPlotArea(div);
+        const spanX = Math.abs(zoom.x[1] - zoom.x[0]);
+        const spanY = Math.abs(zoom.y[1] - zoom.y[0]);
+        if (!(spanX > 0) || !(spanY > 0)) return zoom;
+        const perPixel = Math.max(spanX / width, spanY / height);
+        const around = (range, span) => {
+            const centre = (range[0] + range[1]) / 2;
+            const sign = range[1] >= range[0] ? 1 : -1;
+            return [centre - sign * span / 2, centre + sign * span / 2];
+        };
+        return { x: around(zoom.x, perPixel * width), y: around(zoom.y, perPixel * height) };
+    };
+
     proto._griddedFittedRanges = function(map, div) {
         const dx = map.lon.length > 1 ? Math.abs(map.lon[1] - map.lon[0]) / 2 : 0.5;
         const dy = map.lat.length > 1 ? Math.abs(map.lat[1] - map.lat[0]) / 2 : 0.5;
         let x = [map.lon[0] - dx, map.lon[map.lon.length - 1] + dx];
         let y = [map.lat[0] - dy, map.lat[map.lat.length - 1] + dy];
-        const margin = this._griddedMapMargins(this._griddedNarrowMap(div));
-        const width = Math.max(1, (div?.clientWidth || 800) - margin.l - margin.r);
-        const height = Math.max(1, (div?.clientHeight || 500) - margin.t - margin.b);
+        const { width, height } = this._griddedPlotArea(div);
         const spanX = x[1] - x[0];
         const spanY = y[1] - y[0];
         const grow = (range, span, limits) => {
@@ -2669,6 +2729,25 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedBindPlot = function(div) {
         const interaction = { pressed: false, wheelAt: 0 };
         div._griddedInteraction = interaction;
+        // Fingers (ui/plot-touch-gestures.js): one pans and two pinch in
+        // every tool, Region included, where the mouse draws the box; the
+        // pinch scales longitude and latitude alike (scaled apart, Plotly
+        // shrank the map to keep its degrees equal, a little more at every
+        // pinch); and in Region a box is drawn by a tap, then a touch that
+        // drags (or, slowly, a double tap and then a drag).
+        div._touchOwnsEveryDrag = true;
+        div._touchUniformPinch = true;
+        div._touchWindowZoom = () => {
+            if (this._griddedVisibleView()?.mode !== 'region') return null;
+            return {
+                hint: i18n.t('griddedBoxTouchHint'),
+                box: true,
+                onBox: ({ x0, x1, y0, y1 }) => {
+                    const view = this._griddedVisibleView();
+                    if (view) this._griddedSetPendingBox(view, { x0, x1, y0, y1 });
+                },
+            };
+        };
         // The boxes take no pointer events (gridded.css), so the wheel always
         // reaches the plot, over a box too.
         div.addEventListener('wheel', () => { interaction.wheelAt = Date.now(); }, { capture: true, passive: true });
@@ -2842,6 +2921,12 @@ export function installGriddedMethods(TargetClass) {
             if (Date.now() - (interaction.pannedAt || 0) < 400) return;
             this._griddedOpenMenuAt(div, where);
         }, true);
+        div.on('plotly_doubleclick', () => {
+            const view = this._griddedVisibleView();
+            if (!view || view.editing) return;
+            view.zoom = null;
+            this._griddedDrawMap(view);
+        });
         div.on('plotly_relayout', update => {
             const view = this._griddedVisibleView();
             if (!view || !update || view.editing) return;
