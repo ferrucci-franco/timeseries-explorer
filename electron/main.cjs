@@ -678,7 +678,7 @@ async function selectResultFilePaths(options = {}, multiple = false) {
     // converter has no reader for .mat or .pkl, and offering them in its own
     // dialog would only let the user pick a file it then has to refuse.
     filters: Array.isArray(options.filters) && options.filters.length ? options.filters : [
-      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods', ...AUDIO_FILE_EXTENSIONS] },
+      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'grib', 'grb', 'grib2', 'grb2', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods', ...AUDIO_FILE_EXTENSIONS] },
       // Second, not last. A readable file with the wrong extension — a CSV
       // exported as `.000`, a measurement log with no extension at all — is
       // common enough that the way to reach it should be the next entry down,

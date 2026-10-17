@@ -313,6 +313,59 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
     await assert.rejects(() => client.request('map', { datasetId: 'test-1', variable: '/t2m' }).promise, { code: 'GRIDDED_NOT_OPEN' });
 }
 
+// --- GRIB (ERA5's native format), read by the same dataset: GRIB1 and
+//     GRIB2, simple and complex packing, a bitmap, pressure levels. The
+//     fixtures are written by ecCodes (scripts/generate-grib-fixtures.py).
+{
+    const gribField = (lat, lon, step, level = 0, offset = 0) => 280 + offset + 0.1 * lat + 0.01 * lon + step - 0.01 * level;
+    const openGribFixture = name => {
+        const raw = readFileSync(`test-files/grib/${name}`);
+        return GriddedDataset.open([{ buffer: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), filename: name }]);
+    };
+    const packed = 0.05; // 16-bit packing of these fields
+
+    const sfc = await openGribFixture('era5-grib1-sfc.grib');
+    const sfcModel = sfc.model();
+    assert.equal(sfc.gridded, true, 'a GRIB1 file opens as a map');
+    assert.equal(sfcModel.members[0].storageFormat, 'grib1');
+    assert.deepEqual(sfcModel.variables.filter(item => item.mapable).map(item => item.key).sort(), ['/2t', '/msl']);
+    const t2m = sfcModel.variables.find(item => item.key === '/2t');
+    assert.equal(t2m.longName, '2 metre temperature');
+    assert.equal(t2m.units, 'K');
+    assert.deepEqual(sfcModel.axes.time.labels.slice(0, 2), ['2024-01-01 00:00', '2024-01-01 01:00'], 'GRIB times decoded');
+    const sfcMap = sfc.readMap('/2t', { time: 2 });
+    assert.deepEqual(Array.from(sfcMap.lat), [-60, -30, 0, 30, 60], 'latitude ascending, as for netCDF');
+    assert.ok(Math.abs(sfcMap.values[displayIndex(sfcMap, 30, 45)] - gribField(30, 45, 2, 0, 5)) < packed, 'map value');
+    assert.ok(Number.isNaN(sfcMap.values[displayIndex(sfcMap, 60, 0)]), 'the bitmap leaves the first cell missing');
+    const sfcPoint = await sfc.pointSeries('/msl', {}, -30, 90);
+    sfcPoint.values.forEach((value, step) => assert.ok(Math.abs(value - gribField(-30, 90, step, 0, 100000)) < 2, `msl step ${step}`));
+
+    const complex = await openGribFixture('era5-grib2-complex.grib2');
+    assert.equal(complex.model().members[0].storageFormat, 'grib2');
+    const complexPoint = await complex.pointSeries('/2t', {}, 0, 180);
+    complexPoint.values.forEach((value, step) => assert.ok(Math.abs(value - gribField(0, 180, step, 0, 5)) < packed, `complex packing step ${step}`));
+
+    const levels = await openGribFixture('era5-grib2-pl.grib2');
+    const levelsModel = levels.model();
+    assert.deepEqual(Array.from(levelsModel.axes.pressure_level.values), [850, 500], 'pressure levels top down, as ERA5 netCDF');
+    assert.deepEqual(levelsModel.variables.filter(item => item.mapable).map(item => item.key).sort(), ['/t', '/u']);
+    const both = await levels.pointSeries('/u', {}, 30, 90, {}, { levels: [0, 1] });
+    for (const { index, values } of both.byLevel) {
+        const hPa = [850, 500][index];
+        values.forEach((value, step) => assert.ok(Math.abs(value - gribField(30, 90, step, hPa, 10)) < packed, `u at ${hPa} hPa step ${step}`));
+    }
+    const box = await levels.regionStats('/t', { pressure_level: 1 }, { latMin: -30, latMax: 30, lonMin: 0, lonMax: 90 });
+    assert.equal(box.cells, 9);
+    box.max.forEach((value, step) => assert.ok(Math.abs(value - gribField(30, 90, step, 500)) < packed, `region max step ${step}`));
+
+    const grib1Levels = await openGribFixture('era5-grib1-pl.grib');
+    const g1 = await grib1Levels.pointSeries('/t', { pressure_level: 0 }, 60, 315);
+    g1.values.forEach((value, step) => assert.ok(Math.abs(value - gribField(60, 315, step, 850)) < packed, `GRIB1 levels step ${step}`));
+
+    await assert.rejects(() => openGribFixture('ccsds.grib2'), error => error.code === 'GRIB_UNSUPPORTED' && /CCSDS/.test(error.message), 'CCSDS packing is refused in words');
+    for (const dataset of [sfc, complex, levels, grib1Levels]) dataset.close();
+}
+
 // --- A long series split along time between workers: each worker reads a
 //     slice of the steps, and the slices joined are the series one worker
 //     returns. The slices fall on chunk boundaries.

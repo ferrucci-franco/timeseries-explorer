@@ -128,7 +128,9 @@ const DERIVED_CONSTANTS = new Map([
     ['math.e', Math.E],
 ]);
 
-const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.nc4', '.netcdf', '.cdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods', ...AUDIO_EXTENSIONS];
+// GRIB opens on the gridded map (src/gridded/grib-reader.js).
+const GRIB_EXTENSIONS = ['.grib', '.grb', '.grib1', '.grb1', '.grib2', '.grb2'];
+const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.nc4', '.netcdf', '.cdf', ...GRIB_EXTENSIONS, '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods', ...AUDIO_EXTENSIONS];
 const APP_VERSION = '0.3.0';
 // Injected at build time by Vite (see vite.config.js). Fall back to placeholders
 // when running outside a Vite build (e.g. Node test scripts), where the globals
@@ -152,4 +154,4 @@ const RESET_LAYOUT_ICON_SVG = `<svg class="reset-layout-glyph" viewBox="0 0 64 6
     <path fill="none" stroke="#ef8b78" stroke-width="2" d="M6 6h52v52H6zM6 58 58 6M32 6v52M6 32h52"/>
 </svg>`;
 
-export { APP_VERSION, BUILD_SHA, BUILD_DATE, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_CONSTANTS, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, FEEDBACK_EMAIL, FEEDBACK_ISSUES_URL, ONLINE_VERSION_URL, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS };
+export { APP_VERSION, BUILD_SHA, BUILD_DATE, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_CONSTANTS, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, FEEDBACK_EMAIL, FEEDBACK_ISSUES_URL, ONLINE_VERSION_URL, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS, GRIB_EXTENSIONS };

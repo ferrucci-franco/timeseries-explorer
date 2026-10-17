@@ -74,6 +74,8 @@
 !/test-files/pypsa/vetea_example_01.nc
 !/test-files/netcdf/
 !/test-files/netcdf/**
+!/test-files/grib/
+!/test-files/grib/**
 !/test-files/pickle/
 !/test-files/pickle/*.pkl
 !/test-files/pickle/manifest.json

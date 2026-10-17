@@ -204,8 +204,18 @@ on the union of their time points, with gaps where a run has no sample.
 
 The `.nc`, `.nc4`, `.netcdf` and `.cdf` loader reads netCDF3 (Classic,
 64-bit offset and CDF-5) and netCDF4/HDF5. What a file is gets decided from its
-bytes, not its name: a ZIP, a GRIB file or a saved error page named `.nc` is
-reported as what it is, with what to do about it.
+bytes, not its name: a ZIP or a saved error page named `.nc` is reported as
+what it is, with what to do about it.
+
+**GRIB** (`.grib`, `.grb`, `.grib2`, `.grb2`, or a GRIB saved as `.nc`), the
+format ERA5 is stored in and the one the Climate Data Store sends by default,
+opens on the same map: GRIB1 and GRIB2 on regular latitude/longitude grids,
+with simple, complex (with or without spatial differencing) or IEEE packing,
+and bitmaps. It is read by parts too: the messages are listed from their
+headers and a field is decoded when a map or a series needs it (a week of
+hourly global ERA5 at 0.25°, 350 MB, opens in about 3 s). JPEG 2000, PNG and
+CCSDS packing, spectral fields and Gaussian or rotated grids are named in the
+error, with the command to convert them.
 
 **Files of series** (stations, PyPSA networks) are read by parts in the parse
 worker too: the file is never copied whole into memory, so a 600 MB station

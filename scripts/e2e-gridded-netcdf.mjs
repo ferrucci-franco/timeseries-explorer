@@ -1058,8 +1058,45 @@ try {
         });
         await page.waitForSelector('.modal-overlay.show', { timeout: 60000 });
         const message = await page.$eval('.modal-overlay.show', el => el.innerText);
-        assert.match(message, /es un archivo GRIB, no netCDF/);
-        assert.equal(await page.evaluate(() => window.app.files.size), 2, 'the GRIB file is not added');
+        assert.match(message, /es un archivo GRIB de una forma que este lector todavía no maneja/, `a broken GRIB is explained (${message})`);
+        assert.equal(await page.evaluate(() => window.app.files.size), 2, 'the broken GRIB file is not added');
+        await page.click('.modal-overlay.show .modal-btn-confirm, .modal-overlay.show .modal-btn');
+        await page.waitForSelector('.modal-overlay.show', { state: 'detached' });
+        // A packing the reader does not decode yet is named, with what to do.
+        await page.setInputFiles('#file-input', resolve('test-files/grib/ccsds.grib2'));
+        await page.waitForSelector('.modal-overlay.show', { timeout: 60000 });
+        assert.match(await page.$eval('.modal-overlay.show', el => el.innerText), /CCSDS[\s\S]*grib_set/, 'CCSDS is named, with the way out');
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
+    // 4b. GRIB, ERA5's native format, opens on the map like netCDF: read by
+    // parts in the worker, by its extension or saved as ".nc".
+    {
+        const { context, page, errors } = await openApp();
+        await page.setInputFiles('#file-input', resolve('test-files/grib/era5-grib2-pl.grib2'));
+        await mapShown(page);
+        await page.waitForTimeout(500);
+        const grib = await page.evaluate(() => ({
+            variables: [...document.querySelectorAll('#gridded-view [data-role="variable"] option')].map(option => option.value).sort(),
+            level: document.querySelector('#gridded-view [data-dim="pressure_level"]')?.selectedOptions[0]?.textContent,
+            format: window.app.plotManager.files.get(window.app.plotManager.activeFileId).data.metadata.format,
+        }));
+        assert.deepEqual(grib.variables, ['/t', '/u']);
+        assert.equal(grib.level, '850 hPa');
+        assert.equal(grib.format, 'gridded-netcdf');
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.fill('#gridded-view [data-input="lat"]', '30');
+        await page.fill('#gridded-view [data-input="lon"]', '90');
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 1 && !window.app._griddedVisibleView().job, null, { timeout: 60000 });
+        const values = (await extractions(page))[0].values;
+        values.forEach((value, step) => assert.ok(Math.abs(value - (280 + 0.1 * 30 + 0.01 * 90 + step - 8.5)) < 0.05, `GRIB point value at step ${step}: ${value}`));
+        // Saved under a netCDF name (cdsapi users do), it still opens.
+        await page.setInputFiles('#file-input', {
+            name: 'era5.nc', mimeType: 'application/octet-stream', buffer: readFileSync('test-files/grib/era5-grib1-sfc.grib'),
+        });
+        await page.waitForFunction(() => window.app.files.size === 2 && window.app._griddedVisibleView()?.model?.members?.[0]?.storageFormat === 'grib1', null, { timeout: 60000 });
         assert.deepEqual(errors, []);
         await context.close();
     }
@@ -1427,7 +1464,7 @@ try {
         await context.close();
     }
 
-    console.log('Gridded netCDF e2e passed: map, point and box extractions, slider, plotting, CDS ZIP, series files untouched, GRIB message, desktop path, projects that keep the map.');
+    console.log('Gridded netCDF e2e passed: map, point and box extractions, slider, plotting, CDS ZIP, series files untouched, GRIB on the map, desktop path, projects that keep the map.');
 } finally {
     await browser.close();
     await server.close();
