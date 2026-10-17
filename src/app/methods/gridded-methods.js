@@ -1713,6 +1713,9 @@ export function installGriddedMethods(TargetClass) {
         const div = this._griddedEl('map');
         this._griddedDeactivateShape(div);
         if (div?._fullLayout) Plotly.relayout(div, { dragmode: mode === 'region' ? 'drawrect' : 'pan' });
+        // A series is coming: on a large dataset the helper workers start
+        // and open the files now, while the point or the box is placed.
+        if (mode === 'point' || mode === 'region') griddedClient().prepareParallel(view.datasetId);
     };
 
     proto._griddedSyncMode = function(view) {

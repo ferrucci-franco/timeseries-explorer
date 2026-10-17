@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { GriddedDataset } from '../src/gridded/dataset.js';
-import { GriddedClient } from '../src/gridded/gridded-client.js';
+import { GriddedClient, joinSeriesSlices, splitTimeRange } from '../src/gridded/gridded-client.js';
 import { decodeCfTime } from '../src/gridded/cf-time.js';
 import { extractZipEntry, isNetcdfEntryName, listZipEntries } from '../src/gridded/zip-reader.js';
 import { openNetcdf3 } from '../src/gridded/nc3-reader.js';
@@ -311,6 +311,50 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
     close(map.values[displayIndex(map, 45, 90)], field(45, 90, 1, 5), 'map through the client');
     await client.close('test-1');
     await assert.rejects(() => client.request('map', { datasetId: 'test-1', variable: '/t2m' }).promise, { code: 'GRIDDED_NOT_OPEN' });
+}
+
+// --- A long series split along time between workers: each worker reads a
+//     slice of the steps, and the slices joined are the series one worker
+//     returns. The slices fall on chunk boundaries.
+{
+    assert.deepEqual(splitTimeRange(744, 1, 4), [[0, 186], [186, 372], [372, 558], [558, 744]]);
+    assert.deepEqual(splitTimeRange(744, 24, 4), [[0, 192], [192, 384], [384, 552], [552, 744]], 'whole chunks of 24 steps');
+    splitTimeRange(744, 24, 4).forEach(([start]) => assert.equal(start % 24, 0));
+    assert.deepEqual(splitTimeRange(10, 4, 4), [[0, 4], [4, 8], [8, 10]], 'never more slices than chunks');
+    assert.deepEqual(splitTimeRange(3, 1, 4), [[0, 1], [1, 2], [2, 3]]);
+    assert.deepEqual(splitTimeRange(5, 8, 4), [[0, 5]], 'one chunk: one slice');
+
+    const dataset = await open('era5-like-new-cds.nc');
+    const t2m = dataset.model().variables.find(item => item.key === '/t2m');
+    assert.equal(t2m.timeChunk, 1, 'the model says how many steps a chunk holds');
+    const slices = [[0, 1], [1, 3], [3, 4]];
+    const same = (joined, whole, label) => {
+        const parts = whole.byLevel ? whole.byLevel.map((level, index) => [joined.byLevel[index], level]) : [[joined, whole]];
+        for (const [a, b] of parts) {
+            for (const field of ['values', 'mean', 'min', 'max', 'validFraction', 'minLat', 'minLon', 'maxLat', 'maxLon']) {
+                if (!b[field]) continue;
+                assert.deepEqual(Array.from(a[field]), Array.from(b[field]), `${label}: ${field}`);
+            }
+        }
+    };
+    for (const [label, run] of [
+        ['nearest', range => dataset.pointSeries('/t2m', {}, 44, 92, {}, { timeRange: range })],
+        ['bilinear across the seam', range => dataset.pointSeries('/t2m', {}, -30, -22.5, {}, { method: 'bilinear', timeRange: range })],
+        ['point, two levels', range => dataset.pointSeries('/t', {}, 44, 92, {}, { levels: [0, 1], timeRange: range })],
+        ['region across the seam', range => dataset.regionStats('/t2m', {}, { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 }, {}, { timeRange: range })],
+        ['region, two levels', range => dataset.regionStats('/t', {}, { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 }, {}, { levels: [0, 1], timeRange: range })],
+    ]) {
+        const whole = await run(null);
+        const parts = [];
+        for (const range of slices) parts.push(await run(range));
+        assert.equal((parts[1].values || parts[1].mean || parts[1].byLevel[0].values || parts[1].byLevel[0].mean).length, 2, `${label}: a slice holds its steps only`);
+        same(joinSeriesSlices(label.startsWith('region') ? 'region' : 'point', parts), whole, label);
+    }
+    // The joined result keeps what describes the series as a whole.
+    const region = joinSeriesSlices('region', await Promise.all(slices.map(range => dataset.regionStats('/t2m', {}, { latMin: 0, latMax: 50, lonMin: -50, lonMax: 50 }, {}, { timeRange: range }))));
+    assert.equal(region.cells, 6);
+    assert.equal(region.weighting, 'cos-lat');
+    dataset.close();
 }
 
 // Units as they are read: powers become superscripts, names ending in a
