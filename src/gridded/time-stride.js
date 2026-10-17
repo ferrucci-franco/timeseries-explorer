@@ -157,3 +157,23 @@ export function strideIndex(axis, index, strideId, direction = 1) {
     }
     return low - 1;
 }
+
+/**
+ * The steps to read together with `index` when the file stores many steps
+ * per chunk (see GriddedDataset.readMaps): `index` first, then one stride at
+ * a time in `direction`, while they stay in the chunk of `chunk` steps that
+ * holds `index` and there are fewer than `limit`. Steps `isCached` says are
+ * in hand already are left out.
+ */
+export function batchIndices(axis, index, strideId, direction, { chunk, limit, isCached = () => false }) {
+    const chunkStart = Math.floor(index / chunk) * chunk;
+    const chunkEnd = chunkStart + chunk;
+    const out = [index];
+    let next = index;
+    while (out.length < limit) {
+        next = strideIndex(axis, next, strideId, direction);
+        if (next < 0 || next < chunkStart || next >= chunkEnd) break;
+        if (!isCached(next)) out.push(next);
+    }
+    return out;
+}

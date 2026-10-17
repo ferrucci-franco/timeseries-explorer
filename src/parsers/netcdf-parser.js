@@ -327,6 +327,8 @@ export default class NetcdfParser {
                     dimensions: [],
                     read: ranges => ranges ? object.slice(ranges) : object.value,
                     supportsSlice: true,
+                    // h5wasm takes [start, stop, step] per axis.
+                    supportsStep: true,
                     numeric: typeInfo.numeric,
                     textual: typeInfo.textual,
                     chunks: typeInfo.chunks,

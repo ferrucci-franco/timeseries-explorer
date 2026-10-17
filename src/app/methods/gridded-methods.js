@@ -18,7 +18,7 @@ import { formatUnitPowers } from '../../utils/unit-superscripts.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
 import { coastlineTrace, coastlineWindow, insideCoastlineWindow } from '../../gridded/coastlines.js';
 import { copyTextToClipboard } from '../../utils/clipboard.js';
-import { strideIndex, strideOptions } from '../../gridded/time-stride.js';
+import { batchIndices, strideIndex, strideOptions } from '../../gridded/time-stride.js';
 
 const GRIDDED_EXTENSIONS = new Set(['.nc', '.nc4', '.netcdf', '.cdf', '.zip', ...GRIB_EXTENSIONS]);
 // What the gridded reader opens: netCDF (3, 4, CDF-5) and GRIB.
@@ -1920,35 +1920,82 @@ export function installGriddedMethods(TargetClass) {
         return axis ? strideIndex(axis, index, view.stride, direction) : -1;
     };
 
+    // Play keeps to the clock: drawing slower than the speed asked skips
+    // strides to catch up, up to this many at once, so "30 a second" goes
+    // through time at 30 a second, showing fewer of them. A step that had
+    // to be read from the file (a chunk decompressed) restarts the clock
+    // instead: skipping then would only jump past what is being read.
+    const PLAY_MAX_SKIP = 4;
+    const PLAY_STALL_INTERVALS = 4;
+
     proto._griddedPlayLoop = async function(view) {
         const dim = this._griddedTimeDim(view);
-        while (view.playing && dim && this._griddedVisibleView() === view) {
-            const started = performance.now();
+        // Pause and Play again within one frame left the first loop running
+        // beside the second, at twice the speed: the newest loop alone plays.
+        const run = (view.playRun || 0) + 1;
+        view.playRun = run;
+        let clock = performance.now();
+        let shown = 0;
+        let speed = view.speed;
+        while (view.playing && view.playRun === run && dim && this._griddedVisibleView() === view) {
+            if (view.speed !== speed) {
+                speed = view.speed;
+                clock = performance.now();
+                shown = 0;
+            }
+            const interval = 1000 / Math.max(1, speed);
             const size = view.model.axes[dim].size;
             view.stepDirection = 1;
-            // One stride on; past the end, back to the start.
-            const next = this._griddedStrideFrom(view, view.selection[dim] || 0, 1);
-            view.selection[dim] = next < 0 || next >= size ? 0 : next;
+            const due = Math.floor((performance.now() - clock) / interval) + 1;
+            const strides = Math.min(PLAY_MAX_SKIP, Math.max(1, due - shown));
+            // Strides on; past the end, back to the start.
+            let index = view.selection[dim] || 0;
+            for (let count = 0; count < strides; count++) {
+                const next = this._griddedStrideFrom(view, index, 1);
+                index = next < 0 || next >= size ? 0 : next;
+            }
+            shown += strides;
+            view.selection[dim] = index;
             const slider = this._griddedEl('time');
-            if (slider) slider.value = String(view.selection[dim]);
+            if (slider) slider.value = String(index);
             this._griddedSyncTimeLabel(view);
+            const started = performance.now();
             await this._griddedRequestMap(view);
-            const wait = 1000 / Math.max(1, view.speed) - (performance.now() - started);
+            const now = performance.now();
+            if (now - started > PLAY_STALL_INTERVALS * interval || clock + shown * interval < now - PLAY_MAX_SKIP * interval) {
+                clock = now;
+                shown = 0;
+                continue;
+            }
+            const wait = clock + shown * interval - now;
             if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
         }
+        if (view.playRun !== run) return;
         view.playing = false;
         this._griddedSyncTimeLabel(view);
     };
 
     // Maps already read, by variable and selection, newest last: stepping
     // back and forth, or a loop played again, costs no read. Bounded by
-    // bytes, so a global 0.25° grid keeps a dozen and a regional one more.
-    const MAP_CACHE_BYTES = 64 * 1024 * 1024;
+    // bytes, so a global 0.25° grid keeps a few dozen and a regional one
+    // thousands; a batch read ahead (below) fits in it several times.
+    const MAP_CACHE_BYTES = 128 * 1024 * 1024;
+
+    // A file storing many steps per chunk (the new CDS writes four months
+    // of hours in one) is read in batches: the steps Play will show from the
+    // same chunk, in one read (GriddedDataset.readMaps), at most this many
+    // bytes of maps. Smaller chunks are read map by map.
+    const BATCH_BYTES = 48 * 1024 * 1024;
+    const BATCH_MIN_CHUNK = 8;
+    // How many strides ahead the next batch is looked for, so its chunk is
+    // being read before Play gets there.
+    const BATCH_LOOKAHEAD = 90;
 
     // The dataset is in the key: a view reopened on new files reads anew.
     // An index left out is 0, so `{}` and `{ valid_time: 0 }` are one map.
     const mapKey = (view, request) => JSON.stringify([view.datasetId, request.variable,
         Object.entries(request.selection || {}).filter(([, index]) => Number(index) !== 0).sort()]);
+    const atIndex = (request, dim, index) => ({ variable: request.variable, selection: { ...request.selection, [dim]: index } });
 
     proto._griddedCachedMap = function(view, request) {
         const cache = view.mapCache;
@@ -1973,12 +2020,50 @@ export function installGriddedMethods(TargetClass) {
         }
     };
 
+    // The steps to read with this one, or null when the file is read map by map.
+    proto._griddedBatchFor = function(view, request, direction) {
+        const variable = this._griddedVariable(view);
+        const dim = this._griddedTimeDim(view);
+        const chunk = variable?.timeChunk || 1;
+        if (!dim || chunk < BATCH_MIN_CHUNK) return null;
+        const cells = variable.dimNames
+            .filter(name => view.model.axes[name]?.role === 'y' || view.model.axes[name]?.role === 'x')
+            .reduce((total, name) => total * (view.model.axes[name]?.size || 1), 1);
+        return batchIndices(view.model.axes[dim], Number(request.selection?.[dim]) || 0, view.stride, direction, {
+            chunk,
+            limit: Math.max(2, Math.floor(BATCH_BYTES / (4 * cells))),
+            isCached: index => view.mapCache?.has(mapKey(view, atIndex(request, dim, index))) === true,
+        });
+    };
+
+    // Reads the steps of `indices` in one request and keeps them all; the
+    // map of `request` is what it resolves to.
+    proto._griddedReadBatch = async function(view, request, indices) {
+        const dim = this._griddedTimeDim(view);
+        const wanted = Number(request.selection?.[dim]) || 0;
+        const result = await griddedClient().request('maps', {
+            datasetId: view.datasetId, variable: request.variable, selection: request.selection, indices,
+        }).promise;
+        let map = null;
+        for (const item of result.maps) {
+            this._griddedRememberMap(view, atIndex(request, dim, item.index), item.map);
+            if (item.index === wanted) map = item.map;
+        }
+        return map;
+    };
+
     proto._griddedFetchMap = async function(view, request) {
         const key = mapKey(view, request);
         // The step read ahead may still be on its way: wait for it rather
         // than read it a second time.
-        if (view.prefetch?.key === key) {
-            const map = await view.prefetch.promise.catch(() => null);
+        if (view.prefetch?.keys.has(key)) {
+            await view.prefetch.promise.catch(() => null);
+            const map = this._griddedCachedMap(view, request);
+            if (map) return map;
+        }
+        const batch = this._griddedBatchFor(view, request, view.stepDirection || 1);
+        if (batch?.length > 1) {
+            const map = await this._griddedReadBatch(view, request, batch);
             if (map) return map;
         }
         const map = await griddedClient().request('map', { datasetId: view.datasetId, ...request }).promise;
@@ -1987,29 +2072,46 @@ export function installGriddedMethods(TargetClass) {
     };
 
     /**
-     * Reads the next time step ahead, in the direction the slider or the
-     * player last moved, while the one on screen is looked at: the next
-     * step then only has to be drawn. Not while a series is being read,
-     * which has the worker's attention.
+     * Reads ahead, in the direction the slider or the player last moved,
+     * while the step on screen is looked at: the next step then only has to
+     * be drawn. For a file of many steps per chunk, the first of the coming
+     * strides not in hand yet, with the rest of its batch, so that chunk is
+     * read before Play reaches it. One read ahead at a time, and none while
+     * a series is being read, which has the worker's attention.
      */
     proto._griddedPrefetchNext = function(view, request) {
         const dim = this._griddedTimeDim(view);
         if (!dim || view.job || !request?.variable) return;
         const size = view.model.axes[dim]?.size || 0;
         const current = Number(request.selection?.[dim]) || 0;
-        let next = this._griddedStrideFrom(view, current, view.stepDirection || 1);
-        if (view.playing && next < 0) next = 0;
-        if (next < 0 || next >= size || next === current) return;
-        const ahead = { variable: request.variable, selection: { ...request.selection, [dim]: next } };
-        const key = mapKey(view, ahead);
-        if (view.mapCache?.has(key) || view.prefetch?.key === key) return;
-        const promise = griddedClient().request('map', { datasetId: view.datasetId, ...ahead }).promise.then(map => {
-            this._griddedRememberMap(view, ahead, map);
-            return map;
-        });
-        view.prefetch = { key, promise };
+        const direction = view.stepDirection || 1;
+        const chunked = (this._griddedVariable(view)?.timeChunk || 1) >= BATCH_MIN_CHUNK;
+        if (chunked && view.prefetch) return;
+        let ahead = null;
+        let next = current;
+        for (let count = 0; count < (chunked ? BATCH_LOOKAHEAD : 1); count++) {
+            next = this._griddedStrideFrom(view, next, direction);
+            if (view.playing && next < 0) next = 0;
+            if (next < 0 || next >= size || next === current) break;
+            const candidate = atIndex(request, dim, next);
+            if (!view.mapCache?.has(mapKey(view, candidate))) {
+                ahead = candidate;
+                break;
+            }
+        }
+        if (!ahead || view.prefetch?.keys.has(mapKey(view, ahead))) return;
+        const batch = chunked ? this._griddedBatchFor(view, ahead, direction) : null;
+        const indices = batch?.length > 1 ? batch : [Number(ahead.selection[dim])];
+        const promise = indices.length > 1
+            ? this._griddedReadBatch(view, ahead, indices)
+            : griddedClient().request('map', { datasetId: view.datasetId, ...ahead }).promise.then(map => {
+                this._griddedRememberMap(view, ahead, map);
+                return map;
+            });
+        const entry = { keys: new Set(indices.map(index => mapKey(view, atIndex(request, dim, index)))), promise };
+        view.prefetch = entry;
         promise.catch(() => null).finally(() => {
-            if (view.prefetch?.key === key) view.prefetch = null;
+            if (view.prefetch === entry) view.prefetch = null;
         });
     };
 

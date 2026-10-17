@@ -196,6 +196,7 @@
     "test:gridded-loading-overlay": "node scripts/test-gridded-loading-overlay.mjs",
     "test:file-byte-source": "node scripts/test-file-byte-source.mjs",
     "test:gridded-time-stride": "node scripts/test-gridded-time-stride.mjs",
+    "test:gridded-read-maps": "node scripts/test-gridded-read-maps.mjs",
     "verify:netcdf-corpus": "node scripts/verify-netcdf-corpus.mjs",
     "test:pypsa": "node scripts/test-pypsa-netcdf-parser.mjs",
     "test:pypsa-session": "node scripts/test-pypsa-session.mjs",

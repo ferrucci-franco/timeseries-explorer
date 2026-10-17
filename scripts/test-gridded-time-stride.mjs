@@ -6,7 +6,7 @@
 // ahead on the axis itself, and Play goes up to 30 steps a second.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { axisSpacingMs, strideIndex, strideOptions } from '../src/gridded/time-stride.js';
+import { axisSpacingMs, batchIndices, strideIndex, strideOptions } from '../src/gridded/time-stride.js';
 
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
@@ -113,11 +113,47 @@ const iso = (axis, index) => new Date(axis.values[index]).toISOString().slice(0,
 const gridded = readFileSync(new URL('../src/app/methods/gridded-methods.js', import.meta.url), 'utf8');
 assert.match(gridded, /const PLAY_SPEEDS = \[1, 2, 4, 8, 16, 30\];/, 'Play goes up to 30 steps a second');
 assert.match(gridded, /<select data-role="stride" class="gridded-speed gridded-stride"><\/select>/, 'the stride is chosen next to the speed');
-assert.match(gridded, /_griddedPlayLoop = async function\(view\) \{[\s\S]*?const next = this\._griddedStrideFrom\(view, view\.selection\[dim\] \|\| 0, 1\);\s*view\.selection\[dim\] = next < 0 \|\| next >= size \? 0 : next;/,
+const play = gridded.slice(gridded.indexOf('proto._griddedPlayLoop'), gridded.indexOf('// Maps already read'));
+assert.match(play, /const next = this\._griddedStrideFrom\(view, index, 1\);\s*index = next < 0 \|\| next >= size \? 0 : next;/,
     'Play moves by the stride, and loops past the end');
 assert.match(gridded, /_griddedStep = function\(step\) \{[\s\S]*?this\._griddedStrideFrom\(view, current, step === 'next' \? 1 : -1\)/,
     '◀ ▶ (and the arrow keys) move by the stride');
-assert.match(gridded, /_griddedPrefetchNext = function\(view, request\) \{[\s\S]*?let next = this\._griddedStrideFrom\(view, current, view\.stepDirection \|\| 1\);/,
+assert.match(gridded, /_griddedPrefetchNext = function\(view, request\) \{[\s\S]*?const direction = view\.stepDirection \|\| 1;[\s\S]*?next = this\._griddedStrideFrom\(view, next, direction\);/,
     'the step read ahead is the next stride, not the next step');
+
+// ── Play keeps to the clock ─────────────────────────────────────────────────
+// Drawing slower than the speed asked skips strides (a few at most), so the
+// speed is the speed of time; a step that had to be read restarts the clock.
+assert.match(play, /const due = Math\.floor\(\(performance\.now\(\) - clock\) \/ interval\) \+ 1;\s*const strides = Math\.min\(PLAY_MAX_SKIP, Math\.max\(1, due - shown\)\);/,
+    'behind the clock, several strides at once');
+assert.match(play, /if \(now - started > PLAY_STALL_INTERVALS \* interval \|\| clock \+ shown \* interval < now - PLAY_MAX_SKIP \* interval\) \{\s*clock = now;\s*shown = 0;/,
+    'a read that stalled, or a lag past catching up, restarts the clock');
+assert.match(play, /const run = \(view\.playRun \|\| 0\) \+ 1;\s*view\.playRun = run;[\s\S]*?while \(view\.playing && view\.playRun === run/,
+    'Pause and Play again quickly: one loop plays, not two at twice the speed');
+assert.match(play, /if \(view\.playRun !== run\) return;\s*view\.playing = false;/, 'and the old one does not stop the new one');
+assert.match(play, /if \(view\.speed !== speed\) \{\s*speed = view\.speed;\s*clock = performance\.now\(\);/, 'and so does a new speed');
+
+// ── Batches for files of many steps per chunk ──────────────────────────────
+{
+    const axis = datetimeAxis('2025-01-01T00:00:00Z', 8760, HOUR);
+    const plan = (index, stride, options) => batchIndices(axis, index, stride, 1, { chunk: 2920, limit: 500, ...options });
+    const daily = plan(5, '1d');
+    assert.equal(daily[0], 5, 'the step asked first');
+    assert.equal(daily.length, 122, 'a day at a time, to the end of its chunk of 2920 steps');
+    assert.ok(daily.every((index, k) => index === 5 + 24 * k));
+    assert.equal(plan(2915, '1d').length, 1, 'the next day is in the next chunk: read with that one');
+    assert.equal(plan(0, 'step').length, 500, 'at most `limit` maps');
+    assert.deepEqual(plan(0, '1d', { isCached: index => index % 48 === 24 }).slice(0, 4), [0, 48, 96, 144], 'steps in hand are left out');
+    assert.deepEqual(batchIndices(axis, 100, '1d', -1, { chunk: 2920, limit: 10 }), [100, 76, 52, 28, 4], 'backwards, down to the chunk start');
+    const months = plan(0, '1mo');
+    // 2920 hours are 121.7 days: the first chunk runs to 2 May, 16:00.
+    assert.deepEqual(months.map(index => iso(axis, index)), ['2025-01-01T00:00', '2025-02-01T00:00', '2025-03-01T00:00', '2025-04-01T00:00', '2025-05-01T00:00'],
+        'months: those that begin in the first chunk');
+}
+assert.match(gridded, /const batch = this\._griddedBatchFor\(view, request, view\.stepDirection \|\| 1\);\s*if \(batch\?\.length > 1\) \{\s*const map = await this\._griddedReadBatch\(view, request, batch\);/,
+    'a map of a time-chunked file is read with the steps after it');
+assert.match(gridded, /for \(let count = 0; count < \(chunked \? BATCH_LOOKAHEAD : 1\); count\+\+\)/,
+    'and the next batch is read before Play gets to it');
+assert.match(gridded, /if \(view\.prefetch\?\.keys\.has\(key\)\) \{\s*await view\.prefetch\.promise/, 'a step being read ahead is waited for, not read twice');
 
 console.log('Gridded time stride tests passed: hours, days, calendar months and years, gaps, model calendars, step counts.');
