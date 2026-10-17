@@ -961,6 +961,34 @@ try {
         assert.ok(Math.abs(compared.lastProgress - 1) < 1e-9, `progress ends at 1 (${compared.lastProgress})`);
         assert.equal(compared.cancelled, true, 'a split series can be cancelled');
         compared.firstValues.forEach((value, step) => assert(Math.abs(value - field(45, 90, step, 5)) < 1e-3, `split point value at step ${step}`));
+        // The next time step is read ahead while one is on screen: stepping
+        // forward then reads nothing but the step after it.
+        const ahead = await page.evaluate(async () => {
+            const { griddedClient } = await import('/src/gridded/gridded-client.js');
+            const client = griddedClient();
+            const view = window.app._griddedVisibleView();
+            const dim = window.app._griddedTimeDim(view);
+            const settled = async () => {
+                for (let i = 0; i < 200 && (view.mapInFlight || view.prefetch || view.mapFor?.selection[dim] !== view.selection[dim]); i++) {
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                }
+            };
+            window.app._griddedStep('first');
+            await settled();
+            const asked = [];
+            const request = client.request.bind(client);
+            client.request = (op, payload, options) => {
+                if (op === 'map') asked.push(payload.selection[dim]);
+                return request(op, payload, options);
+            };
+            window.app._griddedStep('next');
+            await settled();
+            window.app._griddedStep('prev');
+            await settled();
+            client.request = request;
+            return { asked, shown: view.mapFor.selection[dim] };
+        });
+        assert.deepEqual(ahead, { asked: [2], shown: 0 }, 'step 1 was read ahead, step 2 is read ahead now, step 0 comes back from the cache');
         // Picking a tool starts the helpers ahead of the series; closing the
         // last dataset stops them.
         const lifecycle = await page.evaluate(async () => {

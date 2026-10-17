@@ -1385,6 +1385,15 @@ resumen de buscador):
 
 - Con archivos en bloques chicos las series son más rápidas todavía; el
   build portable (`file://`, sin Workers) sigue leyendo en la página.
+- **Cambio de instante.** Medido con más precisión, un paso costaba 160–200 ms
+  (leer el mapa 50–180 ms, dibujarlo ~100 ms; los 0,4 s de antes eran el
+  primer paso en frío). Ahora el instante siguiente, en la dirección en que se
+  movió el deslizador o el reproductor, se lee mientras se dibuja el actual,
+  y los mapas leídos quedan en una caché de la vista (hasta 64 MB, el más
+  viejo sale primero): un paso queda en ~140 ms (mediana) y la animación a 10
+  pasos/s da ~8 cuadros por segundo (antes ~6,5). El resto es el dibujo de
+  Plotly (~95 ms para 361 × 720 celdas aun cambiando solo `z`; `zsmooth:
+  'fast'` no lo baja).
 
 **Pendiente de esta parte:**
 
