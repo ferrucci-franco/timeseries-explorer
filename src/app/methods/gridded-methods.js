@@ -1203,7 +1203,9 @@ export function installGriddedMethods(TargetClass) {
             if (!current) return;
             const dim = this._griddedTimeDim(current);
             if (!dim) return;
-            current.selection[dim] = Number(event.target.value);
+            const next = Number(event.target.value);
+            current.stepDirection = next < (current.selection[dim] || 0) ? -1 : 1;
+            current.selection[dim] = next;
             this._griddedSyncTimeLabel(current);
             this._griddedRequestMap(current);
         });
@@ -1838,6 +1840,7 @@ export function installGriddedMethods(TargetClass) {
         const next = step === 'first' ? 0 : step === 'last' ? size - 1
             : step === 'next' ? Math.min(size - 1, current + 1) : Math.max(0, current - 1);
         if (next === current) return;
+        view.stepDirection = next < current ? -1 : 1;
         view.selection[dim] = next;
         this._griddedEl('time').value = String(next);
         this._griddedSyncTimeLabel(view);
@@ -1849,6 +1852,7 @@ export function installGriddedMethods(TargetClass) {
         while (view.playing && dim && this._griddedVisibleView() === view) {
             const started = performance.now();
             const size = view.model.axes[dim].size;
+            view.stepDirection = 1;
             view.selection[dim] = ((view.selection[dim] || 0) + 1) % size;
             const slider = this._griddedEl('time');
             if (slider) slider.value = String(view.selection[dim]);
@@ -1859,6 +1863,79 @@ export function installGriddedMethods(TargetClass) {
         }
         view.playing = false;
         this._griddedSyncTimeLabel(view);
+    };
+
+    // Maps already read, by variable and selection, newest last: stepping
+    // back and forth, or a loop played again, costs no read. Bounded by
+    // bytes, so a global 0.25° grid keeps a dozen and a regional one more.
+    const MAP_CACHE_BYTES = 64 * 1024 * 1024;
+
+    // The dataset is in the key: a view reopened on new files reads anew.
+    // An index left out is 0, so `{}` and `{ valid_time: 0 }` are one map.
+    const mapKey = (view, request) => JSON.stringify([view.datasetId, request.variable,
+        Object.entries(request.selection || {}).filter(([, index]) => Number(index) !== 0).sort()]);
+
+    proto._griddedCachedMap = function(view, request) {
+        const cache = view.mapCache;
+        const key = mapKey(view, request);
+        const map = cache?.get(key);
+        if (!map) return null;
+        cache.delete(key);
+        cache.set(key, map);
+        return map;
+    };
+
+    proto._griddedRememberMap = function(view, request, map) {
+        if (!view.mapCache) view.mapCache = new Map();
+        const cache = view.mapCache;
+        cache.set(mapKey(view, request), map);
+        let bytes = 0;
+        for (const item of cache.values()) bytes += item.values?.byteLength || 0;
+        for (const [key, item] of cache) {
+            if (bytes <= MAP_CACHE_BYTES || cache.size <= 2) break;
+            bytes -= item.values?.byteLength || 0;
+            cache.delete(key);
+        }
+    };
+
+    proto._griddedFetchMap = async function(view, request) {
+        const key = mapKey(view, request);
+        // The step read ahead may still be on its way: wait for it rather
+        // than read it a second time.
+        if (view.prefetch?.key === key) {
+            const map = await view.prefetch.promise.catch(() => null);
+            if (map) return map;
+        }
+        const map = await griddedClient().request('map', { datasetId: view.datasetId, ...request }).promise;
+        this._griddedRememberMap(view, request, map);
+        return map;
+    };
+
+    /**
+     * Reads the next time step ahead, in the direction the slider or the
+     * player last moved, while the one on screen is looked at: the next
+     * step then only has to be drawn. Not while a series is being read,
+     * which has the worker's attention.
+     */
+    proto._griddedPrefetchNext = function(view, request) {
+        const dim = this._griddedTimeDim(view);
+        if (!dim || view.job || !request?.variable) return;
+        const size = view.model.axes[dim]?.size || 0;
+        const current = Number(request.selection?.[dim]) || 0;
+        let next = current + (view.stepDirection || 1);
+        if (view.playing) next = ((next % size) + size) % size;
+        if (next < 0 || next >= size || next === current) return;
+        const ahead = { variable: request.variable, selection: { ...request.selection, [dim]: next } };
+        const key = mapKey(view, ahead);
+        if (view.mapCache?.has(key) || view.prefetch?.key === key) return;
+        const promise = griddedClient().request('map', { datasetId: view.datasetId, ...ahead }).promise.then(map => {
+            this._griddedRememberMap(view, ahead, map);
+            return map;
+        });
+        view.prefetch = { key, promise };
+        promise.catch(() => null).finally(() => {
+            if (view.prefetch?.key === key) view.prefetch = null;
+        });
     };
 
     // Requests coalesce: while a map is being read, only the latest selection
@@ -1873,9 +1950,12 @@ export function installGriddedMethods(TargetClass) {
                     view.requestedMap = null;
                     if (!request.variable) break;
                     try {
-                        const map = await griddedClient().request('map', { datasetId: view.datasetId, ...request }).promise;
+                        const map = this._griddedCachedMap(view, request)
+                            || await this._griddedFetchMap(view, request);
                         view.map = map;
                         view.mapFor = request;
+                        // The next step is read while this one is drawn.
+                        if (!view.requestedMap) this._griddedPrefetchNext(view, request);
                         if (view.scale.follow || !view.scale.range) this._griddedSyncScale(view);
                         if (this._griddedVisibleView() === view) await this._griddedDrawMap(view);
                     } catch (error) {
