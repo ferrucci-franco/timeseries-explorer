@@ -24,6 +24,7 @@ import {
 } from '../../parsers/audio-limits.js';
 
 import WorkerPool, { canUseWorkers, spawnWorker } from '../../core/worker-pool.js';
+import { GRIB_EXTENSIONS } from '../constants.js';
 import { checkDecodedAudioLimit, checkFullLoadLimit, checkLoadedNetcdfLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
 import {
@@ -1690,6 +1691,12 @@ proto._isPypsaNetcdfExtension = function(extension) {
     return extension === '.nc' || extension === '.nc4' || extension === '.netcdf' || extension === '.cdf';
 };
 
+// What the desktop fetches from its local server rather than through IPC:
+// the files the map reads by parts.
+proto._isDesktopFetchedByPartsExtension = function(extension) {
+    return this._isPypsaNetcdfExtension(extension) || GRIB_EXTENSIONS.includes(extension) || extension === '.zip';
+};
+
 proto._isPickleExtension = function(extension) {
     return extension === '.pkl' || extension === '.pickle';
 };
@@ -1871,12 +1878,13 @@ proto._readLocalResultPath = async function(filePath) {
         }
     }
 
-    // netCDF on the desktop: fetched from the local server as a Blob, which
-    // the browser keeps on disk past its memory budget, instead of through IPC
-    // into one buffer. A gridded file is then read by parts from that Blob, so
-    // a multi-GB ERA5 month opens without the full-load question; a series
-    // file still gets the question, from loadFile, before it is read whole.
-    if (this.capabilities?.isDesktop && this._isPypsaNetcdfExtension(this._fileExtension(filePath))) {
+    // netCDF, GRIB and the CDS ZIP on the desktop: fetched from the local
+    // server as a Blob, which the browser keeps on disk past its memory
+    // budget, instead of through IPC into one buffer. A gridded file is then
+    // read by parts from that Blob, so a multi-GB ERA5 month opens without the
+    // full-load question; a series file still gets the question, from
+    // loadFile, before it is read whole.
+    if (this.capabilities?.isDesktop && this._isDesktopFetchedByPartsExtension(this._fileExtension(filePath))) {
         try {
             const origin = globalThis.location?.origin || '';
             const response = await fetch(`${origin}${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`, { cache: 'no-store' });
@@ -1884,7 +1892,8 @@ proto._readLocalResultPath = async function(filePath) {
                 const blob = await response.blob();
                 const name = String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'dataset.nc';
                 const lastModified = Number(response.headers.get('x-omv-last-modified')) || Date.now();
-                return new File([blob], name, { lastModified, type: 'application/x-netcdf' });
+                const type = this._isPypsaNetcdfExtension(this._fileExtension(filePath)) ? 'application/x-netcdf' : 'application/octet-stream';
+                return new File([blob], name, { lastModified, type });
             }
         } catch (err) {
             console.warn('[netcdf] local fetch failed, reading through IPC instead:', err?.message || err);
