@@ -1063,8 +1063,18 @@ export function installGriddedMethods(TargetClass) {
         // Plotly only follows window resizes on its own.
         if (typeof ResizeObserver === 'function') {
             let mapFrame = 0;
+            const main = root.querySelector('.gridded-main');
+            const mapDiv = root.querySelector('[data-role="map"]');
             const observer = new ResizeObserver(entries => {
                 for (const entry of entries) {
+                    if (entry.target === main) {
+                        // The room the map may take: a phone's sheet that
+                        // closes, or the address bar that goes, gives it
+                        // back. The map's own size follows, and its redraw.
+                        const view = this._griddedVisibleView();
+                        if (view && entry.contentRect.height > 0) this._griddedFitPhoneHeight(view, mapDiv);
+                        continue;
+                    }
                     if (!entry.target._fullLayout || !(entry.contentRect.width > 0) || !(entry.contentRect.height > 0)) continue;
                     if (entry.target.dataset.role !== 'map') {
                         Plotly.Plots.resize(entry.target);
@@ -1090,8 +1100,9 @@ export function installGriddedMethods(TargetClass) {
                     });
                 }
             });
-            observer.observe(root.querySelector('[data-role="map"]'));
+            observer.observe(mapDiv);
             observer.observe(root.querySelector('[data-role="preview-chart"]'));
+            if (main) observer.observe(main);
         }
         this._griddedRefreshTexts();
         return root;

@@ -4544,8 +4544,13 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         mapBtn.classList.toggle('active', !!entryData.gridded && this._gridded?.visibleFileId === fileId);
         mapBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (this._gridded?.visibleFileId === fileId) this._hideGriddedView();
-            else this._showGriddedView(fileId);
+            if (this._gridded?.visibleFileId === fileId) {
+                this._hideGriddedView();
+                return;
+            }
+            // On a phone the Data sheet covers half the map: it gives way.
+            if (this._compact?.sheet) this._closeCompactSheet();
+            this._showGriddedView(fileId);
         });
 
         const closeBtn = document.createElement('button');
