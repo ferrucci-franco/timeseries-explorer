@@ -731,6 +731,58 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
     assert.equal(await page.locator('.compact-page-plot .compact-trace-name', { hasText: 'voltage / current' }).count(), 1, 'the Plot sheet lists the pair');
     await shot(page, '2d-plot-sheet');
+
+    // ── Correlation: the analysis made of those pairs ───────────────────────
+    const corrPairs = () => page.evaluate(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return { mode: plot?.mode, pairs: (plot?.phaseTraces || []).map(p => [p.x, p.y]) };
+    });
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    await page.locator('.compact-radio', { hasText: 'Correlation' }).click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'correlation');
+    assert.equal(await page.locator('.modal-overlay').count(), 0, 'turning an analysis of the 2D family on asks nothing');
+    assert.deepEqual(await corrPairs(), { mode: 'correlation', pairs: [['voltage', 'current']] }, 'and keeps the pair');
+    await page.waitForFunction(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return !!plot?.correlationOptionsEl && document.querySelector('.compact-sheet')?.contains(plot.correlationOptionsEl);
+    }, null, { timeout: 15000 });
+    await page.waitForFunction(() => /r=/.test(document.querySelector('.compact-sheet .correlation-pair-r')?.textContent || ''), null, { timeout: 30000 });
+    assert.equal(await page.locator('.correlation-container .fft-topbar-group').first().isVisible(), false,
+        'its own buttons are in the sheet, not over the plot');
+    assert.ok(await page.locator('.compact-page-analyze .compact-secondary-btn', { hasText: 'V/H' }).isVisible(), 'its layout switch is');
+    assert.deepEqual(await sizeProblems(), [], 'the correlation options are phone-sized');
+    assert.deepEqual(await sidewaysProblems(page), [], 'and fit the width');
+    await shot(page, 'analyze-correlation');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    assert.equal(await page.evaluate(() => !!document.querySelector('.correlation-container .fft-workspace > .correlation-options')), true,
+        'closing the sheet gives correlation its options panel back');
+    await page.waitForTimeout(400);
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            const axes = div => [...div.querySelectorAll('.compact-fit-btn[data-axis]')].filter(btn => !btn.hidden).map(btn => btn.dataset.axis);
+            return { time: axes(plot.div), results: axes(plot.correlationDiv) };
+        }),
+        { time: ['x', 'y', 'all'], results: [] },
+        'the pair pane fits; the r results, fixed between -1 and 1, have nothing to fit',
+    );
+    await shot(page, 'correlation');
+    // A plot carrying an analysis is still that plot.
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    assert.equal(await page.locator('.compact-plot-types [data-plot-type="phase2d"]').getAttribute('aria-checked'), 'true',
+        'the Plot sheet still reads 2D under correlation');
+    assert.equal(await page.locator('.compact-page-plot .compact-trace-name', { hasText: 'voltage / current' }).count(), 1,
+        'and still lists the pair');
+    // Turning it off leaves the 2D plot the pair belongs to, not an empty time series.
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    await page.locator('.compact-radio', { hasText: '2D plot' }).click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'phase2d');
+    assert.equal(await page.locator('.modal-overlay').count(), 0, 'and asks nothing on the way back');
+    assert.deepEqual(await corrPairs(), { mode: 'phase2d', pairs: [['voltage', 'current']] }, 'with the pair still there');
+    assert.equal(await page.locator('.compact-sheet .correlation-options').count(), 0, 'and its options panel gone from the sheet');
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+
     await page.locator('.compact-page-plot .compact-trace-remove').first().click();
     await page.waitForFunction(() => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phaseTraces?.length);
     // Back to a time series, empty: nothing to confirm.

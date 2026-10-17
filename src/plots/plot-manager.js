@@ -2307,9 +2307,12 @@ class PlotManager {
                 if (plot.correlationDiv) Plotly.purge(plot.correlationDiv);
                 Plotly.purge(plot.div);
                 correlationContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.correlationOptionsEl?.remove();
                 plot.div = null;
                 plot.correlationDiv = null;
                 plot.correlationContainer = null;
+                plot.correlationOptionsEl = null;
             } else if (integralContainer) {
                 if (plot.integralDiv) Plotly.purge(plot.integralDiv);
                 if (plot.integralPieDiv) Plotly.purge(plot.integralPieDiv);

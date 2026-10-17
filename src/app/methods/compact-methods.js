@@ -23,8 +23,8 @@ import { button, el, section } from './compact-dom.js';
 import {
     COMPACT_ANALYSES,
     COMPACT_ANALYSIS_PANES,
-    COMPACT_ANALYSIS_PANE_MODE,
     COMPACT_FIT_MODES,
+    COMPACT_PAIR_MODES,
     COMPACT_SIGNAL_LIST_MODES,
     COMPACT_WINDOW_ZOOM_MODES,
     compactAnalysis,
@@ -110,8 +110,13 @@ const COMPACT_PLOT_TYPES = [
 
 // Plots built from signals in roles, one tap per role: x then y (then z)
 // for a curve, x₁ x₂ (x₃) for an animation's state. 2D + t pairs x and y
-// like 2D, and draws them in a 3D scene along time.
-const PHASE_MODES = new Set(['phase2d', 'phase2dt', 'phase3d']);
+// like 2D, and draws them in a 3D scene along time. The analyses made from
+// the same pairs (compact-analyses.js) read and edit them the same way.
+const PAIR_MODES = new Set(['phase2d', 'phase2dt', 'phase3d', ...COMPACT_PAIR_MODES]);
+
+// The 2D plot and the analyses of its pairs: switching inside this family
+// keeps them, as the desktop's Correlation toggle does.
+const PHASE2D_FAMILY = new Set(['phase2d', ...COMPACT_PAIR_MODES]);
 const STATE_SLOT_LABELS = ['x₁', 'x₂', 'x₃'];
 
 // What a plot is, rather than an analysis of it.
@@ -691,9 +696,15 @@ export function installCompactMethods(ViewerClass) {
             };
         }
         let group = div._compactFitGroup;
+        // The analysis pane this div is, when it is the one its mode draws now
+        // (a div left over from another mode is nobody's).
+        const ownPane = compactAnalysis(owner?.plot?.mode)?.pane;
+        const analysisPane = ownPane?.name === owner?.pane ? ownPane : null;
         const wanted = !!owner
             && FIT_BUTTON_MODES.has(owner.plot.mode)
-            && (owner.pane === 'main' || COMPACT_ANALYSIS_PANE_MODE[owner.pane] === owner.plot.mode)
+            // Its own pane fits only where there is something to fit:
+            // correlation's results are r against a fixed [-1, 1].
+            && (owner.pane === 'main' ? true : !!analysisPane?.fit)
             && this.plotManager._hasContent(owner.plot)
             && !!div._fullLayout;
         if (!wanted) {
@@ -713,10 +724,8 @@ export function installCompactMethods(ViewerClass) {
         group.hidden = false;
         // A pane with nothing to fit on one axis (the Heatmap's calendar rows)
         // does not offer that button, as the desktop toolbar does not either.
-        const analysisPane = compactAnalysis(owner.plot.mode)?.pane;
-        const noFitY = analysisPane?.name === owner.pane && analysisPane.fitY === false;
         const yBtn = group.querySelector('[data-axis="y"]');
-        if (yBtn) yBtn.hidden = noFitY;
+        if (yBtn) yBtn.hidden = analysisPane?.fitY === false;
         this._compactSyncCursorButton(group, owner);
         // The corner of the plotting area, not of the div: clear of the axis
         // labels on the right and of a legend placed above the plot.
@@ -733,11 +742,15 @@ export function installCompactMethods(ViewerClass) {
         const relayout = (update) => (update && Object.keys(update).length ? Plotly.relayout(div, update) : Promise.resolve());
         const analysis = compactAnalysis(plot.mode);
         let work;
+        const ctx = { pm, panelId, plot, div, relayout };
         if (analysis?.pane?.name === pane && analysis.pane.fit) {
             // The analysis's own pane: each has its own axis conventions, which
             // its entry in compact-analyses.js states.
-            const ctx = { pm, panelId, plot, div, relayout };
             work = () => analysis.pane.fit(ctx, axis);
+        } else if (analysis?.mainFit && pane === 'main') {
+            // An analysis whose time pane is not drawn from plot.traces fits it
+            // its own way.
+            work = () => analysis.mainFit(ctx, axis);
         } else if (analysis?.pane) {
             // The time pane beside the analysis is the timeseries chart.
             work = axis === 'all'
@@ -1039,6 +1052,10 @@ export function installCompactMethods(ViewerClass) {
         if (plot.mode === mode && sameAnim) return;
         if (TIME_FAMILY.has(plot.mode) && TIME_FAMILY.has(mode)) {
             pm._requestModeChange(panelId, mode);
+        } else if (PHASE2D_FAMILY.has(plot.mode) && PHASE2D_FAMILY.has(mode)) {
+            // Turning an analysis of the 2D family on or off: the pairs are
+            // the same pairs, so nothing is cleared and nothing is asked.
+            pm._setMode(panelId, mode);
         } else {
             if (pm._hasContent(plot)) {
                 const ok = await Modal.confirm(i18n.t('modeChangeClearsTracesWarning'), { icon: '⚠' });
@@ -1071,13 +1088,16 @@ export function installCompactMethods(ViewerClass) {
                 .replace('{y}', this._compactVarLabel(pending.y, pending.fileId));
         }
         if (pending?.x) return i18n.t('compactPendingY').replace('{x}', this._compactVarLabel(pending.x, pending.fileId));
+        // An analysis of the pair family says what its own pairs are for.
+        const analysisHint = compactAnalysis(plot?.mode)?.pairHintKey;
+        if (analysisHint) return i18n.t(analysisHint);
         return i18n.t(plot?.mode === 'phase3d' ? 'compactPhaseHint3d'
             : plot?.mode === 'phase2dt' ? 'compactPhaseHint2dt'
             : 'compactPhaseHint');
     };
 
     // Does this plot take its signals in roles (x, y, z; x₁, x₂, x₃)?
-    const usesRoles = (plot) => PHASE_MODES.has(plot?.mode) || plot?.mode === 'state-anim';
+    const usesRoles = (plot) => PAIR_MODES.has(plot?.mode) || plot?.mode === 'state-anim';
 
     proto._compactVarLabel = function(varName, fileId) {
         const variable = this.plotManager.files.get(fileId || this.activeFileId)?.data?.variables?.[varName];
@@ -1092,7 +1112,7 @@ export function installCompactMethods(ViewerClass) {
         banner.hidden = !show;
         if (!show) return;
         banner.querySelector('.compact-phase-text').textContent = this._compactPhaseHint(plot);
-        banner.querySelector('.compact-phase-cancel').hidden = !(PHASE_MODES.has(plot.mode) && plot.phasePending?.x);
+        banner.querySelector('.compact-phase-cancel').hidden = !(PAIR_MODES.has(plot.mode) && plot.phasePending?.x);
     };
 
     proto._compactCancelPhasePending = function() {
@@ -1167,7 +1187,7 @@ export function installCompactMethods(ViewerClass) {
         const ownerId = fileId || this.activeFileId;
         const index = (plot?.traces || []).findIndex(trace => trace.varName === varName && trace.fileId === ownerId);
         const pending = plot?.phasePending;
-        if (PHASE_MODES.has(plot?.mode) && pending?.x
+        if (PAIR_MODES.has(plot?.mode) && pending?.x
             && (pending.x === varName || pending.y === varName)
             && (pending.fileId || this.activeFileId) === ownerId) {
             // A signal of the curve still being chosen, tapped again: changed
@@ -1313,7 +1333,7 @@ export function installCompactMethods(ViewerClass) {
             if (!list.includes(role)) list.push(role);
             roles.set(key, list);
         };
-        if (PHASE_MODES.has(plot?.mode)) {
+        if (PAIR_MODES.has(plot?.mode)) {
             for (const curve of plot.phaseTraces || []) {
                 addRole(curve.fileId, curve.x, 'x');
                 addRole(curve.fileId, curve.y, 'y');
@@ -1324,7 +1344,7 @@ export function installCompactMethods(ViewerClass) {
         }
         // The curve still being chosen: its signals, marked as waiting.
         const pending = new Map();
-        if (PHASE_MODES.has(plot?.mode) && plot.phasePending?.x) {
+        if (PAIR_MODES.has(plot?.mode) && plot.phasePending?.x) {
             const fileId = plot.phasePending.fileId || this.activeFileId;
             pending.set(`${fileId}\u0000${plot.phasePending.x}`, 'x …');
             if (plot.phasePending.y) pending.set(`${fileId}\u0000${plot.phasePending.y}`, 'y …');
@@ -1494,7 +1514,10 @@ export function installCompactMethods(ViewerClass) {
         typeRow.setAttribute('role', 'radiogroup');
         const currentMode = plot?.mode || 'timeseries';
         for (const type of COMPACT_PLOT_TYPES) {
+            // A plot carrying an analysis is still that plot: a time series
+            // under FFT, a 2D plot under correlation.
             const selected = type.mode === 'timeseries' ? TIME_FAMILY.has(currentMode)
+                : type.mode === 'phase2d' ? PHASE2D_FAMILY.has(currentMode)
                 : type.mode === 'state-anim' ? currentMode === 'state-anim' && (plot?.stateAnimDim || 2) === type.dim
                 : currentMode === type.mode;
             const btn = button(`compact-list-btn compact-radio${selected ? ' is-active' : ''}`, i18n.t(type.labelKey), () => {
@@ -1543,7 +1566,7 @@ export function installCompactMethods(ViewerClass) {
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
         const traces = plot?.traces || [];
-        if (PHASE_MODES.has(mode)) {
+        if (PAIR_MODES.has(mode)) {
             this._buildCompactPhasePairs(signals, panelId, plot);
         } else if (mode === 'state-anim') {
             this._buildCompactStateSlots(signals, panelId, plot);
@@ -1616,7 +1639,10 @@ export function installCompactMethods(ViewerClass) {
                     .filter(Boolean).map(name => this._compactVarLabel(name, pair.fileId)).join(' / ');
                 const name = el('span', 'compact-trace-name', label);
                 const remove = button('compact-icon-btn compact-trace-remove', '', async () => {
-                    await pm._removePhaseTraceFromLegend(panelId, plot, pair);
+                    // An analysis of the pair family takes a pair off its own way.
+                    const removePair = compactAnalysis(plot.mode)?.removePair;
+                    if (removePair) removePair({ pm, panelId, plot }, pair);
+                    else await pm._removePhaseTraceFromLegend(panelId, plot, pair);
                     this._compactSyncTreeMarks();
                     this._compactUpdateAppBar();
                     this._renderCompactSheetContent();
@@ -1769,15 +1795,21 @@ export function installCompactMethods(ViewerClass) {
             current.appendChild(el('span', 'compact-btn-label', this._compactPanelSummary(panelId).modeLabel));
             list.appendChild(current);
         }
+        // Leaving an analysis goes back to the plot it was made from: the time
+        // series, or — for correlation — the 2D plot whose pairs it reads.
+        const active = compactAnalysis(mode);
         for (const analysis of COMPACT_ANALYSES) {
-            const selected = mode === analysis.mode;
-            const item = button(`compact-list-btn compact-radio${selected ? ' is-active' : ''}`, i18n.t(analysis.labelKey), () => {
+            const isOff = !analysis.options;
+            const target = isOff ? (active?.offMode || analysis.mode) : analysis.mode;
+            const label = i18n.t(isOff && active?.offMode ? active.offLabelKey : analysis.labelKey);
+            const selected = mode === target;
+            const item = button(`compact-list-btn compact-radio${selected ? ' is-active' : ''}`, label, () => {
                 if (!panelId || selected) return;
                 restoreOptions?.();
                 restoreOptions = null;
                 // The new chart, and the options panel it lends to this
                 // sheet, are built asynchronously; the switch re-renders.
-                this._compactSetPlotMode(analysis.mode);
+                this._compactSetPlotMode(target);
             });
             item.setAttribute('role', 'radio');
             item.setAttribute('aria-checked', String(selected));

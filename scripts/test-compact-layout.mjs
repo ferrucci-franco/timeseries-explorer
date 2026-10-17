@@ -17,8 +17,8 @@ import { compactPlotLayout, compactPlotRelayout } from '../src/utils/compact-plo
 import {
     COMPACT_ANALYSES,
     COMPACT_ANALYSIS_PANES,
-    COMPACT_ANALYSIS_PANE_MODE,
     COMPACT_FIT_MODES,
+    COMPACT_PAIR_MODES,
     COMPACT_SIGNAL_LIST_MODES,
     COMPACT_WINDOW_ZOOM_MODES,
     compactAnalysis,
@@ -176,8 +176,16 @@ assert.equal(isLandscapeViewport(390, 844), false);
     for (const entry of COMPACT_ANALYSES) {
         assert.ok(entry.labelKey, `${entry.mode} has a label for its radio in the Analyze sheet`);
         assert.equal(compactAnalysis(entry.mode), entry, `${entry.mode} is found by its mode`);
+        assert.ok(!(entry.signals && entry.pairs), `${entry.mode} takes signals or pairs, not both`);
         if (entry.signals) {
             assert.equal(typeof entry.removeTrace, 'function', `${entry.mode} says how a tap in Data takes a signal off it`);
+        }
+        if (entry.pairs) {
+            assert.equal(typeof entry.removePair, 'function', `${entry.mode} says how one of its pairs comes off`);
+            // Its plot is not a time series, so the sheet needs the mode to go
+            // back to, and what to call it, when the analysis is turned off.
+            assert.ok(entry.offMode && entry.offLabelKey, `${entry.mode} says what turning it off leaves`);
+            assert.ok(entry.pairHintKey, `${entry.mode} says what its pairs are for`);
         }
         if (entry.mode === 'timeseries') continue;
         // Every analysis lends an options panel to the sheet, under a title,
@@ -187,8 +195,9 @@ assert.equal(isLandscapeViewport(390, 844), false);
         assert.ok(entry.reset?.labelKey && entry.reset?.titleKey && typeof entry.reset.run === 'function',
             `${entry.mode} has its reset, for the Analyze and the Plot sheet`);
         assert.equal(typeof entry.actions, 'function', `${entry.mode} lists the rest of its top bar`);
-        assert.ok(entry.pane?.name && entry.pane?.div, `${entry.mode} names the pane it draws beside its time series`);
-        assert.equal(typeof entry.pane.fit, 'function', `${entry.pane.name} says how its own axes are fitted`);
+        assert.ok(entry.pane?.name && entry.pane?.div, `${entry.mode} names the pane it draws beside its time pane`);
+        assert.ok(entry.pane.fit === null || typeof entry.pane.fit === 'function',
+            `${entry.pane.name} says how its own axes are fitted, or that nothing on it can be`);
     }
 
     const paneNames = COMPACT_ANALYSIS_PANES.map(pane => pane.name);
@@ -196,13 +205,23 @@ assert.equal(isLandscapeViewport(390, 844), false);
     assert.ok(!paneNames.includes('main'), '"main" is the time pane, which no analysis owns');
     const paneDivs = COMPACT_ANALYSIS_PANES.map(pane => pane.div);
     assert.deepEqual(paneDivs, [...new Set(paneDivs)], 'nor hold their div in the same property');
-    assert.equal(COMPACT_ANALYSIS_PANE_MODE.calendar, 'heatmap');
-    assert.equal(COMPACT_ANALYSIS_PANE_MODE.spectrum, 'fft');
+    assert.equal(COMPACT_ANALYSIS_PANES.find(pane => pane.name === 'calendar')?.mode, 'heatmap');
+    assert.equal(COMPACT_ANALYSIS_PANES.find(pane => pane.name === 'spectrum')?.mode, 'fft');
 
     // Derived, not written twice.
     assert.deepEqual([...COMPACT_SIGNAL_LIST_MODES], COMPACT_ANALYSES.filter(e => e.signals).map(e => e.mode));
     assert.deepEqual([...COMPACT_FIT_MODES], COMPACT_ANALYSES.filter(e => e.fit).map(e => e.mode));
     assert.deepEqual([...COMPACT_WINDOW_ZOOM_MODES], COMPACT_ANALYSES.filter(e => e.windowZoom).map(e => e.mode));
+    assert.deepEqual([...COMPACT_PAIR_MODES], ['correlation'], 'correlation is the analysis made of pairs');
+    // Its results pane is r against a fixed [-1, 1]: no fit buttons there, and
+    // its time pane, drawn from the pairs, fits itself.
+    assert.equal(compactAnalysis('correlation').pane.fit, null);
+    assert.equal(typeof compactAnalysis('correlation').mainFit, 'function');
+    assert.equal(compactAnalysis('correlation').offMode, 'phase2d');
+    for (const mode of ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']) {
+        assert.equal(compactAnalysis(mode).offMode, undefined, `${mode} turns off to the time series`);
+        assert.equal(compactAnalysis(mode).mainFit, undefined, `${mode} shares the time-pane fit`);
+    }
     // The Heatmap's rows are a fixed calendar axis, and its calendar is not a
     // time axis to draw a window across.
     assert.equal(compactAnalysis('heatmap').pane.fitY, false);

@@ -206,6 +206,59 @@ export const COMPACT_ANALYSES = [
             ];
         },
     },
+    {
+        // The analysis of the 2D family: its signals come in pairs, and an r
+        // for each. Shown in the Analyze sheet beside the others, where
+        // turning it off leaves the 2D plot the pairs belong to.
+        mode: 'correlation',
+        labelKey: 'modeCorrelationLabel',
+        pairs: true,
+        offMode: 'phase2d',
+        offLabelKey: 'compactAnalysisNone2d',
+        pairHintKey: 'compactCorrelationHint',
+        fit: true,
+        windowZoom: true,
+        removePair: ({ pm, panelId, plot }, pair) => pm._removeCorrelationPairFromLegend(panelId, plot, pair),
+        pane: {
+            name: 'correlation',
+            div: 'correlationDiv',
+            windowZoom: false,
+            // The results pane is r against the pairs: a fixed [-1, 1] and a
+            // row per pair, so there is nothing to fit and no buttons on it.
+            fit: null,
+        },
+        // Its time pane draws the pairs, not plot.traces, so the time-pane fit
+        // the other analyses share has nothing to read; the desktop's own
+        // buttons fit it this way.
+        mainFit: ({ pm, plot }, axis) => (axis === 'all'
+            ? pm._autoScaleCorrelationTime(plot)
+            : pm._autoScaleCorrelationAxis(plot, axis)),
+        optionsTitleKey: 'compactCorrelationOptions',
+        options: ({ pm, plot }) => pm._correlationOptionsPanel(plot),
+        reset: { labelKey: 'fftResetLabel', titleKey: 'fftResetView', run: ({ pm, panelId }) => pm._resetCorrelationView(panelId) },
+        actions: ({ pm, panelId, plot, refresh }) => {
+            const state = pm._ensureCorrelationState(plot);
+            const actions = [
+                { label: 'V/H', titleKey: 'fftLayoutToggle', run: () => pm._setCorrelationLayout(panelId, flip(state.layout)) },
+                {
+                    labelKey: 'hideTimeSeries',
+                    titleKey: 'hideTimeSeriesTooltip',
+                    pressed: !!state.timeSeriesHidden,
+                    run: () => { pm._toggleCorrelationTimeSeries(panelId); refresh(); },
+                },
+            ];
+            // Only while a lazy pair is stale after a live append, as on the
+            // desktop top bar the phone hides.
+            if (state.dirty) {
+                actions.push({
+                    labelKey: 'correlationRefresh',
+                    titleKey: 'correlationRefreshTooltip',
+                    run: () => { pm._refreshDirtyCorrelation(panelId); refresh(); },
+                });
+            }
+            return actions;
+        },
+    },
 ];
 
 const BY_MODE = new Map(COMPACT_ANALYSES.map(entry => [entry.mode, entry]));
@@ -231,9 +284,11 @@ export const COMPACT_ANALYSIS_PANES = COMPACT_ANALYSES
     .filter(entry => entry.pane)
     .map(entry => ({ mode: entry.mode, ...entry.pane }));
 
-// Pane name → the mode that draws it.
-export const COMPACT_ANALYSIS_PANE_MODE = Object.fromEntries(
-    COMPACT_ANALYSIS_PANES.map(pane => [pane.name, pane.mode]),
+// The analyses built from pairs of signals rather than from signals of their
+// own: a tap in Data gives one an x, then a y, and the phone lists its pairs
+// where it lists a time series' signals.
+export const COMPACT_PAIR_MODES = new Set(
+    COMPACT_ANALYSES.filter(entry => entry.pairs).map(entry => entry.mode),
 );
 
 // Where a slow double tap draws a window: the modes with a time axis.

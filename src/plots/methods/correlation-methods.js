@@ -276,6 +276,10 @@ export function installPlotCorrelationMethods(TargetClass) {
         plot.correlationContainer = container;
         plot.correlationDiv = resultDiv;
         plot.div = timeDiv;
+        // Kept on the plot, not looked up through the container: the phone's
+        // Analyze sheet borrows this panel, and while it is lent out it is no
+        // longer a child of the workspace.
+        plot.correlationOptionsEl = options;
 
         this._renderCorrelationOptionsPanel(panelId, plot);
 
@@ -906,7 +910,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         const state = this._ensureCorrelationState(plot);
         state.optionsVisible = !state.optionsVisible;
         syncEdgeToggle(plot.correlationContainer, !state.optionsVisible);
-        const options = plot.correlationContainer.querySelector('.correlation-options');
+        const options = this._correlationOptionsPanel(plot);
         if (options) options.hidden = !state.optionsVisible;
         const btn = plot.correlationContainer.querySelector('.fft-options-btn');
         if (btn) {
@@ -955,8 +959,12 @@ export function installPlotCorrelationMethods(TargetClass) {
     };
 
     // ── Right drawer (options panel) ───────────────────────────────
+    proto._correlationOptionsPanel = function(plot) {
+        return plot?.correlationOptionsEl || plot?.correlationContainer?.querySelector('.correlation-options') || null;
+    };
+
     proto._renderCorrelationOptionsPanel = function(panelId, plot = this.plots.get(panelId)) {
-        const panel = plot?.correlationContainer?.querySelector('.correlation-options');
+        const panel = this._correlationOptionsPanel(plot);
         if (!panel) return;
         const state = this._ensureCorrelationState(plot);
         const results = plot._correlationResults || [];
@@ -1227,7 +1235,7 @@ export function installPlotCorrelationMethods(TargetClass) {
     };
 
     proto._syncCorrelationRangeInputs = function(plot, options = {}) {
-        const panel = plot?.correlationContainer?.querySelector('.correlation-options');
+        const panel = this._correlationOptionsPanel(plot);
         if (!panel) return;
         const state = this._ensureCorrelationState(plot);
         const usesCalendar = this._correlationUsesCalendarTime(plot);

@@ -2008,6 +2008,31 @@ html.compact .compact-sheet .heatmap-summary * {
     font-size: 14px;
 }
 
+/* Correlation reuses the FFT shell, so its top bar and its drawer are already
+   handled above; what it draws inside the drawer is its own: the section
+   titles, the pair list with its r and its two icon actions, and the notes. */
+html.compact .compact-sheet .correlation-options .fft-options-section h4 {
+    font-size: 14px;
+}
+
+html.compact .compact-sheet .correlation-pair-item {
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 15px;
+}
+
+html.compact .compact-sheet .correlation-pair-btn {
+    min-width: 44px;
+}
+
+html.compact .compact-sheet .correlation-pending-hint,
+html.compact .compact-sheet .correlation-warning,
+html.compact .compact-sheet .correlation-message,
+html.compact .compact-sheet .correlation-message *,
+html.compact .compact-sheet .correlation-empty {
+    font-size: 14px;
+}
+
 /* Text that was 11–13 px. */
 html.compact .compact-section-title,
 html.compact .compact-plot-mode,
