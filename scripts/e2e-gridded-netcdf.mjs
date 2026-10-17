@@ -750,6 +750,32 @@ try {
         assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'pause');
         await page.click('#gridded-view [data-step="play"]');
         assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'play');
+        // Moving the map pauses Play: a drag (the right button pans in every
+        // tool) and a turn of the wheel.
+        {
+            const playing = () => page.evaluate(() => window.app._griddedVisibleView().playing);
+            const centre = await page.evaluate(() => {
+                const div = document.querySelector('#gridded-view .gridded-map');
+                const { xaxis, yaxis } = div._fullLayout;
+                const rect = div.getBoundingClientRect();
+                return [rect.left + xaxis._offset + xaxis._length / 2, rect.top + yaxis._offset + yaxis._length / 2];
+            });
+            await page.click('#gridded-view [data-step="play"]');
+            assert.equal(await playing(), true);
+            await page.mouse.move(...centre);
+            await page.mouse.down({ button: 'right' });
+            await page.mouse.move(centre[0] + 60, centre[1] + 20, { steps: 6 });
+            assert.equal(await playing(), false, 'a pan pauses Play, while the map still moves');
+            await page.mouse.up({ button: 'right' });
+            assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'play', 'and the button says so');
+            await page.click('#gridded-view [data-step="play"]');
+            assert.equal(await playing(), true);
+            await page.mouse.move(...centre);
+            await page.mouse.wheel(0, -200);
+            await page.waitForFunction(() => !window.app._griddedVisibleView().playing, null, { timeout: 3000 });
+            await page.dblclick('#gridded-view .gridded-map .nsewdrag');
+            await page.waitForTimeout(400);
+        }
 
         // Reload reopens the dataset on its map; it is never reparsed as series.
         await page.evaluate(() => window.app.reloadActiveFile());
@@ -963,6 +989,15 @@ try {
             const framed = await mapState();
             sameSize(framed, 'a double tap');
             assert.ok(Math.abs(framed.x[0] - whole.x[0]) < 1e-6 && Math.abs(framed.y[0] - whole.y[0]) < 1e-6, 'a double tap frames the whole map again');
+            // A finger that pans pauses Play.
+            await page.evaluate(() => document.querySelector('#gridded-view [data-step="play"]').click());
+            assert.equal(await page.evaluate(() => window.app._griddedVisibleView().playing), true);
+            await swipe(at(framed, 0.5, 0.5), at(framed, 0.6, 0.55));
+            assert.equal(await page.evaluate(() => window.app._griddedVisibleView().playing), false, 'a finger that pans pauses Play');
+            await tapAt(at(framed, 0.5, 0.5));
+            await page.waitForTimeout(120);
+            await tapAt(at(framed, 0.5, 0.5));
+            await page.waitForTimeout(900);
             await page.click('#gridded-view [data-mode="region"]');
             await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
             await page.waitForTimeout(300);

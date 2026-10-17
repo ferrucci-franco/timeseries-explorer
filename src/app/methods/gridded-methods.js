@@ -1953,6 +1953,12 @@ export function installGriddedMethods(TargetClass) {
     const PLAY_MAX_SKIP = 4;
     const PLAY_STALL_INTERVALS = 4;
 
+    proto._griddedPause = function(view) {
+        if (!view.playing) return;
+        view.playing = false;
+        this._griddedSyncTimeLabel(view);
+    };
+
     proto._griddedPlayLoop = async function(view) {
         const dim = this._griddedTimeDim(view);
         // Pause and Play again within one frame left the first loop running
@@ -2935,13 +2941,25 @@ export function installGriddedMethods(TargetClass) {
             if (Date.now() - (interaction.pannedAt || 0) < 400) return;
             this._griddedOpenMenuAt(div, where);
         }, true);
+        // Moving the map pauses Play: a pan, a zoom (wheel, pinch, trackpad)
+        // or the whole map framed again is a look at a place, which the next
+        // steps would keep changing under it. Only the user moves the axes:
+        // the app redraws with Plotly.react, which says nothing here.
+        const pauseOnMove = update => {
+            const view = this._griddedVisibleView();
+            if (!view?.playing || !update) return;
+            if (Object.keys(update).some(key => /^[xy]axis\.(range|autorange)/.test(key))) this._griddedPause(view);
+        };
+        div.on('plotly_relayouting', pauseOnMove);
         div.on('plotly_doubleclick', () => {
             const view = this._griddedVisibleView();
             if (!view || view.editing) return;
+            if (view.playing) this._griddedPause(view);
             view.zoom = null;
             this._griddedDrawMap(view);
         });
         div.on('plotly_relayout', update => {
+            pauseOnMove(update);
             const view = this._griddedVisibleView();
             if (!view || !update || view.editing) return;
             const keys = Object.keys(update);
