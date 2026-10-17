@@ -478,9 +478,12 @@ proto.loadFiles = async function(items = []) {
         this._largeCsvRawApproved?.clear();
     }
 
-    // The last gridded dataset of the batch opens on its map.
+    // The last gridded dataset of the batch opens on its map. A batch with no
+    // map in it is now the active file, and the map of a file loaded before
+    // comes down: it would otherwise stay over the new file's plots.
     const lastGridded = [...loaded].reverse().find(result => result.gridded);
     if (lastGridded) this._showGriddedView(lastGridded.fileId);
+    else if (loaded.length && this._gridded?.visibleFileId) this._hideGriddedView();
 
     for (const result of loaded) {
         if (result.gridded) continue;
@@ -4209,6 +4212,9 @@ proto._releaseQueryEngineIfIdle = async function() {
 
 proto.setActiveFile = function(fileId) {
     if (!this.files.has(fileId)) return;
+    // The map belongs to its file: picking another file takes it down, or it
+    // would stay over that file's plots. Its file row's Map button reopens it.
+    if (this._gridded?.visibleFileId && this._gridded.visibleFileId !== fileId) this._hideGriddedView();
     this.plotManager.setActiveFile(fileId);
     this._clearVariableSelection();
     const d = this.plotManager.files.get(fileId)?.data;

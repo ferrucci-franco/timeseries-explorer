@@ -11,6 +11,9 @@
 // 2. The CDS ZIP (instant + accumulated variables) is listed and opened as
 //    one dataset.
 // 3. A station file stays with the series reader, unchanged.
+// 3b. The map belongs to its file: loading a file that is not a map, or
+//    picking another file, takes it down; the file row's Map button and the
+//    next map loaded bring one back.
 // 4. A GRIB file saved as ".nc" is explained, in the user's language.
 // 5. The desktop path: a netCDF or a GRIB opened by path is fetched from the
 //    same local file server Electron runs (electron/local-file-http.cjs), not
@@ -1066,6 +1069,38 @@ try {
         await page.setInputFiles('#file-input', resolve('test-files/grib/ccsds.grib2'));
         await page.waitForSelector('.modal-overlay.show', { timeout: 60000 });
         assert.match(await page.$eval('.modal-overlay.show', el => el.innerText), /CCSDS[\s\S]*grib_set/, 'CCSDS is named, with the way out');
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
+    // 3b. The map comes down when another file takes its place.
+    {
+        const { context, page, errors } = await openApp();
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'era5-like-new-cds.nc'));
+        await mapShown(page);
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'generic-timeseries-classic.nc'));
+        await page.waitForFunction(() => window.app.files.size === 2, null, { timeout: 60000 });
+        const state = () => page.evaluate(() => {
+            const app = window.app;
+            const active = app.files.get(app.plotManager.activeFileId);
+            return { map: !document.getElementById('gridded-view')?.hidden, visible: app._gridded?.visibleFileId || null, activeGridded: !!active?.gridded };
+        });
+        assert.deepEqual(await state(), { map: false, visible: null, activeGridded: false },
+            'a file that is not a map, loaded after one, is shown instead of the map');
+        const ids = await page.evaluate(() => {
+            const entries = [...window.app.files.entries()];
+            return { grid: entries.find(([, entry]) => entry.gridded)[0], station: entries.find(([, entry]) => !entry.gridded)[0] };
+        });
+        // The Map button on the gridded file's row brings the map back...
+        await page.evaluate(id => window.app._showGriddedView(id), ids.grid);
+        assert.deepEqual(await state(), { map: true, visible: ids.grid, activeGridded: true });
+        // ...and picking the other file in the list takes it down again.
+        await page.evaluate(id => window.app.setActiveFile(id), ids.station);
+        assert.deepEqual(await state(), { map: false, visible: null, activeGridded: false }, 'picking another file closes the map');
+        // Picking the gridded file itself does not take it down.
+        await page.evaluate(id => window.app._showGriddedView(id), ids.grid);
+        await page.evaluate(id => window.app.setActiveFile(id), ids.grid);
+        assert.deepEqual(await state(), { map: true, visible: ids.grid, activeGridded: true }, 'its own file keeps it');
         assert.deepEqual(errors, []);
         await context.close();
     }
