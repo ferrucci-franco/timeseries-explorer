@@ -1945,6 +1945,8 @@ export function installGriddedMethods(TargetClass) {
         const current = view.selection[dim] || 0;
         if (step === 'play') {
             view.playing = !view.playing;
+            view.held = false;
+            clearTimeout(view.holdTimer);
             this._griddedSyncTimeLabel(view);
             if (view.playing) this._griddedPlayLoop(view);
             return;
@@ -1994,10 +1996,29 @@ export function installGriddedMethods(TargetClass) {
     const PLAY_MAX_SKIP = 4;
     const PLAY_STALL_INTERVALS = 4;
 
-    proto._griddedPause = function(view) {
+    // After the last move of the map, how long Play waits to go on.
+    const PLAY_HOLD_MS = 300;
+
+    /**
+     * Play waits while the map is moved (a pan, a zoom, the whole map framed
+     * again): the next steps would change the field under the place being
+     * looked at. It goes on by itself once the hand lets go: no button held,
+     * no wheel turning, no move for a moment. Still playing all along, so the
+     * button keeps saying Pause.
+     */
+    proto._griddedHoldPlay = function(view, div) {
         if (!view.playing) return;
-        view.playing = false;
-        this._griddedSyncTimeLabel(view);
+        clearTimeout(view.holdTimer);
+        view.held = true;
+        const release = () => {
+            const wait = this._griddedInteractionWait(div);
+            if (wait > 0) {
+                view.holdTimer = setTimeout(release, wait);
+                return;
+            }
+            view.held = false;
+        };
+        view.holdTimer = setTimeout(release, PLAY_HOLD_MS);
     };
 
     proto._griddedPlayLoop = async function(view) {
@@ -2010,6 +2031,13 @@ export function installGriddedMethods(TargetClass) {
         let shown = 0;
         let speed = view.speed;
         while (view.playing && view.playRun === run && dim && this._griddedVisibleView() === view) {
+            if (view.held) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+                // From the release on, at the chosen speed: no catching up.
+                clock = performance.now();
+                shown = 0;
+                continue;
+            }
             if (view.speed !== speed) {
                 speed = view.speed;
                 clock = performance.now();
@@ -2793,7 +2821,9 @@ export function installGriddedMethods(TargetClass) {
     };
 
     proto._griddedBindPlot = function(div) {
-        const interaction = { pressed: false, wheelAt: 0 };
+        // Pressed while any finger or button is down: a pinch lifts one
+        // finger before the other.
+        const interaction = { pressed: false, wheelAt: 0, pointers: new Set() };
         div._griddedInteraction = interaction;
         // Fingers (ui/plot-touch-gestures.js): one pans and two pinch in
         // every tool, Region included, where the mouse draws the box; the
@@ -2820,10 +2850,13 @@ export function installGriddedMethods(TargetClass) {
         // Pressed, the open hand of Navigate closes (Plotly's drag cover
         // takes the cursor of the plot at the press).
         div.addEventListener('pointerdown', event => {
+            interaction.pointers.add(event.pointerId);
             interaction.pressed = true;
             if (event.button === 0) div.classList.add('gridded-pressed');
         }, { capture: true });
-        const release = () => {
+        const release = event => {
+            interaction.pointers.delete(event.pointerId);
+            if (interaction.pointers.size) return;
             interaction.pressed = false;
             div.classList.remove('gridded-pressed');
         };
@@ -2987,25 +3020,24 @@ export function installGriddedMethods(TargetClass) {
             if (Date.now() - (interaction.pannedAt || 0) < 400) return;
             this._griddedOpenMenuAt(div, where);
         }, true);
-        // Moving the map pauses Play: a pan, a zoom (wheel, pinch, trackpad)
-        // or the whole map framed again is a look at a place, which the next
-        // steps would keep changing under it. Only the user moves the axes:
-        // the app redraws with Plotly.react, which says nothing here.
-        const pauseOnMove = update => {
+        // Moving the map holds Play until the hand lets go
+        // (_griddedHoldPlay). Only the user moves the axes: the app redraws
+        // with Plotly.react, which says nothing here.
+        const holdOnMove = update => {
             const view = this._griddedVisibleView();
             if (!view?.playing || !update) return;
-            if (Object.keys(update).some(key => /^[xy]axis\.(range|autorange)/.test(key))) this._griddedPause(view);
+            if (Object.keys(update).some(key => /^[xy]axis\.(range|autorange)/.test(key))) this._griddedHoldPlay(view, div);
         };
-        div.on('plotly_relayouting', pauseOnMove);
+        div.on('plotly_relayouting', holdOnMove);
         div.on('plotly_doubleclick', () => {
             const view = this._griddedVisibleView();
             if (!view || view.editing) return;
-            if (view.playing) this._griddedPause(view);
+            this._griddedHoldPlay(view, div);
             view.zoom = null;
             this._griddedDrawMap(view);
         });
         div.on('plotly_relayout', update => {
-            pauseOnMove(update);
+            holdOnMove(update);
             const view = this._griddedVisibleView();
             if (!view || !update || view.editing) return;
             const keys = Object.keys(update);
