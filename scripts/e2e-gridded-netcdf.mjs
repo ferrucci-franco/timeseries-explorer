@@ -12,9 +12,9 @@
 //    one dataset.
 // 3. A station file stays with the series reader, unchanged.
 // 4. A GRIB file saved as ".nc" is explained, in the user's language.
-// 5. The desktop path: a netCDF opened by path is fetched from the same local
-//    file server Electron runs (electron/local-file-http.cjs), not read
-//    through IPC into one buffer, and opens on its map.
+// 5. The desktop path: a netCDF or a GRIB opened by path is fetched from the
+//    same local file server Electron runs (electron/local-file-http.cjs), not
+//    read through IPC into one buffer, and opens on its map.
 // 6. A saved project brings the map back: its places (P1, R1…), their series
 //    and values, the tree folders they live in, what the map was showing and
 //    the panel that plotted them.
@@ -1124,6 +1124,18 @@ try {
         assert.equal(result.localPath, fixture);
         await mapShown(page);
         assert.match(await page.$eval('#gridded-view [data-role="time-label"]', el => el.textContent), /^2023-11-22 00:00/);
+        // A GRIB takes the same road: read by parts, not pulled whole through IPC.
+        const grib = resolve('test-files/grib/era5-grib2-pl.grib2');
+        const gribResult = await page.evaluate(async path => {
+            const app = window.app;
+            let ipcReads = 0;
+            globalThis.omvDesktop.readFile = async () => { ipcReads += 1; return { ok: false, message: 'IPC read should not be used for GRIB' }; };
+            const file = await app._readLocalResultPath(path);
+            await app.loadFiles([{ file, fileHandle: null, localPath: path }]);
+            const entry = [...app.files.values()].find(item => item.localPath === path);
+            return { ipcReads, size: file.size, gridded: !!entry?.gridded };
+        }, grib);
+        assert.deepEqual(gribResult, { ipcReads: 0, size: readFileSync(grib).length, gridded: true }, 'a GRIB opened by path is fetched from the local server');
         assert.deepEqual(errors, []);
         await context.close();
     }
