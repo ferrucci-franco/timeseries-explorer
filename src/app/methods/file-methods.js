@@ -24,7 +24,7 @@ import {
 } from '../../parsers/audio-limits.js';
 
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
-import { checkDecodedAudioLimit, checkFullLoadLimit } from '../file-size-limits.js';
+import { checkDecodedAudioLimit, checkFullLoadLimit, checkLoadedNetcdfLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
 import {
     SPREADSHEET_EXTENSIONS,
@@ -1716,6 +1716,8 @@ proto._fullLoadLimitBytesFor = function(limitKey) {
 
 // Verdict only — no dialog, no throw. Null means "nothing to warn about".
 proto._checkFullLoadLimit = function(file, extension = this._fileExtension(file?.name || '')) {
+    // Read by parts, a netCDF file is judged by what it loads, once that is known.
+    if (this._canParseNetcdfByParts(file, extension)) return null;
     return checkFullLoadLimit(file, extension, key => this._fullLoadLimitBytesFor(key));
 };
 
@@ -2072,7 +2074,7 @@ proto._fileEntryTooltip = function(entry) {
 proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file, options);
-    if (this._isPypsaNetcdfExtension(extension)) return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
+    if (this._isPypsaNetcdfExtension(extension)) return this._parsePypsaNetcdfResultBuffer(filename, buffer, options, file);
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
     if (isAudioExtension(extension)) return this._parseAudioResultBuffer(filename, buffer, options);
@@ -2130,7 +2132,8 @@ proto._parseMicroCapResultBuffer = async function(filename, buffer, _options = {
     );
 };
 
-proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options = {}) {
+proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options = {}, file = null) {
+    if (!buffer && file && this._canParseNetcdfByParts(file)) return this._parseNetcdfFileByParts(filename, file, options);
     // The reader enforces a ceiling of its own, so both "the user chose to
     // proceed" and "there is no limit" have to reach it — see readerFileCeiling
     // for why neither can travel as the number the app holds.
@@ -2141,6 +2144,33 @@ proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options =
     } catch (err) {
         // What the file turned out to be (ZIP, GRIB, an error page...), said in
         // the user's language with what to do about it.
+        if (err?.containerKind && typeof this._griddedContainerMessage === 'function') {
+            throw new Error(this._griddedContainerMessage(err.containerKind, filename));
+        }
+        throw err;
+    }
+};
+
+// The worker reads the File by parts and first works out what its series
+// would hold. Above the limit it says so before reading any, and the question
+// is the one asked of every format over its limit, about that size; a yes
+// reads the file again, unbounded.
+proto._parseNetcdfFileByParts = async function(filename, file, options = {}) {
+    const run = maxLoadBytes => getParsePool().run('parse:netcdf', { filename, file, maxLoadBytes });
+    try {
+        try {
+            return await run(readerFileCeiling(this._pypsaNetcdfEagerLimitBytes(), options));
+        } catch (err) {
+            if (err?.code !== 'NETCDF_OVER_LIMIT') throw err;
+            const verdict = checkLoadedNetcdfLimit(filename, err.loadedBytes, err.limitBytes);
+            if (!verdict || !(await this._confirmOversizedFile(verdict, { name: filename, size: verdict.sizeBytes }))) {
+                const cancelled = new Error('netCDF load cancelled');
+                cancelled.name = 'AbortError';
+                throw cancelled;
+            }
+            return await run(Infinity);
+        }
+    } catch (err) {
         if (err?.containerKind && typeof this._griddedContainerMessage === 'function') {
             throw new Error(this._griddedContainerMessage(err.containerKind, filename));
         }
@@ -2468,9 +2498,17 @@ proto._csvCompactHintBytes = function() {
 // has to be read so _parseResultBuffer can sniff its bytes and decide what it
 // is; skipping the read would leave nothing to sniff.
 proto._canParseFromFile = function(file, extension = this._fileExtension(file?.name || '')) {
+    if (this._canParseNetcdfByParts(file, extension)) return true;
     return !!file
         && (isTextTableExtension(extension) || extension === '.parquet')
         && this._canUseDuckDb();
+};
+
+// A netCDF file of series (stations, PyPSA) goes to the parse worker as the
+// File itself and is read there by parts, never copied whole: its size no
+// longer matters, only the series it loads (see _parsePypsaNetcdfResultBuffer).
+proto._canParseNetcdfByParts = function(file, extension = this._fileExtension(file?.name || '')) {
+    return !!file && this._isPypsaNetcdfExtension(extension) && canUseWorkers();
 };
 
 proto._fileFingerprint = function(file) {

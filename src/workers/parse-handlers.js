@@ -48,9 +48,12 @@ export const PARSE_HANDLERS = {
         return { result: await parser.parse(buffer, filename, { maxFileBytes }) };
     },
 
-    'parse:netcdf': async ({ filename, buffer, maxFileBytes }) => {
+    // A File is read by parts here (never copied whole), and bounded by the
+    // series it loads rather than by its size; a buffer is the old way.
+    'parse:netcdf': async ({ filename, buffer, file, maxFileBytes, maxLoadBytes }) => {
         const { default: Parser } = await import('../parsers/netcdf-parser.js');
         const parser = new Parser(getBaseParser());
+        if (file) return { result: await parser.parseFile(file, filename, { maxLoadBytes }) };
         return { result: await parser.parse(buffer, filename, { maxFileBytes }) };
     },
 

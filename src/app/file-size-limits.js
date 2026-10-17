@@ -97,6 +97,27 @@ export function checkDecodedAudioLimit(name, decodedBytes, limitBytes) {
     };
 }
 
+// A netCDF file of series is read by parts, so its size says little: a
+// compressed station archive can be small on disk and large in memory, and a
+// big file may load a few series. What is weighed is what the series it
+// loads hold, with the netCDF limit and a wording that says so.
+export function checkLoadedNetcdfLimit(name, loadedBytes, limitBytes) {
+    const sizeBytes = Number(loadedBytes);
+    const limit = Number(limitBytes);
+    if (!Number.isFinite(sizeBytes) || !Number.isFinite(limit) || !(limit > 0) || sizeBytes <= limit) return null;
+    const format = BY_EXTENSION.get('.nc');
+    return {
+        format: format.id,
+        name: name || format.sampleName,
+        sizeBytes,
+        limitBytes: limit,
+        settingLabelKey: format.settingLabelKey,
+        formatLabelKey: format.formatLabelKey,
+        titleKey: 'fileOverLimitNetcdfTitle',
+        bodyKey: 'fileOverLimitNetcdfBody',
+    };
+}
+
 const BY_EXTENSION = new Map();
 for (const format of EAGER_ONLY_FORMATS) {
     for (const extension of format.extensions) BY_EXTENSION.set(extension, format);
