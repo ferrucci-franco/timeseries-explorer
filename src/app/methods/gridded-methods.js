@@ -18,6 +18,7 @@ import { formatUnitPowers } from '../../utils/unit-superscripts.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
 import { coastlineTrace, coastlineWindow, insideCoastlineWindow } from '../../gridded/coastlines.js';
 import { copyTextToClipboard } from '../../utils/clipboard.js';
+import { strideIndex, strideOptions } from '../../gridded/time-stride.js';
 
 const GRIDDED_EXTENSIONS = new Set(['.nc', '.nc4', '.netcdf', '.cdf', '.zip', ...GRIB_EXTENSIONS]);
 // What the gridded reader opens: netCDF (3, 4, CDF-5) and GRIB.
@@ -26,7 +27,7 @@ const GRIDDED_READABLE_KINDS = new Set([...NETCDF_READABLE_KINDS, 'cdf5', 'grib'
 // reads the full resolution of what is visible.
 const MAX_DRAWN_CELLS = 400 * 1000;
 const PALETTES = ['Viridis', 'Cividis', 'Turbo', 'RdBu', 'Greys'];
-const PLAY_SPEEDS = [1, 2, 4, 8];
+const PLAY_SPEEDS = [1, 2, 4, 8, 16, 30];
 const COASTLINE_FILES = { coarse: 'geo/natural-earth-110m.json', fine: 'geo/natural-earth-50m.json' };
 // Zoomed in past this longitude span, the 1:50m coastline replaces the 1:110m one.
 const FINE_COAST_SPAN_DEGREES = 70;
@@ -812,6 +813,9 @@ export function installGriddedMethods(TargetClass) {
             groupCount: 0,
             playing: false,
             speed: 2,
+            // How far Play and ◀ ▶ move: one step of the file, or a time
+            // (6 h, a day, a month…). See time-stride.js.
+            stride: 'step',
             map: null,
             zoom: null,
             requestedMap: null,
@@ -954,6 +958,7 @@ export function installGriddedMethods(TargetClass) {
                         <button type="button" class="gridded-step" data-step="last">${STEP_ICONS.last}</button>
                         <input type="range" min="0" max="0" step="1" value="0" data-role="time">
                         <span class="gridded-time-label" data-role="time-label"></span>
+                        <select data-role="stride" class="gridded-speed gridded-stride"></select>
                         <select data-role="speed" class="gridded-speed"></select>
                     </div>
                     <div class="gridded-progress" data-role="progress" hidden>
@@ -1247,6 +1252,10 @@ export function installGriddedMethods(TargetClass) {
         root.querySelectorAll('.gridded-step').forEach(button => {
             button.addEventListener('click', () => this._griddedStep(button.dataset.step));
         });
+        root.querySelector('[data-role="stride"]').addEventListener('change', event => {
+            const current = view();
+            if (current) current.stride = event.target.value || 'step';
+        });
         root.querySelector('[data-role="speed"]').addEventListener('change', event => {
             const current = view();
             if (current) current.speed = Number(event.target.value) || 2;
@@ -1456,6 +1465,7 @@ export function installGriddedMethods(TargetClass) {
         set('[data-step="next"]', 'griddedNextStep', 'title');
         set('[data-step="last"]', 'griddedLastStep', 'title');
         set('[data-role="speed"]', 'griddedSpeed', 'title');
+        set('[data-role="stride"]', 'griddedStride', 'title');
         const palette = root.querySelector('[data-role="palette"]');
         palette.innerHTML = '';
         for (const name of PALETTES) palette.add(new Option(name, name));
@@ -1560,6 +1570,7 @@ export function installGriddedMethods(TargetClass) {
         this._griddedSyncScale(view);
         root.querySelector('[data-role="speed"]').value = String(view.speed);
         const timeDim = variable?.timeDim;
+        this._griddedSyncStride(view, timeDim ? model.axes[timeDim] : null);
         const timebar = root.querySelector('[data-role="timebar"]');
         const slider = root.querySelector('[data-role="time"]');
         const size = timeDim ? model.axes[timeDim]?.size || 1 : 1;
@@ -1872,8 +1883,11 @@ export function installGriddedMethods(TargetClass) {
             if (view.playing) this._griddedPlayLoop(view);
             return;
         }
+        // One stride; past either end, the end itself.
+        const strided = step === 'next' || step === 'prev'
+            ? this._griddedStrideFrom(view, current, step === 'next' ? 1 : -1) : null;
         const next = step === 'first' ? 0 : step === 'last' ? size - 1
-            : step === 'next' ? Math.min(size - 1, current + 1) : Math.max(0, current - 1);
+            : step === 'next' ? (strided < 0 ? size - 1 : strided) : (strided < 0 ? 0 : strided);
         if (next === current) return;
         view.stepDirection = next < current ? -1 : 1;
         view.selection[dim] = next;
@@ -1882,13 +1896,39 @@ export function installGriddedMethods(TargetClass) {
         this._griddedRequestMap(view);
     };
 
+    // The stride's options for this axis, in the user's language; the view's
+    // stride kept when the axis offers it, one step of the file otherwise.
+    proto._griddedSyncStride = function(view, axis) {
+        const select = this._griddedEl('stride');
+        if (!select) return;
+        const options = axis ? strideOptions(axis) : [{ id: 'step', label: { key: 'step', n: 1 } }];
+        const keys = {
+            step: 'griddedStrideStep', steps: 'griddedStrideSteps', minutes: 'griddedStrideMinutes', hours: 'griddedStrideHours',
+            day: 'griddedStrideDay', days: 'griddedStrideDays', week: 'griddedStrideWeek', month: 'griddedStrideMonth', year: 'griddedStrideYear',
+        };
+        select.innerHTML = '';
+        for (const option of options) {
+            select.add(new Option(i18n.t(keys[option.label.key]).replace('{n}', String(option.label.n)), option.id));
+        }
+        if (!options.some(option => option.id === view.stride)) view.stride = 'step';
+        select.value = view.stride;
+    };
+
+    proto._griddedStrideFrom = function(view, index, direction) {
+        const dim = this._griddedTimeDim(view);
+        const axis = dim ? view.model.axes[dim] : null;
+        return axis ? strideIndex(axis, index, view.stride, direction) : -1;
+    };
+
     proto._griddedPlayLoop = async function(view) {
         const dim = this._griddedTimeDim(view);
         while (view.playing && dim && this._griddedVisibleView() === view) {
             const started = performance.now();
             const size = view.model.axes[dim].size;
             view.stepDirection = 1;
-            view.selection[dim] = ((view.selection[dim] || 0) + 1) % size;
+            // One stride on; past the end, back to the start.
+            const next = this._griddedStrideFrom(view, view.selection[dim] || 0, 1);
+            view.selection[dim] = next < 0 || next >= size ? 0 : next;
             const slider = this._griddedEl('time');
             if (slider) slider.value = String(view.selection[dim]);
             this._griddedSyncTimeLabel(view);
@@ -1957,8 +1997,8 @@ export function installGriddedMethods(TargetClass) {
         if (!dim || view.job || !request?.variable) return;
         const size = view.model.axes[dim]?.size || 0;
         const current = Number(request.selection?.[dim]) || 0;
-        let next = current + (view.stepDirection || 1);
-        if (view.playing) next = ((next % size) + size) % size;
+        let next = this._griddedStrideFrom(view, current, view.stepDirection || 1);
+        if (view.playing && next < 0) next = 0;
         if (next < 0 || next >= size || next === current) return;
         const ahead = { variable: request.variable, selection: { ...request.selection, [dim]: next } };
         const key = mapKey(view, ahead);
