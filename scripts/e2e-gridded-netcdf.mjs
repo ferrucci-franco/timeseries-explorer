@@ -303,17 +303,24 @@ try {
             heading: document.querySelector('#gridded-view [data-role="results-heading"]').textContent,
         }));
         const shown = await layoutNow();
-        await page.click('#gridded-view [data-action="toggle-results"]');
+        const listToggle = '#gridded-view .gridded-results-head [data-action="toggle-results"]';
+        await page.click(listToggle);
         await page.waitForTimeout(300);
         const folded = await layoutNow();
         assert.equal(folded.body, true, 'Hide folds the list away');
         assert.equal(folded.preview, true, 'and the preview under the map');
         assert.ok(folded.map > shown.map + 50, `the map takes the height (${shown.map} → ${folded.map})`);
         assert.match(folded.heading, /\(\d+\)$/, 'the heading counts the series');
-        await page.click('#gridded-view [data-action="toggle-results"]');
+        await page.click(listToggle);
         await page.waitForTimeout(300);
         const back = await layoutNow();
         assert.deepEqual([back.body, back.preview], [false, false], 'Show brings both back');
+        // The preview has the same switch on its own heading.
+        await page.click('#gridded-view [data-role="preview"] [data-action="toggle-results"]');
+        await page.waitForTimeout(300);
+        assert.deepEqual(Object.values(await layoutNow()).slice(0, 2), [true, true], "the preview's Hide folds both too");
+        await page.click(listToggle);
+        await page.waitForTimeout(300);
         // The "Map" button on the file row opens the map again. A map closed
         // with "Close map" does not put a button over the plots asking to
         // come back.
@@ -332,7 +339,7 @@ try {
         assert.equal(await page.$('#gridded-view [data-action="as-series"]'), null);
         // Text buttons beside icon buttons are as tall as they are.
         const heights = await page.evaluate(() => ['export-map', 'close', 'toggle-results', 'remove-all', 'export-series']
-            .map(action => Math.round(document.querySelector(`#gridded-view [data-action="${action}"]`).getBoundingClientRect().height)));
+            .map(action => Math.round(document.querySelector(`#gridded-view :is(.gridded-toolbar, .gridded-results-head) [data-action="${action}"]`).getBoundingClientRect().height)));
         assert.ok(heights.every(height => height === heights[0]), `one height for the toolbar and list buttons (${heights})`);
         // A wheel zoom only ever moves one way: no redraw between notches puts
         // back the ranges it started from, and a grid this small is drawn
@@ -857,6 +864,123 @@ try {
         assert.ok(layout.toolbar < 90, `the toolbar is two rows (${layout.toolbar}px)`);
         assert.ok(layout.labelHeight < 24, `the time stays on one line (${layout.labelHeight}px)`);
         assert.match(layout.help, /pinch/, 'the help speaks of fingers');
+        // A map taller than wide (Argentina: 35° of latitude by 30° of
+        // longitude) pushed the time bar under the app's bottom bar, on a
+        // phone of Safari's height (664 px of page on an iPhone 13). Sized
+        // for one, the map leaves the slider on screen above that bar.
+        // Measured as it is sized: a redraw of the world map may follow.
+        await page.setViewportSize({ width: 390, height: 664 });
+        await page.waitForTimeout(300);
+        const tall = await page.evaluate(() => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const steps = (from, to, step) => Float64Array.from({ length: Math.round((to - from) / step) + 1 }, (_, index) => from + index * step);
+            window.app._griddedFitPhoneHeight({ map: { lon: steps(-80, -50, 0.25), lat: steps(-55, -20, 0.25) } }, div);
+            const slider = document.querySelector('#gridded-view [data-role="time"]').getBoundingClientRect();
+            const nav = document.querySelector('.compact-nav').getBoundingClientRect();
+            return { sliderBottom: Math.round(slider.bottom), navTop: Math.round(nav.top), mapHeight: Math.round(div.parentElement.getBoundingClientRect().height) };
+        });
+        assert.ok(tall.sliderBottom <= tall.navTop, `a tall map leaves the time slider above the bottom bar (${JSON.stringify(tall)})`);
+        assert.ok(tall.mapHeight >= 300, `and is still a map, not a strip (${JSON.stringify(tall)})`);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.evaluate(() => window.app._griddedDrawMap(window.app._griddedVisibleView()));
+        await page.waitForTimeout(300);
+        // Fingers, in every tool: one pans, two pinch, and the pinch keeps
+        // the map's size (scaled per axis, Plotly shrank it to keep the
+        // degrees equal, a little more at every pinch). In Region a finger
+        // pans too, and a tap, then a touch that drags, draws the box. A
+        // double tap frames the whole map; turning the phone and back
+        // leaves a whole map, not a strip.
+        {
+            const fingers = await context.newCDPSession(page);
+            const touchAt = (type, points) => fingers.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+            const swipe = async (from, to) => {
+                await touchAt('touchStart', [from]);
+                for (let step = 1; step <= 10; step++) await touchAt('touchMove', [[from[0] + (to[0] - from[0]) * step / 10, from[1] + (to[1] - from[1]) * step / 10]]);
+                await touchAt('touchEnd', []);
+                await page.waitForTimeout(400);
+            };
+            const pinchAt = async ([cx, cy], from, to, angle) => {
+                const pair = d => [[cx - Math.cos(angle) * d / 2, cy - Math.sin(angle) * d / 2], [cx + Math.cos(angle) * d / 2, cy + Math.sin(angle) * d / 2]];
+                await touchAt('touchStart', pair(from));
+                for (let step = 1; step <= 10; step++) await touchAt('touchMove', pair(from + (to - from) * step / 10));
+                await touchAt('touchEnd', []);
+                await page.waitForTimeout(500);
+            };
+            const tapAt = async point => { await touchAt('touchStart', [point]); await touchAt('touchEnd', []); };
+            const mapState = () => page.evaluate(() => {
+                const div = document.querySelector('#gridded-view .gridded-map');
+                const { xaxis, yaxis } = div._fullLayout;
+                const rect = div.getBoundingClientRect();
+                const view = window.app._griddedVisibleView();
+                return {
+                    size: [Math.round(xaxis._length), Math.round(yaxis._length)],
+                    perPixel: [(xaxis.range[1] - xaxis.range[0]) / xaxis._length, (yaxis.range[1] - yaxis.range[0]) / yaxis._length],
+                    x: [...xaxis.range], y: [...yaxis.range],
+                    area: { left: rect.left + xaxis._offset, top: rect.top + yaxis._offset, w: xaxis._length, h: yaxis._length },
+                    box: view.pendingBox,
+                };
+            });
+            const at = (state, fx, fy) => [state.area.left + fx * state.area.w, state.area.top + fy * state.area.h];
+            const whole = await mapState();
+            const sameSize = (state, message) => {
+                assert.deepEqual(state.size, whole.size, `${message}: the map keeps its size (${JSON.stringify(state.size)})`);
+                assert.ok(Math.abs(state.perPixel[0] - state.perPixel[1]) < 1e-6, `${message}: equal degrees on both axes`);
+            };
+            for (const angle of [0.05, 1.5]) {
+                await pinchAt(at(whole, 0.5, 0.5), 60, 150, angle);
+                const pinched = await mapState();
+                sameSize(pinched, `a pinch at ${angle} rad`);
+                assert.ok(pinched.perPixel[0] < whole.perPixel[0] * 0.9, 'and zooms in');
+            }
+            await tapAt(at(whole, 0.5, 0.5));
+            await page.waitForTimeout(120);
+            await tapAt(at(whole, 0.5, 0.5));
+            await page.waitForTimeout(900);
+            const framed = await mapState();
+            sameSize(framed, 'a double tap');
+            assert.ok(Math.abs(framed.x[0] - whole.x[0]) < 1e-6 && Math.abs(framed.y[0] - whole.y[0]) < 1e-6, 'a double tap frames the whole map again');
+            await page.click('#gridded-view [data-mode="region"]');
+            await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
+            await page.waitForTimeout(300);
+            const regionStart = await mapState();
+            await swipe(at(regionStart, 0.5, 0.5), at(regionStart, 0.65, 0.6));
+            const panned = await mapState();
+            assert.ok(panned.x[0] !== regionStart.x[0] && !panned.box, `in Region a finger pans and draws nothing (${JSON.stringify(panned.box)})`);
+            await pinchAt(at(panned, 0.5, 0.5), 60, 150, 0.1);
+            const regionPinched = await mapState();
+            sameSize(regionPinched, 'a pinch in Region');
+            assert.ok(regionPinched.perPixel[0] < panned.perPixel[0] && !regionPinched.box, 'in Region two fingers zoom');
+            const from = at(regionPinched, 0.3, 0.3);
+            const to = at(regionPinched, 0.7, 0.7);
+            await tapAt(from);
+            await page.waitForTimeout(150);
+            await swipe(from, to);
+            const drawn = await mapState();
+            const lonLat = point => [regionPinched.x[0] + (point[0] - regionPinched.area.left) * regionPinched.perPixel[0],
+                regionPinched.y[1] - (point[1] - regionPinched.area.top) * regionPinched.perPixel[1]];
+            const [lon0, lat0] = lonLat(from);
+            const [lon1, lat1] = lonLat(to);
+            assert.ok(drawn.box && Math.abs(drawn.box.lonMin - lon0) < 0.6 && Math.abs(drawn.box.lonMax - lon1) < 0.6
+                && Math.abs(drawn.box.latMax - lat0) < 0.6 && Math.abs(drawn.box.latMin - lat1) < 0.6,
+                `a tap, then a touch that drags, draws the box under the finger (${JSON.stringify({ box: drawn.box, expected: [lon0, lon1, lat1, lat0] })})`);
+            assert.deepEqual(drawn.x, regionPinched.x, 'and the map stays still while it is drawn');
+            // Turned on its side and back: a whole map each way.
+            await page.setViewportSize({ width: 844, height: 390 });
+            await page.waitForTimeout(1200);
+            const side = await mapState();
+            assert.ok(side.size[0] > 400 && side.size[1] > 100, `on its side the map fills its area (${JSON.stringify(side.size)})`);
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.waitForTimeout(1200);
+            sameSize(await mapState(), 'turned back upright');
+            await page.click('#gridded-view [data-mode="navigate"]');
+            await page.evaluate(() => {
+                const view = window.app._griddedVisibleView();
+                view.pendingBox = null;
+                view.zoom = null;
+                return window.app._griddedDrawMap(view);
+            });
+            await page.waitForTimeout(300);
+        }
         // The ring, then extract from over the map.
         await page.click('#gridded-view [data-mode="point"]');
         await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
@@ -872,6 +996,24 @@ try {
         await page.click('#gridded-view [data-action="map-extract"]');
         await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 1, null, { timeout: 60000 });
         await page.waitForTimeout(600);
+        // One column in the order a finger uses it: the time bar, the tools,
+        // the preview with its own Hide, the list of series, the inspector.
+        const order = await page.evaluate(() => ['[data-role="timebar"]', '.gridded-tools', '[data-role="preview"]', '.gridded-results', '[data-role="inspector"]']
+            .map(selector => Math.round(document.querySelector(`#gridded-view ${selector}`).getBoundingClientRect().top)));
+        assert.deepEqual([...order].sort((a, b) => a - b), order, `on a phone: time bar, tools, preview, series, inspector (${order})`);
+        const previewToggle = '#gridded-view [data-role="preview"] [data-action="toggle-results"]';
+        await page.click(previewToggle);
+        await page.waitForTimeout(300);
+        const folded = await page.evaluate(() => {
+            const preview = document.querySelector('#gridded-view [data-role="preview"]');
+            return { hidden: preview.hidden, height: preview.getBoundingClientRect().height, toggle: preview.querySelector('[data-action="toggle-results"]').textContent };
+        });
+        assert.ok(!folded.hidden && folded.height < 60 && /Show/.test(folded.toggle), `hidden on a phone, the preview keeps one line with Show (${JSON.stringify(folded)})`);
+        await page.click(previewToggle);
+        await page.waitForTimeout(300);
+        assert.ok(await page.evaluate(() => document.querySelector('#gridded-view [data-role="preview"]').getBoundingClientRect().height > 150), 'and Show brings it back');
+        await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
+        await page.waitForTimeout(300);
         // A finger held on P1: its menu, and the map stays where it is.
         const cdp = await context.newCDPSession(page);
         const p1 = await phoneAt(45, 15);

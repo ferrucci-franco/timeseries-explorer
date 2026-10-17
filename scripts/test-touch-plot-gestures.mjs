@@ -24,6 +24,7 @@ import {
     PINCH_MAX_GESTURE_SCALE,
     PINCH_MIN_SEPARATION_PX,
     panZoomRange,
+    pinchScaleUniform,
     pinchScales,
     zoomRangeAbout,
 } from '../src/utils/pinch-zoom.js';
@@ -144,8 +145,28 @@ assert.match(installer, /gesture = points\.length \? baseline\(points, moved\) :
     'a cancelled touch leaves the rest of the hand on the glass');
 assert.match(installer, /if \(!gesture\.moved && !movedBeyondSlop\(gesture\.points, points\)\) return;/,
     'a tap is left alone, so it still reaches Plotly as a click');
-assert.match(installer, /const scales = points\.length === 2 \? pinchScales\(gesture\.points, points\) : \{ x: 1, y: 1 \};/,
-    'one finger is the same arithmetic with nothing to scale');
+assert.match(installer, /const scales = points\.length === 2\s*\? \(div\._touchUniformPinch === true \? pinchScaleUniform : pinchScales\)\(gesture\.points, points\)\s*: \{ x: 1, y: 1 \};/,
+    'one finger is the same arithmetic with nothing to scale; a map pinches both axes alike');
+// A map keeps equal degrees on both axes (scaleanchor, constrain 'domain'):
+// scaled per axis, Plotly shrank the drawing to keep the proportion, a
+// little more at every pinch. One factor, the spread of the fingers.
+{
+    const start = [{ x: 100, y: 100 }, { x: 200, y: 110 }];
+    const spread = [{ x: 50, y: 95 }, { x: 250, y: 115 }];
+    const uniform = pinchScaleUniform(start, spread);
+    assert.equal(uniform.x, uniform.y, 'one scale for both axes');
+    assert.ok(Math.abs(uniform.x - Math.hypot(200, 20) / Math.hypot(100, 10)) < 1e-12, 'the ratio of the distances between the fingers');
+    assert.deepEqual(pinchScaleUniform([{ x: 0, y: 0 }, { x: 5, y: 5 }], spread), { x: null, y: null }, 'fingers too close say nothing');
+    assert.notEqual(pinchScales(start, spread).y, uniform.y, 'where pinchScales would have scaled the axes apart');
+}
+assert.match(installer, /if \(div\._touchOwnsEveryDrag !== true && !touchGestureOwnsDrag\(div\._fullLayout\?\.dragmode\)\)/,
+    'a plot can keep finger pan and pinch whatever its dragmode (the map in Region draws with the mouse)');
+// The map's region tool: tap, then touch again and drag, draws a rectangle
+// handed to the plot in data units, not a zoom.
+assert.match(installer, /const box = options\?\.box === true && typeof options\.onBox === 'function';/, 'a plot asks for a box');
+assert.match(installer, /if \(selection\.box\) \{[\s\S]*?selection\.options\.onBox\(\{ x0: x\(from\.x\), x1: x\(to\.x\), y0: y\(from\.y\), y1: y\(to\.y\) \}\);/,
+    'and gets its corners, not a relayout');
+assert.match(installer, /followUp = \{ x: point\.x, y: point\.y, gap: time - lastTap\.time, options \};/, 'the second touch remembers what the plot asked for');
 assert.match(installer, /div\.addEventListener\('touchstart', onTouchStart, \{ capture: true, passive: false \}\);/,
     'in the capture phase, before Plotly sees any of it');
 assert.match(installer, /put\('yaxis2', y2, gesture\.ranges\.y2, gesture\.anchors\.y2, scales\.y, true\);/,

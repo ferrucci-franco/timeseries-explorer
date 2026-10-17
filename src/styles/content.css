@@ -2565,6 +2565,11 @@ body.cursor-box-dragging {
     border-bottom: 2px solid var(--primary-color);
 }
 
+/* A rectangle (the map's region tool): outlined on all four sides. */
+.touch-window-zoom-band.is-box {
+    border: 2px solid var(--primary-color);
+}
+
 .touch-window-zoom-hint {
     position: fixed;
     z-index: 2000;
