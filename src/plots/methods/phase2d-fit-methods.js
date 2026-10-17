@@ -662,6 +662,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot.phase2dFitTimeDiv) { Plotly.purge(plot.phase2dFitTimeDiv); }
         this._cleanupPhase2dFitDocListeners(plot);
         container.remove();
+        // Lent to the phone's Analyze sheet, the drawer is outside the shell.
+        plot.phase2dFitOptions?.remove();
         plot.phase2dFitContainer = null;
         plot.phase2dFitTimeDiv = null;
         plot.phase2dFitOptions = null;

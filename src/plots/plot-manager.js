@@ -2365,6 +2365,8 @@ class PlotManager {
                 if (plot.phase2dFitTimeDiv) Plotly.purge(plot.phase2dFitTimeDiv);
                 Plotly.purge(plot.div);
                 phase2dFitContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the shell.
+                plot.phase2dFitOptions?.remove();
                 plot.div = null;
                 plot.phase2dFitTimeDiv = null;
                 plot.phase2dFitContainer = null;

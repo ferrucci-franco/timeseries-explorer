@@ -2033,6 +2033,39 @@ html.compact .compact-sheet .correlation-empty {
     font-size: 14px;
 }
 
+/* The 2D fit's drawer, lent to the sheet the same way: the pair and the fit
+   type become full-width rows, and the results — equation, coefficients and
+   metrics — are read at a phone's text size. */
+html.compact .compact-sheet .phase2d-fit-field {
+    flex-wrap: wrap;
+}
+
+html.compact .compact-sheet .phase2d-fit-field-label,
+html.compact .compact-sheet .phase2d-fit-drawer-title,
+html.compact .compact-sheet .phase2d-fit-result-name,
+html.compact .compact-sheet .phase2d-fit-coeffs,
+html.compact .compact-sheet .phase2d-fit-coeff-k,
+html.compact .compact-sheet .phase2d-fit-coeff-v {
+    font-size: 15px;
+}
+
+html.compact .compact-sheet .phase2d-fit-pair-select,
+html.compact .compact-sheet .phase2d-fit-type-select {
+    flex: 1 1 100%;
+    font-size: 16px;
+    padding: 0 8px;
+}
+
+html.compact .compact-sheet .phase2d-fit-equation {
+    font-size: 16px;
+}
+
+html.compact .compact-sheet .phase2d-fit-stats,
+html.compact .compact-sheet .phase2d-fit-warning,
+html.compact .compact-sheet .phase2d-fit-empty {
+    font-size: 14px;
+}
+
 /* Text that was 11–13 px. */
 html.compact .compact-section-title,
 html.compact .compact-plot-mode,

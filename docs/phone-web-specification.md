@@ -2,8 +2,8 @@
 
 Status: first slice built (2026-10-04), extended since. It covers time series and
 every analysis of the desktop — FFT, the histogram, the calendar heatmap, the
-temporal profile, the integral and correlation — 2D, 2D + t and 3D plots and state
-animations, the measurement cursors, plus CSV parsing.
+temporal profile, the integral, correlation and the 2D curve fit — 2D, 2D + t and
+3D plots and state animations, the measurement cursors, plus CSV parsing.
 
 Built:
 
@@ -15,13 +15,18 @@ Built:
 - the Data sheet, with tap-to-plot and the per-file page;
 - the Plot sheet: view and signals;
 - the Analyze sheet: time series, FFT, histogram, calendar heatmap, temporal profile,
-  integral and correlation, each analysis with its options lent to the sheet and its
+  integral, correlation and the 2D curve fit, each analysis with its options lent to
+  the sheet and its
   top-bar buttons (reset, V/H, hide the time series) as buttons there; the histogram's
   log counts, in the View menu on the desktop, is a button there too, and the
-  heatmap's and correlation's **Update** appear while appended data is waiting to be
-  folded in. Correlation is the analysis of the 2D family: it reads the plot's pairs,
-  keeps them when it is turned on or off, and its "None" entry leaves the 2D plot
-  rather than a time series;
+  heatmap's, correlation's and the fit's **Update** appear while appended data is
+  waiting to be folded in. Correlation and the **curve fit** are the analyses of the
+  2D family: they read the plot's pairs, keep them when turned on or off, and their
+  "None" entry leaves the 2D plot rather than a time series. The fit is not a mode —
+  a 2D plot opens it over itself — so the sheet reads the plot's own state to know it
+  is on, takes a plot that is not 2D there first, and its pair, fit type (none,
+  linear, quadratic, power), equation, coefficients and metrics are the drawer it
+  lends;
 - 2D (x–y), 2D + t (x–y along time) and 3D (x–y–z) plots: the plot type in the Plot
   sheet, x then y (then z) by tapping in Data, the curves listed with removal, the
   1:1 aspect in 2D, and the 3D scene's gestures (pan with a slow double tap) in
@@ -537,12 +542,17 @@ For an **analysis** the rule is enforced in code. Its placement is one entry in
 in Data gives it a signal or half a pair (and how either comes off again), the pane
 it draws beside its time pane (and how that pane's axes are fitted, or that nothing
 on it can be), what turning it off leaves, its reset, the rest of its top bar, and
-the options panel it lends to the sheet. Nothing else in the compact
-layout names an analysis mode — the sets it reads are derived from those entries —
-and `npm run test:compact-layout` fails when the desktop Analysis menu offers an
-analysis that file does not describe. The CSS side is three selectors: the
-analysis's top-bar groups, its options panel and its edge rail, hidden in
-`src/styles/compact.css` so only its status stays on the plot.
+the options panel it lends to the sheet. An analysis that is not a mode of its own —
+one a plot opens over itself, as a 2D plot does its curve fit — says so in the same
+entry: the plot mode it lives on, how it is recognised on a plot, and how it is
+turned on and off. The phone asks the plot which analysis it carries, never the mode
+alone. Nothing else in the compact layout names an analysis — the sets it reads are
+derived from those entries — and `npm run test:compact-layout` fails when the desktop
+Analysis menu offers an analysis that file does not describe. The CSS side is three
+selectors: the analysis's top-bar groups, its options panel and its edge rail, hidden
+in `src/styles/compact.css` so only its status stays on the plot (an analysis built
+on the FFT shell, as correlation and the fit are, is covered by its selectors
+already).
 
 ## 12. Delivery
 

@@ -259,6 +259,65 @@ export const COMPACT_ANALYSES = [
             return actions;
         },
     },
+    {
+        // The one analysis that is not a mode: a 2D plot opens its fit
+        // workspace over itself, and its own pairs are what it fits. Which
+        // analysis a panel carries is therefore asked of the plot, not of its
+        // mode (compactAnalysisFor), and this entry says how it is turned on
+        // and off instead of which mode to switch to.
+        mode: 'phase2d-fit',
+        labelKey: 'phase2dFitToggleLabel',
+        onMode: 'phase2d',
+        offMode: 'phase2d',
+        offLabelKey: 'compactAnalysisNone2d',
+        matches: (plot) => plot?.mode === 'phase2d' && !!plot.phase2d?.fitEnabled,
+        // On its own plot it is a toggle; coming from another plot the flag is
+        // set first, so the 2D plot is built with the workspace already open.
+        turnOn: ({ pm, panelId, plot }) => {
+            if (plot.mode === 'phase2d') pm._togglePhase2dFit(panelId);
+            else pm._ensurePhase2dState(plot).fitEnabled = true;
+        },
+        turnOff: ({ pm, panelId }) => pm._togglePhase2dFit(panelId),
+        fit: true,
+        // Its main pane is the 2D plot: x against y, no window to draw.
+        windowZoom: false,
+        pane: {
+            name: 'fit-time',
+            div: 'phase2dFitTimeDiv',
+            windowZoom: true,
+            fit: ({ pm, plot, relayout }, axis) => (axis === 'all'
+                ? pm._autoScalePhase2dFitTime(plot)
+                : relayout({ [`${axis}axis.autorange`]: true })),
+        },
+        // The pane the workspace is built around is the 2D plot itself, which
+        // fits the way it does on its own.
+        mainFit: ({ pm, panelId, plot }, axis) => (axis === 'all'
+            ? pm._autoScalePlot(panelId, plot)
+            : pm._autoScalePlotAxis(panelId, plot, axis)),
+        optionsTitleKey: 'compactFitOptions',
+        options: ({ plot }) => plot?.phase2dFitOptions || null,
+        reset: { labelKey: 'fftResetLabel', titleKey: 'fftResetView', run: ({ pm, panelId }) => pm._resetPhase2dFitView(panelId) },
+        actions: ({ pm, panelId, plot, refresh }) => {
+            const state = pm._ensurePhase2dState(plot);
+            const actions = [
+                { label: 'V/H', titleKey: 'fftLayoutToggle', run: () => pm._setPhase2dFitLayout(panelId, flip(state.layout)) },
+                {
+                    labelKey: 'hideTimeSeries',
+                    titleKey: 'hideTimeSeriesTooltip',
+                    pressed: !!state.timeSeriesHidden,
+                    run: () => { pm._togglePhase2dFitTimeSeries(panelId); refresh(); },
+                },
+            ];
+            if (state.dirty) {
+                actions.push({
+                    labelKey: 'phase2dFitUpdate',
+                    titleKey: 'phase2dFitUpdateTooltip',
+                    run: () => { pm._refreshDirtyPhase2dFit(panelId); refresh(); },
+                });
+            }
+            return actions;
+        },
+    },
 ];
 
 const BY_MODE = new Map(COMPACT_ANALYSES.map(entry => [entry.mode, entry]));
@@ -267,15 +326,27 @@ const BY_MODE = new Map(COMPACT_ANALYSES.map(entry => [entry.mode, entry]));
 // it: such a panel is still shown, with its controls on the desktop layout.
 export const compactAnalysis = (mode) => BY_MODE.get(mode) || null;
 
+// The analysis a plot carries right now. Most are a mode, but one is a
+// workspace a plot opens over itself, so the plot — not its mode — is what
+// the phone layout asks.
+export const compactAnalysisFor = (plot) => {
+    if (!plot) return null;
+    for (const entry of COMPACT_ANALYSES) {
+        if (entry.matches?.(plot)) return entry;
+    }
+    return BY_MODE.get(plot.mode) || null;
+};
+
 // The analyses whose signals the phone layout lists and edits like a time
 // series: a tap in Data adds or removes one.
 export const COMPACT_SIGNAL_LIST_MODES = new Set(
     COMPACT_ANALYSES.filter(entry => entry.signals).map(entry => entry.mode),
 );
 
-// Modes whose plots carry the fit buttons.
+// Plot modes whose panes carry the fit buttons — the mode an analysis is, or
+// the one it opens over.
 export const COMPACT_FIT_MODES = new Set(
-    COMPACT_ANALYSES.filter(entry => entry.fit).map(entry => entry.mode),
+    COMPACT_ANALYSES.filter(entry => entry.fit).map(entry => entry.onMode || entry.mode),
 );
 
 // An analysis's own pane, next to its time pane: the plot property that holds
@@ -291,7 +362,9 @@ export const COMPACT_PAIR_MODES = new Set(
     COMPACT_ANALYSES.filter(entry => entry.pairs).map(entry => entry.mode),
 );
 
-// Where a slow double tap draws a window: the modes with a time axis.
-export const COMPACT_WINDOW_ZOOM_MODES = new Set(
-    COMPACT_ANALYSES.filter(entry => entry.windowZoom).map(entry => entry.mode),
-);
+// Where a slow double tap draws a window: a pane with a time axis. The entry's
+// own flag answers for the pane the plot is built on, its pane's for the one
+// beside it.
+export const compactWindowZoom = (analysis, pane) => (analysis?.pane?.name === pane
+    ? !!analysis.pane.windowZoom
+    : !!analysis?.windowZoom);

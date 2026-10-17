@@ -20,8 +20,9 @@ import {
     COMPACT_FIT_MODES,
     COMPACT_PAIR_MODES,
     COMPACT_SIGNAL_LIST_MODES,
-    COMPACT_WINDOW_ZOOM_MODES,
     compactAnalysis,
+    compactAnalysisFor,
+    compactWindowZoom,
 } from '../src/app/methods/compact-analyses.js';
 
 // ── Phones, upright and sideways ────────────────────────────────────────────
@@ -187,6 +188,16 @@ assert.equal(isLandscapeViewport(390, 844), false);
             assert.ok(entry.offMode && entry.offLabelKey, `${entry.mode} says what turning it off leaves`);
             assert.ok(entry.pairHintKey, `${entry.mode} says what its pairs are for`);
         }
+        if (entry.onMode) {
+            // Not a mode of its own: it opens over a plot of another mode, so
+            // it says how it is recognised, turned on and turned off, and what
+            // that plot is called when it is off.
+            assert.equal(typeof entry.matches, 'function', `${entry.mode} says when it is the analysis on a plot`);
+            assert.equal(typeof entry.turnOn, 'function', `${entry.mode} says how it is turned on`);
+            assert.equal(typeof entry.turnOff, 'function', `${entry.mode} says how it is turned off`);
+            assert.ok(entry.offMode && entry.offLabelKey, `${entry.mode} says what turning it off leaves`);
+            assert.equal(typeof entry.mainFit, 'function', `${entry.mode} fits the plot it opens over its own way`);
+        }
         if (entry.mode === 'timeseries') continue;
         // Every analysis lends an options panel to the sheet, under a title,
         // and offers the reset its own top bar has.
@@ -210,8 +221,9 @@ assert.equal(isLandscapeViewport(390, 844), false);
 
     // Derived, not written twice.
     assert.deepEqual([...COMPACT_SIGNAL_LIST_MODES], COMPACT_ANALYSES.filter(e => e.signals).map(e => e.mode));
-    assert.deepEqual([...COMPACT_FIT_MODES], COMPACT_ANALYSES.filter(e => e.fit).map(e => e.mode));
-    assert.deepEqual([...COMPACT_WINDOW_ZOOM_MODES], COMPACT_ANALYSES.filter(e => e.windowZoom).map(e => e.mode));
+    // In plot-mode terms: the fit buttons are drawn on a panel, which knows
+    // its mode and not which workspace is open over it.
+    assert.deepEqual([...COMPACT_FIT_MODES], COMPACT_ANALYSES.filter(e => e.fit).map(e => e.onMode || e.mode));
     assert.deepEqual([...COMPACT_PAIR_MODES], ['correlation'], 'correlation is the analysis made of pairs');
     // Its results pane is r against a fixed [-1, 1]: no fit buttons there, and
     // its time pane, drawn from the pairs, fits itself.
@@ -229,6 +241,30 @@ assert.equal(isLandscapeViewport(390, 844), false);
     assert.equal(compactAnalysis('integral').pane.windowZoom, false, 'the integral’s bars are per period');
     assert.equal(compactAnalysis('fft').pane.windowZoom, true);
     assert.equal(compactAnalysis('phase2d'), null, 'a plot type is not an analysis');
+
+    // A slow double tap draws a window where there is a time axis: the pane an
+    // analysis is built on answers with the entry's flag, the pane beside it
+    // with its own.
+    assert.equal(compactWindowZoom(compactAnalysis('fft'), 'main'), true);
+    assert.equal(compactWindowZoom(compactAnalysis('fft'), 'spectrum'), true);
+    assert.equal(compactWindowZoom(compactAnalysis('integral'), 'integral'), false);
+    assert.equal(compactWindowZoom(compactAnalysis('heatmap'), 'calendar'), false);
+    assert.equal(compactWindowZoom(null, 'main'), false, 'a plot with no analysis draws no window');
+
+    // ── The analysis a plot carries ─────────────────────────────────────────
+    // A mode answers for itself; the 2D fit is a workspace a 2D plot opens
+    // over itself, so the plot's own state is what says it is on.
+    const fit = compactAnalysis('phase2d-fit');
+    assert.equal(compactAnalysisFor({ mode: 'fft' }), compactAnalysis('fft'));
+    assert.equal(compactAnalysisFor({ mode: 'phase2d' }), null, 'a 2D plot without the fit carries no analysis');
+    assert.equal(compactAnalysisFor({ mode: 'phase2d', phase2d: { fitEnabled: true } }), fit);
+    assert.equal(compactAnalysisFor({ mode: 'correlation', phase2d: { fitEnabled: true } }), compactAnalysis('correlation'),
+        'the flag only counts on the plot the fit opens over');
+    assert.equal(compactAnalysisFor(null), null);
+    assert.equal(fit.onMode, 'phase2d');
+    assert.equal(fit.windowZoom, false, 'its main pane is the 2D plot: x against y');
+    assert.equal(compactWindowZoom(fit, 'fit-time'), true, 'the pane beside it is the time one');
+    assert.ok(COMPACT_FIT_MODES.has('phase2d'), 'a 2D plot under the fit still carries its fit buttons');
 
     // ── §11: the desktop Analysis menu and the phone agree ──────────────────
     // Read from the menu's own source, so a new analysis there has to declare
