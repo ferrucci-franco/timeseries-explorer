@@ -1200,6 +1200,11 @@ try {
         assert.deepEqual(await extractionTraces(), [5], 'the checked series are in one panel');
         await page.click('#gridded-return');
         await mapShown(page);
+        // Left mid-way: the point tool in hand, a place typed but not extracted.
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.fill('#gridded-view [data-input="lat"]', '10');
+        await page.fill('#gridded-view [data-input="lon"]', '20');
+        await page.waitForFunction(() => window.app._griddedVisibleView().pendingPoint?.lat === 10);
 
         const before = await page.evaluate(() => {
             const view = window.app._griddedVisibleView();
@@ -1230,6 +1235,8 @@ try {
                     .filter(([, plot]) => plot.traces.some(trace => String(trace.varName).startsWith('grid:x')))
                     .map(([panelId, plot]) => [panelId, plot.traces.map(trace => trace.varName).sort()]),
                 mapOpen: !document.getElementById('gridded-view').hidden,
+                mode: view.mode,
+                pendingPoint: view.pendingPoint,
             };
         });
         assert.equal(before.groups.length, 2);
@@ -1298,6 +1305,10 @@ try {
                     .map(([panelId, plot]) => [panelId, plot.traces.map(trace => trace.varName).sort()]),
                 mapOpen: !document.getElementById('gridded-view').hidden,
                 rows: document.querySelectorAll('#gridded-view .gridded-result').length,
+                mode: view.mode,
+                pendingPoint: view.pendingPoint,
+                activeButton: document.querySelector('#gridded-view .gridded-mode.active')?.dataset.mode,
+                latInput: document.querySelector('#gridded-view [data-input="lat"]').value,
             };
         });
         assert.equal(after.files, 1, 'one dataset, not one file per member');
@@ -1312,6 +1323,10 @@ try {
         assert.deepEqual(after.scale, { range: [250, 300], source: 'manual' }, 'the colour range as it was typed');
         assert.equal(after.mapOpen, true, 'a project saved with the map open opens on it');
         assert.equal(after.rows, 2, 'the panel lists both places');
+        assert.equal(after.mode, 'point', 'the tool in hand comes back');
+        assert.deepEqual(after.pendingPoint, before.pendingPoint, 'and so does the place typed but not extracted');
+        assert.equal(after.activeButton, 'point', 'the toolbar shows it');
+        assert.equal(after.latInput, '10', 'with its coordinates in the fields');
         // Another extraction after the restore gets its own name and tag.
         await page.click('#gridded-view [data-mode="point"]');
         await page.fill('#gridded-view [data-input="lat"]', '-15');

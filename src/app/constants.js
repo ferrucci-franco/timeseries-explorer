@@ -131,7 +131,7 @@ const DERIVED_CONSTANTS = new Map([
 // GRIB opens on the gridded map (src/gridded/grib-reader.js).
 const GRIB_EXTENSIONS = ['.grib', '.grb', '.grib1', '.grb1', '.grib2', '.grb2'];
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.nc4', '.netcdf', '.cdf', ...GRIB_EXTENSIONS, '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods', ...AUDIO_EXTENSIONS];
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 // Injected at build time by Vite (see vite.config.js). Fall back to placeholders
 // when running outside a Vite build (e.g. Node test scripts), where the globals
 // are undeclared; `typeof` avoids a ReferenceError in that case.

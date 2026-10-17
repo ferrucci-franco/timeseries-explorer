@@ -669,6 +669,11 @@ async function createWindow(url) {
   return win;
 }
 
+// netCDF in every encoding, the ZIP the Climate Data Store sends, and GRIB:
+// what opens on a map (src/app/methods/gridded-methods.js), plus the series
+// netCDF the same extensions cover.
+const GRIDDED_FILE_EXTENSIONS = ['nc', 'nc4', 'netcdf', 'cdf', 'zip', 'grib', 'grb', 'grib1', 'grb1', 'grib2', 'grb2'];
+
 async function selectResultFilePaths(options = {}, multiple = false) {
   const result = await dialog.showOpenDialog({
     title: typeof options.title === 'string' ? options.title : 'Select result file',
@@ -678,7 +683,7 @@ async function selectResultFilePaths(options = {}, multiple = false) {
     // converter has no reader for .mat or .pkl, and offering them in its own
     // dialog would only let the user pick a file it then has to refuse.
     filters: Array.isArray(options.filters) && options.filters.length ? options.filters : [
-      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'grib', 'grb', 'grib2', 'grb2', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods', ...AUDIO_FILE_EXTENSIONS] },
+      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', ...GRIDDED_FILE_EXTENSIONS, 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods', 'tno', 'ano', 'dno', ...AUDIO_FILE_EXTENSIONS] },
       // Second, not last. A readable file with the wrong extension — a CSV
       // exported as `.000`, a measurement log with no extension at all — is
       // common enough that the way to reach it should be the next entry down,
@@ -687,6 +692,7 @@ async function selectResultFilePaths(options = {}, multiple = false) {
       // picking one has to be possible.
       { name: 'All files', extensions: ['*'] },
       { name: 'Spreadsheets', extensions: ['xlsx', 'xlsm', 'xls', 'ods'] },
+      { name: 'Climate grids (netCDF, GRIB)', extensions: [...GRIDDED_FILE_EXTENSIONS] },
       { name: 'Audio recordings', extensions: [...AUDIO_FILE_EXTENSIONS] },
     ],
   });
