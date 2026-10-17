@@ -1395,6 +1395,24 @@ resumen de buscador):
   Plotly (~95 ms para 361 × 720 celdas aun cambiando solo `z`; `zsmooth:
   'fast'` no lo baja).
 
+**Archivos de series (estaciones, PyPSA) por partes.**
+
+- El lector de series ya no recibe el archivo entero copiado (antes: leído en
+  la página, con hash, copiado al Worker y otra vez al sistema de archivos de
+  h5wasm, cuatro copias). El Worker de parseo recibe el `File` y lo lee por
+  partes: netCDF4 montado con WORKERFS (`src/gridded/hdf5-input.js`,
+  compartido con los datasets grillados), netCDF3 con el lector propio.
+- El límite de netCDF de Ajustes se aplica a lo que el archivo carga (las
+  series que guarda, en Float64), no a su tamaño. Se calcula antes de leer
+  ninguna serie; por encima, el Worker devuelve `NETCDF_OVER_LIMIT` con los
+  bytes y la app hace la pregunta de siempre, con un texto que lo dice
+  ("carga X de series"). PyPSA carga sus tablas dinámicas enteras: eso es lo
+  que se pesa.
+- Medido con un archivo de estaciones de 573 MB (150 000 instantes × 1000
+  estaciones): antes, aviso por tamaño y, aceptando, 18 s y +2,1 GB de
+  memoria; ahora, sin aviso (carga 64 series, 77 MB), 4,6 s y +350 MB.
+- Sin Worker (build portable en `file://`) sigue el camino anterior.
+
 **Pendiente de esta parte:**
 
 - No probado dentro de Electron mismo: el camino del renderer sí, contra el

@@ -207,6 +207,12 @@ The `.nc`, `.nc4`, `.netcdf` and `.cdf` loader reads netCDF3 (Classic,
 bytes, not its name: a ZIP, a GRIB file or a saved error page named `.nc` is
 reported as what it is, with what to do about it.
 
+**Files of series** (stations, PyPSA networks) are read by parts in the parse
+worker too: the file is never copied whole into memory, so a 600 MB station
+archive opens in a few seconds. The netCDF limit in Settings → File loading
+applies to what the file loads (the series it keeps), not to its size; above
+it the app asks before loading.
+
 **Gridded files** (ERA5, CMIP, regular lat/lon grids) open on a map, read by
 parts in a worker, so their size is not limited by memory (a multi-GB ERA5
 month opens in a couple of seconds). The map view has offline Natural Earth

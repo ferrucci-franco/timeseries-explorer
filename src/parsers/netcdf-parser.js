@@ -1,10 +1,10 @@
-import h5wasm from 'h5wasm';
 import MatParser from './mat-parser.js';
 import PypsaNetcdfParser from './pypsa-netcdf-parser.js';
 import { PYPSA_NETCDF_DEFAULT_EAGER_LIMIT_BYTES } from './pypsa-netcdf-limits.js';
 import { netcdfContainerError, sniffNetcdfContainer } from './netcdf-sniff.js';
 import { openNetcdf3 } from '../gridded/nc3-reader.js';
-import { BufferByteSource } from '../gridded/byte-source.js';
+import { BufferByteSource, FileByteSource } from '../gridded/byte-source.js';
+import { openHdf5 } from '../gridded/hdf5-input.js';
 import {
     DESCRIPTION_KEYS,
     NON_STANDARD_CALENDARS,
@@ -169,6 +169,20 @@ function gridSample(sizes, limit) {
 }
 
 /**
+ * The series a file would load, against the limit the app set: above it, a
+ * coded error the app turns into its "larger than the limit" question.
+ */
+function checkLoadLimit(loadedBytes, options = {}) {
+    const limit = Number(options.maxLoadBytes);
+    if (!(limit > 0) || !Number.isFinite(limit) || !(loadedBytes > limit)) return;
+    throw Object.assign(new Error(`This netCDF file loads ${Math.round(loadedBytes / 1048576)} MB of series, above the ${Math.round(limit / 1048576)} MB limit.`), {
+        code: 'NETCDF_OVER_LIMIT',
+        loadedBytes,
+        limitBytes: limit,
+    });
+}
+
+/**
  * How many slices each gridded variable may contribute, given how long the
  * time axis is and how many variables are competing for the file-wide limit.
  *
@@ -246,28 +260,45 @@ export default class NetcdfParser {
         }
 
         const { kind } = sniffNetcdfContainer(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096)));
-        if (kind === 'hdf5') return this._parseHdf5(buffer, filename);
-        if (kind === 'netcdf3-classic' || kind === 'netcdf3-64-bit-offset' || kind === 'cdf5') return this._parseNetcdf3(buffer, filename);
+        if (kind === 'hdf5') return this._parseHdf5Input({ buffer }, filename, options);
+        if (kind === 'netcdf3-classic' || kind === 'netcdf3-64-bit-offset' || kind === 'cdf5') return this._parseNetcdf3(new BufferByteSource(buffer), filename, options);
         throw netcdfContainerError(kind);
     }
 
-    async _parseHdf5(buffer, filename) {
-        const module = await h5wasm.ready;
-        const virtualPath = `/netcdf-${Date.now()}-${this._sequence++}.nc`;
-        module.FS.writeFile(virtualPath, new Uint8Array(buffer));
-        const file = new h5wasm.File(virtualPath, 'r');
+    /**
+     * The same, from a File read by parts inside a Worker: netCDF4 mounted
+     * with WORKERFS, netCDF3 through the reader by parts. The file is never
+     * held whole, so its size does not matter; what is held is the series it
+     * loads. `options.maxLoadBytes` bounds those: above it a coded error
+     * (NETCDF_OVER_LIMIT, with `loadedBytes`) is thrown before any series is
+     * read, for the app to ask, and asked again with `Infinity`.
+     */
+    async parseFile(file, filename = file?.name || '', options = {}) {
+        if (!file?.size) throw new Error('netCDF file is empty.');
+        const source = new FileByteSource(file);
+        const { kind } = sniffNetcdfContainer(source.read(0, Math.min(file.size, 4096)));
+        if (kind === 'hdf5') return this._parseHdf5Input({ file, filename }, filename, options);
+        if (kind === 'netcdf3-classic' || kind === 'netcdf3-64-bit-offset' || kind === 'cdf5') return this._parseNetcdf3(source, filename, options);
+        throw netcdfContainerError(kind);
+    }
+
+    async _parseHdf5Input(input, filename, options = {}) {
+        const opened = await openHdf5(input);
+        const file = opened.file;
         try {
             const rootKeys = file.keys().sort();
-            if (this.pypsaParser._looksLikePypsa(rootKeys)) return this.pypsaParser._parseFile(file, filename);
-            const descriptors = this._hdf5Descriptors(file);
-            return this._parseGeneric(descriptors, attrsFromHdf5(file), filename, 'netcdf4-hdf5');
-        } finally {
-            file.close();
-            try {
-                module.FS.unlink(virtualPath);
-            } catch {
-                // Best-effort cleanup of the Emscripten in-memory file.
+            if (this.pypsaParser._looksLikePypsa(rootKeys)) {
+                // PyPSA loads every dynamic table whole: that is what it costs.
+                const loadedBytes = rootKeys
+                    .filter(key => this.pypsaParser._isDynamicDatasetName(key))
+                    .reduce((sum, key) => sum + product([...(file.get(key)?.shape || [])].map(Number)) * 8, 0);
+                checkLoadLimit(loadedBytes, options);
+                return this.pypsaParser._parseFile(file, filename);
             }
+            const descriptors = this._hdf5Descriptors(file);
+            return this._parseGeneric(descriptors, attrsFromHdf5(file), filename, 'netcdf4-hdf5', options);
+        } finally {
+            opened.close();
         }
     }
 
@@ -349,17 +380,17 @@ export default class NetcdfParser {
     // value. Legacy-CDS ERA5 files are exactly that (int16 fields on odd-sized
     // grids). The by-parts reader follows the file format's padding rules and
     // reads CDF-5 as well.
-    _parseNetcdf3(buffer, filename) {
+    _parseNetcdf3(source, filename, options = {}) {
         let opened;
         try {
-            opened = openNetcdf3(new BufferByteSource(buffer));
+            opened = openNetcdf3(source);
         } catch (error) {
             throw new Error(`Could not parse netCDF3 file: ${error?.message || error}`);
         }
-        return this._parseGeneric(opened.descriptors, opened.globalAttrs, filename, opened.storageFormat);
+        return this._parseGeneric(opened.descriptors, opened.globalAttrs, filename, opened.storageFormat, options);
     }
 
-    _parseGeneric(descriptors, globalAttrs, filename, storageFormat) {
+    _parseGeneric(descriptors, globalAttrs, filename, storageFormat, options = {}) {
         if (!descriptors.length) throw new Error('The netCDF file does not contain any data variables.');
         const coordinateCache = new Map();
         const readFlat = descriptor => {
@@ -444,6 +475,8 @@ export default class NetcdfParser {
         }
 
         const limits = seriesLimits(plans.map(plan => plan.seriesCount), axis.length);
+        // What the series kept will hold, known before any is read.
+        checkLoadLimit(limits.reduce((sum, limit) => sum + limit, 0) * axis.length * 8, options);
         for (const [planIndex, plan] of plans.entries()) {
             const { descriptor, alignment, otherAxes, seriesCount } = plan;
             const limit = limits[planIndex];

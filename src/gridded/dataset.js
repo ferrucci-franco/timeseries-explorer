@@ -13,7 +13,7 @@
 // arithmetic (descending latitude, 0..360 longitude rolled to -180..180, a box
 // that wraps the antimeridian) stays here.
 
-import h5wasm from 'h5wasm';
+import { openHdf5 } from './hdf5-input.js';
 import NetcdfParser from '../parsers/netcdf-parser.js';
 import { netcdfContainerError, sniffNetcdfContainer } from '../parsers/netcdf-sniff.js';
 import {
@@ -49,7 +49,6 @@ const LON_UNITS = /^(degrees?_?e(ast)?|degree_e|degrees?e|deg_e)$/i;
 const BLOCK_VALUE_TARGET = 4 * 1024 * 1024;
 const MIN_PROGRESS_BLOCKS = 40;
 
-let mountSequence = 0;
 
 function basename(path) {
     const parts = String(path || '').split('/').filter(Boolean);
@@ -87,33 +86,9 @@ async function openMember(input, parser) {
     const filename = input.filename || input.file?.name || 'dataset.nc';
     const { kind } = sniffNetcdfContainer(readHead(input));
     if (kind === 'hdf5') {
-        const module = await h5wasm.ready;
-        const FS = module.FS;
-        let path;
-        let cleanup;
-        const slot = mountSequence++;
-        if (input.file && typeof FileReaderSync === 'function' && FS.filesystems?.WORKERFS) {
-            // WORKERFS reads the File by parts on demand: the file is never copied
-            // into memory, which is what lets a multi-GB ERA5 month open.
-            const directory = `/gridded-${slot}`;
-            FS.mkdir(directory);
-            const safeName = String(input.file.name || 'dataset.nc').replace(/[\\/]/g, '_') || 'dataset.nc';
-            const file = safeName === input.file.name ? input.file : new File([input.file], safeName);
-            FS.mount(FS.filesystems.WORKERFS, { files: [file] }, directory);
-            path = `${directory}/${safeName}`;
-            cleanup = () => {
-                try { FS.unmount(directory); } catch { /* already gone */ }
-                try { FS.rmdir(directory); } catch { /* already gone */ }
-            };
-        } else {
-            const bytes = input.buffer ? new Uint8Array(input.buffer) : new Uint8Array(await input.file.arrayBuffer());
-            path = `/gridded-${slot}.nc`;
-            FS.writeFile(path, bytes);
-            cleanup = () => {
-                try { FS.unlink(path); } catch { /* already gone */ }
-            };
-        }
-        const file = new h5wasm.File(path, 'r');
+        // Mounted, never copied, inside the Worker (see hdf5-input.js).
+        const opened = await openHdf5(input);
+        const file = opened.file;
         const rootKeys = file.keys().sort();
         const pypsa = parser.pypsaParser._looksLikePypsa(rootKeys);
         const descriptors = pypsa ? [] : parser._hdf5Descriptors(file);
@@ -124,8 +99,7 @@ async function openMember(input, parser) {
             globalAttrs: attrsFromHdf5(file),
             descriptors,
             close() {
-                try { file.close(); } catch { /* already closed */ }
-                cleanup();
+                opened.close();
             },
         };
     }

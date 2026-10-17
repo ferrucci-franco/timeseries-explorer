@@ -1036,6 +1036,21 @@ try {
             map: !!document.querySelector('#gridded-view:not([hidden])'),
         }));
         assert.deepEqual(station, { gridded: false, format: 'generic-netcdf', map: false });
+        // Read by parts in the worker: the app holds no copy of the file.
+        const held = await page.evaluate(() => {
+            const entry = [...window.app.files.values()][0];
+            return { buffer: entry.buffer, hash: String(entry.contentHash).startsWith('file:') };
+        });
+        assert.deepEqual(held, { buffer: null, hash: true }, 'a station file is not read whole into the page');
+        // Judged by the series it loads, not by its size: over the limit,
+        // the netCDF question says so; going on loads it.
+        await page.evaluate(() => { window.app._pypsaNetcdfEagerLimitBytes = () => 16; });
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'generic-timeseries-64bit-offset.nc'));
+        await page.waitForSelector('.modal-overlay.show .modal-btn-confirm', { timeout: 60000 });
+        const question = await page.$eval('.modal-overlay.show', el => el.innerText);
+        assert.match(question, /carga .* de series/, `the question is about the series loaded (${question})`);
+        await page.click('.modal-overlay.show .modal-btn-confirm');
+        await page.waitForFunction(() => window.app.files.size === 2, null, { timeout: 60000 });
 
         await page.setInputFiles('#file-input', {
             name: 'download.nc', mimeType: 'application/octet-stream',
@@ -1044,7 +1059,7 @@ try {
         await page.waitForSelector('.modal-overlay.show', { timeout: 60000 });
         const message = await page.$eval('.modal-overlay.show', el => el.innerText);
         assert.match(message, /es un archivo GRIB, no netCDF/);
-        assert.equal(await page.evaluate(() => window.app.files.size), 1, 'the GRIB file is not added');
+        assert.equal(await page.evaluate(() => window.app.files.size), 2, 'the GRIB file is not added');
         assert.deepEqual(errors, []);
         await context.close();
     }
