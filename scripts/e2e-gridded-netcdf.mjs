@@ -303,17 +303,24 @@ try {
             heading: document.querySelector('#gridded-view [data-role="results-heading"]').textContent,
         }));
         const shown = await layoutNow();
-        await page.click('#gridded-view [data-action="toggle-results"]');
+        const listToggle = '#gridded-view .gridded-results-head [data-action="toggle-results"]';
+        await page.click(listToggle);
         await page.waitForTimeout(300);
         const folded = await layoutNow();
         assert.equal(folded.body, true, 'Hide folds the list away');
         assert.equal(folded.preview, true, 'and the preview under the map');
         assert.ok(folded.map > shown.map + 50, `the map takes the height (${shown.map} → ${folded.map})`);
         assert.match(folded.heading, /\(\d+\)$/, 'the heading counts the series');
-        await page.click('#gridded-view [data-action="toggle-results"]');
+        await page.click(listToggle);
         await page.waitForTimeout(300);
         const back = await layoutNow();
         assert.deepEqual([back.body, back.preview], [false, false], 'Show brings both back');
+        // The preview has the same switch on its own heading.
+        await page.click('#gridded-view [data-role="preview"] [data-action="toggle-results"]');
+        await page.waitForTimeout(300);
+        assert.deepEqual(Object.values(await layoutNow()).slice(0, 2), [true, true], "the preview's Hide folds both too");
+        await page.click(listToggle);
+        await page.waitForTimeout(300);
         // The "Map" button on the file row opens the map again. A map closed
         // with "Close map" does not put a button over the plots asking to
         // come back.
@@ -332,7 +339,7 @@ try {
         assert.equal(await page.$('#gridded-view [data-action="as-series"]'), null);
         // Text buttons beside icon buttons are as tall as they are.
         const heights = await page.evaluate(() => ['export-map', 'close', 'toggle-results', 'remove-all', 'export-series']
-            .map(action => Math.round(document.querySelector(`#gridded-view [data-action="${action}"]`).getBoundingClientRect().height)));
+            .map(action => Math.round(document.querySelector(`#gridded-view :is(.gridded-toolbar, .gridded-results-head) [data-action="${action}"]`).getBoundingClientRect().height)));
         assert.ok(heights.every(height => height === heights[0]), `one height for the toolbar and list buttons (${heights})`);
         // A wheel zoom only ever moves one way: no redraw between notches puts
         // back the ranges it started from, and a grid this small is drawn
@@ -989,6 +996,24 @@ try {
         await page.click('#gridded-view [data-action="map-extract"]');
         await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 1, null, { timeout: 60000 });
         await page.waitForTimeout(600);
+        // One column in the order a finger uses it: the time bar, the tools,
+        // the preview with its own Hide, the list of series, the inspector.
+        const order = await page.evaluate(() => ['[data-role="timebar"]', '.gridded-tools', '[data-role="preview"]', '.gridded-results', '[data-role="inspector"]']
+            .map(selector => Math.round(document.querySelector(`#gridded-view ${selector}`).getBoundingClientRect().top)));
+        assert.deepEqual([...order].sort((a, b) => a - b), order, `on a phone: time bar, tools, preview, series, inspector (${order})`);
+        const previewToggle = '#gridded-view [data-role="preview"] [data-action="toggle-results"]';
+        await page.click(previewToggle);
+        await page.waitForTimeout(300);
+        const folded = await page.evaluate(() => {
+            const preview = document.querySelector('#gridded-view [data-role="preview"]');
+            return { hidden: preview.hidden, height: preview.getBoundingClientRect().height, toggle: preview.querySelector('[data-action="toggle-results"]').textContent };
+        });
+        assert.ok(!folded.hidden && folded.height < 60 && /Show/.test(folded.toggle), `hidden on a phone, the preview keeps one line with Show (${JSON.stringify(folded)})`);
+        await page.click(previewToggle);
+        await page.waitForTimeout(300);
+        assert.ok(await page.evaluate(() => document.querySelector('#gridded-view [data-role="preview"]').getBoundingClientRect().height > 150), 'and Show brings it back');
+        await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
+        await page.waitForTimeout(300);
         // A finger held on P1: its menu, and the map stays where it is.
         const cdp = await context.newCDPSession(page);
         const p1 = await phoneAt(45, 15);

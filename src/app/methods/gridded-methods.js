@@ -968,7 +968,10 @@ export function installGriddedMethods(TargetClass) {
                     </div>
                     <div class="gridded-splitter" data-role="splitter" role="separator" aria-orientation="horizontal" tabindex="0" hidden></div>
                     <div class="gridded-preview" data-role="preview" hidden>
-                        <div class="gridded-preview-head" data-role="preview-title"></div>
+                        <div class="gridded-preview-head">
+                            <span data-role="preview-title"></span>
+                            <button type="button" class="gridded-results-toggle gridded-preview-toggle" data-action="toggle-results" aria-expanded="true"></button>
+                        </div>
                         <div class="gridded-preview-chart" data-role="preview-chart"></div>
                     </div>
                 </div>
@@ -983,7 +986,7 @@ export function installGriddedMethods(TargetClass) {
                         </div>
                         <button type="button" class="gridded-inspector-copy" data-action="copy-inspector"></button>
                     </section>
-                    <section class="gridded-panel-section">
+                    <section class="gridded-panel-section gridded-tools">
                         <h3 class="gridded-tools-heading"><span data-role="tools-heading"></span><button type="button" class="fft-help-btn gridded-help-btn" data-action="methods-help">?</button></h3>
                         <div class="gridded-modes" role="radiogroup" data-role="modes">
                             <button type="button" class="gridded-mode" data-mode="navigate"></button>
@@ -3942,15 +3945,19 @@ export function installGriddedMethods(TargetClass) {
     };
 
     proto._griddedSyncResultsToggle = function(view) {
-        const toggle = document.querySelector('#gridded-view [data-action="toggle-results"]');
+        // Two of them: on the list's heading and on the preview's, which on a
+        // phone is a long scroll away from the list.
+        const toggles = document.querySelectorAll('#gridded-view [data-action="toggle-results"]');
         const body = this._griddedEl('results-body');
         const heading = this._griddedEl('results-heading');
-        if (!toggle || !body || !heading) return;
+        if (!toggles.length || !body || !heading) return;
         const hidden = !!view.resultsHidden;
         body.hidden = hidden;
-        toggle.textContent = `${hidden ? '▸' : '▾'} ${i18n.t(hidden ? 'griddedShow' : 'griddedHide')}`;
-        toggle.title = i18n.t(hidden ? 'griddedShowResultsTitle' : 'griddedHideResultsTitle');
-        toggle.setAttribute('aria-expanded', String(!hidden));
+        for (const toggle of toggles) {
+            toggle.textContent = `${hidden ? '▸' : '▾'} ${i18n.t(hidden ? 'griddedShow' : 'griddedHide')}`;
+            toggle.title = i18n.t(hidden ? 'griddedShowResultsTitle' : 'griddedHideResultsTitle');
+            toggle.setAttribute('aria-expanded', String(!hidden));
+        }
         const count = (view.groups || []).reduce((sum, group) => sum + group.sets.length, 0);
         heading.textContent = i18n.t('griddedResultsHeading') + (hidden && count ? ` (${count})` : '');
     };
@@ -4038,14 +4045,21 @@ export function installGriddedMethods(TargetClass) {
         const panel = this._griddedEl('preview');
         const chart = this._griddedEl('preview-chart');
         if (!panel || !chart) return;
-        const series = view.resultsHidden ? [] : this._griddedCheckedSeries(view);
+        const checked = this._griddedCheckedSeries(view);
+        const series = view.resultsHidden ? [] : checked;
         const splitter = this._griddedEl('splitter');
         if (!series.length) {
-            panel.hidden = true;
+            // Hidden on a phone, the preview keeps its heading, one line with
+            // the way back where the series were, not a long scroll away.
+            const folded = !!view.resultsHidden && checked.length > 0 && document.documentElement.classList.contains('compact');
+            panel.hidden = !folded;
+            panel.classList.toggle('is-folded', folded);
+            if (folded) this._griddedEl('preview-title').textContent = `${i18n.t('griddedPreviewTitle')} (${checked.length})`;
             if (splitter) splitter.hidden = true;
             return;
         }
         panel.hidden = false;
+        panel.classList.remove('is-folded');
         if (splitter) splitter.hidden = false;
         this._griddedEl('preview-title').textContent = i18n.t('griddedPreviewTitle');
         const data = this.plotManager.files.get(view.fileId).data;

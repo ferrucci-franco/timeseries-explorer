@@ -484,9 +484,19 @@ html:not(.compact) .gridded-menu input[type="checkbox"]:focus-visible {
 }
 
 .gridded-preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
     padding: 0.2rem 0.6rem 0;
     font-size: 0.75rem;
     color: var(--text-secondary);
+}
+
+.gridded-view .gridded-preview-toggle {
+    height: 1.5rem;
+    margin: 0;
+    font-size: 0.72rem;
 }
 
 .gridded-preview-chart {
@@ -989,9 +999,53 @@ html.compact .gridded-main {
     overscroll-behavior: contain;
 }
 
-html.compact .gridded-map-column {
-    flex: none;
-    min-height: 0;
+/* One column, in the order a finger uses it: the map and its time bar,
+   the tools that act on the map, the preview of the series extracted and
+   their list, the inspector last. The map's column and the panel of the
+   wide layout lend their parts to it. */
+html.compact .gridded-map-column,
+html.compact .gridded-panel {
+    display: contents;
+}
+
+html.compact .gridded-body { order: 1; }
+html.compact .gridded-status { order: 2; }
+html.compact .gridded-progress { order: 3; }
+html.compact .gridded-timebar { order: 4; }
+html.compact .gridded-tools { order: 5; }
+html.compact .gridded-preview { order: 6; }
+html.compact .gridded-results { order: 7; }
+html.compact .gridded-inspector { order: 8; }
+
+html.compact .gridded-status,
+html.compact .gridded-progress,
+html.compact .gridded-timebar,
+html.compact .gridded-panel-section {
+    flex-shrink: 0;
+}
+
+html.compact .gridded-panel-section {
+    padding: 0.55rem 0.75rem;
+    background: var(--bg-secondary);
+    font-size: 0.85rem;
+}
+
+html.compact .gridded-panel-section h3 {
+    margin-bottom: 0.35rem;
+}
+
+/* The help and the scope in small print: on a phone they were most of the
+   screen between the map and the series. */
+html.compact .gridded-tools .gridded-help,
+html.compact .gridded-results .gridded-help,
+html.compact .gridded-scope {
+    font-size: 0.75rem;
+    line-height: 1.3;
+}
+
+html.compact .gridded-scope {
+    margin-top: 0.4rem;
+    padding: 0.25rem 0.45rem;
 }
 
 /* Sized by _griddedFitPhoneHeight. */
@@ -1050,24 +1104,34 @@ html.compact .gridded-splitter {
 }
 
 html.compact .gridded-preview {
-    height: 200px;
-}
-
-html.compact .gridded-panel {
-    width: auto;
-    flex-shrink: 0;
-    overflow: visible;
-    border-left: none;
+    height: 220px;
     border-top: 1px solid var(--border-color);
-    font-size: 0.85rem;
+    border-bottom: 1px solid var(--border-color);
 }
 
-html.compact .gridded-panel > .gridded-results {
-    order: 1;
+/* Hidden, the preview keeps its heading: one line, with the way back. */
+html.compact .gridded-preview.is-folded {
+    height: auto;
+    min-height: 0;
 }
 
-html.compact .gridded-panel > .gridded-inspector {
-    order: 2;
+html.compact .gridded-preview.is-folded .gridded-preview-chart {
+    display: none;
+}
+
+html.compact .gridded-preview-head {
+    padding: 0.3rem 0.5rem 0.3rem 0.75rem;
+}
+
+/* An extraction's series beside its switch, without the air of the wide
+   layout's rows. */
+html.compact .gridded-result {
+    padding: 0.25rem 0.35rem;
+}
+
+html.compact .gridded-sets {
+    padding-left: 0;
+    gap: 0;
 }
 
 /* Fingers: taller tool buttons and fields. */
