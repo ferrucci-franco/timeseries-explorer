@@ -2307,9 +2307,12 @@ class PlotManager {
                 if (plot.correlationDiv) Plotly.purge(plot.correlationDiv);
                 Plotly.purge(plot.div);
                 correlationContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.correlationOptionsEl?.remove();
                 plot.div = null;
                 plot.correlationDiv = null;
                 plot.correlationContainer = null;
+                plot.correlationOptionsEl = null;
             } else if (integralContainer) {
                 if (plot.integralDiv) Plotly.purge(plot.integralDiv);
                 if (plot.integralPieDiv) Plotly.purge(plot.integralPieDiv);
@@ -2338,9 +2341,12 @@ class PlotManager {
                 if (plot.heatmapDiv) Plotly.purge(plot.heatmapDiv);
                 Plotly.purge(plot.div);
                 heatmapContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.heatmapOptionsEl?.remove();
                 plot.div = null;
                 plot.heatmapDiv = null;
                 plot.heatmapContainer = null;
+                plot.heatmapOptionsEl = null;
             } else if (histContainer) {
                 if (plot.histogramDiv) Plotly.purge(plot.histogramDiv);
                 Plotly.purge(plot.div);
@@ -2359,6 +2365,8 @@ class PlotManager {
                 if (plot.phase2dFitTimeDiv) Plotly.purge(plot.phase2dFitTimeDiv);
                 Plotly.purge(plot.div);
                 phase2dFitContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the shell.
+                plot.phase2dFitOptions?.remove();
                 plot.div = null;
                 plot.phase2dFitTimeDiv = null;
                 plot.phase2dFitContainer = null;

@@ -1083,6 +1083,66 @@ html.compact .compact-switch-row input[type="checkbox"]:not(.modal-checklist-box
     padding-top: 6px;
 }
 
+/* A desktop panel menu's settings, as rows of a sheet (View, Marks): a choice
+   keeps its caption above the buttons, where a dropdown had it beside them. */
+.compact-menu-choice {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.compact-menu-choice-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
+.compact-menu-choice .compact-action-row {
+    margin: 0;
+}
+
+html.compact .compact-number-input {
+    width: 96px;
+    flex: 0 0 auto;
+    min-height: 44px;
+    box-sizing: border-box;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 16px;
+    text-align: right;
+}
+
+/* A setting that is off cannot be set: say so rather than letting a finger
+   find out. */
+html.compact .compact-switch-row:has(input:disabled),
+html.compact .compact-menu-choice:has(button:disabled) {
+    opacity: 0.5;
+}
+
+/* The gaps settings (Marks → ⚙), the one panel that opens on the plot rather
+   than in a sheet: it is already drawn inside the panel and clamped to it, so
+   only its controls grow to a finger's. */
+html.compact .gaps-panel {
+    font-size: 14px;
+}
+
+html.compact .gaps-panel-row input,
+html.compact .gaps-panel-row select,
+html.compact .gaps-panel-auto {
+    min-height: 40px;
+    font-size: 16px;
+}
+
+html.compact .gaps-panel-close {
+    min-width: 40px;
+    min-height: 40px;
+}
+
 /* ── Lent desktop pieces, restyled for the sheet ─────────────────────── */
 
 /* The sidebar, as the Data sheet. Only files and variables for now; the
@@ -1234,8 +1294,11 @@ html.compact .compact-sheet .example-menu[hidden] {
     display: flex !important;
 }
 
-/* The FFT options panel, as the content of the Analyze sheet. */
-html.compact .compact-sheet .fft-options {
+/* An analysis's options panel (FFT's, and the Heatmap's own aside), as the
+   content of the Analyze sheet: a side rail of a fixed width becomes a block
+   as wide as the sheet. */
+html.compact .compact-sheet .fft-options,
+html.compact .compact-sheet .heatmap-options {
     position: static;
     width: auto;
     max-width: none;
@@ -1324,6 +1387,12 @@ html.compact .plots-area .compact-fit-group[hidden] {
     display: none;
 }
 
+/* A pane with nothing to fit on that axis (the Heatmap's calendar rows) drops
+   its button; `display: flex` below would otherwise outrank `hidden`. */
+html.compact .compact-fit-btn[hidden] {
+    display: none;
+}
+
 html.compact .compact-fit-btn {
     pointer-events: auto;
     display: flex;
@@ -1377,6 +1446,14 @@ html.compact .fft-workspace > .edge-toggle-rail,
 html.compact .hist-container .hist-topbar-group,
 html.compact .hist-container .hist-workspace > .hist-options,
 html.compact .hist-container .hist-workspace > .edge-toggle-rail {
+    display: none !important;
+}
+
+/* The Heatmap, the same way: its top bar's buttons and its options panel go
+   to the Analyze sheet, and only its status stays on the plot. */
+html.compact .heatmap-topbar-group,
+html.compact .heatmap-workspace > .heatmap-options,
+html.compact .heatmap-workspace > .edge-toggle-rail {
     display: none !important;
 }
 
@@ -1940,6 +2017,113 @@ html.compact .compact-sheet .fft-options-subtitle {
 
 html.compact .compact-sheet .fft-options button {
     padding: 0 14px;
+}
+
+/* The Heatmap's options, as lent to the Analyze sheet: its rows, its pickers
+   and its segmented choices are drawn at desktop size, and grow here to a
+   finger's and to readable text. */
+html.compact .compact-sheet .heatmap-options,
+html.compact .compact-sheet .heatmap-options-subtitle,
+html.compact .compact-sheet .heatmap-option-row {
+    font-size: 16px;
+}
+
+html.compact .compact-sheet .heatmap-option-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 44px;
+}
+
+html.compact .compact-sheet .heatmap-option-row input[type="checkbox"] {
+    justify-self: end;
+}
+
+html.compact .compact-sheet .heatmap-select,
+html.compact .compact-sheet .heatmap-number-input,
+html.compact .compact-sheet .heatmap-datetime-input,
+html.compact .compact-sheet .heatmap-text-input {
+    height: auto;
+    min-height: 44px;
+    font-size: 16px;
+}
+
+html.compact .compact-sheet .heatmap-number-input {
+    max-width: 140px;
+}
+
+/* A segmented choice takes the width and splits it, rather than crowding a
+   row of 26 px buttons against the edge. */
+html.compact .compact-sheet .heatmap-segmented {
+    display: flex;
+    width: 100%;
+}
+
+html.compact .compact-sheet .heatmap-segmented-btn {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+html.compact .compact-sheet .heatmap-help,
+html.compact .compact-sheet .heatmap-summary,
+html.compact .compact-sheet .heatmap-summary * {
+    font-size: 14px;
+}
+
+/* Correlation reuses the FFT shell, so its top bar and its drawer are already
+   handled above; what it draws inside the drawer is its own: the section
+   titles, the pair list with its r and its two icon actions, and the notes. */
+html.compact .compact-sheet .correlation-options .fft-options-section h4 {
+    font-size: 14px;
+}
+
+html.compact .compact-sheet .correlation-pair-item {
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 15px;
+}
+
+html.compact .compact-sheet .correlation-pair-btn {
+    min-width: 44px;
+}
+
+html.compact .compact-sheet .correlation-pending-hint,
+html.compact .compact-sheet .correlation-warning,
+html.compact .compact-sheet .correlation-message,
+html.compact .compact-sheet .correlation-message *,
+html.compact .compact-sheet .correlation-empty {
+    font-size: 14px;
+}
+
+/* The 2D fit's drawer, lent to the sheet the same way: the pair and the fit
+   type become full-width rows, and the results — equation, coefficients and
+   metrics — are read at a phone's text size. */
+html.compact .compact-sheet .phase2d-fit-field {
+    flex-wrap: wrap;
+}
+
+html.compact .compact-sheet .phase2d-fit-field-label,
+html.compact .compact-sheet .phase2d-fit-drawer-title,
+html.compact .compact-sheet .phase2d-fit-result-name,
+html.compact .compact-sheet .phase2d-fit-coeffs,
+html.compact .compact-sheet .phase2d-fit-coeff-k,
+html.compact .compact-sheet .phase2d-fit-coeff-v {
+    font-size: 15px;
+}
+
+html.compact .compact-sheet .phase2d-fit-pair-select,
+html.compact .compact-sheet .phase2d-fit-type-select {
+    flex: 1 1 100%;
+    font-size: 16px;
+    padding: 0 8px;
+}
+
+html.compact .compact-sheet .phase2d-fit-equation {
+    font-size: 16px;
+}
+
+html.compact .compact-sheet .phase2d-fit-stats,
+html.compact .compact-sheet .phase2d-fit-warning,
+html.compact .compact-sheet .phase2d-fit-empty {
+    font-size: 14px;
 }
 
 /* Text that was 11–13 px. */

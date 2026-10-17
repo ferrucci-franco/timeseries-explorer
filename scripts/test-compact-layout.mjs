@@ -14,6 +14,16 @@ import {
     viewportWantsCompact,
 } from '../src/ui/compact-layout.js';
 import { compactPlotLayout, compactPlotRelayout } from '../src/utils/compact-plot-layout.js';
+import {
+    COMPACT_ANALYSES,
+    COMPACT_ANALYSIS_PANES,
+    COMPACT_FIT_MODES,
+    COMPACT_PAIR_MODES,
+    COMPACT_SIGNAL_LIST_MODES,
+    compactAnalysis,
+    compactAnalysisFor,
+    compactWindowZoom,
+} from '../src/app/methods/compact-analyses.js';
 
 // ── Phones, upright and sideways ────────────────────────────────────────────
 for (const [width, height] of [[320, 568], [360, 800], [390, 844], [412, 915]]) {
@@ -152,6 +162,122 @@ assert.equal(isLandscapeViewport(390, 844), false);
     assert.equal(compactPlotRelayout({ 'yaxis.title.font.size': 10 })['yaxis.title.font.size'], 12);
     assert.equal(compactPlotRelayout({ 'font.size': 11 })['font.size'], 12);
     assert.deepEqual(compactPlotRelayout({ font: { color: '#fff' } }), { font: { color: '#fff' } }, 'a colour change is only a colour change');
+}
+
+// ── The analyses the phone layout drives (§5.3, §11) ────────────────────────
+// One entry per analysis describes it on a phone, and the sets the layout
+// reads are derived from those entries. The guard below is the point of the
+// registry: an analysis added to the desktop menu fails this test until it
+// says where it lives on a phone.
+{
+    const modes = COMPACT_ANALYSES.map(entry => entry.mode);
+    assert.deepEqual(modes, [...new Set(modes)], 'no mode is described twice');
+    assert.equal(modes[0], 'timeseries', 'the plain time series comes first: it is how an analysis is left');
+
+    for (const entry of COMPACT_ANALYSES) {
+        assert.ok(entry.labelKey, `${entry.mode} has a label for its radio in the Analyze sheet`);
+        assert.equal(compactAnalysis(entry.mode), entry, `${entry.mode} is found by its mode`);
+        assert.ok(!(entry.signals && entry.pairs), `${entry.mode} takes signals or pairs, not both`);
+        if (entry.signals) {
+            assert.equal(typeof entry.removeTrace, 'function', `${entry.mode} says how a tap in Data takes a signal off it`);
+        }
+        if (entry.pairs) {
+            assert.equal(typeof entry.removePair, 'function', `${entry.mode} says how one of its pairs comes off`);
+            // Its plot is not a time series, so the sheet needs the mode to go
+            // back to, and what to call it, when the analysis is turned off.
+            assert.ok(entry.offMode && entry.offLabelKey, `${entry.mode} says what turning it off leaves`);
+            assert.ok(entry.pairHintKey, `${entry.mode} says what its pairs are for`);
+        }
+        if (entry.onMode) {
+            // Not a mode of its own: it opens over a plot of another mode, so
+            // it says how it is recognised, turned on and turned off, and what
+            // that plot is called when it is off.
+            assert.equal(typeof entry.matches, 'function', `${entry.mode} says when it is the analysis on a plot`);
+            assert.equal(typeof entry.turnOn, 'function', `${entry.mode} says how it is turned on`);
+            assert.equal(typeof entry.turnOff, 'function', `${entry.mode} says how it is turned off`);
+            assert.ok(entry.offMode && entry.offLabelKey, `${entry.mode} says what turning it off leaves`);
+            assert.equal(typeof entry.mainFit, 'function', `${entry.mode} fits the plot it opens over its own way`);
+        }
+        if (entry.mode === 'timeseries') continue;
+        // Every analysis lends an options panel to the sheet, under a title,
+        // and offers the reset its own top bar has.
+        assert.equal(typeof entry.options, 'function', `${entry.mode} lends an options panel`);
+        assert.ok(entry.optionsTitleKey, `${entry.mode} titles it`);
+        assert.ok(entry.reset?.labelKey && entry.reset?.titleKey && typeof entry.reset.run === 'function',
+            `${entry.mode} has its reset, for the Analyze and the Plot sheet`);
+        assert.equal(typeof entry.actions, 'function', `${entry.mode} lists the rest of its top bar`);
+        assert.ok(entry.pane?.name && entry.pane?.div, `${entry.mode} names the pane it draws beside its time pane`);
+        assert.ok(entry.pane.fit === null || typeof entry.pane.fit === 'function',
+            `${entry.pane.name} says how its own axes are fitted, or that nothing on it can be`);
+    }
+
+    const paneNames = COMPACT_ANALYSIS_PANES.map(pane => pane.name);
+    assert.deepEqual(paneNames, [...new Set(paneNames)], 'two analyses never call their pane the same');
+    assert.ok(!paneNames.includes('main'), '"main" is the time pane, which no analysis owns');
+    const paneDivs = COMPACT_ANALYSIS_PANES.map(pane => pane.div);
+    assert.deepEqual(paneDivs, [...new Set(paneDivs)], 'nor hold their div in the same property');
+    assert.equal(COMPACT_ANALYSIS_PANES.find(pane => pane.name === 'calendar')?.mode, 'heatmap');
+    assert.equal(COMPACT_ANALYSIS_PANES.find(pane => pane.name === 'spectrum')?.mode, 'fft');
+
+    // Derived, not written twice.
+    assert.deepEqual([...COMPACT_SIGNAL_LIST_MODES], COMPACT_ANALYSES.filter(e => e.signals).map(e => e.mode));
+    // In plot-mode terms: the fit buttons are drawn on a panel, which knows
+    // its mode and not which workspace is open over it.
+    assert.deepEqual([...COMPACT_FIT_MODES], COMPACT_ANALYSES.filter(e => e.fit).map(e => e.onMode || e.mode));
+    assert.deepEqual([...COMPACT_PAIR_MODES], ['correlation'], 'correlation is the analysis made of pairs');
+    // Its results pane is r against a fixed [-1, 1]: no fit buttons there, and
+    // its time pane, drawn from the pairs, fits itself.
+    assert.equal(compactAnalysis('correlation').pane.fit, null);
+    assert.equal(typeof compactAnalysis('correlation').mainFit, 'function');
+    assert.equal(compactAnalysis('correlation').offMode, 'phase2d');
+    for (const mode of ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']) {
+        assert.equal(compactAnalysis(mode).offMode, undefined, `${mode} turns off to the time series`);
+        assert.equal(compactAnalysis(mode).mainFit, undefined, `${mode} shares the time-pane fit`);
+    }
+    // The Heatmap's rows are a fixed calendar axis, and its calendar is not a
+    // time axis to draw a window across.
+    assert.equal(compactAnalysis('heatmap').pane.fitY, false);
+    assert.equal(compactAnalysis('heatmap').pane.windowZoom, false);
+    assert.equal(compactAnalysis('integral').pane.windowZoom, false, 'the integral’s bars are per period');
+    assert.equal(compactAnalysis('fft').pane.windowZoom, true);
+    assert.equal(compactAnalysis('phase2d'), null, 'a plot type is not an analysis');
+
+    // A slow double tap draws a window where there is a time axis: the pane an
+    // analysis is built on answers with the entry's flag, the pane beside it
+    // with its own.
+    assert.equal(compactWindowZoom(compactAnalysis('fft'), 'main'), true);
+    assert.equal(compactWindowZoom(compactAnalysis('fft'), 'spectrum'), true);
+    assert.equal(compactWindowZoom(compactAnalysis('integral'), 'integral'), false);
+    assert.equal(compactWindowZoom(compactAnalysis('heatmap'), 'calendar'), false);
+    assert.equal(compactWindowZoom(null, 'main'), false, 'a plot with no analysis draws no window');
+
+    // ── The analysis a plot carries ─────────────────────────────────────────
+    // A mode answers for itself; the 2D fit is a workspace a 2D plot opens
+    // over itself, so the plot's own state is what says it is on.
+    const fit = compactAnalysis('phase2d-fit');
+    assert.equal(compactAnalysisFor({ mode: 'fft' }), compactAnalysis('fft'));
+    assert.equal(compactAnalysisFor({ mode: 'phase2d' }), null, 'a 2D plot without the fit carries no analysis');
+    assert.equal(compactAnalysisFor({ mode: 'phase2d', phase2d: { fitEnabled: true } }), fit);
+    assert.equal(compactAnalysisFor({ mode: 'correlation', phase2d: { fitEnabled: true } }), compactAnalysis('correlation'),
+        'the flag only counts on the plot the fit opens over');
+    assert.equal(compactAnalysisFor(null), null);
+    assert.equal(fit.onMode, 'phase2d');
+    assert.equal(fit.windowZoom, false, 'its main pane is the 2D plot: x against y');
+    assert.equal(compactWindowZoom(fit, 'fit-time'), true, 'the pane beside it is the time one');
+    assert.ok(COMPACT_FIT_MODES.has('phase2d'), 'a 2D plot under the fit still carries its fit buttons');
+
+    // ── §11: the desktop Analysis menu and the phone agree ──────────────────
+    // Read from the menu's own source, so a new analysis there has to declare
+    // its phone placement (or be listed below as deliberately desktop-only).
+    const desktopOnly = new Set();
+    const marks = readFileSync(new URL('../src/plots/methods/marks-methods.js', import.meta.url), 'utf8');
+    const menu = marks.slice(marks.indexOf('_analysisModes = function'), marks.indexOf('_analysisMenuModel'));
+    const ids = [...menu.matchAll(/\{ id: '([^']+)'/g)].map(match => match[1]);
+    assert.ok(ids.length >= 5, 'the desktop Analysis menu was read');
+    for (const id of ids) {
+        if (desktopOnly.has(id)) continue;
+        assert.ok(compactAnalysis(id), `the desktop analysis "${id}" says where it lives on a phone (compact-analyses.js)`);
+    }
 }
 
 console.log('compact layout rules: ok');

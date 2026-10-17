@@ -281,6 +281,65 @@ try {
     const rowLines = await page.evaluate(() => [...document.querySelectorAll('.compact-sheet .compact-action-row')]
         .filter(row => getComputedStyle(row).backgroundImage !== 'none').length);
     assert.equal(rowLines, 0, 'no divider line between the plot sheet buttons');
+    // ── View and Marks: the desktop's two menus, as rows of this sheet ──────
+    const viewState = () => page.evaluate(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return {
+            logY: !!plot.timeseriesYLog,
+            stacked: !!plot.timeseriesStacked,
+            y2: !!plot.timeseriesY2Enabled,
+            shape: plot.div?._fullData?.[0]?.line?.shape ?? null,
+            nan: !!plot.showNaN,
+            gaps: !!plot.showGaps,
+        };
+    });
+    const menuItem = (key) => page.locator(`.compact-page-plot [data-menu-item="${key}"]`);
+    assert.equal(await menuItem('y2log').isDisabled(), true, 'Log Y2 is off while there is no second axis');
+    await menuItem('ylog').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.timeseriesYLog === true);
+    await menuItem('stack').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.timeseriesStacked === true);
+    assert.deepEqual(
+        { logY: (await viewState()).logY, stacked: (await viewState()).stacked },
+        { logY: true, stacked: true },
+        'the View switches read the plot and change it',
+    );
+    // The line shape, a segmented choice where the desktop has a radio row.
+    await menuItem('line-hv').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?._fullData?.[0]?.line?.shape === 'hv');
+    assert.equal(await menuItem('line-hv').getAttribute('aria-checked'), 'true', 'and says which one is on');
+    await menuItem('line-auto').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?._fullData?.[0]?.line?.shape !== 'hv');
+    // Marks, the second menu, as switches of their own section.
+    await menuItem('nan').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.showNaN === true);
+    await menuItem('gaps').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.showGaps === true);
+    assert.deepEqual({ nan: (await viewState()).nan, gaps: (await viewState()).gaps }, { nan: true, gaps: true }, 'NaN and gaps are marked');
+    await shot(page, 'view-marks');
+    // The gaps settings are a panel on the plot, so the sheet gets out of the way.
+    await menuItem('gaps-settings').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null && !!document.querySelector('.gaps-panel'));
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const r = document.querySelector('.gaps-panel').getBoundingClientRect();
+            const problems = [];
+            if (r.left < 0 || r.right > window.innerWidth) problems.push(`the gaps panel runs from ${Math.round(r.left)} to ${Math.round(r.right)}`);
+            if (document.documentElement.scrollWidth > window.innerWidth + 1) problems.push('the page scrolls sideways');
+            return problems;
+        }),
+        [],
+        'and it fits the screen',
+    );
+    await page.locator('.gaps-panel-close').click();
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    // Back to a plain plot for what follows.
+    for (const key of ['nan', 'gaps', 'stack', 'ylog']) await menuItem(key).click();
+    await page.waitForFunction(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return !plot.showNaN && !plot.showGaps && !plot.timeseriesStacked && !plot.timeseriesYLog;
+    });
+
     await page.locator('.compact-add-signals-btn').click();
     await page.waitForFunction(() => window.app._compact.sheet === 'data');
     await page.locator('.compact-sheet-close').click();
@@ -731,9 +790,135 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
     assert.equal(await page.locator('.compact-page-plot .compact-trace-name', { hasText: 'voltage / current' }).count(), 1, 'the Plot sheet lists the pair');
     await shot(page, '2d-plot-sheet');
+
+    // ── Correlation: the analysis made of those pairs ───────────────────────
+    const corrPairs = () => page.evaluate(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return { mode: plot?.mode, pairs: (plot?.phaseTraces || []).map(p => [p.x, p.y]) };
+    });
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    await page.locator('.compact-radio', { hasText: 'Correlation' }).click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'correlation');
+    assert.equal(await page.locator('.modal-overlay').count(), 0, 'turning an analysis of the 2D family on asks nothing');
+    assert.deepEqual(await corrPairs(), { mode: 'correlation', pairs: [['voltage', 'current']] }, 'and keeps the pair');
+    await page.waitForFunction(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return !!plot?.correlationOptionsEl && document.querySelector('.compact-sheet')?.contains(plot.correlationOptionsEl);
+    }, null, { timeout: 15000 });
+    await page.waitForFunction(() => /r=/.test(document.querySelector('.compact-sheet .correlation-pair-r')?.textContent || ''), null, { timeout: 30000 });
+    assert.equal(await page.locator('.correlation-container .fft-topbar-group').first().isVisible(), false,
+        'its own buttons are in the sheet, not over the plot');
+    assert.ok(await page.locator('.compact-page-analyze .compact-secondary-btn', { hasText: 'V/H' }).isVisible(), 'its layout switch is');
+    assert.deepEqual(await sizeProblems(), [], 'the correlation options are phone-sized');
+    assert.deepEqual(await sidewaysProblems(page), [], 'and fit the width');
+    await shot(page, 'analyze-correlation');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    assert.equal(await page.evaluate(() => !!document.querySelector('.correlation-container .fft-workspace > .correlation-options')), true,
+        'closing the sheet gives correlation its options panel back');
+    await page.waitForTimeout(400);
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            const axes = div => [...div.querySelectorAll('.compact-fit-btn[data-axis]')].filter(btn => !btn.hidden).map(btn => btn.dataset.axis);
+            return { time: axes(plot.div), results: axes(plot.correlationDiv) };
+        }),
+        { time: ['x', 'y', 'all'], results: [] },
+        'the pair pane fits; the r results, fixed between -1 and 1, have nothing to fit',
+    );
+    await shot(page, 'correlation');
+    // A plot carrying an analysis is still that plot.
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    assert.equal(await page.locator('.compact-plot-types [data-plot-type="phase2d"]').getAttribute('aria-checked'), 'true',
+        'the Plot sheet still reads 2D under correlation');
+    assert.equal(await page.locator('.compact-page-plot .compact-trace-name', { hasText: 'voltage / current' }).count(), 1,
+        'and still lists the pair');
+    // Turning it off leaves the 2D plot the pair belongs to, not an empty time series.
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    await page.locator('.compact-radio', { hasText: '2D plot' }).click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'phase2d');
+    assert.equal(await page.locator('.modal-overlay').count(), 0, 'and asks nothing on the way back');
+    assert.deepEqual(await corrPairs(), { mode: 'phase2d', pairs: [['voltage', 'current']] }, 'with the pair still there');
+    assert.equal(await page.locator('.compact-sheet .correlation-options').count(), 0, 'and its options panel gone from the sheet');
+
+    // ── The 2D fit: a workspace the 2D plot opens over itself ───────────────
+    const fitState = () => page.evaluate(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return {
+            mode: plot?.mode,
+            fitEnabled: !!plot?.phase2d?.fitEnabled,
+            inShell: !!plot?.div?.closest('.phase2d-fit-container'),
+            drawerInSheet: !!plot?.phase2dFitOptions && !!document.querySelector('.compact-sheet')?.contains(plot.phase2dFitOptions),
+        };
+    });
+    await page.locator('.compact-radio', { hasText: 'Curve Fit' }).click();
+    await page.waitForFunction(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return plot?.phase2d?.fitEnabled && !!plot.phase2dFitOptions
+            && document.querySelector('.compact-sheet')?.contains(plot.phase2dFitOptions);
+    }, null, { timeout: 15000 });
+    assert.equal(await page.locator('.modal-overlay').count(), 0, 'it opens over the 2D plot without asking: it is the same plot');
+    assert.deepEqual(await corrPairs(), { mode: 'phase2d', pairs: [['voltage', 'current']] }, 'fitting the pair it already had');
+    assert.deepEqual(await fitState(), { mode: 'phase2d', fitEnabled: true, inShell: true, drawerInSheet: true });
+    assert.equal(await page.locator('.phase2d-fit-container .fft-topbar-group').first().isVisible(), false,
+        'its own buttons are in the sheet, not over the plot');
+    assert.ok(await page.locator('.compact-page-analyze .compact-secondary-btn', { hasText: 'V/H' }).isVisible(), 'its layout switch is');
+    // A fit type, and the drawer reads its equation.
+    await page.selectOption('.compact-sheet .phase2d-fit-type-select', 'linear');
+    await page.waitForFunction(() => /y/.test(document.querySelector('.compact-sheet .phase2d-fit-equation')?.textContent || ''), null, { timeout: 30000 });
+    assert.deepEqual(await sizeProblems(), [], 'the fit drawer is phone-sized');
+    assert.deepEqual(await sidewaysProblems(page), [], 'and fits the width');
+    await shot(page, 'analyze-2d-fit');
+    // It opens on the 2D scatter alone; the time pane is one button away.
+    const fitHideTime = page.locator('.compact-page-analyze .compact-secondary-btn', { hasText: 'Hide time-series' });
+    assert.equal(await fitHideTime.getAttribute('aria-pressed'), 'true', 'the time pane starts hidden, as on the desktop');
+    await fitHideTime.click();
+    await page.waitForFunction(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return plot?.phase2d?.timeSeriesHidden === false && plot.phase2dFitTimeDiv?.data?.length > 0;
+    }, null, { timeout: 30000 });
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    assert.equal(await page.evaluate(() => !!document.querySelector('.phase2d-fit-container .fft-workspace > .phase2d-fit-options')), true,
+        'closing the sheet gives the fit its drawer back');
+    await page.waitForTimeout(500);
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            const axes = div => [...div.querySelectorAll('.compact-fit-btn[data-axis]')].filter(btn => !btn.hidden).map(btn => btn.dataset.axis);
+            return { scatter: axes(plot.div), time: axes(plot.phase2dFitTimeDiv) };
+        }),
+        { scatter: ['x', 'y', 'all'], time: ['x', 'y', 'all'] },
+        'the 2D plot fits as it always did, and its time pane fits too',
+    );
+    await shot(page, '2d-fit');
+    // Turning it off closes the workspace and leaves the plain 2D plot.
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    await page.locator('.compact-radio', { hasText: '2D plot' }).click();
+    await page.waitForFunction(() => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phase2d?.fitEnabled);
+    assert.deepEqual(await fitState(), { mode: 'phase2d', fitEnabled: false, inShell: false, drawerInSheet: false },
+        'the 2D plot is itself again, with nothing left of the workspace');
+    assert.deepEqual(await corrPairs(), { mode: 'phase2d', pairs: [['voltage', 'current']] }, 'and keeps the pair');
+    assert.equal(await page.locator('.compact-sheet .phase2d-fit-options').count(), 0, 'its drawer is gone from the sheet');
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+
     await page.locator('.compact-page-plot .compact-trace-remove').first().click();
     await page.waitForFunction(() => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phaseTraces?.length);
     // Back to a time series, empty: nothing to confirm.
+    await page.locator('.compact-plot-types [data-plot-type="timeseries"]').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'timeseries');
+    // Curve Fit asked of a plot that is not 2D takes it there and opens with
+    // it; empty, so nothing is asked and the sheet says what it needs.
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    await page.locator('.compact-radio', { hasText: 'Curve Fit' }).click();
+    await page.waitForFunction(() => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        return plot?.mode === 'phase2d' && plot.phase2d?.fitEnabled === true;
+    });
+    assert.match(await page.locator('.compact-page-analyze').innerText(), /Add a signal/, 'and the sheet asks for a pair first');
+    await page.locator('.compact-radio', { hasText: '2D plot' }).click();
+    await page.waitForFunction(() => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phase2d?.fitEnabled);
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
     await page.locator('.compact-plot-types [data-plot-type="timeseries"]').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'timeseries');
     await page.locator('.compact-sheet-close').click();
@@ -954,6 +1139,53 @@ try {
         await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
         await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
         assert.deepEqual(await profilePlot(), { mode: 'histogram', traces: ['temp'] }, 'a tap takes a signal off the histogram');
+
+        // The Heatmap, the same way: chosen in Analyze, its options lent to the
+        // sheet, and the buttons of its own top bar there.
+        await profilePage.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+        await profilePage.locator('.compact-radio', { hasText: 'Calendar heatmap' }).click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'heatmap');
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return !!plot?.heatmapOptionsEl && document.querySelector('.compact-sheet')?.contains(plot.heatmapOptionsEl);
+        }, null, { timeout: 15000 });
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return plot?.heatmapDiv?.data?.length > 0;
+        }, null, { timeout: 30000 });
+        assert.equal(await profilePage.locator('.heatmap-container .heatmap-topbar-group').first().isVisible(), false,
+            'the Heatmap\'s own buttons are in the sheet, not over the plot');
+        assert.ok(await profilePage.locator('.compact-page-analyze .compact-secondary-btn', { hasText: 'V/H' }).isVisible(), 'its layout switch is');
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.compact-sheet .heatmap-summary')?.textContent.trim()), true,
+            'the Heatmap\'s summary updates while its options are in the sheet');
+        assert.deepEqual(await sizeProblems(profilePage), [], 'the Heatmap options are phone-sized');
+        assert.deepEqual(await sidewaysProblems(profilePage), [], 'and fit the width');
+        await shot(profilePage, 'analyze-heatmap');
+        await profilePage.locator('.compact-sheet-close').click();
+        await profilePage.waitForFunction(() => window.app._compact.sheet === null);
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.heatmap-workspace > .heatmap-options')), true,
+            'closing the sheet gives the Heatmap its options panel back');
+        await profilePage.waitForTimeout(400);
+        assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
+            'the time pane and the calendar each have their fit buttons');
+        assert.deepEqual(
+            await profilePage.evaluate(() => {
+                const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+                const axes = div => [...div.querySelectorAll('.compact-fit-btn[data-axis]')].filter(btn => !btn.hidden).map(btn => btn.dataset.axis);
+                return { time: axes(plot.div), calendar: axes(plot.heatmapDiv) };
+            }),
+            { time: ['x', 'y', 'all'], calendar: ['x', 'all'] },
+            'the calendar\'s rows are a fixed axis: nothing to fit vertically there',
+        );
+        await shot(profilePage, 'heatmap');
+        await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
+        assert.deepEqual(await profilePlot(), { mode: 'heatmap', traces: ['temp', 'load'] }, 'a tap adds to the Heatmap');
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="temp"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
+        assert.deepEqual(await profilePlot(), { mode: 'heatmap', traces: ['load'] }, 'and takes one off it');
+
         assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
         await profileContext.close();
     }
