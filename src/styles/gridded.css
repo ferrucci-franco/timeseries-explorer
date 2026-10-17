@@ -1103,15 +1103,16 @@ html.compact .gridded-splitter {
     display: none;
 }
 
+/* Above a height dragged on a desktop (kept in localStorage, set inline). */
 html.compact .gridded-preview {
-    height: 220px;
+    height: 220px !important;
     border-top: 1px solid var(--border-color);
     border-bottom: 1px solid var(--border-color);
 }
 
 /* Hidden, the preview keeps its heading: one line, with the way back. */
 html.compact .gridded-preview.is-folded {
-    height: auto;
+    height: auto !important;
     min-height: 0;
 }
 
@@ -1182,6 +1183,88 @@ html.compact.compact-landscape .gridded-map-action:not([hidden]) {
     bottom: auto;
     right: 6.5rem;
     padding: 0.3rem 0.8rem;
+}
+
+/* A phone on its side is short of height: the map and its time bar take
+   it all, and the tools go to a panel beside them (the preview with them,
+   _griddedPlacePreview), shown and hidden from the toolbar like the
+   explorer's side sheets. Elsewhere the panel has no switch. */
+.gridded-panel-toggle {
+    display: none;
+}
+
+html.compact.compact-landscape .gridded-panel-toggle {
+    display: inline-flex;
+}
+
+html.compact.compact-landscape .gridded-panel-toggle[aria-pressed="true"] {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+html.compact.compact-landscape .gridded-main {
+    flex-direction: row;
+    overflow: hidden;
+}
+
+html.compact.compact-landscape .gridded-map-column,
+html.compact.compact-landscape .gridded-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+html.compact.compact-landscape .gridded-map-column {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+html.compact.compact-landscape .gridded-body {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+}
+
+/* The buttons, the speed and the stride; then the time and the slider, on
+   the same row when the panel leaves the room. */
+html.compact.compact-landscape .gridded-timebar {
+    gap: 0.2rem 0.3rem;
+    padding: 0.25rem 0.5rem;
+}
+
+html.compact.compact-landscape .gridded-view .gridded-step {
+    width: 1.9rem;
+    height: 1.75rem;
+}
+
+html.compact.compact-landscape .gridded-time-label {
+    order: 9;
+    flex: 0 1 auto;
+    max-width: 45%;
+}
+
+html.compact.compact-landscape .gridded-timebar input[type="range"] {
+    flex: 1 1 40%;
+    margin: 0.2rem 0;
+}
+
+html.compact.compact-landscape .gridded-panel {
+    width: min(42vw, 380px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+html.compact.compact-landscape .gridded-view.is-panel-hidden .gridded-panel {
+    display: none;
+}
+
+html.compact.compact-landscape .gridded-panel .gridded-preview {
+    flex-shrink: 0;
+    height: 190px !important;
+}
+
+html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
+    height: auto !important;
 }
 
 /* The right-button menu on a point or a box of the map. */

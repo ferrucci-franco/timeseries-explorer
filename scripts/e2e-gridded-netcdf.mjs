@@ -1027,7 +1027,8 @@ try {
             await page.setViewportSize({ width: 844, height: 390 });
             await page.waitForTimeout(1200);
             const side = await mapState();
-            assert.ok(side.size[0] > 400 && side.size[1] > 100, `on its side the map fills its area (${JSON.stringify(side.size)})`);
+            // Beside the tools' panel: about half of the 768 px beside the rail.
+            assert.ok(side.size[0] > 230 && side.size[1] > 100, `on its side the map fills its area (${JSON.stringify(side.size)})`);
             await page.setViewportSize({ width: 390, height: 844 });
             await page.waitForTimeout(1200);
             sameSize(await mapState(), 'turned back upright');
@@ -1106,6 +1107,36 @@ try {
         await page.setViewportSize({ width: 844, height: 390 });
         await page.waitForFunction(() => document.querySelector('#gridded-view .gridded-map').data[0].colorbar.orientation !== 'h', null, { timeout: 10000 });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 844);
+        // And the tools leave the column under the map for a panel beside
+        // it, which the toolbar shows and hides: the map and its time bar
+        // take the whole height, nothing to scroll to.
+        {
+            const sides = () => page.evaluate(() => {
+                const rect = selector => document.querySelector(selector).getBoundingClientRect();
+                const main = rect('#gridded-view .gridded-main');
+                const panel = document.querySelector('#gridded-view [data-role="panel"]');
+                return {
+                    main: { right: Math.round(main.right), bottom: Math.round(main.bottom) },
+                    map: rect('#gridded-view .gridded-body').width,
+                    timebarBottom: Math.round(rect('#gridded-view [data-role="timebar"]').bottom),
+                    panel: panel.offsetWidth ? { left: Math.round(panel.getBoundingClientRect().left), right: Math.round(panel.getBoundingClientRect().right) } : null,
+                    preview: document.querySelector('#gridded-view [data-role="preview"]').parentElement === panel,
+                    pressed: document.querySelector('#gridded-view [data-action="toggle-panel"]').getAttribute('aria-pressed'),
+                };
+            });
+            await page.waitForTimeout(800);
+            const shown = await sides();
+            assert.ok(shown.panel && shown.panel.right === shown.main.right && shown.panel.left > 300 && shown.preview && shown.pressed === 'true',
+                `on its side, the tools and the preview are in a panel beside the map (${JSON.stringify(shown)})`);
+            assert.ok(Math.abs(shown.timebarBottom - shown.main.bottom) <= 1, `the time bar at the foot of the screen (${JSON.stringify(shown)})`);
+            await page.click('#gridded-view [data-action="toggle-panel"]');
+            await page.waitForTimeout(800);
+            const hidden = await sides();
+            assert.ok(!hidden.panel && hidden.pressed === 'false' && hidden.map > shown.map + 250, `hidden, the map takes the width (${JSON.stringify(hidden)})`);
+            await page.click('#gridded-view [data-action="toggle-panel"]');
+            await page.waitForTimeout(500);
+            assert.ok((await sides()).panel, 'and the panel comes back');
+        }
         assert.deepEqual(errors, []);
         await context.close();
     }

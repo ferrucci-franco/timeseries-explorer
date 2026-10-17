@@ -34,6 +34,8 @@ const FINE_COAST_SPAN_DEGREES = 70;
 
 // The export button of every plot panel, so the map's reads the same.
 const EXPORT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
+// A window with its right-hand column: the tools beside the map.
+const PANEL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/></svg>';
 const GLOBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8.5" stroke-width="1.8"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17" stroke-width="1.6"/></svg>';
 // The time bar's buttons as drawn icons, all on the same 16-unit box: text
 // glyphs (⏮ ▶ ⏸ ▶|) come from different fonts and never line up.
@@ -939,6 +941,7 @@ export function installGriddedMethods(TargetClass) {
                     </span>
                 </span>
                 <span class="gridded-toolbar-end">
+                    <button type="button" class="gridded-icon-btn gridded-panel-toggle" data-action="toggle-panel" aria-pressed="true">${PANEL_ICON}</button>
                     <button type="button" class="gridded-icon-btn" data-action="export-map">${EXPORT_ICON}</button>
                     <button type="button" class="gridded-close" data-action="close"></button>
                 </span>
@@ -1071,6 +1074,8 @@ export function installGriddedMethods(TargetClass) {
                         // The room the map may take: a phone's sheet that
                         // closes, or the address bar that goes, gives it
                         // back. The map's own size follows, and its redraw.
+                        // A phone turned also moves the preview.
+                        this._griddedPlacePreview(root);
                         const view = this._griddedVisibleView();
                         if (view && entry.contentRect.height > 0) this._griddedFitPhoneHeight(view, mapDiv);
                         continue;
@@ -1104,8 +1109,41 @@ export function installGriddedMethods(TargetClass) {
             observer.observe(root.querySelector('[data-role="preview-chart"]'));
             if (main) observer.observe(main);
         }
+        let panelHidden = false;
+        try { panelHidden = localStorage.getItem('omv.gridded.panelHidden') === '1'; } catch { /* shown */ }
+        this._griddedTogglePanel(!panelHidden, root);
+        this._griddedPlacePreview(root);
         this._griddedRefreshTexts();
         return root;
+    };
+
+    /**
+     * A phone on its side is short of height: the tools leave the column
+     * under the map for a panel beside it, which the toolbar's button shows
+     * and hides, as the explorer's side sheets are. The choice is kept.
+     * Elsewhere the panel is always there (beside the map on a desktop,
+     * under it on an upright phone).
+     */
+    proto._griddedTogglePanel = function(show, root = document.getElementById('gridded-view')) {
+        if (!root) return;
+        const shown = show ?? root.classList.contains('is-panel-hidden');
+        root.classList.toggle('is-panel-hidden', !shown);
+        root.querySelector('[data-action="toggle-panel"]')?.setAttribute('aria-pressed', String(shown));
+        if (show === undefined) {
+            try { localStorage.setItem('omv.gridded.panelHidden', shown ? '0' : '1'); } catch { /* not kept */ }
+        }
+    };
+
+    // The preview of the extractions belongs to the map's column, under the
+    // map; beside it, on a phone on its side, it goes to the panel with the
+    // list it previews.
+    proto._griddedPlacePreview = function(root = document.getElementById('gridded-view')) {
+        const preview = root?.querySelector('[data-role="preview"]');
+        if (!preview) return;
+        const html = document.documentElement;
+        const beside = html.classList.contains('compact') && html.classList.contains('compact-landscape');
+        const home = beside ? root.querySelector('[data-role="panel"]') : root.querySelector('.gridded-map-column');
+        if (preview.parentElement !== home) home.appendChild(preview);
     };
 
     proto._griddedEl = function(role) {
@@ -1305,6 +1343,7 @@ export function installGriddedMethods(TargetClass) {
                 this._griddedState().returnFileId = null;
                 this._hideGriddedView();
             }
+            else if (action === 'toggle-panel') this._griddedTogglePanel();
             else if (!current) return;
             else if (action === 'cancel' && current.job) griddedClient().cancel(current.job.id);
             else if (action === 'extract-point') this._griddedExtractPoint(current);
@@ -1443,6 +1482,8 @@ export function installGriddedMethods(TargetClass) {
         set('[data-role="opt-follow"]', 'griddedScaleFollow');
         set('[data-role="splitter"]', 'griddedSplitterTitle', 'title');
         set('[data-role="splitter"]', 'griddedSplitterTitle', 'ariaLabel');
+        set('[data-action="toggle-panel"]', 'griddedTogglePanel', 'title');
+        set('[data-action="toggle-panel"]', 'griddedTogglePanel', 'ariaLabel');
         set('[data-action="export-map"]', 'griddedExportMapTitle', 'title');
         set('[data-action="export-map"]', 'griddedExportMapTitle', 'ariaLabel');
         set('[data-action="close"]', 'griddedCloseMap');
@@ -2410,7 +2451,10 @@ export function installGriddedMethods(TargetClass) {
      * instead of beside it. A phone on its side is short of height, not of
      * width, and keeps the bar beside the map.
      */
+    // The colour bar under the map, not beside it: a narrow map, unless the
+    // height is what is short (a phone on its side, its tools beside it).
     proto._griddedNarrowMap = function(div) {
+        if (document.documentElement.classList.contains('compact-landscape')) return false;
         return (div?.clientWidth || 800) < 600;
     };
 
@@ -2427,7 +2471,9 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedFitPhoneHeight = function(view, div) {
         const body = div?.parentElement;
         if (!body) return;
-        if (!document.documentElement.classList.contains('compact') || !view.map) {
+        const html = document.documentElement;
+        // On its side, the map takes the height beside the panel.
+        if (!html.classList.contains('compact') || html.classList.contains('compact-landscape') || !view.map) {
             if (body.style.height) body.style.height = '';
             return;
         }
