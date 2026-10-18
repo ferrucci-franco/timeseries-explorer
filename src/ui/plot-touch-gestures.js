@@ -165,6 +165,12 @@ function axisValueAt(axis, clientPixel, rect, vertical = false) {
  * `{ hint, box: true, onBox }` the drag draws a rectangle instead, and
  * `onBox({ x0, x1, y0, y1 })` gets its corners in the axes' linear units.
  *
+ * A plot that frames itself on a double tap says so with
+ * `div._touchDoubleTap`, called on the second tap instead of Plotly's own
+ * double click: Plotly counts its clicks on a drag layer that a redraw
+ * replaces, and on a phone busy redrawing (a map playing fast) the two taps
+ * never met.
+ *
  * @param {HTMLElement} div a Plotly graph div
  * @param {{relayout: Function}} plotly
  * @returns {boolean} whether it was installed
@@ -186,7 +192,18 @@ export function installTouchPlotGestures(div, plotly) {
     // `followUp` is that second touch while it is still deciding what it is;
     // `armedUntil` is set by a slow double tap, waiting for the drag.
     const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    // When the finger moved, not when a busy page got round to saying so:
+    // a tap handled late read as a long press, and two taps handled far apart
+    // as two single ones. An event's own time is on the same clock as now();
+    // one that is not (an old browser's epoch time) is not used.
+    const eventTime = (event) => {
+        const stamp = Number(event?.timeStamp);
+        const current = now();
+        return Number.isFinite(stamp) && stamp > 0 && stamp <= current + 50 ? stamp : current;
+    };
     let lastTap = null;
+    // The gap to the tap before, while a touch may be the second of a double tap.
+    let secondTapGap = null;
     let touchStartedAt = 0;
     let fingersSeen = 0;
     let followUp = null;
@@ -459,17 +476,19 @@ export function installTouchPlotGestures(div, plotly) {
         // from here.
         event.stopPropagation();
         if (!gesture && !windowSel) {
-            touchStartedAt = now();
+            touchStartedAt = eventTime(event);
             fingersSeen = 0;
         }
         fingersSeen = Math.max(fingersSeen, points.length);
         if (points.length > 1) {
             // A second finger is a pinch, whatever the first one was doing.
             forgetWindowZoom();
+            secondTapGap = null;
         } else if (!windowSel) {
             const options = windowZoomOptions();
             const [point] = points;
-            const time = now();
+            const time = eventTime(event);
+            secondTapGap = isFollowUpTap(lastTap, { time, ...point }) ? time - lastTap.time : null;
             if (options && armedUntil && time < armedUntil) {
                 // The drag a slow double tap was waiting for.
                 event.preventDefault();
@@ -589,7 +608,18 @@ export function installTouchPlotGestures(div, plotly) {
         flush();
         settle(moved);
         clearHold();
-        const time = now();
+        const time = eventTime(event);
+        const gap = secondTapGap;
+        secondTapGap = null;
+        const tapped = !moved && fingersSeen === 1 && time - touchStartedAt <= TAP_MAX_DURATION_MS;
+        // A second tap the plot handles itself; no click after it, or
+        // Plotly would count it too.
+        const doubleTap = () => {
+            if (gap === null || !tapped || typeof div._touchDoubleTap !== 'function') return false;
+            event.preventDefault();
+            div._touchDoubleTap();
+            return true;
+        };
         if (followUp) {
             // The second touch was a tap. Quick, it is Plotly's double tap and
             // its reset; slow, the plot waits for the drag that draws the window.
@@ -599,9 +629,13 @@ export function installTouchPlotGestures(div, plotly) {
             if (options) {
                 event.preventDefault();
                 arm(options);
+            } else {
+                doubleTap();
             }
             lastTap = null;
-        } else if (!moved && fingersSeen === 1 && landed && time - touchStartedAt <= TAP_MAX_DURATION_MS) {
+        } else if (doubleTap()) {
+            lastTap = null;
+        } else if (tapped && landed) {
             lastTap = { time, x: landed.x, y: landed.y };
             showTapValue(event, landed);
         } else {

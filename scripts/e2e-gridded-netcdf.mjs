@@ -949,6 +949,39 @@ try {
             const back = await sized();
             assert.ok(Math.abs(back.body - full.body) <= 2, `the sheet gone, the map is as tall as before (${JSON.stringify({ full, back })})`);
         }
+        // The tools are a scroll away: a thin bar at the foot of the map
+        // says so, on screen above the app's bottom bar, under the slider; a
+        // tap brings the tools up, another the map back.
+        {
+            const peekState = () => page.evaluate(() => {
+                const rect = selector => document.querySelector(selector).getBoundingClientRect();
+                const peek = document.querySelector('#gridded-view [data-action="peek"]');
+                return {
+                    peek: rect('#gridded-view [data-action="peek"]'),
+                    slider: rect('#gridded-view [data-role="time"]'),
+                    tools: rect('#gridded-view .gridded-tools'),
+                    navTop: rect('.compact-nav').top,
+                    expanded: peek.getAttribute('aria-expanded'),
+                    label: peek.textContent.trim(),
+                };
+            });
+            await page.evaluate(() => { document.querySelector('#gridded-view .gridded-main').scrollTop = 0; });
+            await page.waitForTimeout(200);
+            const closed = await peekState();
+            assert.ok(closed.peek.height > 0 && closed.peek.height < 48 && closed.peek.bottom <= closed.navTop + 1 && closed.peek.top >= closed.slider.bottom - 1,
+                `a thin bar under the slider, on screen (${JSON.stringify(closed)})`);
+            assert.ok(Math.abs(closed.tools.top - closed.peek.bottom) <= 1, `the tools follow it (${JSON.stringify(closed)})`);
+            assert.match(closed.label, /Extract series/);
+            assert.equal(closed.expanded, 'false');
+            await page.tap('#gridded-view [data-action="peek"]');
+            await page.waitForTimeout(900);
+            const opened = await peekState();
+            assert.ok(opened.expanded === 'true' && opened.tools.top < opened.navTop - 100, `a tap brings the tools up (${JSON.stringify(opened)})`);
+            await page.tap('#gridded-view [data-action="peek"]');
+            await page.waitForTimeout(900);
+            assert.equal((await peekState()).expanded, 'false', 'and another the map back');
+            assert.equal(await page.evaluate(() => document.querySelector('#gridded-view .gridded-main').scrollTop), 0);
+        }
         // Fingers, in every tool: one pans, two pinch, and the pinch keeps
         // the map's size (scaled per axis, Plotly shrank it to keep the
         // degrees equal, a little more at every pinch). In Region a finger
@@ -1036,6 +1069,28 @@ try {
             await tapAt(playButton);
             await page.waitForTimeout(300);
             assert.equal((await playState()).playing, false, 'and pauses');
+            // A double tap frames the whole map while Play runs, even when
+            // the page, busy drawing, handles the second tap long after the
+            // finger made it: the taps are timed by when they happened.
+            {
+                await pinchAt(at(framed, 0.5, 0.5), 60, 150, 0.3);
+                assert.ok(await page.evaluate(() => !!window.app._griddedVisibleView().zoom), 'zoomed in');
+                await tapAt(playButton);
+                await page.waitForTimeout(500);
+                const point = at(framed, 0.5, 0.5);
+                const base = Date.now() / 1000;
+                const send = (type, when, points) => fingers.send('Input.dispatchTouchEvent', { type, timestamp: base + when, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+                await send('touchStart', 0, [point]);
+                await send('touchEnd', 0.06, []);
+                await page.evaluate(() => { const start = performance.now(); while (performance.now() - start < 900) { /* busy */ } });
+                await send('touchStart', 0.18, [point]);
+                await send('touchEnd', 0.24, []);
+                await page.waitForFunction(() => !window.app._griddedVisibleView().zoom, null, { timeout: 5000 });
+                assert.equal((await playState()).playing, true, 'and Play goes on');
+                await tapAt(playButton);
+                await page.waitForTimeout(300);
+                assert.equal((await playState()).playing, false);
+            }
             await tapAt(at(framed, 0.5, 0.5));
             await page.waitForTimeout(120);
             await tapAt(at(framed, 0.5, 0.5));
