@@ -1,6 +1,6 @@
 import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
-import Plotly from '../vendor/plotly.js';
+import Plotly, { onPlotDrawn } from '../vendor/plotly.js';
 import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
 import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
@@ -123,6 +123,19 @@ class PlotManager {
         this.onBusyOverlay = null;
         // Ctrl+Z: back to the previous zoom/pan view (view-history-methods.js).
         this._installViewUndoShortcut();
+        // A finger pans a 3D scene after a slow double tap, in every layout:
+        // one finger orbits and two zoom, so without it a touch screen had
+        // no way to move the view (ui/plot-3d-gestures.js).
+        onPlotDrawn(div => this._installTouchScenePan(div));
+    }
+
+    _installTouchScenePan(div) {
+        if (!div || div._touchScenePan) return;
+        div._touchScenePan = () => {
+            const plot = [...this.plots.values()].find(p => p.div === div);
+            const is3D = !!plot && (this._is3D(plot.mode) || this._isStateAnim3D(plot));
+            return is3D ? { hint: i18n.t('scenePanHint') } : null;
+        };
     }
 
     // ─── Public API ────────────────────────────────────────────────

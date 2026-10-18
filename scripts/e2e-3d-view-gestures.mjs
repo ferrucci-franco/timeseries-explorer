@@ -56,6 +56,7 @@ try {
         app.setActiveFile([...app.plotManager.files.keys()][0]);
         return document.querySelector('.layout-panel').dataset.id;
     });
+    assert.equal(await page.evaluate(() => !!window.app._compact?.active), false, 'the desktop layout, on a touch screen');
     const cdp = await context.newCDPSession(page);
     const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', {
         type, touchPoints: points.map((p, i) => ({ x: p[0], y: p[1], id: i })),
@@ -187,6 +188,28 @@ try {
             await settled();
             const top2 = await readView();
             check(sameView(top1, top2), `${tag}: the Top view does not depend on the zoom before it`);
+
+            // ── A slow double tap, then a drag, pans: in the desktop layout too ──
+            // One finger orbits and two zoom, so this is the only way a finger
+            // moves the view; it used to exist only in the phone layout.
+            await page.evaluate(id => window.app.plotManager._autoScalePlot(id), panelId);
+            await settled();
+            const beforePan = await readView();
+            await touch('touchStart', [[c.x, c.y]]);
+            await touch('touchEnd', []);
+            await page.waitForTimeout(450);
+            await touch('touchStart', [[c.x, c.y]]);
+            for (let step = 1; step <= 8; step++) await touch('touchMove', [[c.x + step * 12, c.y + step * 6]]);
+            await touch('touchEnd', []);
+            await settled();
+            v = await readView();
+            const rel = (w) => ['x', 'y', 'z'].map(k => w.eye[k] - w.center[k]);
+            const [r0, r1] = [rel(beforePan), rel(v)];
+            const cosPan = r0.reduce((acc, value, i) => acc + value * r1[i], 0) / Math.hypot(...r0) / Math.hypot(...r1);
+            const shift = Math.hypot(...['x', 'y', 'z'].map(k => v.center[k] - beforePan.center[k]));
+            check(cosPan > 0.999, `${tag}: the drag after a slow double tap does not orbit (cos = ${cosPan})`);
+            check(shift > 0.05, `${tag}: the drag after a slow double tap pans (centre moved ${shift})`);
+            check(Math.abs(zoomOf(v) / zoomOf(beforePan) - 1) < 1e-3, `${tag}: the pan leaves the zoom alone`);
 
             if (view.mode !== 'state-anim') {
                 // ── Ctrl+Z takes back a zoom in either projection ──
