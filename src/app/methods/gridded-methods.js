@@ -1313,7 +1313,22 @@ export function installGriddedMethods(TargetClass) {
             this._griddedRequestMap(current);
         });
         root.querySelectorAll('.gridded-step').forEach(button => {
-            button.addEventListener('click', () => this._griddedStep(button.dataset.step));
+            button.addEventListener('click', event => {
+                // A finger has already played or paused, at the touch.
+                if (button.dataset.step === 'play' && (event.pointerType === 'touch' || event.pointerType === 'pen' || button._touched)) {
+                    button._touched = false;
+                    return;
+                }
+                this._griddedStep(button.dataset.step);
+            });
+        });
+        // Play and Pause answer the finger as it lands. Safari makes the
+        // click only when the finger lifts, and on a phone busy drawing the
+        // maps of a fast Play it came late, or never: Pause did nothing.
+        root.querySelector('[data-step="play"]').addEventListener('pointerdown', event => {
+            if (event.pointerType === 'mouse') return;
+            event.currentTarget._touched = true;
+            this._griddedStep('play');
         });
         root.querySelector('[data-role="stride"]').addEventListener('change', event => {
             const current = view();
@@ -1724,7 +1739,8 @@ export function installGriddedMethods(TargetClass) {
                 play.innerHTML = STEP_ICONS[icon];
                 play.dataset.icon = icon;
             }
-            play.title = i18n.t(view.playing ? 'griddedPause' : 'griddedPlay');
+            const title = i18n.t(view.playing ? 'griddedPause' : 'griddedPlay');
+            if (play.title !== title) play.title = title;
         }
         if (!label) return;
         if (!dim) {
