@@ -2523,12 +2523,9 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
                      title: { text: multiTrace ? (isTimez ? 'y' : 'z') : zLabel, font: zTitleFont },
                      showspikes: true, spikecolor: '#3498db', spikethickness: 3, spikesides: false },
             camera: {
-                // phase2dt default view is rotated around the Z (var y / up) axis so time
-                // (plotly X) reads from the lower-right toward the upper-left of the screen,
-                // with var x (plotly Y) going toward the lower-left and var y (plotly Z) up.
-                eye: isTimez ? { x: 1.25, y: -1.25, z: 1.25 } : { x: 1.25, y: 1.25, z: 1.25 },
-                up:  { x: 0, y: 0, z: 1 },
-                center: { x: 0, y: 0, z: 0 },
+                // phase2dt opens turned so time reads from lower-right toward
+                // upper-left (see _homeCamera3D).
+                ...this._homeCamera3D(plot),
                 projection: { type: plot.projection || 'orthographic' },
             },
             bgcolor: bg,

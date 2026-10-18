@@ -414,7 +414,7 @@ proto._buildStateAnimLayout = function(plot) {
                          showspikes: true, spikecolor: '#3498db', spikethickness: 3, spikesides: false },
                 bgcolor: bg,
                 camera: {
-                    ...(plot.homeCamera || { eye: { x: 1.5, y: 1.5, z: 1.2 } }),
+                    ...this._homeCamera3D(plot),
                     projection: { type: plot.projection || 'orthographic' },
                 },
                 aspectmode: 'cube',
