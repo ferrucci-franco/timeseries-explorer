@@ -3050,13 +3050,17 @@ export function installGriddedMethods(TargetClass) {
             if (Object.keys(update).some(key => /^[xy]axis\.(range|autorange)/.test(key))) this._griddedHoldPlay(view, div);
         };
         div.on('plotly_relayouting', holdOnMove);
-        div.on('plotly_doubleclick', () => {
+        // A double click, or a double tap (ui/plot-touch-gestures.js), frames
+        // the whole map again.
+        const frameWhole = () => {
             const view = this._griddedVisibleView();
             if (!view || view.editing) return;
             this._griddedHoldPlay(view, div);
             view.zoom = null;
             this._griddedDrawMap(view);
-        });
+        };
+        div._touchDoubleTap = frameWhole;
+        div.on('plotly_doubleclick', frameWhole);
         div.on('plotly_relayout', update => {
             holdOnMove(update);
             const view = this._griddedVisibleView();

@@ -1036,6 +1036,28 @@ try {
             await tapAt(playButton);
             await page.waitForTimeout(300);
             assert.equal((await playState()).playing, false, 'and pauses');
+            // A double tap frames the whole map while Play runs, even when
+            // the page, busy drawing, handles the second tap long after the
+            // finger made it: the taps are timed by when they happened.
+            {
+                await pinchAt(at(framed, 0.5, 0.5), 60, 150, 0.3);
+                assert.ok(await page.evaluate(() => !!window.app._griddedVisibleView().zoom), 'zoomed in');
+                await tapAt(playButton);
+                await page.waitForTimeout(500);
+                const point = at(framed, 0.5, 0.5);
+                const base = Date.now() / 1000;
+                const send = (type, when, points) => fingers.send('Input.dispatchTouchEvent', { type, timestamp: base + when, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+                await send('touchStart', 0, [point]);
+                await send('touchEnd', 0.06, []);
+                await page.evaluate(() => { const start = performance.now(); while (performance.now() - start < 900) { /* busy */ } });
+                await send('touchStart', 0.18, [point]);
+                await send('touchEnd', 0.24, []);
+                await page.waitForFunction(() => !window.app._griddedVisibleView().zoom, null, { timeout: 5000 });
+                assert.equal((await playState()).playing, true, 'and Play goes on');
+                await tapAt(playButton);
+                await page.waitForTimeout(300);
+                assert.equal((await playState()).playing, false);
+            }
             await tapAt(at(framed, 0.5, 0.5));
             await page.waitForTimeout(120);
             await tapAt(at(framed, 0.5, 0.5));
