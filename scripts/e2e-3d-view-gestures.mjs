@@ -129,6 +129,28 @@ try {
             v = await readView();
             check(sameView(v, home), `${tag}: a double click goes back to the opening view\n  ${JSON.stringify(home)}\n  ${JSON.stringify(v)}`);
 
+            // ── An orbit released outside the plot is kept ──
+            // Plotly writes its camera to the layout on a mouseup over the
+            // scene only; the next full redraw (every frame of the 3D
+            // animation) put the old view back.
+            const plotLeft = await page.evaluate(id => window.app.plotManager.plots.get(id).div.getBoundingClientRect().left, panelId);
+            await page.mouse.move(c.x, c.y);
+            await page.mouse.down();
+            await page.mouse.move(plotLeft - 120, c.y + 20, { steps: 20 });
+            await page.mouse.up();
+            const released = await readView();
+            check(!sameView(released, home), `${tag}: the drag toward the edge orbits`);
+            if (view.mode === 'state-anim') {
+                await page.evaluate(id => window.app.plotManager._stateAnimTogglePlay(id), panelId);
+                await page.waitForTimeout(1200);
+                await page.evaluate(id => window.app.plotManager._stateAnimTogglePlay(id), panelId);
+            } else {
+                await page.evaluate(id => globalThis.Plotly.redraw(window.app.plotManager.plots.get(id).div), panelId);
+            }
+            await settled();
+            v = await readView();
+            check(sameView(v, released), `${tag}: an orbit released outside the plot survives the next redraw\n  ${JSON.stringify(released)}\n  ${JSON.stringify(v)}`);
+
             // ── Home button: the same view ──
             await wheelZoomIn();
             await orbit();

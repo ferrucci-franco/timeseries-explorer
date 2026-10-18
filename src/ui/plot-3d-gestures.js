@@ -34,7 +34,8 @@
 //   double click  home         as the double tap
 //
 // One finger and the left button are still Plotly's orbit, the right button
-// (or Ctrl+drag) its pan: those work.
+// (or Ctrl+drag) its pan: those work, and the camera they leave is written to
+// the layout wherever the button is released.
 //
 // "Home" is the chart's own: the graph div is sent `plotly_doubleclick`, which
 // every 3D view answers with its Home button.
@@ -478,16 +479,37 @@ export function install3DSceneGestures(div) {
         dragZoom = null;
         if (finished?.moved) commit(div, finished.scene);
     };
+    // Plotly's own orbit and pan write the camera to the layout on a mouseup
+    // over the scene, and only there: released anywhere else, the layout
+    // kept the old camera, and the next full redraw put it back — at once in
+    // the 3D animation, which redraws every frame. Captured on the document,
+    // so this is written before the animation resumes.
+    let mouseScene = null;
+    const onMouseSessionEnd = () => {
+        document.removeEventListener('mouseup', onMouseSessionEnd, true);
+        const scene = mouseScene;
+        mouseScene = null;
+        let changed = false;
+        try { changed = scene.isCameraChanged(div.layout) || scene.isAspectChanged(div.layout); } catch (_) { /* scene replaced */ }
+        if (changed) commit(div, scene);
+    };
+
     const onMouseDown = (event) => {
-        if (!(event.button === 1 || (event.button === 0 && event.altKey)) || dragZoom) return;
         const scene = sceneAt(div, event.target);
-        const base = scene ? zoomBase(scene) : null;
-        if (!base) return;
-        event.stopPropagation();
-        event.preventDefault();
-        dragZoom = { scene, base, y: event.clientY, moved: false };
-        document.addEventListener('mousemove', onDragZoomMove, true);
-        document.addEventListener('mouseup', onDragZoomEnd, true);
+        if (!scene) return;
+        if (event.button === 1 || (event.button === 0 && event.altKey)) {
+            const base = dragZoom ? null : zoomBase(scene);
+            if (!base) return;
+            event.stopPropagation();
+            event.preventDefault();
+            dragZoom = { scene, base, y: event.clientY, moved: false };
+            document.addEventListener('mousemove', onDragZoomMove, true);
+            document.addEventListener('mouseup', onDragZoomEnd, true);
+            return;
+        }
+        if (mouseScene) return;
+        mouseScene = scene;
+        document.addEventListener('mouseup', onMouseSessionEnd, true);
     };
 
     let wheelTimer = 0;
