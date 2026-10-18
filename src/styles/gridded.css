@@ -1084,6 +1084,74 @@ html.compact .gridded-scope {
     padding: 0.25rem 0.45rem;
 }
 
+/* The bar that says the tools are under the map (_griddedPeek): an
+   upright phone only, where they are a scroll away. A grip like a sheet's,
+   their names, a chevron that nods until it has been used. */
+.gridded-peek {
+    display: none;
+}
+
+html.compact:not(.compact-landscape) .gridded-peek {
+    order: 4;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    width: 100%;
+    margin: 0;
+    padding: 0.3rem 0.75rem 0.35rem;
+    border: none;
+    border-top: 1px solid var(--border-color);
+    border-radius: 0;
+    background: var(--bg-secondary);
+    color: var(--text-secondary, inherit);
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.gridded-peek-grip {
+    width: 2.25rem;
+    height: 0.25rem;
+    border-radius: 999px;
+    background: var(--border-color);
+}
+
+.gridded-peek-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gridded-peek-chevron {
+    flex-shrink: 0;
+    color: var(--primary-color);
+    transition: transform 0.2s ease;
+}
+
+.gridded-peek[aria-expanded="true"] .gridded-peek-chevron {
+    transform: rotate(180deg);
+}
+
+.gridded-peek.is-new .gridded-peek-chevron {
+    animation: gridded-peek-nod 1.6s ease-in-out 0.8s 3;
+}
+
+@keyframes gridded-peek-nod {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gridded-peek.is-new .gridded-peek-chevron {
+        animation: none;
+    }
+}
+
 /* Sized by _griddedFitPhoneHeight. */
 html.compact .gridded-body {
     flex: none;

@@ -964,6 +964,13 @@ export function installGriddedMethods(TargetClass) {
                         <select data-role="stride" class="gridded-speed gridded-stride"></select>
                         <select data-role="speed" class="gridded-speed"></select>
                     </div>
+                    <button type="button" class="gridded-peek" data-action="peek" aria-expanded="false">
+                        <span class="gridded-peek-grip" aria-hidden="true"></span>
+                        <span class="gridded-peek-row">
+                            <span data-role="peek-label"></span>
+                            <svg class="gridded-peek-chevron" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </span>
+                    </button>
                     <div class="gridded-progress" data-role="progress" hidden>
                         <span data-role="progress-label"></span>
                         <progress max="1" value="0" data-role="progress-bar"></progress>
@@ -1112,6 +1119,7 @@ export function installGriddedMethods(TargetClass) {
         let panelHidden = false;
         try { panelHidden = localStorage.getItem('omv.gridded.panelHidden') === '1'; } catch { /* shown */ }
         this._griddedTogglePanel(!panelHidden, root);
+        root.querySelector('.gridded-main')?.addEventListener('scroll', () => this._griddedSyncPeek(), { passive: true });
         this._griddedPlacePreview(root);
         this._griddedRefreshTexts();
         return root;
@@ -1131,6 +1139,54 @@ export function installGriddedMethods(TargetClass) {
         root.querySelector('[data-action="toggle-panel"]')?.setAttribute('aria-pressed', String(shown));
         if (show === undefined) {
             try { localStorage.setItem('omv.gridded.panelHidden', shown ? '0' : '1'); } catch { /* not kept */ }
+        }
+    };
+
+    /**
+     * On an upright phone the tools are under the map, a scroll away, and
+     * nothing said so: the scroll bar of the page shows for a second. A thin
+     * bar under the time bar names them (with the extractions made), always
+     * on screen at the foot of the map (_griddedFitPhoneHeight leaves room
+     * for it); a tap scrolls to them, and back to the map. Its chevron nods
+     * the first times, until it has been used once.
+     */
+    proto._griddedPeek = function() {
+        const root = document.getElementById('gridded-view');
+        const main = root?.querySelector('.gridded-main');
+        const peek = root?.querySelector('[data-action="peek"]');
+        if (!main || !peek) return;
+        const top = peek.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+        const down = peek.getAttribute('aria-expanded') !== 'true';
+        main.scrollTo({ top: down ? top : 0, behavior: 'smooth' });
+        try { localStorage.setItem('omv.gridded.peekSeen', '1'); } catch { /* not kept */ }
+        peek.classList.remove('is-new');
+    };
+
+    proto._griddedSyncPeek = function() {
+        const root = document.getElementById('gridded-view');
+        const main = root?.querySelector('.gridded-main');
+        const peek = root?.querySelector('[data-action="peek"]');
+        if (!main || !peek) return;
+        const view = this._griddedVisibleView();
+        const count = view?.groups?.length || 0;
+        const label = i18n.t('griddedPeekTools') + (count ? ` · ${i18n.t('griddedPeekExtracted').replace('{n}', count)}` : '');
+        const text = peek.querySelector('[data-role="peek-label"]');
+        if (text.textContent !== label) text.textContent = label;
+        // Scrolled to the tools, the bar heads them and points back up.
+        const top = peek.getBoundingClientRect().top - main.getBoundingClientRect().top;
+        // (Or as far as the page goes: under a short map it may not go further.)
+        const bottom = main.scrollTop >= main.scrollHeight - main.clientHeight - 2;
+        const open = main.scrollTop > 8 && (top < main.clientHeight / 2 || bottom);
+        peek.setAttribute('aria-expanded', String(open));
+        peek.title = i18n.t(open ? 'griddedPeekBack' : 'griddedPeekShow');
+        if (open) {
+            peek.classList.remove('is-new');
+            try { localStorage.setItem('omv.gridded.peekSeen', '1'); } catch { /* not kept */ }
+        } else if (!peek.dataset.nudged) {
+            peek.dataset.nudged = '1';
+            let seen = false;
+            try { seen = localStorage.getItem('omv.gridded.peekSeen') === '1'; } catch { /* nod */ }
+            peek.classList.toggle('is-new', !seen);
         }
     };
 
@@ -1359,6 +1415,7 @@ export function installGriddedMethods(TargetClass) {
                 this._hideGriddedView();
             }
             else if (action === 'toggle-panel') this._griddedTogglePanel();
+            else if (action === 'peek') this._griddedPeek();
             else if (!current) return;
             else if (action === 'cancel' && current.job) griddedClient().cancel(current.job.id);
             else if (action === 'extract-point') this._griddedExtractPoint(current);
@@ -1497,6 +1554,7 @@ export function installGriddedMethods(TargetClass) {
         set('[data-role="opt-follow"]', 'griddedScaleFollow');
         set('[data-role="splitter"]', 'griddedSplitterTitle', 'title');
         set('[data-role="splitter"]', 'griddedSplitterTitle', 'ariaLabel');
+        this._griddedSyncPeek();
         set('[data-action="toggle-panel"]', 'griddedTogglePanel', 'title');
         set('[data-action="toggle-panel"]', 'griddedTogglePanel', 'ariaLabel');
         set('[data-action="export-map"]', 'griddedExportMapTitle', 'title');
@@ -2540,8 +2598,10 @@ export function installGriddedMethods(TargetClass) {
         const main = body.closest('.gridded-main');
         const timebar = main?.querySelector('[data-role="timebar"]');
         const status = main?.querySelector('[data-role="status"]');
+        // The bar that says the tools are under the map stays on screen too.
+        const peek = main?.querySelector('[data-action="peek"]');
         const room = main?.clientHeight
-            ? main.clientHeight - (timebar?.offsetHeight || 0) - (status?.offsetHeight || 0) - 4
+            ? main.clientHeight - (timebar?.offsetHeight || 0) - (status?.offsetHeight || 0) - (peek?.offsetHeight || 0) - 4
             : window.innerHeight * 0.62;
         const height = Math.round(Math.max(200, Math.min(wanted, room)));
         if (Math.abs(body.offsetHeight - height) > 2) body.style.height = `${height}px`;
@@ -4174,6 +4234,7 @@ export function installGriddedMethods(TargetClass) {
     };
 
     proto._griddedDrawPreview = function(view) {
+        this._griddedSyncPeek();
         const panel = this._griddedEl('preview');
         const chart = this._griddedEl('preview-chart');
         if (!panel || !chart) return;
