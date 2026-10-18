@@ -2061,6 +2061,11 @@ export function installGriddedMethods(TargetClass) {
             this._griddedSyncTimeLabel(view);
             const started = performance.now();
             await this._griddedRequestMap(view);
+            // A frame to the browser at every step: a map from the cache is
+            // read and drawn without a turn of the event loop, and late steps
+            // follow each other without waiting, so a fast Play on a phone
+            // never let the tap on Pause through.
+            await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
             const now = performance.now();
             if (now - started > PLAY_STALL_INTERVALS * interval || clock + shown * interval < now - PLAY_MAX_SKIP * interval) {
                 clock = now;
