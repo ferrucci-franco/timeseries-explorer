@@ -17,6 +17,7 @@ import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
+import { sceneAspectUpdate, sceneZoomAspect } from '../ui/plot-3d-gestures.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { streamColumns } from '../data/column-stream.js';
 import { concatenatedCsvBlocks, planTimeConcat } from './timeseries-concat.js';
@@ -4383,14 +4384,10 @@ class PlotManager {
                 'scene.yaxis.range': layout.scene.yaxis.range,
                 'scene.zaxis.range': layout.scene.zaxis.range,
             };
-            const is2dt = plot.mode === 'phase2dt';
-            if (is2dt) {
+            if (plot.mode === 'phase2dt') {
                 Object.assign(update, this._timeAxisRelayoutUpdate(layout.scene.xaxis, 'scene.xaxis'));
             }
-            const homeCamera = plot.homeCamera || (is2dt
-                ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
-                : { eye: { x: 1.25, y: 1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } });
-            update['scene.camera'] = { ...homeCamera, projection: { type: plot.projection || 'orthographic' } };
+            Object.assign(update, this._sceneViewUpdate3D(plot, this._homeCamera3D(plot)));
             return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));
         }
 
@@ -4832,6 +4829,8 @@ class PlotManager {
             return {
                 mode: '3d',
                 camera: scene.camera ? JSON.parse(JSON.stringify(scene.camera)) : null,
+                // An orthographic zoom is the aspect ratio, not the camera.
+                aspect: sceneZoomAspect(scene),
                 xRange: axisRange(scene.xaxis),
                 yRange: axisRange(scene.yaxis),
                 zRange: axisRange(scene.zaxis),
@@ -4946,6 +4945,7 @@ class PlotManager {
             if (view.yRange) { update['scene.yaxis.range'] = view.yRange; update['scene.yaxis.autorange'] = false; }
             if (view.zRange) { update['scene.zaxis.range'] = view.zRange; update['scene.zaxis.autorange'] = false; }
             if (view.camera) update['scene.camera'] = view.camera;
+            if (view.aspect) Object.assign(update, sceneAspectUpdate(view.aspect));
         } else {
             if (view.xRange) { update['xaxis.range'] = view.xRange; update['xaxis.autorange'] = false; }
             if (view.yRange) { update['yaxis.range'] = view.yRange; update['yaxis.autorange'] = false; }

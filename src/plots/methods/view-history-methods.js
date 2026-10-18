@@ -1,7 +1,8 @@
 import Plotly from '../../vendor/plotly.js';
+import { sceneAspectUpdate, sceneZoomAspect } from '../../ui/plot-3d-gestures.js';
 
 // Ctrl+Z (⌘Z) goes back to the previous zoom/pan view of a panel. Only the
-// view: axis ranges and the 3D camera, nothing else.
+// view: axis ranges and the 3D camera and zoom, nothing else.
 //
 // Each panel keeps a stack of the views it had. A view covers every chart of
 // the panel: the analysis modes have a time pane and a result chart (spectrum,
@@ -57,6 +58,8 @@ export function installPlotViewHistoryMethods(TargetClass) {
             return {
                 scene: {
                     camera: scene.camera ? JSON.parse(JSON.stringify(scene.camera)) : null,
+                    // An orthographic zoom is the aspect ratio, not the camera.
+                    aspect: sceneZoomAspect(scene),
                     x: range(scene.xaxis), y: range(scene.yaxis), z: range(scene.zaxis),
                 },
             };
@@ -101,6 +104,7 @@ export function installPlotViewHistoryMethods(TargetClass) {
                 if (was[axis]) { update[`scene.${axis}axis.range`] = was[axis]; update[`scene.${axis}axis.autorange`] = false; }
             }
             if (was.camera) update['scene.camera'] = was.camera;
+            Object.assign(update, sceneAspectUpdate(was.aspect));
             return update;
         }
         for (const [name, was] of Object.entries(saved.axes || {})) {

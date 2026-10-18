@@ -22,10 +22,22 @@
 //                              slow second tap waits for the drag. Two fingers
 //                              moving together were tried first, and did not
 //                              work on an iPhone.
+//   a quick       home         the view the chart opened with, as on a 2D plot;
+//   double tap                 gl3d has no double click of its own
 //   the wheel     zoom         proportional to the delta, so a trackpad pinch
-//                              and a mouse notch both feel continuous
+//                              and a mouse notch both feel continuous; a
+//                              sideways wheel does nothing (Plotly rolled the
+//                              camera with it, and zoomed 10 % a notch too)
+//   middle drag   zoom         drag down to zoom in, as Plotly does; its own
+//   or Alt+drag                version moved the camera, which an orthographic
+//                              view does not show
+//   double click  home         as the double tap
 //
-// One finger is still Plotly's orbit: that part works.
+// One finger and the left button are still Plotly's orbit, the right button
+// (or Ctrl+drag) its pan: those work.
+//
+// "Home" is the chart's own: the graph div is sent `plotly_doubleclick`, which
+// every 3D view answers with its Home button.
 //
 // A zoom is written the way Plotly writes its own: orthographic scenes scale
 // their aspect ratio, perspective ones move the camera closer. Both go straight
@@ -40,6 +52,9 @@ const WHEEL_ZOOM_PER_PX = 0.002;
 const PINCH_WHEEL_ZOOM_PER_PX = 0.01;
 const LINE_HEIGHT_PX = 16;
 const WHEEL_SETTLE_MS = 180;
+// Middle (or Alt) drag: zoom exponent per pixel of vertical travel, so 100 px
+// is about ×2.
+const DRAG_ZOOM_PER_PX = 0.007;
 
 const clamp = (value, lo, hi) => Math.min(Math.max(value, lo), hi);
 
@@ -130,6 +145,27 @@ function applyZoom(scene, base, scale) {
         // A camera move is picked up by the scene's own render loop.
         scene.camera.distance = base.distance / scale;
     }
+}
+
+/**
+ * The zoom of an orthographic scene, as a saved view keeps it: its aspect ratio
+ * once a zoom has made it manual, null while it still has the one the chart
+ * opened with. (A perspective zoom is the camera distance, saved with the
+ * camera.)
+ *
+ * @param {object|undefined} sceneLayout a scene of `_fullLayout`
+ */
+export function sceneZoomAspect(sceneLayout) {
+    const ar = sceneLayout?.aspectratio;
+    if (sceneLayout?.aspectmode !== 'manual' || !ar) return null;
+    return { x: ar.x, y: ar.y, z: ar.z };
+}
+
+/** The relayout that puts back what sceneZoomAspect saved (every 3D chart here opens on 'cube'). */
+export function sceneAspectUpdate(aspect, id = 'scene') {
+    return aspect
+        ? { [`${id}.aspectmode`]: 'manual', [`${id}.aspectratio`]: { ...aspect } }
+        : { [`${id}.aspectmode`]: 'cube' };
 }
 
 /**
@@ -286,11 +322,17 @@ export function install3DSceneGestures(div) {
     // second touch soon after, close by, is ours: dragged (or held), it pans;
     // lifted after a slow gap, the scene waits for the drag that will.
     const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    // The chart's Home (see the top of this file). Called from the event that
+    // ends the gesture, whose default is a click or dblclick of its own.
+    const goHome = (event) => {
+        event?.preventDefault?.();
+        try { div.emit?.('plotly_doubleclick', null); } catch (error) { console.error(error); }
+    };
     const panOptions = () => {
         try { return typeof div._touchScenePan === 'function' ? div._touchScenePan() : null; } catch (_) { return null; }
     };
     let lastTap = null;     // { time, x, y } of the last one-finger tap
-    let oneFinger = null;   // { time, x, y, moved } of the touch in progress
+    let oneFinger = null;   // { time, x, y, moved, quickSecond } of the touch in progress
     let pan = null;         // { scene, x, y, panning, followUpGap, holdTimer }
     let armedUntil = 0;
     let armedTimer = 0;
@@ -338,13 +380,14 @@ export function install3DSceneGestures(div) {
         }
         const touch = event.touches[0];
         const time = nowMs();
-        oneFinger = { time, x: touch.clientX, y: touch.clientY, moved: false };
         const scene = sceneAt(div, event.target);
         const options = scene ? panOptions() : null;
         const armed = armedUntil > 0 && time < armedUntil;
         const followUp = !armed && isFollowUpTap(lastTap, { time, x: touch.clientX, y: touch.clientY });
         const gap = followUp ? time - lastTap.time : 0;
         lastTap = null;
+        // Lifted as a tap, a quick second touch is a double tap.
+        oneFinger = { time, x: touch.clientX, y: touch.clientY, moved: false, quickSecond: !!scene && followUp && gap < QUICK_DOUBLE_TAP_MS };
         if (!options || !(armed || followUp)) return;
         // Ours from here: Plotly would orbit under this finger.
         event.stopPropagation();
@@ -391,17 +434,60 @@ export function install3DSceneGestures(div) {
             // A pan is written to the layout with the touch session's end
             // (onTouchSessionEnd, which sees the camera changed). A second
             // touch that was a tap: slow, the scene waits for the drag;
-            // quick, it was a double tap, and nothing pans.
-            if (!finished.moved && finished.followUp && !finished.panning && finished.slow) arm(finished.scene, finished.options);
+            // quick, it was a double tap.
+            if (!finished.moved && finished.followUp && !finished.panning) {
+                if (finished.slow) arm(finished.scene, finished.options);
+                else goHome(event);
+            }
             oneFinger = null;
             return;
         }
-        if (oneFinger && !oneFinger.moved && time - oneFinger.time <= TAP_MAX_DURATION_MS) {
+        const tapped = oneFinger && !oneFinger.moved && time - oneFinger.time <= TAP_MAX_DURATION_MS;
+        if (tapped && oneFinger.quickSecond) {
+            goHome(event);
+            lastTap = null;
+        } else if (tapped) {
             lastTap = { time, x: oneFinger.x, y: oneFinger.y };
         } else {
             lastTap = null;
         }
         oneFinger = null;
+    };
+
+    // ── Mouse: a double click, and a middle or Alt drag ──────────────────
+    const onDoubleClick = (event) => {
+        if (sceneAt(div, event.target)) goHome(event);
+    };
+
+    // Plotly zooms on these by moving the camera, which an orthographic view
+    // does not show; this one zooms the way the wheel does, in either
+    // projection. Down zooms in, as Plotly's does.
+    let dragZoom = null;    // { scene, base, y, moved }
+    const onDragZoomMove = (event) => {
+        if (!dragZoom) return;
+        // Plotly's camera reads the buttons held on every move over the scene.
+        event.stopPropagation();
+        const scale = clamp(Math.exp((event.clientY - dragZoom.y) * DRAG_ZOOM_PER_PX), 1 / MAX_GESTURE_SCALE, MAX_GESTURE_SCALE);
+        applyZoom(dragZoom.scene, dragZoom.base, scale);
+        dragZoom.moved = true;
+    };
+    const onDragZoomEnd = () => {
+        document.removeEventListener('mousemove', onDragZoomMove, true);
+        document.removeEventListener('mouseup', onDragZoomEnd, true);
+        const finished = dragZoom;
+        dragZoom = null;
+        if (finished?.moved) commit(div, finished.scene);
+    };
+    const onMouseDown = (event) => {
+        if (!(event.button === 1 || (event.button === 0 && event.altKey)) || dragZoom) return;
+        const scene = sceneAt(div, event.target);
+        const base = scene ? zoomBase(scene) : null;
+        if (!base) return;
+        event.stopPropagation();
+        event.preventDefault();
+        dragZoom = { scene, base, y: event.clientY, moved: false };
+        document.addEventListener('mousemove', onDragZoomMove, true);
+        document.addEventListener('mouseup', onDragZoomEnd, true);
     };
 
     let wheelTimer = 0;
@@ -411,11 +497,16 @@ export function install3DSceneGestures(div) {
         if (!div._context?._scrollZoom?.gl3d) return;
         const scene = sceneAt(div, event.target);
         if (!scene) return;
-        const delta = event.deltaMode === 1 ? event.deltaY * LINE_HEIGHT_PX
-            : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY;
-        if (!Number.isFinite(delta) || delta === 0) return;
+        const unit = event.deltaMode === 1 ? LINE_HEIGHT_PX : event.deltaMode === 2 ? 400 : 1;
+        const delta = event.deltaY * unit;
+        if (!Number.isFinite(delta)) return;
+        // A sideways wheel (a trackpad swipe, Shift+wheel) is nobody's here:
+        // Plotly would roll the camera with it, and step the zoom 10 %.
+        const sideways = !event.ctrlKey && Math.abs(event.deltaX * unit) > Math.abs(delta);
+        if (delta === 0 && !sideways) return;
         event.stopPropagation();
         event.preventDefault();
+        if (sideways) return;
         const perPx = event.ctrlKey ? PINCH_WHEEL_ZOOM_PER_PX : WHEEL_ZOOM_PER_PX;
         const scale = clamp(Math.exp(-delta * perPx), 0.5, 2);
         if (!wheelScene) announce(div, SCENE_GESTURE_START);
@@ -441,6 +532,8 @@ export function install3DSceneGestures(div) {
     div.addEventListener('touchend', onTouchSessionEnd, { capture: true });
     div.addEventListener('touchcancel', onTouchSessionEnd, { capture: true });
     div.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    div.addEventListener('dblclick', onDoubleClick, { capture: true });
+    div.addEventListener('mousedown', onMouseDown, { capture: true });
     div.addEventListener('touchstart', onPanTouchStart, { capture: true, passive: false });
     div.addEventListener('touchmove', onPanTouchMove, { capture: true, passive: false });
     div.addEventListener('touchend', onPanTouchEnd, { capture: true, passive: false });

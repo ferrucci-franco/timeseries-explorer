@@ -4,6 +4,7 @@ import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/ff
 import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
+import { sceneAspectUpdate } from '../../ui/plot-3d-gestures.js';
 import { movedBeyondSlop } from '../../utils/touch-plot-gestures.js';
 import { copyTextToClipboard, cursorReadoutText } from '../../utils/clipboard.js';
 import { cursorHandleAt, cursorHandleLayout } from '../../utils/cursor-handles.js';
@@ -4484,25 +4485,42 @@ proto._fmtCameraNumber = function(value) {
     return n.toFixed(4).replace(/\.?0+$/, '');
 };
 
+// The view a 3D chart opens with, and the one Home and a double click go back
+// to. Plotly's own default is eye=(1.25,1.25,1.25), up=(0,0,1). phase2dt
+// rotates it around the Z (up) axis so time (plotly X) reads from lower-right
+// toward upper-left, var x (plotly Y) toward lower-left, var y up; the state
+// animation stands a little further back.
+proto._homeCamera3D = function(plot) {
+    if (plot?.homeCamera) return plot.homeCamera;
+    const center = { x: 0, y: 0, z: 0 };
+    const up = { x: 0, y: 0, z: 1 };
+    if (plot?.mode === 'state-anim') return { eye: { x: 1.5, y: 1.5, z: 1.2 }, center, up };
+    if (plot?.mode === 'phase2dt') return { eye: { x: 1.25, y: -1.25, z: 1.25 }, center, up };
+    return { eye: { x: 1.25, y: 1.25, z: 1.25 }, center, up };
+};
+
+// A camera preset is a fresh view from that side, zoom included. The zoom is
+// the camera distance in perspective but the aspect ratio in orthographic, so
+// setting the camera alone undid a perspective zoom and kept an orthographic
+// one. Back to the aspect every 3D chart opens with.
+proto._sceneViewUpdate3D = function(plot, camera) {
+    return {
+        'scene.camera': { ...camera, projection: { type: plot.projection || 'orthographic' } },
+        ...sceneAspectUpdate(null),
+    };
+};
+
 proto._setCamera = function(panelId, preset) {
     const plot = this.plots.get(panelId);
     if (!plot?.div) return;
-    // Plotly's own default is eye=(1.25,1.25,1.25), up=(0,0,1).
-    // phase2dt rotates the home eye around the Z (up) axis so time (plotly X) reads
-    // from lower-right toward upper-left, var x (plotly Y) toward lower-left, var y up.
-    const is2dt = plot.mode === 'phase2dt';
     const cameras = {
-        home:  plot.homeCamera || (is2dt
-            ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
-            : { eye: { x: 1.25, y:  1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }),
+        home:  this._homeCamera3D(plot),
         top:   { eye: { x: 0, y: 0, z: 2 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 } },
         front: { eye: { x: 0,    y: -2,   z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
         yz:    { eye: { x: 2,    y: 0,    z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
     };
     const cam = cameras[preset] || cameras.home;
-    const layoutUpdate = {
-        'scene.camera': { ...cam, projection: { type: plot.projection || 'orthographic' } },
-    };
+    const layoutUpdate = this._sceneViewUpdate3D(plot, cam);
     // Note: don't re-enable autorange here — explicit ranges (set at layout-build time
     // and including origin) are what lets the origin-anchored axis lines render at
     // equal visual length. Re-enabling autorange would let the axis lines themselves
