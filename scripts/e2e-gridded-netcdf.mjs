@@ -1018,8 +1018,24 @@ try {
                 await touchAt('touchEnd', []);
             }
             await page.waitForFunction(() => { const view = window.app._griddedVisibleView(); return view.playing && !view.held; }, null, { timeout: 3000 });
-            await page.evaluate(() => document.querySelector('#gridded-view [data-step="play"]').click());
-            assert.equal((await playState()).playing, false);
+            // A finger on Pause pauses as it lands, once: the click Safari
+            // makes when it lifts (late, or never, while Play keeps the
+            // phone busy) does not play again.
+            const playButton = await page.evaluate(() => {
+                const rect = document.querySelector('#gridded-view [data-step="play"]').getBoundingClientRect();
+                return [rect.left + rect.width / 2, rect.top + rect.height / 2];
+            });
+            await touchAt('touchStart', [playButton]);
+            assert.equal((await playState()).playing, false, 'Pause as the finger lands');
+            await touchAt('touchEnd', []);
+            await page.waitForTimeout(300);
+            assert.equal((await playState()).playing, false, 'and the click of the lift does not play again');
+            await tapAt(playButton);
+            await page.waitForTimeout(300);
+            assert.equal((await playState()).playing, true, 'a tap plays');
+            await tapAt(playButton);
+            await page.waitForTimeout(300);
+            assert.equal((await playState()).playing, false, 'and pauses');
             await tapAt(at(framed, 0.5, 0.5));
             await page.waitForTimeout(120);
             await tapAt(at(framed, 0.5, 0.5));
