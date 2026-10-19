@@ -2429,6 +2429,20 @@ proto._phase3dDisplayProps = function(plot, color) {
     return props;
 };
 
+// The view a 3D chart opens with, and the one Home and a double click go back
+// to. Plotly's own default is eye=(1.25,1.25,1.25), up=(0,0,1). phase2dt
+// rotates it around the Z (up) axis so time (plotly X) reads from lower-right
+// toward upper-left, var x (plotly Y) toward lower-left, var y up; the state
+// animation stands a little further back.
+proto._homeCamera3D = function(plot) {
+    if (plot?.homeCamera) return plot.homeCamera;
+    const center = { x: 0, y: 0, z: 0 };
+    const up = { x: 0, y: 0, z: 1 };
+    if (plot?.mode === 'state-anim') return { eye: { x: 1.5, y: 1.5, z: 1.2 }, center, up };
+    if (plot?.mode === 'phase2dt') return { eye: { x: 1.25, y: -1.25, z: 1.25 }, center, up };
+    return { eye: { x: 1.25, y: 1.25, z: 1.25 }, center, up };
+};
+
 proto._buildPhase3DLayout = function(plot, isTimez) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
     const first = plot.phaseTraces[0] || {};
