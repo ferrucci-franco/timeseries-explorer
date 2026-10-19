@@ -185,6 +185,68 @@ try {
     assert.equal(shrink.name, 'screen.jpg');
     assert.equal(shrink.width, 2000, 'and capped at 2000 px on its longest edge');
 
+    // ── The handover from Full Desktop ──────────────────────────────────────
+    // That edition transmits nothing, so its Feedback command opens this page
+    // with the form requested in the query. The form has to come up by itself,
+    // the query has to be gone afterwards, and the report has to say which
+    // build it is about -- the desktop one, not this page.
+    received.length = 0;
+    const handed = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await handed.goto(`${baseUrl}?feedback=1&from=desktop&v=0.4.1&c=abc1234&p=win32`, { waitUntil: 'domcontentloaded' });
+    await handed.waitForSelector('.feedback-dialog', { timeout: 15000 });
+    assert.equal(await handed.evaluate(() => window.location.search), '',
+        'the query is cleared, so a reload does not reopen the form');
+
+    await handed.fill('.feedback-field:nth-child(3) .feedback-control', 'Crashes when opening a .mat');
+    await handed.fill('.feedback-field:nth-child(4) .feedback-control', 'Opened a Dymola result in the desktop app.');
+    await handed.click('.feedback-send-btn');
+    await handed.waitForSelector('.feedback-status.is-sent', { timeout: 15000 });
+    const handedHead = JSON.parse(received[0].body.split('\n')[0]);
+    assert.equal(handedHead.app.reportedFrom, 'Full Desktop 0.4.1 · win32 · commit abc1234');
+
+    // ── And the desktop end of it ───────────────────────────────────────────
+    // With a desktop runtime in place, Feedback must build no sending form at
+    // all: it explains itself and hands that URL to the system browser, which
+    // is what `window.open` becomes inside Electron.
+    const desktop = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await desktop.addInitScript(() => {
+        const noop = () => {};
+        // Enough of the preload's surface (electron/preload.cjs) for the app
+        // to come up believing it is Full Desktop.
+        window.omvDesktop = {
+            platform: 'win32',
+            homedir: 'C:\\Users\\tester',
+            tmpdir: 'C:\\Temp',
+            username: 'tester',
+            setTheme: noop,
+            setSpellcheck: noop,
+            getZoom: async () => 1,
+            setZoom: async () => 1,
+            onZoomChanged: () => noop,
+            selectFilePath: async () => null,
+            selectFilePaths: async () => null,
+            selectParquetOutputPath: async () => null,
+            deleteTemporaryParquet: async () => null,
+            readFile: async () => null,
+        };
+        window.__openedUrls = [];
+        window.open = (target) => { window.__openedUrls.push(target); return null; };
+    });
+    const desktopErrors = [];
+    desktop.on('pageerror', error => desktopErrors.push(String(error)));
+    await desktop.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await desktop.waitForFunction(() => window.app?.capabilities?.isDesktop === true);
+    await desktop.evaluate(() => window.app.showFeedbackForm());
+    await desktop.waitForSelector('.modal-dialog');
+    assert.equal(await desktop.$$eval('.feedback-dialog', nodes => nodes.length), 0,
+        'the edition that cannot transmit never builds the form that would');
+    await desktop.click('.modal-btn-confirm');
+    await desktop.waitForFunction(() => window.__openedUrls.length > 0, { timeout: 5000 });
+    const opened = await desktop.evaluate(() => window.__openedUrls[0]);
+    assert.match(opened, /^https:\/\/www\.unditas\.com\/\?feedback=1&from=desktop&v=/, `handed over to ${opened}`);
+    assert.match(opened, /&p=win32$/, 'with the platform the report is about');
+    assert.deepEqual(desktopErrors, [], 'and nothing broke on the way there');
+
     assert.deepEqual(pageErrors, [], 'no page errors along the way');
     console.log('Feedback end-to-end send checks passed.');
 } finally {

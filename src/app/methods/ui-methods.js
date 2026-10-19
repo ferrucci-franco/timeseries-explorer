@@ -32,8 +32,10 @@ import {
     FEEDBACK_MAX_ATTACHMENTS,
     FEEDBACK_MAX_TOTAL_BYTES,
     FeedbackSendError,
+    buildFeedbackHandoffUrl,
     buildFeedbackReport,
     checkFeedbackAttachments,
+    readFeedbackHandoff,
     sendFeedbackReport,
     shrinkScreenshot,
 } from '../feedback-transport.js';
@@ -1805,7 +1807,63 @@ proto._renderExtraMenu = function() {
     menu.append(...items);
 };
 
+/**
+ * Feedback, from the edition that does not transmit.
+ *
+ * Full Desktop cancels every external request the renderer makes, on purpose
+ * (electron/navigation-policy.cjs). Sending a report from inside it would mean
+ * cutting a hole in that promise for one feature. So it hands the job to the
+ * browser instead: the same form, on the web build, which carries this build's
+ * version and commit in its URL. Electron's window-open handler sends that to
+ * the system browser; nothing is fetched by the app itself.
+ *
+ * Asked first rather than simply done, because an app that opens a browser
+ * window unannounced is an app that did something you did not ask for.
+ */
+proto._openFeedbackInBrowser = function() {
+    const url = buildFeedbackHandoffUrl(ONLINE_VERSION_URL, {
+        version: APP_VERSION,
+        commit: BUILD_SHA,
+        platform: globalThis.omvDesktop?.platform || '',
+    });
+    Modal.confirm(i18n.t('feedbackDesktopBody'), {
+        title: i18n.t('feedbackDesktopTitle'),
+        icon: '💬',
+        confirmText: i18n.t('feedbackDesktopOpen'),
+    }).then((confirmed) => {
+        if (!confirmed) return;
+        window.open(url, '_blank', 'noopener');
+        this._showTransientStatus?.(i18n.t('feedbackDesktopOpened'));
+    });
+};
+
+/**
+ * Opens the form by itself when the page was reached from Full Desktop's
+ * Feedback command. The query is then dropped from the address bar: it has
+ * been read, and a reload should not reopen the form over whatever the user
+ * went on to do.
+ */
+proto.openFeedbackFromUrl = function() {
+    const handoff = readFeedbackHandoff(globalThis.location?.search || '');
+    if (!handoff.requested) return false;
+    this._feedbackReportedFrom = handoff.reportedFrom;
+    try {
+        const url = new URL(globalThis.location.href);
+        ['feedback', 'from', 'v', 'c', 'p'].forEach(key => url.searchParams.delete(key));
+        globalThis.history?.replaceState?.(null, '', url.toString());
+    } catch (_) {
+        // An address bar that cannot be rewritten is no reason not to open.
+    }
+    this.showFeedbackForm();
+    return true;
+};
+
 proto.showFeedbackForm = function() {
+    // The desktop edition never sends; it hands the form to the browser.
+    if (this.capabilities?.isDesktop) {
+        this._openFeedbackInBrowser();
+        return;
+    }
     const previousActive = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay feedback-overlay';
@@ -2110,6 +2168,9 @@ proto.showFeedbackForm = function() {
         pageUrl: window.location.href,
         userAgent: navigator.userAgent,
         language: i18n.currentLang,
+        // Set when the form was opened from Full Desktop's Feedback command:
+        // the report is about that build, not about this page.
+        reportedFrom: this._feedbackReportedFrom || '',
         createdAt: new Date().toISOString(),
         attachmentNames: attachedFiles.map(attachment => attachment.file.name),
     });
@@ -2286,13 +2347,9 @@ proto.showFeedbackForm = function() {
             console.error('Feedback send failed:', error);
             const kind = error instanceof FeedbackSendError ? error.kind : 'server';
             const translatedRefusal = FEEDBACK_REFUSAL_KEYS[error?.code];
-            let text;
-            // Full Desktop denies every external request by design
-            // (electron/navigation-policy.cjs), so there "check the connection"
-            // blames the wrong thing: nothing was ever going to leave.
-            if (kind === 'offline' && this.capabilities?.isDesktop) text = i18n.t('feedbackErrorDesktopOffline');
-            else if (kind === 'rejected' && translatedRefusal) text = i18n.t(translatedRefusal);
-            else text = i18n.t(FEEDBACK_ERROR_KEYS[kind] || 'feedbackErrorServer');
+            const text = kind === 'rejected' && translatedRefusal
+                ? i18n.t(translatedRefusal)
+                : i18n.t(FEEDBACK_ERROR_KEYS[kind] || 'feedbackErrorServer');
             // A refusal the endpoint had no code for still says something
             // concrete, even if it says it in English: better than "the report
             // could not be sent" and nothing else.

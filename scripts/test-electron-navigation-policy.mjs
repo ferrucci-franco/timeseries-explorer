@@ -46,6 +46,16 @@ assert.equal(isExternalOpenUrl('http://127.0.0.1:8876/help', origin), false);
 assert.equal(isExternalOpenUrl('javascript:alert(1)', origin), false);
 assert.equal(appOriginFromUrl('not a URL'), '');
 
+// ── Feedback leaves through the system browser, never through the app ──────
+// Full Desktop sends nothing over the network, so its Feedback command opens
+// the web build in the user's own browser instead. That only holds if the two
+// halves of this policy disagree about the same URL: openable externally,
+// never fetchable by the renderer.
+const { buildFeedbackHandoffUrl } = await import('../src/app/feedback-transport.js');
+const handoffUrl = buildFeedbackHandoffUrl('https://www.unditas.com/', { version: '0.4.1', platform: 'win32' });
+assert.equal(isExternalOpenUrl(handoffUrl, origin), true, 'the feedback form must open in the system browser');
+assert.equal(isAllowedRendererUrl(handoffUrl, origin), false, 'and must stay unreachable from inside the app');
+
 const mainSource = await readFile(new URL('../electron/main.cjs', import.meta.url), 'utf8');
 assert.match(mainSource, /Menu\.setApplicationMenu\(null\)/, 'the native Electron menu must be removed');
 assert.match(mainSource, /setWindowOpenHandler/, 'popup navigation must be intercepted');

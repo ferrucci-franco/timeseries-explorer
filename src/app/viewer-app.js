@@ -92,6 +92,10 @@ class OpenModelicaViewer {
         // app and a blank one: how to put a variable on a panel with a finger
         // (#110). After the first paint, so it does not hold the app up.
         setTimeout(() => this._showTouchHintIfNeeded?.(), 800);
+        // Full Desktop's Feedback command opens this page with the form
+        // requested in the query (src/app/feedback-transport.js): that edition
+        // transmits nothing itself, so the browser files the report for it.
+        this.openFeedbackFromUrl?.();
     }
 
     // ─── File management ───────────────────────────────────────────

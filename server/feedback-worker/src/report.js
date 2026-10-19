@@ -167,6 +167,10 @@ export function parseReportBody(bodyText) {
                 url: clamp(app.url, 300),
                 userAgent: clamp(app.userAgent, 400),
                 language: clamp(app.language, 20),
+                // Set when Full Desktop handed the form to the browser: the
+                // report is about that build, not about the page it was typed
+                // on, and the issue has to say which.
+                reportedFrom: clamp(app.reportedFrom, 120),
                 createdAt: clamp(app.createdAt, 40),
             },
         },
@@ -231,6 +235,7 @@ export function buildIssueBody(report, assets = [], reference = '') {
         '',
         '| | |',
         '| --- | --- |',
+        ...(app.reportedFrom ? [`| Reported from | ${app.reportedFrom} |`] : []),
         `| Version | ${app.version || '-'} |`,
         `| Commit | ${app.commit || '-'} |`,
         `| Build date | ${app.buildDate || '-'} |`,

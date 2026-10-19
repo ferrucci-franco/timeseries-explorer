@@ -88,11 +88,29 @@ the sentence rather than to silence.
 A build with no `OMV_FEEDBACK_ENDPOINT` behaves exactly like that failure: the
 form works, the send does not pretend to.
 
-The Full Desktop edition denies every external request by design
-(`electron/navigation-policy.cjs`), so Send cannot reach the endpoint there and
-says so in those words — not "check your connection" — and offers the same
-fallback. Making it work there means allowing that one host through, which is a
-deliberate change to the offline-first guarantee.
+## Full Desktop
+
+That edition transmits nothing: every external request the renderer makes is
+cancelled on purpose (`electron/navigation-policy.cjs`). Rather than cut a hole
+in that promise for one feature, Feedback there hands the job to the browser,
+which never made the promise.
+
+The command opens a short dialog — a browser window appearing unannounced is an
+app doing something nobody asked for — and then opens the web build at
+
+```
+https://www.unditas.com/?feedback=1&from=desktop&v=0.4.1&c=abc1234&p=win32
+```
+
+`window.open` inside Electron is routed to `shell.openExternal`
+(`setWindowOpenHandler` in `electron/main.cjs`), so the page is fetched by the
+user's browser and never by the app. The web build sees `?feedback=1`, opens
+the form by itself, clears the query so a reload does not reopen it, and files
+the report with a **Reported from** row naming the desktop build: the page that
+filed it is not the thing that misbehaved.
+
+The query is a stranger's text by the time it is read back, so every field is
+stripped to `[A-Za-z0-9._ -]` and clipped before it can reach an issue.
 
 ## Configuring it
 
@@ -133,4 +151,5 @@ repository variable of the same name. Deployment is in
 | `npm run test:feedback-form` | the form's one button, the paste wiring, the translations |
 | `npm run test:feedback-attachments` | a dropped file is visibly received and does not reach the data loader |
 | `npm run test:feedback-screenshots` | the download fallback, for when a send fails |
-| `npm run e2e:feedback-send` | in a real browser: Ctrl+V with the caret in a text field, then Send |
+| `npm run e2e:feedback-send` | in a real browser: Ctrl+V with the caret in a text field, Send, the shrinking, and the desktop handover |
+| `npm run test:electron-navigation` | the handover URL opens externally and stays unfetchable from inside the app |

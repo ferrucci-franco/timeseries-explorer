@@ -104,6 +104,9 @@ A report becomes one issue, labelled `feedback`:
   branch under `reports/<date>-<id>/`, which keeps them out of the code history
   and lets you delete a report's files with one commit.
 - The build table carries version, commit, browser, page URL and a reference id.
+  A report that came from Full Desktop — which transmits nothing itself, and so
+  opens the web form in the user's browser — also carries a **Reported from**
+  row naming that build.
 - A contact address, if the reporter gave one, is written `name [at] example
   [dot] com`. The issue is public and a plain address in one is harvested
   within the day.

@@ -161,6 +161,21 @@ assert.doesNotMatch(body, /\*\*jumps\*\*/, 'the summary line is not markup eithe
 assert.match(body, /someone \[at\] example \[dot\] com/);
 assert.match(body, /\| Version \| 0\.4\.1 \|/);
 assert.match(body, /\| Reference \| 2026-10-19-abc123 \|/);
+assert.doesNotMatch(body, /Reported from/, 'a report typed in the web app claims no other edition');
+
+// A report handed over by Full Desktop says which build it is about: the page
+// that filed it is not the thing that misbehaved.
+const fromDesktop = buildIssueBody(
+    { category: 'bug', summary: 's', details: 'd', contact: '', app: { reportedFrom: 'Full Desktop 0.4.1 · win32', version: '0.4.2' } },
+    [],
+    'ref',
+);
+assert.match(fromDesktop, /\| Reported from \| Full Desktop 0\.4\.1 · win32 \|/);
+assert.equal(
+    parseReportBody(head({ app: { reportedFrom: `x${'y'.repeat(300)}` } })).report.app.reportedFrom.length,
+    121,
+    'and cannot be long enough to bury the rest of the table',
+);
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 assert.equal(corsHeaders('https://a.test', '')['Access-Control-Allow-Origin'], '*', 'unset means any origin');

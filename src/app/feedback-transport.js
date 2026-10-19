@@ -161,6 +161,51 @@ export async function shrinkScreenshot(file, {
 }
 
 /**
+ * The handover from Full Desktop to the browser.
+ *
+ * The desktop edition transmits nothing: every external request the renderer
+ * makes is cancelled on purpose (electron/navigation-policy.cjs). Rather than
+ * cut a hole in that for one feature, Feedback there opens this URL in the
+ * user's own browser, which has no such promise to keep. The desktop build's
+ * version, commit and platform ride along in the query, because the report is
+ * about THAT build, not about the web page now showing the form.
+ */
+export function buildFeedbackHandoffUrl(baseUrl, { version = '', commit = '', platform = '' } = {}) {
+    const url = new URL(baseUrl);
+    url.searchParams.set('feedback', '1');
+    url.searchParams.set('from', 'desktop');
+    if (version) url.searchParams.set('v', version);
+    if (commit) url.searchParams.set('c', commit);
+    if (platform) url.searchParams.set('p', platform);
+    return url.toString();
+}
+
+/**
+ * The other end of that handover, read from `location.search`.
+ *
+ * Everything here arrived in a URL, so it is treated as what it is: a
+ * stranger's text. Each field is clipped to a short, harmless shape before it
+ * can reach a report, and `reportedFrom` is the one sentence the issue shows.
+ */
+export function readFeedbackHandoff(search) {
+    let params;
+    try {
+        params = new URLSearchParams(String(search || ''));
+    } catch {
+        return { requested: false, reportedFrom: '' };
+    }
+    if (!params.has('feedback')) return { requested: false, reportedFrom: '' };
+    const clean = (key, max) => String(params.get(key) || '').replace(/[^A-Za-z0-9._ -]/g, '').slice(0, max);
+    const desktop = params.get('from') === 'desktop';
+    const version = clean('v', 20);
+    const commit = clean('c', 12);
+    const platform = clean('p', 20);
+    if (!desktop) return { requested: true, reportedFrom: '' };
+    const parts = [version && `Full Desktop ${version}`, platform, commit && `commit ${commit}`].filter(Boolean);
+    return { requested: true, reportedFrom: parts.length ? parts.join(' · ') : 'Full Desktop' };
+}
+
+/**
  * The report, as the endpoint receives it: the metadata, and each attachment
  * already base64-encoded.
  */
@@ -193,6 +238,9 @@ export async function buildFeedbackReport(feedback, attachments = []) {
             url: feedback.pageUrl,
             userAgent: feedback.userAgent,
             language: feedback.language || '',
+            // Set only when the form was opened from Full Desktop: the build
+            // the report is about is not the one running this page.
+            reportedFrom: feedback.reportedFrom || '',
             createdAt: feedback.createdAt,
         },
         attachments: encoded,

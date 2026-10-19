@@ -9,6 +9,8 @@
 import assert from 'node:assert/strict';
 
 import {
+    buildFeedbackHandoffUrl,
+    readFeedbackHandoff,
     FEEDBACK_MAX_ATTACHMENTS,
     FEEDBACK_MAX_ATTACHMENT_BYTES,
     FEEDBACK_MAX_TOTAL_BYTES,
@@ -88,6 +90,42 @@ assert.throws(
     () => serializeFeedbackReport({ ...report, attachments: [{ name: 'x.png', data: 'AA\nBB' }] }),
     /newline/,
 );
+
+// ── Full Desktop hands the form to the browser ──────────────────────────────
+// That edition cancels every external request on purpose, so rather than cut a
+// hole in the promise for one feature, Feedback there opens the web build in
+// the user's own browser -- carrying the desktop build's identity, because
+// that is what the report is about.
+const handoffUrl = buildFeedbackHandoffUrl('https://www.unditas.com/', {
+    version: '0.4.1',
+    commit: 'abc1234',
+    platform: 'win32',
+});
+assert.equal(handoffUrl, 'https://www.unditas.com/?feedback=1&from=desktop&v=0.4.1&c=abc1234&p=win32');
+assert.equal(
+    buildFeedbackHandoffUrl('https://www.unditas.com/', {}),
+    'https://www.unditas.com/?feedback=1&from=desktop',
+    'a build that knows nothing about itself still opens the form',
+);
+
+const handoff = readFeedbackHandoff(new URL(handoffUrl).search);
+assert.equal(handoff.requested, true);
+assert.equal(handoff.reportedFrom, 'Full Desktop 0.4.1 · win32 · commit abc1234');
+assert.equal(readFeedbackHandoff('').requested, false, 'an ordinary visit opens no form');
+assert.equal(readFeedbackHandoff('?other=1').requested, false);
+assert.equal(readFeedbackHandoff('?feedback=1').reportedFrom, '', 'the web asking for itself reports no edition');
+// It arrived in a URL, so it is a stranger's text: it may not become markup,
+// a link, or a paragraph of its own inside the issue.
+const hostile = readFeedbackHandoff('?feedback=1&from=desktop&v=' + encodeURIComponent('0.4.1](http://evil "x")\n# heading'));
+// Every bracket, slash, quote and newline is gone, and what is left is cut to
+// twenty characters.
+assert.equal(hostile.reportedFrom, 'Full Desktop 0.4.1httpevil x head');
+assert.ok(readFeedbackHandoff(`?feedback=1&from=desktop&v=${'9'.repeat(80)}`).reportedFrom.length < 60,
+    'and it cannot be long enough to bury the report');
+
+const handedOff = await buildFeedbackReport({ ...feedback, reportedFrom: 'Full Desktop 0.4.1 · win32' }, []);
+assert.equal(handedOff.app.reportedFrom, 'Full Desktop 0.4.1 · win32');
+assert.equal(report.app.reportedFrom, '', 'a report typed in the web app says nothing about an edition');
 
 // ── One POST, and what each failure means ───────────────────────────────────
 const replying = (status, body) => async () => ({

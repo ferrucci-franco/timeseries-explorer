@@ -41,8 +41,23 @@ assert.match(feedbackForm, /setStatus\('error', \{ text: `\$\{text\}\$\{detail\}
 // did not keeps the endpoint's English rather than becoming a shrug.
 assert.match(feedbackForm, /FEEDBACK_REFUSAL_KEYS\[error\?\.code\]/, 'a coded refusal is translated');
 assert.match(feedbackForm, /!translatedRefusal && error\?\.detail/, 'an uncoded one still says what happened');
-assert.match(feedbackForm, /this\.capabilities\?\.isDesktop\) text = i18n\.t\('feedbackErrorDesktopOffline'\)/,
-    'the desktop edition does not blame the connection for a policy of its own');
+
+// ── Full Desktop keeps its promise not to transmit ──────────────────────────
+// It cancels every external request the renderer makes (electron/navigation-
+// policy.cjs). Rather than cut a hole in that for one feature, Feedback there
+// opens the web build in the user's own browser, which made no such promise.
+assert.match(feedbackForm, /if \(this\.capabilities\?\.isDesktop\) \{\s*\n\s*this\._openFeedbackInBrowser\(\);\s*\n\s*return;/,
+    'the desktop edition never builds the sending form at all');
+const handoff = ui.slice(ui.indexOf('proto._openFeedbackInBrowser'), ui.indexOf('proto.showFeedbackForm'));
+assert.match(handoff, /buildFeedbackHandoffUrl\(ONLINE_VERSION_URL/, 'it hands over to the published web app');
+assert.match(handoff, /version: APP_VERSION,[\s\S]{0,120}?platform: globalThis\.omvDesktop\?\.platform/,
+    'carrying the build the report is actually about');
+assert.match(handoff, /Modal\.confirm\(/, 'and says so before a browser window appears unannounced');
+assert.doesNotMatch(handoff, /fetch\(/, 'the desktop edition itself requests nothing');
+const fromUrl = ui.slice(ui.indexOf('proto.openFeedbackFromUrl'), ui.indexOf('proto.showFeedbackForm'));
+assert.match(fromUrl, /readFeedbackHandoff\(globalThis\.location\?\.search/, 'the web end reads the handover');
+assert.match(fromUrl, /searchParams\.delete\(key\)[\s\S]{0,120}?replaceState/,
+    'and clears the query, so a reload does not reopen the form');
 assert.match(feedbackForm, /sent = true;[\s\S]*?this\._feedbackDraft = null;/, 'a filed report is not left in the draft to be sent twice');
 assert.match(feedbackForm, /sendButton\.hidden = true;/, 'and the Send button goes away once it is filed');
 
@@ -66,8 +81,8 @@ assert.equal([...translations.matchAll(/feedbackMinimize:/g)].length, 4, 'Feedba
 for (const key of ['feedbackSend', 'feedbackSending', 'feedbackSentBody', 'feedbackSentLink', 'feedbackClose',
     'feedbackSendNote', 'feedbackPasteButton', 'feedbackErrorOffline', 'feedbackErrorRejected',
     'feedbackErrorServer', 'feedbackErrorTimeout', 'feedbackErrorNotConfigured', 'feedbackFallbackIntro',
-    'feedbackErrorDesktopOffline', 'feedbackErrorRateLimited', 'feedbackErrorTooLarge',
-    'feedbackErrorInvalid', 'feedbackErrorTypeRejected']) {
+    'feedbackErrorRateLimited', 'feedbackErrorTooLarge', 'feedbackErrorInvalid', 'feedbackErrorTypeRejected',
+    'feedbackDesktopTitle', 'feedbackDesktopBody', 'feedbackDesktopOpen', 'feedbackDesktopOpened']) {
     assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 4, `${key} should exist in all four languages`);
 }
 // The keys of the paths that are gone must be gone too, or the next reader
