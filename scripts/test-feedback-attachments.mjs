@@ -43,20 +43,25 @@ assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}?\.feed
 // re-rendering after a removal must not flash the rows that stayed.
 assert.match(ui, /renderFiles\(\{ highlightFrom: attachedFiles\.length > firstNew \? firstNew : -1 \}\)/,
     'a drop that added nothing highlights nothing');
-assert.match(ui, /const addFiles = \(files, source = 'file'\) => \{\s*\n\s*const firstNew = attachedFiles\.length;/,
+assert.match(ui, /const addFiles = async \(files, source = 'file'\) => \{\s*\n\s*const firstNew = attachedFiles\.length;/,
     'the index is taken before the files are added');
-for (const caller of ['releasePreview\\(removed\\);\\s*\\n\\s*renderFiles\\(\\)', 'this\\._feedbackDraft = null;\\s*\\n\\s*renderFiles\\(\\)']) {
+for (const caller of ['releasePreview\\(removed\\);\\s*\\n\\s*renderFiles\\(\\)', "this\\._feedbackDraft = null;\\s*\\n\\s*setStatus\\(''\\);\\s*\\n\\s*renderFiles\\(\\)"]) {
     assert.match(ui, new RegExp(caller), 'removing and clearing re-render without highlighting');
 }
 
 // ── The drop stays inside the dialog ────────────────────────────────────────
-const zone = ui.slice(ui.indexOf("pasteZone.addEventListener('paste'"));
-const dropHandler = zone.slice(zone.indexOf("pasteZone.addEventListener('drop'"), zone.indexOf('emailButton'));
+// The listeners sit on the whole dialog, not on the drop zone: the zone is a
+// small target at the bottom of a scrolling form, and a screenshot dropped
+// just above it used to be handed to the app's data loader instead.
+const zone = ui.slice(ui.indexOf("modal.addEventListener('dragover'"));
+const dropHandler = zone.slice(zone.indexOf("modal.addEventListener('drop'"), zone.indexOf("form.addEventListener('submit'"));
 assert.match(dropHandler, /event\.preventDefault\(\);\s*\n\s*event\.stopPropagation\(\);/,
     'the drop must not also reach the app’s own file loader');
-const dragoverHandler = zone.slice(zone.indexOf("pasteZone.addEventListener('dragover'"), zone.indexOf("pasteZone.addEventListener('dragleave'"));
+const dragoverHandler = zone.slice(0, zone.indexOf("modal.addEventListener('dragleave'"));
 assert.match(dragoverHandler, /event\.stopPropagation\(\);/,
     'nor should the dragover raise the app’s drop target over the dialog');
+assert.match(dropHandler, /addFiles\(filesFromTransfer\(event\.dataTransfer\)\)/,
+    'a drop reads the files the same way a paste does');
 
 // The handler it is being kept away from: if this ever stops loading files,
 // the stopPropagation above needs revisiting rather than silently doing nothing.

@@ -31,6 +31,10 @@ export default defineConfig({
   define: {
     __GIT_SHA__: JSON.stringify(resolveGitSha()),
     __BUILD_DATE__: JSON.stringify(resolveCommitDate()),
+    // The endpoint the Feedback form sends reports to (server/feedback-worker).
+    // A build without it still shows the form; the send then fails with a
+    // message saying so, rather than silently going nowhere.
+    __FEEDBACK_ENDPOINT__: JSON.stringify(process.env.OMV_FEEDBACK_ENDPOINT || ''),
   },
   // The parse worker loads each format's parser with a dynamic import(), so it
   // is a code-splitting build. Vite's default worker format (iife) cannot do

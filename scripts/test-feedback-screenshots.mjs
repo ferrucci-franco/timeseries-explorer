@@ -69,13 +69,11 @@ for (const fragment of ['Axis is wrong', 'See screenshots', 'Commit: abc1234']) 
     assert.ok(issueBare.includes(fragment), `the report still carries "${fragment}"`);
 }
 
-const emailWithShots = app._formatFeedbackEmailBody(feedback, '', names);
-assert.match(emailWithShots, /Please attach these downloaded screenshots to this email:/);
-for (const name of names) assert.ok(emailWithShots.includes(name), `${name} is named in the email`);
-assert.doesNotMatch(emailWithShots, /downloaded zip file/, 'no zip is mentioned when none was made');
-assert.match(app._formatFeedbackEmailBody(feedback, 'report.zip'), /Please attach the downloaded zip file/);
-
 // ─── How the form delivers them ────────────────────────────────────
+// This path is now the fallback, reached only after a send has failed: the
+// Send button posts the report to the endpoint instead (test-feedback-
+// transport.mjs). It stays because a failed send must not cost the reporter
+// their screenshots.
 const ui = readFileSync(new URL('../src/app/methods/ui-methods.js', import.meta.url), 'utf8');
 const start = ui.indexOf('const saveBlob = (blob, filename) =>');
 const end = ui.indexOf('const openIssue =', start);
@@ -96,7 +94,7 @@ assert.match(download, /const downloadPackage = async \(feedback\) => \{[\s\S]*?
 // The prose beside the buttons has to describe what now happens, in every
 // language: an English-only correction is the same bug in a different place.
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-for (const key of ['feedbackNextGithub', 'feedbackSafetyNote']) {
+for (const key of ['feedbackPasteZone', 'feedbackSafetyNote']) {
     const values = [...translations.matchAll(new RegExp(`${key}: '(.*?)',\\n`, 'g'))].map(m => m[1]);
     assert.equal(values.length, 4, `${key} is defined in all four languages`);
     for (const value of values) {

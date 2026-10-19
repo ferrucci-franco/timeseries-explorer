@@ -1,0 +1,22 @@
+name = "timeseries-explorer-feedback"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+
+# Everything here is public: it ships inside the deployed worker. The GitHub
+# token is NOT here -- it is a secret (`wrangler secret put GITHUB_TOKEN`).
+[vars]
+GITHUB_REPO = "ferrucci-franco/timeseries-explorer"
+# The attachments are committed here, never to the default branch.
+ASSET_BRANCH = "feedback-attachments"
+ISSUE_LABELS = "feedback"
+# Comma-separated list of origins allowed to read the reply; empty means any.
+# The desktop build sends no origin, so narrowing this only affects browsers.
+ALLOWED_ORIGINS = ""
+MAX_REPORTS_PER_HOUR = "10"
+
+# Rate limiting is skipped unless a KV namespace is bound. To enable it:
+#   npx wrangler kv namespace create FEEDBACK_KV
+# then paste the id below and uncomment both lines.
+# [[kv_namespaces]]
+# binding = "FEEDBACK_KV"
+# id = "paste-the-id-wrangler-printed"

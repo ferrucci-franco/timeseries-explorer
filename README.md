@@ -138,10 +138,10 @@ More detail: [docs/architecture.md](docs/architecture.md)
 
 ## Feedback
 
-The in-app Feedback command opens a form for text, screenshots pasted from the
-clipboard, and optional files. It does not upload files automatically. Instead,
-it downloads a local zip package and opens a prefilled GitHub Issue; attach the
-zip only when the contents are safe to share publicly.
+The in-app Feedback command opens a form for text, screenshots pasted with
+Ctrl+V, and optional files, with a single Send button. The report becomes a
+GitHub issue with the screenshots inline — no GitHub account and no email
+program needed. The issue is public, so attach only what is safe to share.
 
 More detail: [docs/feedback.md](docs/feedback.md)
 

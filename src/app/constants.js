@@ -139,6 +139,11 @@ const BUILD_SHA = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'dev';
 const BUILD_DATE = typeof __BUILD_DATE__ !== 'undefined' ? __BUILD_DATE__ : '';
 const FEEDBACK_ISSUES_URL = 'https://github.com/ferrucci-franco/timeseries-explorer/issues/new';
 const FEEDBACK_EMAIL = 'ferruccifranco@gmail.com';
+// Where the Send button posts the report (server/feedback-worker). Injected at
+// build time from OMV_FEEDBACK_ENDPOINT, like the two globals above; empty in a
+// build that was given none, which is what makes the form fall back to the
+// manual paths instead of pretending to send.
+const FEEDBACK_ENDPOINT = typeof __FEEDBACK_ENDPOINT__ !== 'undefined' ? __FEEDBACK_ENDPOINT__ : '';
 const ONLINE_VERSION_URL = 'https://www.unditas.com/';
 const DESKTOP_MANIFEST_PATH = './downloads/desktop.json';
 const DESKTOP_PLATFORM_ICON_PATHS = {
@@ -154,4 +159,4 @@ const RESET_LAYOUT_ICON_SVG = `<svg class="reset-layout-glyph" viewBox="0 0 64 6
     <path fill="none" stroke="#ef8b78" stroke-width="2" d="M6 6h52v52H6zM6 58 58 6M32 6v52M6 32h52"/>
 </svg>`;
 
-export { APP_VERSION, BUILD_SHA, BUILD_DATE, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_CONSTANTS, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, FEEDBACK_EMAIL, FEEDBACK_ISSUES_URL, ONLINE_VERSION_URL, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS, GRIB_EXTENSIONS };
+export { APP_VERSION, BUILD_SHA, BUILD_DATE, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_CONSTANTS, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, FEEDBACK_EMAIL, FEEDBACK_ENDPOINT, FEEDBACK_ISSUES_URL, ONLINE_VERSION_URL, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS, GRIB_EXTENSIONS };

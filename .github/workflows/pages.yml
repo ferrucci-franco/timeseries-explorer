@@ -41,6 +41,10 @@ jobs:
           # The site serves DuckDB's Parquet module itself, so opening a
           # Parquet file makes no request to a third party. No module, no deploy.
           OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
+          # Where the Feedback form's Send button posts (server/feedback-worker).
+          # Set as a repository variable; unset, the form still opens and says
+          # sending is unavailable in this build.
+          OMV_FEEDBACK_ENDPOINT: ${{ vars.OMV_FEEDBACK_ENDPOINT }}
         run: npm run build
 
       - name: Add .nojekyll

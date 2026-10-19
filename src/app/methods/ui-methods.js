@@ -21,13 +21,43 @@ import {
     DYMOLA_LOGO_ICON_PATH,
     EXAMPLES,
     FEEDBACK_EMAIL,
+    FEEDBACK_ENDPOINT,
     FEEDBACK_ISSUES_URL,
     ONLINE_VERSION_URL,
     OPENMODELICA_MODELING_ICON_PATH,
     RESET_LAYOUT_ICON_SVG,
 } from '../constants.js';
+import {
+    FEEDBACK_MAX_ATTACHMENT_BYTES,
+    FEEDBACK_MAX_ATTACHMENTS,
+    FEEDBACK_MAX_TOTAL_BYTES,
+    FeedbackSendError,
+    buildFeedbackReport,
+    checkFeedbackAttachments,
+    sendFeedbackReport,
+    shrinkScreenshot,
+} from '../feedback-transport.js';
 
-const FEEDBACK_MAX_PACKAGE_BYTES = 25 * 1024 * 1024;
+// Which sentence the user reads when the send did not go through. The kinds
+// come from FeedbackSendError; anything unforeseen reads as the server one,
+// which is the only message that promises nothing about the cause.
+const FEEDBACK_ERROR_KEYS = {
+    'not-configured': 'feedbackErrorNotConfigured',
+    offline: 'feedbackErrorOffline',
+    timeout: 'feedbackErrorTimeout',
+    rejected: 'feedbackErrorRejected',
+    server: 'feedbackErrorServer',
+};
+
+// A refusal the endpoint had a word for, in the reporter's own language. Its
+// English sentence is the fallback for a code this build does not know -- an
+// endpoint can be newer than the app pointed at it.
+const FEEDBACK_REFUSAL_KEYS = {
+    'rate-limited': 'feedbackErrorRateLimited',
+    'too-large': 'feedbackErrorTooLarge',
+    invalid: 'feedbackErrorInvalid',
+    'type-rejected': 'feedbackErrorTypeRejected',
+};
 
 // Between two screenshots saved one after the other. Fired in the same tick a
 // browser keeps the first download and silently drops the rest.
@@ -1867,10 +1897,24 @@ proto.showFeedbackForm = function() {
     fileInput.multiple = true;
     fileInput.className = 'feedback-file-input';
 
+    const attachButtons = document.createElement('div');
+    attachButtons.className = 'feedback-attach-buttons';
+
     const fileButton = document.createElement('button');
     fileButton.type = 'button';
     fileButton.className = 'modal-btn modal-btn-cancel feedback-file-button';
     fileButton.textContent = i18n.t('feedbackChooseFiles');
+
+    // Ctrl+V is handled wherever the caret is (see onDocumentPaste below), but
+    // a clipboard that the browser will only hand over on an explicit gesture
+    // -- and a tablet, which has no Ctrl+V at all -- need something to press.
+    const pasteButton = document.createElement('button');
+    pasteButton.type = 'button';
+    pasteButton.className = 'modal-btn modal-btn-cancel feedback-paste-button';
+    pasteButton.textContent = i18n.t('feedbackPasteButton');
+    pasteButton.hidden = typeof navigator === 'undefined' || !navigator.clipboard?.read;
+
+    attachButtons.append(fileButton, pasteButton);
 
     const fileList = document.createElement('div');
     fileList.className = 'feedback-file-list';
@@ -1880,24 +1924,25 @@ proto.showFeedbackForm = function() {
     safety.className = 'feedback-safety';
     safety.textContent = i18n.t('feedbackSafetyNote');
 
-    attachmentSection.append(pasteZone, fileInput, fileButton, fileList, safety);
+    attachmentSection.append(pasteZone, fileInput, attachButtons, fileList, safety);
 
-    const nextSteps = document.createElement('div');
-    nextSteps.className = 'feedback-next-steps';
-    const nextTitle = document.createElement('h3');
-    nextTitle.textContent = i18n.t('feedbackNextTitle');
-    const githubStep = document.createElement('p');
-    githubStep.textContent = i18n.t('feedbackNextGithub');
-    const emailStep = document.createElement('p');
-    emailStep.textContent = i18n.t('feedbackNextEmail');
-    nextSteps.append(nextTitle, githubStep, emailStep);
+    const sendNote = document.createElement('p');
+    sendNote.className = 'feedback-send-note';
+    sendNote.textContent = i18n.t('feedbackSendNote');
 
     const body = document.createElement('div');
     body.className = 'feedback-body';
-    body.append(fields, attachmentSection, nextSteps);
+    body.append(fields, attachmentSection, sendNote);
 
     const actions = document.createElement('div');
     actions.className = 'modal-buttons feedback-actions';
+    // Lives with the buttons rather than at the end of the scrolling body: it
+    // is the answer to pressing Send, and it has to be where Send is.
+    const status = document.createElement('div');
+    status.className = 'feedback-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.hidden = true;
     const clearButton = document.createElement('button');
     clearButton.type = 'button';
     clearButton.className = 'modal-btn modal-btn-cancel feedback-clear-btn';
@@ -1906,15 +1951,11 @@ proto.showFeedbackForm = function() {
     minimizeButton.type = 'button';
     minimizeButton.className = 'modal-btn modal-btn-cancel';
     minimizeButton.textContent = i18n.t('feedbackMinimize');
-    const emailButton = document.createElement('button');
-    emailButton.type = 'button';
-    emailButton.className = 'modal-btn modal-btn-cancel';
-    emailButton.textContent = i18n.t('feedbackEmailInstead');
-    const issueButton = document.createElement('button');
-    issueButton.type = 'submit';
-    issueButton.className = 'modal-btn modal-btn-confirm';
-    issueButton.textContent = i18n.t('feedbackOpenIssue');
-    actions.append(clearButton, minimizeButton, emailButton, issueButton);
+    const sendButton = document.createElement('button');
+    sendButton.type = 'submit';
+    sendButton.className = 'modal-btn modal-btn-confirm feedback-send-btn';
+    sendButton.textContent = i18n.t('feedbackSend');
+    actions.append(status, clearButton, minimizeButton, sendButton);
 
     form.append(header, body, actions);
     modal.appendChild(form);
@@ -1953,8 +1994,12 @@ proto.showFeedbackForm = function() {
             attachments: attachedFiles.map(attachment => ({ ...attachment })),
         };
     };
+    // Set once the report is filed. From then on the draft is gone on purpose:
+    // reopening the form must not offer to send the same report again.
+    let sent = false;
     const finish = () => {
-        saveDraft();
+        if (!sent) saveDraft();
+        document.removeEventListener('paste', onDocumentPaste, true);
         Modal.close(overlay, previousActive);
     };
     const clearForm = () => {
@@ -1966,6 +2011,7 @@ proto.showFeedbackForm = function() {
         details.control.value = '';
         expected.control.value = '';
         this._feedbackDraft = null;
+        setStatus('');
         renderFiles();
         summary.control.focus();
     };
@@ -2024,7 +2070,7 @@ proto.showFeedbackForm = function() {
         });
         fileList.appendChild(list);
         const totalLine = document.createElement('div');
-        totalLine.className = total > FEEDBACK_MAX_PACKAGE_BYTES ? 'feedback-total is-too-large' : 'feedback-total';
+        totalLine.className = checkFeedbackAttachments(attachedFiles).ok ? 'feedback-total' : 'feedback-total is-too-large';
         totalLine.textContent = i18n.t('feedbackTotalSize').replace('{size}', this._formatBytes(total));
         fileList.appendChild(totalLine);
         // The attachment list sits at the bottom of a form taller than its own
@@ -2033,17 +2079,23 @@ proto.showFeedbackForm = function() {
         // into view — `nearest` scrolls the form, never the page behind it.
         firstNewRow?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     };
-    const addFiles = (files, source = 'file') => {
+    const addFiles = async (files, source = 'file') => {
         const firstNew = attachedFiles.length;
-        Array.from(files || []).forEach((file, index) => {
-            if (!file) return;
-            const name = this._feedbackAttachmentName(file, attachedFiles, { source, index });
-            const wrappedFile = new File([file], name, { type: file.type || 'application/octet-stream', lastModified: file.lastModified || Date.now() });
+        const incoming = Array.from(files || []).filter(Boolean);
+        for (let index = 0; index < incoming.length; index++) {
+            const original = incoming[index];
+            const name = this._feedbackAttachmentName(original, attachedFiles, { source, index });
+            // A full-screen PNG is a megabyte or two of mostly flat colour.
+            // Shrunk here, where CPU is free, it reaches the endpoint as a
+            // couple of hundred kilobytes and still reads perfectly.
+            const payload = await shrinkScreenshot(original);
+            const finalName = payload === original ? name : name.replace(/\.[A-Za-z0-9]{1,8}$/, '.jpg');
+            const wrappedFile = new File([payload], finalName, { type: payload.type || 'application/octet-stream', lastModified: original.lastModified || Date.now() });
             attachedFiles.push({
                 file: wrappedFile,
                 previewUrl: wrappedFile.type.startsWith('image/') ? URL.createObjectURL(wrappedFile) : '',
             });
-        });
+        }
         renderFiles({ highlightFrom: attachedFiles.length > firstNew ? firstNew : -1 });
     };
     const collectFeedback = () => ({
@@ -2057,14 +2109,32 @@ proto.showFeedbackForm = function() {
         buildDate: BUILD_DATE,
         pageUrl: window.location.href,
         userAgent: navigator.userAgent,
+        language: i18n.currentLang,
         createdAt: new Date().toISOString(),
         attachmentNames: attachedFiles.map(attachment => attachment.file.name),
     });
+    // Which limit an attachment set broke, as a sentence. The endpoint checks
+    // the same numbers, but hearing it here means hearing it before the
+    // upload rather than after it.
+    const attachmentProblem = () => {
+        const check = checkFeedbackAttachments(attachedFiles);
+        if (check.ok) return '';
+        if (check.reason === 'count') return i18n.t('feedbackTooManyFiles').replace('{count}', String(FEEDBACK_MAX_ATTACHMENTS));
+        if (check.reason === 'file') {
+            return i18n.t('feedbackFileTooLarge')
+                .replace('{name}', check.name || '')
+                .replace('{size}', this._formatBytes(FEEDBACK_MAX_ATTACHMENT_BYTES));
+        }
+        if (check.reason === 'total') {
+            return i18n.t('feedbackTotalTooLarge').replace('{size}', this._formatBytes(FEEDBACK_MAX_TOTAL_BYTES));
+        }
+        return i18n.t('feedbackFileTypeRejected').replace('{name}', check.name || '');
+    };
     const ensureValid = () => {
         if (!form.reportValidity()) return false;
-        const total = attachedFiles.reduce((sum, attachment) => sum + attachment.file.size, 0);
-        if (total > FEEDBACK_MAX_PACKAGE_BYTES) {
-            Modal.alert(i18n.t('feedbackPackageTooLargeTitle'), i18n.t('feedbackPackageTooLargeBody'), { icon: 'ZIP' });
+        const problem = attachmentProblem();
+        if (problem) {
+            setStatus('error', { text: problem });
             return false;
         }
         return true;
@@ -2073,6 +2143,11 @@ proto.showFeedbackForm = function() {
         if (typeof this._downloadBlob === 'function') this._downloadBlob(blob, filename);
         else this._downloadFeedbackBlob(blob, filename);
     };
+    // ── The way out of a failed send ───────────────────────────────────────
+    // Reached only from the error state: Send is the path, and these exist so
+    // that an endpoint that is down, or a build that was given none, cannot
+    // cost the reporter what they already typed and attached.
+    //
     // Screenshots go to Downloads as themselves, so they can be dropped
     // straight into the issue and show up inline. A zip cannot: GitHub renders
     // it as a link to something no reader will open, and the person reporting
@@ -2124,16 +2199,140 @@ proto.showFeedbackForm = function() {
         });
         window.open(`${FEEDBACK_ISSUES_URL}?${params.toString()}`, '_blank', 'noopener');
     };
-    const openEmail = (feedback, filename, screenshotNames = []) => {
-        const subject = `[Time Series Explorer feedback] ${feedback.summary || i18n.t('extraFeedback')}`;
-        const body = this._formatFeedbackEmailBody(feedback, filename, screenshotNames);
-        const params = new URLSearchParams({ subject, body });
-        window.open(`mailto:${encodeURIComponent(FEEDBACK_EMAIL)}?${params.toString()}`, '_blank', 'noopener');
+
+    // ── Sending ────────────────────────────────────────────────────────────
+    const setStatus = (kind, { text = '', linkUrl = '', linkText = '', fallback = false } = {}) => {
+        status.innerHTML = '';
+        status.className = kind ? `feedback-status is-${kind}` : 'feedback-status';
+        status.hidden = !kind;
+        if (!kind) return;
+        const line = document.createElement('p');
+        line.className = 'feedback-status-text';
+        line.textContent = text;
+        status.appendChild(line);
+        if (linkUrl) {
+            const link = document.createElement('a');
+            link.className = 'feedback-status-link';
+            link.href = linkUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = linkText || linkUrl;
+            status.appendChild(link);
+        }
+        if (fallback) status.appendChild(buildFallback());
     };
-    const prepareForExternalSend = async () => {
-        if (!ensureValid()) return null;
-        if (!attachedFiles.length) return { feedback: collectFeedback(), filename: '', screenshotNames: [] };
-        return await downloadAttachments();
+    // Only ever shown after a send has already failed. Everything here is a
+    // way for the report not to be lost: keep the text, or file it by hand.
+    const buildFallback = () => {
+        const row = document.createElement('div');
+        row.className = 'feedback-fallback';
+        const hint = document.createElement('span');
+        hint.textContent = i18n.t('feedbackFallbackIntro').replace('{email}', FEEDBACK_EMAIL);
+        const saveButton = document.createElement('button');
+        saveButton.type = 'button';
+        saveButton.className = 'modal-btn modal-btn-cancel';
+        saveButton.textContent = i18n.t('feedbackSaveReport');
+        saveButton.addEventListener('click', () => {
+            downloadAttachments().catch(err => console.error('Feedback download failed:', err));
+        });
+        const issueLink = document.createElement('button');
+        issueLink.type = 'button';
+        issueLink.className = 'modal-btn modal-btn-cancel';
+        issueLink.textContent = i18n.t('feedbackOpenIssue');
+        issueLink.addEventListener('click', () => openIssue(collectFeedback(), '', []));
+        row.append(hint, saveButton, issueLink);
+        return row;
+    };
+    const setBusy = (busy) => {
+        sendButton.disabled = busy;
+        clearButton.disabled = busy;
+        fileButton.disabled = busy;
+        pasteButton.disabled = busy;
+        sendButton.textContent = busy ? i18n.t('feedbackSending') : i18n.t('feedbackSend');
+        form.classList.toggle('is-sending', busy);
+    };
+    const markSent = (result) => {
+        sent = true;
+        this._feedbackDraft = null;
+        attachedFiles.forEach(releasePreview);
+        attachedFiles.length = 0;
+        // The form stays on screen, filled in and frozen: the report is gone,
+        // and a second press of a live Send button would only file it twice.
+        [contact, category, summary, details, expected].forEach(field => { field.control.disabled = true; });
+        fileButton.disabled = true;
+        pasteButton.disabled = true;
+        sendButton.hidden = true;
+        clearButton.hidden = true;
+        minimizeButton.textContent = i18n.t('feedbackClose');
+        minimizeButton.classList.add('modal-btn-confirm');
+        setStatus('sent', {
+            text: i18n.t('feedbackSentBody'),
+            linkUrl: result?.issueUrl || '',
+            linkText: result?.issueNumber ? `${i18n.t('feedbackSentLink')} #${result.issueNumber}` : i18n.t('feedbackSentLink'),
+        });
+        minimizeButton.focus();
+    };
+    const send = async () => {
+        if (sent || !ensureValid()) return;
+        setBusy(true);
+        setStatus('sending', { text: i18n.t('feedbackSending') });
+        try {
+            const report = await buildFeedbackReport(collectFeedback(), attachedFiles);
+            const result = await sendFeedbackReport({ endpoint: FEEDBACK_ENDPOINT, report });
+            setBusy(false);
+            markSent(result);
+        } catch (error) {
+            setBusy(false);
+            console.error('Feedback send failed:', error);
+            const kind = error instanceof FeedbackSendError ? error.kind : 'server';
+            const translatedRefusal = FEEDBACK_REFUSAL_KEYS[error?.code];
+            let text;
+            // Full Desktop denies every external request by design
+            // (electron/navigation-policy.cjs), so there "check the connection"
+            // blames the wrong thing: nothing was ever going to leave.
+            if (kind === 'offline' && this.capabilities?.isDesktop) text = i18n.t('feedbackErrorDesktopOffline');
+            else if (kind === 'rejected' && translatedRefusal) text = i18n.t(translatedRefusal);
+            else text = i18n.t(FEEDBACK_ERROR_KEYS[kind] || 'feedbackErrorServer');
+            // A refusal the endpoint had no code for still says something
+            // concrete, even if it says it in English: better than "the report
+            // could not be sent" and nothing else.
+            const detail = kind === 'rejected' && !translatedRefusal && error?.detail ? ` ${error.detail}` : '';
+            setStatus('error', { text: `${text}${detail}`, fallback: true });
+        }
+    };
+
+    // ── Attachments in ─────────────────────────────────────────────────────
+    // A clipboard entry is a file in `files` on most browsers and only in
+    // `items` on some; a drop is always in `files`. Both are read the same way
+    // so neither gesture depends on which one the browser filled in.
+    const filesFromTransfer = (transfer) => {
+        if (!transfer) return [];
+        const direct = Array.from(transfer.files || []);
+        if (direct.length) return direct;
+        return Array.from(transfer.items || [])
+            .filter(item => item.kind === 'file')
+            .map(item => item.getAsFile())
+            .filter(Boolean);
+    };
+    /**
+     * Ctrl+V, wherever the caret happens to be.
+     *
+     * This used to be a `paste` listener on the drop zone alone, which meant
+     * it fired only while that div held focus -- and the form opens with the
+     * focus in the summary field, so the one gesture everybody tries first,
+     * open the form and press Ctrl+V, reached a text input and did nothing
+     * visible. The dialog is modal, so a paste anywhere in the document while
+     * it is open was meant for it.
+     *
+     * A paste that carries no file is left entirely alone: pasting text into
+     * a text field has to keep working.
+     */
+    const onDocumentPaste = (event) => {
+        if (sent || !overlay.isConnected) return;
+        const files = filesFromTransfer(event.clipboardData);
+        if (!files.length) return;
+        event.preventDefault();
+        addFiles(files, 'paste');
     };
 
     fileButton.addEventListener('click', () => fileInput.click());
@@ -2141,43 +2340,58 @@ proto.showFeedbackForm = function() {
         addFiles(fileInput.files);
         fileInput.value = '';
     });
-    pasteZone.addEventListener('paste', (event) => {
-        addFiles(event.clipboardData?.files || [], 'paste');
+    pasteButton.addEventListener('click', async () => {
+        try {
+            const items = await navigator.clipboard.read();
+            const files = [];
+            for (const item of items) {
+                const type = item.types.find(entry => entry.startsWith('image/'));
+                if (!type) continue;
+                const blob = await item.getType(type);
+                files.push(new File([blob], `image.${type.split('/')[1] || 'png'}`, { type }));
+            }
+            if (!files.length) {
+                setStatus('info', { text: i18n.t('feedbackPasteEmpty') });
+                return;
+            }
+            setStatus('');
+            addFiles(files, 'paste');
+        } catch (error) {
+            // Reading the clipboard is a permission, and a refused one is not
+            // an error to apologise for: say what else works.
+            console.warn('Clipboard read refused:', error);
+            setStatus('info', { text: i18n.t('feedbackPasteDenied') });
+        }
     });
+    document.addEventListener('paste', onDocumentPaste, true);
+
     // stopPropagation, not just preventDefault: the app has its own drop
     // handler on `document` that loads whatever is dropped as a data file. A
     // screenshot dropped here therefore ALSO went to the parser, which failed
     // on it — an attachment that works, plus an error nobody asked for.
-    pasteZone.addEventListener('dragover', (event) => {
+    //
+    // The listeners sit on the whole dialog rather than on the drop zone: the
+    // zone is a small target at the bottom of a scrolling form, and a
+    // screenshot dropped two centimetres above it used to be loaded as data.
+    modal.addEventListener('dragover', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        pasteZone.classList.add('is-dragover');
+        if (!sent) pasteZone.classList.add('is-dragover');
     });
-    pasteZone.addEventListener('dragleave', () => pasteZone.classList.remove('is-dragover'));
-    pasteZone.addEventListener('drop', (event) => {
+    modal.addEventListener('dragleave', (event) => {
+        if (event.relatedTarget && modal.contains(event.relatedTarget)) return;
+        pasteZone.classList.remove('is-dragover');
+    });
+    modal.addEventListener('drop', (event) => {
         event.preventDefault();
         event.stopPropagation();
         pasteZone.classList.remove('is-dragover');
-        addFiles(event.dataTransfer?.files || []);
-    });
-    emailButton.addEventListener('click', () => {
-        prepareForExternalSend().then(result => {
-            if (result) openEmail(result.feedback, result.filename, result.screenshotNames);
-        }).catch(err => {
-            console.error('Feedback email failed:', err);
-            Modal.alert(i18n.t('feedbackPackageFailedTitle'), err?.message || String(err), { icon: 'ZIP' });
-        });
+        if (sent) return;
+        addFiles(filesFromTransfer(event.dataTransfer));
     });
     form.addEventListener('submit', (event) => {
         event.preventDefault();
-        prepareForExternalSend()
-            .then(result => {
-                if (result) openIssue(result.feedback, result.filename, result.screenshotNames);
-            })
-            .catch(err => {
-                console.error('Feedback submit failed:', err);
-                Modal.alert(i18n.t('feedbackPackageFailedTitle'), err?.message || String(err), { icon: 'ZIP' });
-            });
+        send();
     });
     closeButton.addEventListener('click', finish);
     minimizeButton.addEventListener('click', finish);
@@ -2235,20 +2449,6 @@ proto._formatFeedbackIssueBody = function(feedback, includeAttachmentList = fals
     }
     if (includeAttachmentList) {
         lines.push('', 'Attachments:', ...(feedback.attachmentNames.length ? feedback.attachmentNames : ['none']));
-    }
-    return `${lines.join('\n')}\n`;
-};
-
-proto._formatFeedbackEmailBody = function(feedback, packageFilename = '', screenshotNames = []) {
-    const lines = [
-        this._formatFeedbackIssueBody(feedback, false, ''),
-        'No GitHub account:',
-        'Please send this email to the maintainer. The maintainer can create the GitHub issue from this report.',
-    ];
-    if (packageFilename) {
-        lines.push('', `Please attach the downloaded zip file to this email: ${packageFilename}`);
-    } else if (screenshotNames.length) {
-        lines.push('', 'Please attach these downloaded screenshots to this email:', ...screenshotNames);
     }
     return `${lines.join('\n')}\n`;
 };

@@ -1746,27 +1746,111 @@ textarea.feedback-control {
     line-height: 1.4;
 }
 
-.feedback-next-steps {
-    display: grid;
-    gap: 0.45rem;
-    padding: 0.75rem 0.85rem;
+.feedback-attach-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.feedback-send-note {
+    margin: 0;
+    padding: 0.7rem 0.85rem;
     border: 1px solid color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
     border-radius: 8px;
     background: color-mix(in srgb, var(--primary-color) 5%, var(--bg-primary));
-}
-
-.feedback-next-steps h3 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 0.9rem;
-    font-weight: 800;
-}
-
-.feedback-next-steps p {
-    margin: 0;
     color: var(--text-secondary);
     font-size: 0.84rem;
     line-height: 1.42;
+}
+
+/* Spans the whole footer so the answer to Send sits above the buttons rather
+   than squeezed between them. */
+.feedback-status {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    text-align: left;
+}
+
+.feedback-status-text {
+    margin: 0;
+    font-size: 0.86rem;
+    line-height: 1.4;
+}
+
+.feedback-status.is-sent {
+    border-color: #2e7d32;
+    background: color-mix(in srgb, #2e7d32 10%, var(--bg-primary));
+    color: #1b5e20;
+}
+
+.theme-dark .feedback-status.is-sent {
+    border-color: #81c784;
+    color: #c8e6c9;
+}
+
+.feedback-status.is-error {
+    border-color: #c62828;
+    background: color-mix(in srgb, #c62828 8%, var(--bg-primary));
+    color: #b71c1c;
+}
+
+.theme-dark .feedback-status.is-error {
+    border-color: #ef9a9a;
+    color: #ffcdd2;
+}
+
+.feedback-status.is-sending .feedback-status-text::before {
+    content: '';
+    display: inline-block;
+    width: 0.8em;
+    height: 0.8em;
+    margin-right: 0.5em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: feedback-spin 0.8s linear infinite;
+    vertical-align: -0.1em;
+}
+
+@keyframes feedback-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .feedback-status.is-sending .feedback-status-text::before {
+        animation-duration: 2.4s;
+    }
+}
+
+.feedback-status-link {
+    color: inherit;
+    font-weight: 700;
+}
+
+.feedback-fallback {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1 1 100%;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.feedback-fallback .modal-btn {
+    padding: 0.35rem 0.7rem;
+    font-size: 0.8rem;
+}
+
+.feedback-content.is-sending .feedback-body {
+    opacity: 0.7;
 }
 
 .feedback-actions {

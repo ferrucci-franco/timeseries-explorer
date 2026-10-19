@@ -6,10 +6,10 @@ documentation fixes and code.
 ## Reporting problems
 
 Open an issue at
-<https://github.com/ferrucci-franco/timeseries-explorer/issues>. The app's
-Feedback command (see [docs/feedback.md](docs/feedback.md)) prefills one for
-you, with the app version and your browser, and can package screenshots and
-files into a zip for you to attach.
+<https://github.com/ferrucci-franco/timeseries-explorer/issues>, or use the
+app's Feedback command (see [docs/feedback.md](docs/feedback.md)), which files
+one for you from inside the app — screenshots included, and with the app
+version and your browser already filled in. It needs no GitHub account.
 
 A useful report says which edition you used (web, Full Desktop or portable),
 what you did, what you expected and what happened instead. If a particular file
@@ -20,8 +20,8 @@ can be shared publicly; otherwise describe its format and size.
 
 Questions about how to do something are welcome as issues too; there is no
 separate forum. Check the in-app Help first: it documents every feature and
-the file formats in detail. If you prefer not to use GitHub, the Feedback
-command also offers an email fallback.
+the file formats in detail. If you have no GitHub account, the Feedback command
+sends the question for you.
 
 ## Proposing changes
 

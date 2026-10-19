@@ -53,6 +53,10 @@
 /scripts/__pycache__/
 !/electron/
 !/electron/**
+# The feedback endpoint's source and its deployment guide. It is deployed from
+# here (server/feedback-worker/README.md), so it has to be checked in.
+!/server/
+!/server/**
 !/build/
 !/build/icons/
 !/build/icons/**
