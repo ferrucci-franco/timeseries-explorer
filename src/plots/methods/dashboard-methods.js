@@ -21,7 +21,15 @@ import i18n from '../../i18n/index.js';
  */
 
 export const DASHBOARD_SIZES = ['s', 'm', 'l'];
-export const DASHBOARD_COLORS = ['#2196F3', '#4CAF50', '#FF9800', '#F44336', '#9C27B0', '#00BCD4', '#795548', '#607D8B'];
+// Two rows of strong colours, for a card that has to stand out, then two of
+// light ones, for groups of cards that read as one; the text on each is
+// chosen to read on it (readableTextColor).
+export const DASHBOARD_COLORS = [
+    '#1976d2', '#0097a7', '#00897b', '#43a047', '#7cb342', '#fbc02d', '#fb8c00',
+    '#e53935', '#d81b60', '#8e24aa', '#5e35b1', '#6d4c41', '#546e7a', '#212121',
+    '#bbdefb', '#b2ebf2', '#b2dfdb', '#c8e6c9', '#dcedc8', '#fff9c4', '#ffe0b2',
+    '#ffcdd2', '#f8bbd0', '#e1bee7', '#d1c4e9', '#d7ccc8', '#cfd8dc', '#f5f5f5',
+];
 const DECIMALS = ['auto', '0', '1', '2', '3', '4', '5', '6'];
 // How many columns of the grid a card takes: a long title or value gets room.
 export const CARD_SPANS = [1, 2, 3];
@@ -567,7 +575,7 @@ export function installPlotDashboardMethods(TargetClass) {
         editor.remove();
     };
 
-    proto._openDashboardCardEditor = function(panelId, index, anchor) {
+    proto._openDashboardCardEditor = function(panelId, index, anchor, options = {}) {
         this._closeDashboardCardEditor();
         const plot = this.plots.get(panelId);
         const trace = plot?.traces?.[index];
@@ -677,7 +685,8 @@ export function installPlotDashboardMethods(TargetClass) {
         none.title = i18n.t('dashboardColorNone');
         none.setAttribute('aria-label', i18n.t('dashboardColorNone'));
         none.addEventListener('click', event => { event.preventDefault(); setBg(''); });
-        swatches.appendChild(none);
+        const palette = document.createElement('div');
+        palette.className = 'dashboard-editor-palette';
         for (const color of DASHBOARD_COLORS) {
             const swatch = document.createElement('button');
             swatch.type = 'button';
@@ -686,7 +695,7 @@ export function installPlotDashboardMethods(TargetClass) {
             swatch.style.backgroundColor = color;
             swatch.setAttribute('aria-label', color);
             swatch.addEventListener('click', event => { event.preventDefault(); setBg(color.toLowerCase()); });
-            swatches.appendChild(swatch);
+            palette.appendChild(swatch);
         }
         const custom = document.createElement('input');
         custom.type = 'color';
@@ -695,7 +704,11 @@ export function installPlotDashboardMethods(TargetClass) {
         custom.title = i18n.t('dashboardColorCustom');
         custom.setAttribute('aria-label', i18n.t('dashboardColorCustom'));
         custom.addEventListener('input', () => setBg(custom.value.toLowerCase()));
-        swatches.appendChild(custom);
+        // No colour and a colour of one's own, then the palette.
+        const extras = document.createElement('div');
+        extras.className = 'dashboard-editor-swatch-extras';
+        extras.append(none, custom);
+        swatches.append(extras, palette);
         syncSwatches();
         const colorRow = document.createElement('div');
         colorRow.className = 'dashboard-editor-field';
@@ -704,6 +717,35 @@ export function installPlotDashboardMethods(TargetClass) {
         colorCaption.textContent = i18n.t('dashboardCardColor');
         colorRow.append(colorCaption, swatches);
         editor.appendChild(colorRow);
+
+        // Moving a card without dragging it: the keyboard, and a touch screen.
+        const moves = document.createElement('div');
+        moves.className = 'dashboard-editor-moves';
+        const move = (labelKey, className, target, disabled) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `dashboard-move-btn ${className}`;
+            button.textContent = i18n.t(labelKey);
+            button.disabled = disabled;
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                if (unit.value !== this._varUnit(trace.varName, trace.fileId)) this.setVariableUnit(trace.fileId, trace.varName, unit.value);
+                this._moveDashboardCard(panelId, index, target);
+                const newIndex = plot.traces.indexOf(trace);
+                const card = plot.dashboardEl?.querySelectorAll('.dashboard-card')[newIndex];
+                if (card) this._openDashboardCardEditor(panelId, newIndex, card, { focus: className });
+            });
+            moves.appendChild(button);
+        };
+        move('dashboardMoveBefore', 'move-before', index - 1, index === 0);
+        move('dashboardMoveAfter', 'move-after', index + 2, index >= plot.traces.length - 1);
+        const moveRow = document.createElement('div');
+        moveRow.className = 'dashboard-editor-field';
+        const moveCaption = document.createElement('span');
+        moveCaption.className = 'dashboard-editor-caption';
+        moveCaption.textContent = i18n.t('dashboardCardPosition');
+        moveRow.append(moveCaption, moves);
+        editor.appendChild(moveRow);
 
         const buttons = document.createElement('div');
         buttons.className = 'dashboard-editor-buttons';
@@ -729,7 +771,8 @@ export function installPlotDashboardMethods(TargetClass) {
         const height = editor.offsetHeight;
         const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
         const below = rect.bottom + 6;
-        const top = below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 6) : below;
+        const above = rect.top - height - 6;
+        const top = below + height <= window.innerHeight - 8 ? below : (above >= 8 ? above : 8);
         editor.style.left = `${Math.round(left)}px`;
         editor.style.top = `${Math.round(top)}px`;
 
@@ -753,8 +796,14 @@ export function installPlotDashboardMethods(TargetClass) {
         setTimeout(() => {
             if (editor.isConnected) document.addEventListener('pointerdown', onPointer, true);
         }, 0);
-        title.focus();
-        title.select();
+        // Moved with a button: the focus stays on it, so the next press moves
+        // the card on.
+        const keep = options.focus ? editor.querySelector(`.dashboard-move-btn.${options.focus}`) : null;
+        if (keep && !keep.disabled) keep.focus();
+        else {
+            title.focus();
+            title.select();
+        }
     };
 
     // ── Toolbar ──

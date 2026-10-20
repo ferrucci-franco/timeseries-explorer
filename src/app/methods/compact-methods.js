@@ -106,6 +106,7 @@ const COMPACT_PLOT_TYPES = [
     { mode: 'phase3d', labelKey: 'compactPlotType3d' },
     { mode: 'state-anim', dim: 2, labelKey: 'compactPlotTypeAnim2d' },
     { mode: 'state-anim', dim: 3, labelKey: 'compactPlotTypeAnim3d' },
+    { mode: 'dashboard', labelKey: 'compactPlotTypeDashboard' },
 ];
 
 // Plots built from signals in roles, one tap per role: x then y (then z)
@@ -120,6 +121,9 @@ const PHASE2D_FAMILY = new Set(['phase2d', ...COMPACT_PAIR_MODES]);
 const STATE_SLOT_LABELS = ['x₁', 'x₂', 'x₃'];
 
 const TIME_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
+// The plots that keep their signals when switched from one to another: the
+// time-series family, and the dashboard that shows the same signals as cards.
+const TRACE_FAMILY = new Set([...TIME_FAMILY, 'dashboard']);
 
 const MODE_LABEL_KEYS = {
     timeseries: 'modeTimeseries',
@@ -1043,7 +1047,7 @@ export function installCompactMethods(ViewerClass) {
         if (!plot) return;
         const sameAnim = mode !== 'state-anim' || (plot.stateAnimDim || 2) === (stateAnimDim || 2);
         if (plot.mode === mode && sameAnim) return;
-        if (TIME_FAMILY.has(plot.mode) && TIME_FAMILY.has(mode)) {
+        if (TRACE_FAMILY.has(plot.mode) && TRACE_FAMILY.has(mode)) {
             before?.();
             pm._requestModeChange(panelId, mode);
         } else if (PHASE2D_FAMILY.has(plot.mode) && PHASE2D_FAMILY.has(mode)) {

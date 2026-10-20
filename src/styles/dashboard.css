@@ -127,6 +127,13 @@
     opacity: 0.7;
 }
 
+/* No hover on a touch screen: the pencil is always there. */
+@media (hover: none) {
+    .dashboard-card-edit {
+        opacity: 0.7;
+    }
+}
+
 .dashboard-card-edit:hover {
     opacity: 1;
     background: color-mix(in srgb, currentColor 14%, transparent);
@@ -253,6 +260,8 @@
 
 .dashboard-card-editor {
     position: fixed;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
     z-index: 2000;
     display: flex;
     flex-direction: column;
@@ -324,8 +333,46 @@
 
 .dashboard-editor-swatches {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.dashboard-editor-swatch-extras {
+    display: flex;
     gap: 5px;
+}
+
+.dashboard-editor-palette {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 5px;
+}
+
+.dashboard-editor-palette .dashboard-swatch {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+}
+
+.dashboard-editor-moves {
+    display: flex;
+    gap: 4px;
+}
+
+.dashboard-move-btn {
+    flex: 1 1 0;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.dashboard-move-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .dashboard-swatch,

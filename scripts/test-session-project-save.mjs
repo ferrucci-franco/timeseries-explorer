@@ -115,6 +115,31 @@ try {
         'complete project should contain the displayed Live Update rows but not its pending partial row',
     );
 
+    // Reloaded since Live Update appended: the data is the whole file again,
+    // so the archive is the file, not the file cut where Live Update stopped.
+    const reloadedCsv = new SessionProjectHarness([[
+        'f1',
+        {
+            name: 'live',
+            extension: '.csv',
+            buffer: new TextEncoder().encode('time,value\n0,1\n1,2\n2,3\n').buffer,
+            file: new File(['time,value\n0,1\n1,2\n2,3\n'], 'live.csv'),
+            liveUpdate: { hasAppliedAppend: true, lastParsedOffset: 19, cursorData: { before: 'reload' } },
+            contentHash: 'fingerprint',
+            transform: {},
+        },
+    ]]);
+    reloadedCsv._readLiveUpdateFile = async () => new File(['time,value\n0,1\n1,2\n2,3\n'], 'live.csv');
+    reloadedCsv._liveUpdateDataOf = () => ({ after: 'reload' });
+    assert.equal(await reloadedCsv.saveProjectSession(), true);
+    const reloadedZip = unzipSync(new Uint8Array(await reloadedCsv.download.blob.arrayBuffer()));
+    const reloadedSession = JSON.parse(strFromU8(reloadedZip['session.json']));
+    assert.equal(
+        strFromU8(reloadedZip[reloadedSession.files[0].archivePath]),
+        'time,value\n0,1\n1,2\n2,3\n',
+        'after a reload the project holds the whole file the data was read from',
+    );
+
     alerts.length = 0;
     const lazyProject = new SessionProjectHarness([[
         'f1',

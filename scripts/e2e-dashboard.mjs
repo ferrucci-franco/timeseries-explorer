@@ -104,7 +104,8 @@ try {
     await page.click('.dashboard-width-btn[data-span="2"]');
     await page.fill('.dashboard-editor-unit', '°C');
     await page.selectOption('.dashboard-editor-decimals', '1');
-    await page.click('.dashboard-card-editor .dashboard-swatch >> nth=3');
+    assert.equal(await page.locator('.dashboard-editor-palette .dashboard-swatch').count(), 28, 'strong and light colours to pick from');
+    await page.click('.dashboard-card-editor .dashboard-swatch[data-color="#fb8c00"]');
     await page.click('.dashboard-editor-done');
     assert.equal(await page.locator('.dashboard-card-editor').count(), 0, 'Done closes the editor');
     c = await cards(page);
@@ -120,7 +121,7 @@ try {
     assert.ok(wide.ratio > 1.9 && wide.ratio < 2.2, `double width (${wide.ratio.toFixed(2)}× the next card)`);
     assert.equal(c[0].value, '23.0', 'one decimal');
     assert.equal(c[0].unit, '°C');
-    assert.equal(c[0].bg, 'rgb(255, 152, 0)', 'the colour picked');
+    assert.equal(c[0].bg, 'rgb(251, 140, 0)', 'the colour picked');
     assert.equal(await page.evaluate(() => window.app.plotManager._varUnit('temp')), '°C', 'the unit is the signal\'s');
 
     // ── Reordering: the first card dropped on the right half of the third ──
@@ -130,6 +131,23 @@ try {
     });
     c = await cards(page);
     assert.deepEqual(c.map(card => card.title), ['pressure', 'flow', 'Temperatura', 'state'], 'dragged after the third card');
+
+    // The same without dragging (keyboard, touch): the editor's move buttons.
+    await page.dblclick('.dashboard-card >> nth=2');
+    assert.equal(await page.locator('.dashboard-move-btn.move-after').isDisabled(), false);
+    await page.click('.dashboard-move-btn.move-before');
+    c = await cards(page);
+    assert.deepEqual(c.map(card => card.title), ['pressure', 'Temperatura', 'flow', 'state'], 'moved back one');
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('move-before')), true, 'the button keeps the focus');
+    await page.keyboard.press('Enter');
+    c = await cards(page);
+    assert.deepEqual(c.map(card => card.title), ['Temperatura', 'pressure', 'flow', 'state'], 'and again, from the keyboard');
+    assert.equal(await page.locator('.dashboard-move-btn.move-before').isDisabled(), true, 'the first card cannot move back');
+    await page.click('.dashboard-move-btn.move-after');
+    await page.click('.dashboard-move-btn.move-after');
+    await page.click('.dashboard-editor-done');
+    c = await cards(page);
+    assert.deepEqual(c.map(card => card.title), ['pressure', 'flow', 'Temperatura', 'state'], 'and on again');
 
     // ── Live Update: values change in place ──
     const firstCard = await page.evaluateHandle(() => document.querySelector('.dashboard-card'));
@@ -171,7 +189,7 @@ try {
     c = await cards(page);
     assert.deepEqual(c.map(card => card.title), ['pressure', 'flow', 'Temperatura', 'state'], 'the cards, in their order');
     assert.equal(c[2].unit, '°C', 'with the unit');
-    assert.equal(c[2].bg, 'rgb(255, 152, 0)', 'and the colour');
+    assert.equal(c[2].bg, 'rgb(251, 140, 0)', 'and the colour');
     assert.equal(await page.evaluate(() => document.querySelector('.dashboard-grid').classList.contains('size-l')), true, 'and the size');
 
     // ── Back to a plot: the signals it can draw ──

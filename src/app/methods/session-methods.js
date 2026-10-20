@@ -98,7 +98,12 @@ proto._readProjectEntryBytes = async function(entry, member = null) {
             if (bytes) return bytes;
             throw new Error(`Could not read ${member.name || 'a file of the dataset'}`);
         }
-        if (entry?.liveUpdate?.hasAppliedAppend) {
+        // Rows Live Update appended are in the data but not in the file read
+        // when it was opened: the archive takes the file up to where Live
+        // Update stopped reading. Only while the data on screen is the one it
+        // read into — after a Reload the data is the whole file again.
+        const liveData = this._liveUpdateDataOf?.(entry);
+        if (entry?.liveUpdate?.hasAppliedAppend && (!liveData || entry.liveUpdate.cursorData === liveData)) {
             const file = await this._readLiveUpdateFile(entry);
             const parsedEnd = Number(entry.liveUpdate.lastParsedOffset);
             if (!Number.isFinite(parsedEnd) || parsedEnd <= 0 || Number(file?.size) < parsedEnd) {

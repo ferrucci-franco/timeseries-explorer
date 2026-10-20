@@ -199,6 +199,14 @@ proto._startLiveUpdate = async function(fileId) {
     await this._pollLiveUpdate(fileId);
 };
 
+// The data a file entry shows now, for code that holds the entry, not its id.
+proto._liveUpdateDataOf = function(entry) {
+    for (const [fileId, candidate] of this.files || []) {
+        if (candidate === entry) return this.plotManager?.files?.get(fileId)?.data || null;
+    }
+    return null;
+};
+
 proto._canResumeLiveUpdateCursor = function(state, data) {
     return !!state?.hasAppliedAppend
         && !!data
