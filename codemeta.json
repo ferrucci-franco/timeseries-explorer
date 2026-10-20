@@ -3,7 +3,7 @@
   "type": "SoftwareSourceCode",
   "name": "Time Series Explorer",
   "description": "Browser and desktop application to explore time series locally: MATLAB .mat (including OpenModelica and Dymola results), CSV, Excel, Parquet, netCDF and GRIB (ERA5, CMIP on a map), pandas pickle, Micro-Cap and audio files, with time, frequency, distribution, correlation and phase-space views. Files are processed on the user's computer and never uploaded.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "license": "https://spdx.org/licenses/MIT",
   "codeRepository": "https://github.com/ferrucci-franco/timeseries-explorer",
   "url": "https://www.unditas.com/",
