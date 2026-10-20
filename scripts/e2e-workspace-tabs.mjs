@@ -9,6 +9,8 @@
 //   3. A view saved with one file, applied while only another file of the same
 //      experiment is open (a logger names its files by the hour): a dialog
 //      names the file the view was saved with and offers the open one.
+//   4. The web build has tabs as well, reached with Alt+1…9; the Ctrl keys
+//      are the browser's there and are left alone.
 //
 // Full Desktop is told apart by window.omvDesktop, which the page gets here
 // before it loads. Needs a Chromium for Playwright. Run with
@@ -184,6 +186,41 @@ try {
     s = await tabState(page);
     assert.deepEqual(s.traces, ['a', 'b'], 'closing the tab on screen shows the one beside it');
     assert.equal(await page.locator('#workspace-tabs .workspace-tab-close').count(), 0, 'the last tab cannot be closed');
+
+    assert.deepEqual(errors, [], 'no page errors');
+
+    // ── The web build ──
+    const webContext = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+    const web = await webContext.newPage();
+    web.on('pageerror', e => errors.push(e.message));
+    await web.goto(baseUrl);
+    await web.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+    await web.setInputFiles('#file-input', [csv('run_10h.csv', 0)]);
+    await web.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+    assert.equal(await web.isVisible('#workspace-tabs'), true, 'the web build shows the tab strip too');
+    await web.evaluate(() => {
+        const panel = document.querySelector('.layout-panel');
+        window.app.setActiveFile([...window.app.plotManager.files.keys()][0]);
+        window.app.plotManager.addTrace(panel.dataset.id, 'a', panel);
+    });
+    await web.click('#workspace-tabs .workspace-tab-add');
+    await web.waitForFunction(() => window.app.tabs.items.length === 2 && !window.app._tabSwitching);
+    assert.equal(await web.evaluate(() => window.app.tabs.activeIndex), 1, '+ opens a new tab');
+    await web.locator('.top-bar').click({ position: { x: 5, y: 5 } });
+    await web.keyboard.press('Alt+1');
+    await web.waitForFunction(() => window.app.tabs.activeIndex === 0 && !window.app._tabSwitching);
+    s = await tabState(web);
+    assert.deepEqual(s.traces, ['a'], 'Alt+1: the first tab, with its trace');
+    await web.keyboard.press('Alt+9');
+    await web.waitForFunction(() => window.app.tabs.activeIndex === 1 && !window.app._tabSwitching);
+    // Ctrl+1 is the browser's in the web build: the app does not act on it.
+    const ctrlTaken = await web.evaluate(() => {
+        const event = new KeyboardEvent('keydown', { key: '1', code: 'Digit1', ctrlKey: true, bubbles: true, cancelable: true });
+        document.body.dispatchEvent(event);
+        return event.defaultPrevented || window.app.tabs.activeIndex !== 1;
+    });
+    assert.equal(ctrlTaken, false, 'Ctrl+1 is left to the browser');
+    await webContext.close();
 
     assert.deepEqual(errors, [], 'no page errors');
     console.log('Workspace tabs end-to-end checks passed.');

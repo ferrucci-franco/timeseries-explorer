@@ -3,7 +3,8 @@ import Modal from '../../ui/modal.js';
 import { placeTopBarMenu } from '../../ui/top-bar-scroll.js';
 
 /**
- * Tabs: several screens of panels over the same open files, Full Desktop only.
+ * Tabs: several screens of panels over the same open files, in the web build
+ * and in Full Desktop alike (not in the phone layout, which has no top bar).
  *
  * Only the tab on screen has panels. The others are kept the way a saved view
  * keeps them — the layout tree and each panel's plot session — and a switch
@@ -13,13 +14,22 @@ import { placeTopBarMenu } from '../../ui/top-bar-scroll.js';
  * that renamed a signal only drops that trace.
  *
  * In a saved view (session-methods.js) `tabs` lists every tab. The one on
- * screen is the view's own `layout` and `plots`, so a file written with tabs
- * still opens, as that one tab, where there are none.
+ * screen is the view's own `layout` and `plots`, so a view written before
+ * tabs existed opens as one tab, and one written with tabs still opens, as
+ * that one tab, in a version that has none.
  */
 export function installTabMethods(TargetClass) {
     const proto = TargetClass.prototype;
 
+// Kept as the one place that decides it: tabs were Full Desktop only at first.
 proto._tabsEnabled = function() {
+    return true;
+};
+
+// The browser keeps Ctrl+T, Ctrl+W, Ctrl+Tab and Ctrl+1…9 for its own tabs
+// and a page cannot take them, so those are Full Desktop's only. Alt+1…9 is
+// left free by the browsers on Windows, and works in both.
+proto._tabCtrlShortcuts = function() {
     return !!this.capabilities?.isDesktop;
 };
 
@@ -230,8 +240,9 @@ proto._renderTabs = function() {
         tab.tabIndex = active ? 0 : -1;
         tab.dataset.index = String(index);
         tab.draggable = true;
-        const shortcut = index < 8 ? `Ctrl+${index + 1}` : '';
-        tab.title = `${this._tabDisplayName(item)}${shortcut ? ` (${shortcut})` : ''}\n${i18n.t('tabHint')}`;
+        const shortcut = index < 8 ? `Alt+${index + 1}` : '';
+        const keys = this._tabCtrlShortcuts() ? ` ${i18n.t('tabHintDesktopKeys')}` : '';
+        tab.title = `${this._tabDisplayName(item)}${shortcut ? ` (${shortcut})` : ''}\n${i18n.t('tabHint')}${keys}`;
 
         const label = document.createElement('span');
         label.className = 'workspace-tab-label';
@@ -292,7 +303,7 @@ proto._renderTabs = function() {
     add.type = 'button';
     add.className = 'workspace-tab-add';
     add.textContent = '+';
-    add.title = `${i18n.t('tabNew')} (Ctrl+T)`;
+    add.title = this._tabCtrlShortcuts() ? `${i18n.t('tabNew')} (Ctrl+T)` : i18n.t('tabNew');
     add.setAttribute('aria-label', i18n.t('tabNew'));
     add.addEventListener('click', () => this.addTab());
     strip.appendChild(add);
@@ -375,12 +386,12 @@ proto._openTabMenu = function(index, anchor) {
 
 // ── Keyboard ──
 //
-// Ctrl+T new tab, Ctrl+W close it, Ctrl+Tab / Ctrl+Shift+Tab and
-// Ctrl+PageDown / Ctrl+PageUp next and previous, Ctrl+1…8 that tab, Ctrl+9
-// the last one, F2 rename. Full Desktop has no application menu, so none of
-// these is taken.
+// Everywhere: Alt+1…8 that tab, Alt+9 the last one, F2 rename. Full Desktop
+// adds Ctrl+T new tab, Ctrl+W close it, Ctrl+Tab / Ctrl+Shift+Tab and
+// Ctrl+PageDown / Ctrl+PageUp next and previous, Ctrl+1…8 and Ctrl+9: it has
+// no application menu, so none of these is taken there.
 proto._handleTabShortcut = function(event) {
-    if (!this._tabsEnabled() || event.defaultPrevented || event.altKey) return;
+    if (!this._tabsEnabled() || event.defaultPrevented) return;
     if (document.documentElement.classList.contains('compact')) return;
     // A dialog owns the keyboard while it is open.
     if (document.querySelector('.modal-overlay.show')) return;
@@ -388,24 +399,31 @@ proto._handleTabShortcut = function(event) {
     const typing = !!target?.closest?.('input, textarea, select, [contenteditable="true"]');
     const tabs = this._ensureTabsState();
     const count = tabs.items.length;
-    const mod = event.ctrlKey || event.metaKey;
+    const ctrl = this._tabCtrlShortcuts();
+    const mod = ctrl && !event.altKey && (event.ctrlKey || event.metaKey);
+    // The physical key, not the character: Option+1 on a Mac types "¡".
+    const digit = /^Digit[1-9]$/.test(event.code || '') ? Number(event.code.slice(5)) : null;
+    const goTo = n => this.switchTab(n === 9 ? count - 1 : Math.min(n - 1, count - 1));
     let handled = true;
-    if (event.ctrlKey && event.key === 'Tab') {
+    if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && digit && !typing) {
+        goTo(digit);
+    } else if (event.altKey) {
+        handled = false;
+    } else if (ctrl && event.ctrlKey && event.key === 'Tab') {
         this.switchTab((tabs.activeIndex + (event.shiftKey ? count - 1 : 1)) % count);
-    } else if (event.ctrlKey && !event.shiftKey && event.key === 'PageDown') {
+    } else if (ctrl && event.ctrlKey && !event.shiftKey && event.key === 'PageDown') {
         this.switchTab((tabs.activeIndex + 1) % count);
-    } else if (event.ctrlKey && !event.shiftKey && event.key === 'PageUp') {
+    } else if (ctrl && event.ctrlKey && !event.shiftKey && event.key === 'PageUp') {
         this.switchTab((tabs.activeIndex + count - 1) % count);
     } else if (typing) {
         handled = false;
-    } else if (mod && !event.shiftKey && /^[1-9]$/.test(event.key)) {
-        const n = Number(event.key);
-        this.switchTab(n === 9 ? count - 1 : Math.min(n - 1, count - 1));
+    } else if (mod && !event.shiftKey && digit) {
+        goTo(digit);
     } else if (mod && !event.shiftKey && event.key.toLowerCase() === 't') {
         this.addTab();
     } else if (mod && !event.shiftKey && event.key.toLowerCase() === 'w') {
         this.closeTab(tabs.activeIndex);
-    } else if (!mod && !event.shiftKey && event.key === 'F2') {
+    } else if (!event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === 'F2') {
         this._startTabRename(tabs.activeIndex);
     } else {
         handled = false;

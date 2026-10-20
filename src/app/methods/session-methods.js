@@ -294,8 +294,8 @@ proto._createSessionSnapshot = function(options = {}) {
         activeFileId: this.activeFileId || null,
         layout: this._cloneSerializable(this.layoutManager.root),
         plots: this._capturePlotSessions(),
-        // Full Desktop's tabs (tab-methods.js); the one on screen is the
-        // layout and plots above.
+        // The tabs (tab-methods.js); the one on screen is the layout and
+        // plots above.
         tabs: this._captureTabsForSession?.() || null,
     };
 };

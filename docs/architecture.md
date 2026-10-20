@@ -35,7 +35,7 @@ Owns top-level app orchestration and browser-facing workflows.
     open ones, and the dialog (`src/ui/session-file-remap-dialog.js`) that
     lets another open file stand in for one the view was saved with
 - `methods/tab-methods.js`
-  - Full Desktop tabs: only the tab on screen has panels; the others are kept
+  - tabs (web and Full Desktop): only the tab on screen has panels; the others are kept
     as a saved view keeps them (layout tree + plot sessions) and put back
     through the same restore code
 

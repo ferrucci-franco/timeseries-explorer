@@ -109,14 +109,13 @@ const meta = (id, name, extra = {}) => ({ id, name, extension: '.csv', displayNa
     assert.deepEqual(plot.traces, [trace('f9', 'b')]);
     assert.equal(plot.stateSlots.fileId, 'f9');
 
-    // Where there are no tabs (the web build), a view with tabs is its one tab,
-    // and nothing off screen is required of the files.
+    // The web build has tabs too: a view written in Full Desktop opens there
+    // with all of them.
     const web = new Harness();
     web.capabilities = { isDesktop: false };
-    assert.equal(web._captureTabsForSession(), null);
-    assert.deepEqual(web._sessionRequiredVariables('f1', view), ['a']);
     web._applySessionTabs({ tabs: saved }, new Map([['f1', 'f9']]));
-    assert.equal(web.tabs.items.length, 1);
+    assert.equal(web.tabs.items.length, 2);
+    assert.equal(web._captureTabsForSession().items.length, 2);
 }
 
 // ── A duplicated tab gets panel ids of its own ──
