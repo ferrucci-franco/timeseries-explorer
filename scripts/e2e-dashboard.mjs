@@ -100,6 +100,8 @@ try {
     await page.locator('.dashboard-card >> nth=0').hover();
     await page.click('.dashboard-card >> nth=0 >> .dashboard-card-edit');
     await page.fill('.dashboard-editor-title', 'Temperatura');
+    await page.fill('.dashboard-editor-description', 'Entrada del reactor');
+    await page.click('.dashboard-width-btn[data-span="2"]');
     await page.fill('.dashboard-editor-unit', '°C');
     await page.selectOption('.dashboard-editor-decimals', '1');
     await page.click('.dashboard-card-editor .dashboard-swatch >> nth=3');
@@ -107,6 +109,15 @@ try {
     assert.equal(await page.locator('.dashboard-card-editor').count(), 0, 'Done closes the editor');
     c = await cards(page);
     assert.equal(c[0].title, 'Temperatura');
+    const wide = await page.evaluate(() => {
+        const [first, second] = document.querySelectorAll('.dashboard-card');
+        return {
+            description: first.querySelector('.dashboard-card-description').textContent,
+            ratio: first.getBoundingClientRect().width / second.getBoundingClientRect().width,
+        };
+    });
+    assert.equal(wide.description, 'Entrada del reactor', 'the description under the title');
+    assert.ok(wide.ratio > 1.9 && wide.ratio < 2.2, `double width (${wide.ratio.toFixed(2)}× the next card)`);
     assert.equal(c[0].value, '23.0', 'one decimal');
     assert.equal(c[0].unit, '°C');
     assert.equal(c[0].bg, 'rgb(255, 152, 0)', 'the colour picked');
@@ -145,6 +156,8 @@ try {
     assert.equal(view.plots[0].mode, 'dashboard');
     assert.equal(view.plots[0].dashboard.size, 'l');
     assert.equal(view.plots[0].traces[2].card.title, 'Temperatura');
+    assert.equal(view.plots[0].traces[2].card.span, 2);
+    assert.equal(view.plots[0].traces[2].card.description, 'Entrada del reactor');
     await page.evaluate(() => {
         window.app.plotManager.setUnitOverrides([...window.app.plotManager.files.keys()][0], {});
         window.app.plotManager.clearAll?.();

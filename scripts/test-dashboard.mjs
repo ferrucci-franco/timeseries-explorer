@@ -65,8 +65,15 @@ import {
     assert.deepEqual(normalizeDashboardState({}), { follow: true, time: null, size: 'm' });
     assert.deepEqual(normalizeDashboardState({ follow: false, time: 12.5, size: 'l' }), { follow: false, time: 12.5, size: 'l' });
     assert.deepEqual(normalizeDashboardState({ follow: 'x', time: 'soon', size: 'xxl' }), { follow: true, time: null, size: 'm' });
-    assert.deepEqual(normalizeCardSettings({ title: 'T', bg: '#FF9800', decimals: 2 }), { title: 'T', bg: '#ff9800', decimals: '2' });
-    assert.deepEqual(normalizeCardSettings({ bg: 'red', decimals: 9 }), { title: '', bg: '', decimals: 'auto' }, 'only #rrggbb, only 0–6');
+    assert.deepEqual(
+        normalizeCardSettings({ title: 'T', description: 'Reactor inlet', bg: '#FF9800', decimals: 2, span: 2 }),
+        { title: 'T', description: 'Reactor inlet', bg: '#ff9800', decimals: '2', span: 2 },
+    );
+    assert.deepEqual(
+        normalizeCardSettings({ bg: 'red', decimals: 9, span: 7 }),
+        { title: '', description: '', bg: '', decimals: 'auto', span: 1 },
+        'only #rrggbb, only 0–6 decimals, only 1–3 columns',
+    );
 }
 
 console.log('Dashboard checks passed.');

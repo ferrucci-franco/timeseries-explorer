@@ -7,7 +7,8 @@ import i18n from '../../i18n/index.js';
  * The cards are the panel's traces, in their order, so a time-series panel
  * turns into a dashboard (and back) with its signals, and a saved view keeps
  * them with no format of its own. What a card adds to its trace lives on it,
- * in `trace.card`: a title, a background colour, the number of decimals. Its
+ * in `trace.card`: a title, a description under it, a background colour, the
+ * number of decimals, how many columns of the grid it spans. Its
  * unit is the variable's own (setVariableUnit): one unit per signal, the one
  * the plots, the hover and the statistics show too.
  *
@@ -22,6 +23,8 @@ import i18n from '../../i18n/index.js';
 export const DASHBOARD_SIZES = ['s', 'm', 'l'];
 export const DASHBOARD_COLORS = ['#2196F3', '#4CAF50', '#FF9800', '#F44336', '#9C27B0', '#00BCD4', '#795548', '#607D8B'];
 const DECIMALS = ['auto', '0', '1', '2', '3', '4', '5', '6'];
+// How many columns of the grid a card takes: a long title or value gets room.
+export const CARD_SPANS = [1, 2, 3];
 const SLIDER_STEPS = 1000;
 const CARD_DRAG_TYPE = 'application/x-omv-card';
 
@@ -37,7 +40,14 @@ export function normalizeDashboardState(raw = {}) {
 export function normalizeCardSettings(raw = {}) {
     const bg = typeof raw?.bg === 'string' && /^#[0-9a-f]{6}$/i.test(raw.bg) ? raw.bg.toLowerCase() : '';
     const decimals = DECIMALS.includes(String(raw?.decimals)) ? String(raw.decimals) : 'auto';
-    return { title: String(raw?.title || '').slice(0, 80), bg, decimals };
+    const span = CARD_SPANS.includes(Number(raw?.span)) ? Number(raw.span) : 1;
+    return {
+        title: String(raw?.title || '').slice(0, 80),
+        description: String(raw?.description || '').slice(0, 200),
+        bg,
+        decimals,
+        span,
+    };
 }
 
 /** Index of the last sample at or before `t`, or -1 when there is none. */
@@ -356,6 +366,11 @@ export function installPlotDashboardMethods(TargetClass) {
         container.append(grid, bar);
         panelEl.appendChild(container);
         plot.dashboardEl = container;
+        // A wide card never asks for more columns than the panel has room for.
+        if (typeof ResizeObserver === 'function') {
+            plot._dashboardObserver = new ResizeObserver(() => this._fitDashboardSpans(plot));
+            plot._dashboardObserver.observe(grid);
+        }
         this._renderDashboardCards(panelId);
         this._refreshActionBtns(panelId);
     };
@@ -363,6 +378,8 @@ export function installPlotDashboardMethods(TargetClass) {
     proto._destroyDashboard = function(plot) {
         if (!plot?.dashboardEl) return;
         this._closeDashboardCardEditor();
+        plot._dashboardObserver?.disconnect();
+        plot._dashboardObserver = null;
         plot.dashboardEl.remove();
         plot.dashboardEl = null;
     };
@@ -398,6 +415,8 @@ export function installPlotDashboardMethods(TargetClass) {
             this._openDashboardCardEditor(panelId, index, card);
         });
         head.append(title, edit);
+        const description = document.createElement('div');
+        description.className = 'dashboard-card-description';
 
         const value = document.createElement('div');
         value.className = 'dashboard-card-value';
@@ -410,7 +429,7 @@ export function installPlotDashboardMethods(TargetClass) {
         const foot = document.createElement('div');
         foot.className = 'dashboard-card-foot';
 
-        card.append(head, value, foot);
+        card.append(head, description, value, foot);
         card.addEventListener('dblclick', event => {
             event.preventDefault();
             this._openDashboardCardEditor(panelId, index, card);
@@ -487,6 +506,11 @@ export function installPlotDashboardMethods(TargetClass) {
             card.classList.toggle('has-bg', !!settings.bg);
             card.style.backgroundColor = settings.bg || '';
             card.style.color = settings.bg ? readableTextColor(settings.bg) : '';
+            const description = card.querySelector('.dashboard-card-description');
+            description.textContent = settings.description;
+            description.hidden = !settings.description;
+            card.querySelector('.dashboard-card-title').title = label;
+            card.dataset.span = String(settings.span);
         });
 
         const slider = container.querySelector('.dashboard-slider');
@@ -510,6 +534,22 @@ export function installPlotDashboardMethods(TargetClass) {
         latest.setAttribute('aria-pressed', String(time === null));
         live.hidden = !(time === null && this._dashboardIsLive(plot));
         container.classList.toggle('is-following', time === null);
+        this._fitDashboardSpans(plot);
+    };
+
+    // The columns the grid has now; a card's span is held to them.
+    proto._fitDashboardSpans = function(plot) {
+        const grid = plot?.dashboardEl?.querySelector('.dashboard-grid');
+        if (!grid) return;
+        const template = typeof getComputedStyle === 'function' ? getComputedStyle(grid).gridTemplateColumns : '';
+        const columns = Math.max(1, String(template || '').split(' ').filter(Boolean).length);
+        grid.querySelectorAll('.dashboard-card').forEach(card => {
+            const span = Math.min(Number(card.dataset.span) || 1, columns);
+            card.style.gridColumn = span > 1 ? `span ${span}` : '';
+            // The value keeps the size of a one-column card: the room is for
+            // a long value or title, not a bigger number.
+            card.style.setProperty('--dashboard-span', String(span));
+        });
     };
 
     proto.refreshDashboards = function() {
@@ -566,6 +606,15 @@ export function installPlotDashboardMethods(TargetClass) {
         title.addEventListener('input', () => { settings.title = title.value; refresh(); });
         field('dashboardCardTitle', title);
 
+        const description = document.createElement('textarea');
+        description.className = 'dashboard-editor-description';
+        description.rows = 2;
+        description.maxLength = 200;
+        description.value = settings.description;
+        description.placeholder = i18n.t('dashboardDescriptionPlaceholder');
+        description.addEventListener('input', () => { settings.description = description.value; refresh(); });
+        field('dashboardCardDescription', description);
+
         const unit = document.createElement('input');
         unit.type = 'text';
         unit.className = 'dashboard-editor-unit';
@@ -584,6 +633,36 @@ export function installPlotDashboardMethods(TargetClass) {
         decimals.value = settings.decimals;
         decimals.addEventListener('change', () => { settings.decimals = decimals.value; refresh(); });
         field('dashboardCardDecimals', decimals);
+
+        const widths = document.createElement('div');
+        widths.className = 'dashboard-editor-widths';
+        widths.setAttribute('role', 'group');
+        for (const span of CARD_SPANS) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `dashboard-width-btn${settings.span === span ? ' active' : ''}`;
+            button.dataset.span = String(span);
+            button.textContent = i18n.t(`dashboardWidth${span}`);
+            button.setAttribute('aria-pressed', String(settings.span === span));
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                settings.span = span;
+                widths.querySelectorAll('button').forEach(other => {
+                    const active = Number(other.dataset.span) === span;
+                    other.classList.toggle('active', active);
+                    other.setAttribute('aria-pressed', String(active));
+                });
+                refresh();
+            });
+            widths.appendChild(button);
+        }
+        const widthRow = document.createElement('div');
+        widthRow.className = 'dashboard-editor-field';
+        const widthCaption = document.createElement('span');
+        widthCaption.className = 'dashboard-editor-caption';
+        widthCaption.textContent = i18n.t('dashboardCardWidth');
+        widthRow.append(widthCaption, widths);
+        editor.appendChild(widthRow);
 
         const swatches = document.createElement('div');
         swatches.className = 'dashboard-editor-swatches';

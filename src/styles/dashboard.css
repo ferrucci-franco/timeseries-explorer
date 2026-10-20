@@ -77,12 +77,34 @@
 .dashboard-card-title {
     flex: 1 1 auto;
     min-width: 0;
+    /* A long title takes two lines before it is cut; a wider card (its
+       width in the editor) shows it whole. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
     font-size: 0.85rem;
     font-weight: 600;
+    line-height: 1.25;
     opacity: 0.85;
+}
+
+.dashboard-card-description {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    font-size: 0.75rem;
+    line-height: 1.3;
+    opacity: 0.72;
+}
+
+.dashboard-card-description[hidden] {
+    display: none;
 }
 
 .dashboard-card-edit {
@@ -123,7 +145,7 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: clamp(1.4rem, 17cqw, 4.2rem);
+    font-size: clamp(1.4rem, calc(17cqw / var(--dashboard-span, 1)), 4.2rem);
     font-weight: 700;
     line-height: 1.1;
     font-variant-numeric: tabular-nums;
@@ -131,7 +153,7 @@
 
 .dashboard-card-unit {
     flex: 0 0 auto;
-    font-size: clamp(0.8rem, 7cqw, 1.6rem);
+    font-size: clamp(0.8rem, calc(7cqw / var(--dashboard-span, 1)), 1.6rem);
     font-weight: 500;
     opacity: 0.75;
 }
@@ -263,6 +285,7 @@
 }
 
 .dashboard-card-editor input[type="text"],
+.dashboard-card-editor textarea,
 .dashboard-card-editor select {
     padding: 0.3rem 0.45rem;
     border: 1px solid var(--border-color);
@@ -270,6 +293,33 @@
     background: var(--bg-secondary);
     color: var(--text-primary);
     font: inherit;
+}
+
+.dashboard-card-editor textarea {
+    resize: vertical;
+    min-height: 2.6em;
+}
+
+.dashboard-editor-widths {
+    display: flex;
+    gap: 4px;
+}
+
+.dashboard-width-btn {
+    flex: 1 1 0;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.dashboard-width-btn.active {
+    border-color: transparent;
+    background: var(--primary-color);
+    color: white;
 }
 
 .dashboard-editor-swatches {
