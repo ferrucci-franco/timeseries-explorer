@@ -10,7 +10,8 @@
 //      experiment is open (a logger names its files by the hour): a dialog
 //      names the file the view was saved with and offers the open one.
 //   4. The web build has tabs as well, reached with Alt+1…9; the Ctrl keys
-//      are the browser's there and are left alone.
+//      are the browser's there and are left alone. "Close all tabs" asks
+//      first, and leaves one empty tab with the files still open.
 //
 // Full Desktop is told apart by window.omvDesktop, which the page gets here
 // before it loads. Needs a Chromium for Playwright. Run with
@@ -332,6 +333,27 @@ try {
     });
     await web.waitForFunction(() => window.app.plotManager.files.size === 2, null, { timeout: 30000 });
     assert.deepEqual(await tabIds(), idsBefore, 'no tab moved');
+
+    // ── Close all tabs, from a tab's right-click menu, after a warning ──
+    const closeAll = async () => {
+        await web.click('#workspace-tabs .workspace-tab >> nth=2', { button: 'right' });
+        await web.click('.workspace-tab-menu .example-menu-item >> nth=3');
+        await web.waitForSelector('.modal-dialog .modal-btn-confirm');
+        return web.textContent('.modal-dialog .modal-message');
+    };
+    assert.match(await closeAll(), /16/, 'the warning says how many tabs go');
+    await web.click('.modal-dialog .modal-btn-cancel');
+    await web.waitForFunction(() => !document.querySelector('.modal-overlay'));
+    assert.equal(await web.evaluate(() => window.app.tabs.items.length), 16, 'cancelled: every tab stays');
+    await closeAll();
+    await web.click('.modal-dialog .modal-btn-confirm');
+    await web.waitForFunction(() => window.app.tabs.items.length === 1 && !window.app._tabSwitching);
+    const closed = await web.evaluate(() => ({
+        files: window.app.plotManager.files.size,
+        panels: window.app.layoutManager.getPanelCount(),
+        parked: document.querySelectorAll('.workspace-tab-parked').length,
+    }));
+    assert.deepEqual(closed, { files: 2, panels: 1, parked: 0 }, 'one empty tab left; the files stay open');
 
     await webContext.close();
 

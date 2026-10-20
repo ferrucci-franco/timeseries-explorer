@@ -251,6 +251,10 @@
     font-size: 0.75rem;
 }
 
+.dashboard-add-separator-btn {
+    margin-left: 0.5rem;
+}
+
 .dashboard-size-btn.active {
     background: var(--primary-color);
     color: white;
@@ -425,4 +429,69 @@
     border: none;
     background: var(--primary-color);
     color: white;
+}
+
+/* ── Separators: a row across the grid, between groups of cards ── */
+
+.dashboard-separator {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 1.6rem;
+    padding: 0.2rem 0.4rem 0.2rem 0.2rem;
+    border-bottom: 2px solid var(--border-color);
+    color: var(--text-primary);
+    cursor: grab;
+    user-select: none;
+}
+
+.dashboard-separator.has-title {
+    padding-top: 0.5rem;
+}
+
+.dashboard-separator.has-bg {
+    padding: 0.45rem 0.6rem 0.45rem 0.85rem;
+    border-bottom: none;
+    border-radius: 8px;
+}
+
+.dashboard-separator-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.dashboard-separator:hover .dashboard-separator-edit,
+.dashboard-separator-edit:focus-visible {
+    opacity: 0.7;
+}
+
+.dashboard-separator.dragging {
+    opacity: 0.4;
+}
+
+.dashboard-separator.drop-before { box-shadow: 0 -3px 0 var(--primary-color); }
+.dashboard-separator.drop-after  { box-shadow: 0 3px 0 var(--primary-color); }
+
+/* ── Right-click menu of the grid ── */
+
+.example-menu.dashboard-context-menu {
+    position: fixed;
+    right: auto;
+    z-index: 2000;
+    min-width: 190px;
+}
+
+.dashboard-context-menu .example-menu-item {
+    width: 100%;
+}
+
+.dashboard-context-menu .example-menu-item.is-danger {
+    color: var(--danger-color);
 }
