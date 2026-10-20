@@ -180,11 +180,28 @@ proto._startLiveUpdate = async function(fileId) {
     state.lastRows = this._liveUpdateRowCount(fileId);
     state.lastFingerprint = this._fileFingerprint(entry.file);
     state.csvProfile = csvProfile;
-    await this._refreshLiveUpdateReadCursor(entry, state, entry.file);
+    // Resuming after a pause: the rows appended so far are already in the data,
+    // but entry.file is still the snapshot taken when the file was opened (only
+    // a reload replaces it). Rewinding the cursor to that snapshot's size read
+    // those rows a second time and stopped at once on a repeated timestamp.
+    // The cursor stands as long as the data it was advanced for is still the
+    // one displayed; a reload swaps the data object, and starts from the file.
+    const data = this.plotManager.files.get(fileId)?.data || null;
+    if (!this._canResumeLiveUpdateCursor(state, data)) {
+        await this._refreshLiveUpdateReadCursor(entry, state, entry.file);
+    }
+    state.cursorData = data;
     this._renderFilesList();
     this._updateLiveUpdateTopBar();
     this.plotManager.setGlobalLiveViewPolicy('timeseries', {}, { applyNow: true });
     await this._pollLiveUpdate(fileId);
+};
+
+proto._canResumeLiveUpdateCursor = function(state, data) {
+    return !!state?.hasAppliedAppend
+        && !!data
+        && state.cursorData === data
+        && Number(state.lastParsedOffset) > 0;
 };
 
 proto._stopLiveUpdate = function(fileId, status = 'idle', message = '') {
