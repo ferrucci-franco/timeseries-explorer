@@ -21,30 +21,35 @@ import { chromium } from 'playwright';
 // the way the worker does. The endpoint is read at build time, so it has to be
 // in the environment before Vite's config is loaded.
 const received = [];
-const endpoint = await new Promise((resolve) => {
-    const stub = createHttpServer((request, response) => {
-        const chunks = [];
-        request.on('data', chunk => chunks.push(chunk));
-        request.on('end', () => {
-            received.push({
-                method: request.method,
-                contentType: request.headers['content-type'] || '',
-                body: Buffer.concat(chunks).toString('utf8'),
-            });
-            response.writeHead(200, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            });
-            response.end(JSON.stringify({
-                ok: true,
-                issueUrl: 'https://github.com/ferrucci-franco/timeseries-explorer/issues/4242',
-                issueNumber: 4242,
-                reference: '2026-10-19-abcdef',
-            }));
+const stub = createHttpServer((request, response) => {
+    const chunks = [];
+    request.on('data', chunk => chunks.push(chunk));
+    request.on('end', () => {
+        received.push({
+            method: request.method,
+            contentType: request.headers['content-type'] || '',
+            body: Buffer.concat(chunks).toString('utf8'),
         });
+        response.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+        });
+        response.end(JSON.stringify({
+            ok: true,
+            issueUrl: 'https://github.com/ferrucci-franco/timeseries-explorer/issues/4242',
+            issueNumber: 4242,
+            reference: '2026-10-19-abcdef',
+        }));
     });
+});
+const endpoint = await new Promise((resolve) => {
     stub.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${stub.address().port}/report`));
 });
+// Unreferenced, so this stub can never be the reason the script hangs at the
+// end. It was `process.exit(0)` in the finally below that did that job before,
+// which also discarded the exit code of a failed assertion: the script
+// reported success no matter what it found.
+stub.unref();
 process.env.OMV_FEEDBACK_ENDPOINT = endpoint;
 
 const { createServer } = await import('vite');
@@ -74,6 +79,13 @@ try {
     await page.waitForFunction(() => document.activeElement?.closest('.feedback-field') !== null);
     const focusedFirst = await page.evaluate(() => document.activeElement.tagName.toLowerCase());
     assert.equal(focusedFirst, 'input', 'the form still opens with the focus in a text field');
+
+    // Nothing has been reported yet, so the status box must take no space at
+    // all. It is `hidden`, but its class sets `display`, which is one
+    // specificity step above the browser's own [hidden] rule -- so it drew as
+    // an empty grey bar above the buttons until the CSS said otherwise, and
+    // only a real layout can tell.
+    assert.equal(await page.isVisible('.feedback-status'), false, 'an empty status box is not drawn');
 
     await page.fill('.feedback-field:nth-child(3) .feedback-control', 'The cursor jumps one sample');
     await page.fill('.feedback-field:nth-child(4) .feedback-control', 'Opened a csv, dragged the cursor across the plot.');
@@ -116,6 +128,7 @@ try {
     await page.click('.feedback-send-btn');
     await page.waitForSelector('.feedback-status.is-sent', { timeout: 15000 });
 
+    assert.equal(await page.isVisible('.feedback-status'), true, 'and a real one is');
     const link = await page.$eval('.feedback-status-link', node => ({ href: node.href, text: node.textContent }));
     assert.equal(link.href, 'https://github.com/ferrucci-franco/timeseries-explorer/issues/4242');
     assert.match(link.text, /4242/, 'the reporter is shown where the report landed');
@@ -252,5 +265,5 @@ try {
 } finally {
     await browser.close();
     await server.close();
-    process.exit(0);
+    stub.close();
 }

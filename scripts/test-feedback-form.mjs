@@ -99,6 +99,11 @@ assert.match(css, /\.feedback-actions\s*\{[\s\S]*?border-top:\s*1px solid var\(-
 // The answer to pressing Send belongs next to Send, on its own full-width row
 // rather than squeezed between the buttons.
 assert.match(css, /\.feedback-status\s*\{[\s\S]*?flex:\s*1 1 100%;/, 'the status spans the footer');
+// Setting `display` on the class defeats the browser's own [hidden] rule,
+// which is an attribute selector and so one step less specific: without this,
+// the empty status box draws as a grey bar above the buttons before anything
+// has been reported.
+assert.match(css, /\.feedback-status\[hidden\]\s*\{\s*display:\s*none;/, 'an empty status is really hidden');
 assert.match(css, /\.feedback-status\.is-sent\s*\{[\s\S]*?#2e7d32/, 'a filed report reads as success');
 assert.match(css, /\.feedback-status\.is-error\s*\{[\s\S]*?#c62828/, 'and a failure reads as one');
 assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}?\.feedback-status\.is-sending/, 'the spinner respects a request for less motion');

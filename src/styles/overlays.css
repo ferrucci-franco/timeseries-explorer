@@ -1778,6 +1778,15 @@ textarea.feedback-control {
     text-align: left;
 }
 
+/* `hidden` has to win over the `display: flex` above. The browser's own
+   `[hidden] { display: none }` is an attribute selector, one specificity step
+   below a class, so a class that sets `display` quietly defeats it -- and the
+   empty status box drew as a grey bar above the buttons on every form that had
+   nothing to report yet. */
+.feedback-status[hidden] {
+    display: none;
+}
+
 .feedback-status-text {
     margin: 0;
     font-size: 0.86rem;
