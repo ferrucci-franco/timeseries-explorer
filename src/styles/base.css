@@ -177,7 +177,7 @@ textarea,
     display: none;
 }
 
-.top-bar-left.is-squeezed + .top-bar-right {
+.top-bar-left.is-squeezed ~ .top-bar-right {
     margin-left: auto;
 }
 
@@ -376,35 +376,251 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     cursor: grabbing;
 }
 
-/* Language Selector */
+/* Language Selector: one button, the languages in a menu under it */
 .language-selector {
-    display: flex;
-    gap: 0.25rem;
-    margin-right: 1rem;
-    background-color: var(--bg-tertiary);
-    padding: 0.25rem;
-    border-radius: 8px;
+    margin-right: 0.5rem;
 }
 
-.lang-btn {
-    padding: 0.4rem 0.8rem;
-    border: none;
-    background-color: transparent;
-    color: var(--text-primary);
-    cursor: pointer;
+.language-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     font-size: 0.85rem;
-    transition: all 0.2s;
-    border-radius: 6px;
+    font-weight: 600;
+    padding: 0.4rem 0.6rem;
 }
 
-.lang-btn:hover {
+.language-menu-caret {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.example-menu.language-menu {
+    min-width: 160px;
+}
+
+.language-menu .lang-btn {
+    width: 100%;
+}
+
+.language-menu .lang-code {
+    display: inline-block;
+    min-width: 1.8em;
+    font-weight: 700;
+}
+
+.language-menu .lang-btn.active {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+/* Tabs (src/app/methods/tab-methods.js): the room between the title and
+   the row of buttons, one row as tall as those buttons. The tabs scroll
+   sideways inside it; + and the list of every tab stay at its end. */
+.workspace-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    /* As wide as its tabs, up to half the bar: the subtitle, then the title
+       give way first (top-bar-scroll.js), and past that the tabs scroll. */
+    flex: 1000 1 auto;
+    min-width: 9rem;
+    max-width: 50%;
+    margin: 0 0.75rem;
+    height: var(--top-bar-control-height);
+}
+
+.workspace-tabs[hidden] {
+    display: none;
+}
+
+.workspace-tabs-scroll {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 1 auto;
+    min-width: 0;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    /* Room for the focus ring. */
+    padding: 0 2px;
+}
+
+.workspace-tabs-scroll::-webkit-scrollbar {
+    display: none;
+}
+
+/* A fade on the end that has more tabs past it. */
+.workspace-tabs-scroll.more-before {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+    mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+
+.workspace-tabs-scroll.more-after {
+    -webkit-mask-image: linear-gradient(to left, transparent, #000 28px);
+    mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+
+.workspace-tabs-scroll.more-before.more-after {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+.workspace-tab {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.15rem;
+    max-width: 12rem;
+    height: var(--top-bar-control-height);
+    padding: 0 0.35rem 0 0.8rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.workspace-tab:hover {
+    color: var(--text-primary);
     background-color: var(--hover-bg);
 }
 
-.lang-btn.active {
+.workspace-tab.active {
+    border-color: transparent;
     background-color: var(--primary-color);
     color: white;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    font-weight: 600;
+}
+
+.workspace-tab.active:hover {
+    background-color: var(--primary-hover);
+    color: white;
+}
+
+.workspace-tab.drag-over {
+    outline: 2px dashed var(--primary-color);
+    outline-offset: -2px;
+}
+
+.workspace-tab:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+}
+
+/* Blue on blue would not show: the ring of the active tab is drawn inside it. */
+.workspace-tab.active:focus-visible {
+    outline-color: white;
+    outline-offset: -4px;
+}
+
+.workspace-tab-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 0.2rem;
+}
+
+.workspace-tab-input {
+    width: 8rem;
+    min-width: 0;
+    padding: 0.15rem 0.3rem;
+    border: 1px solid var(--primary-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.workspace-tab-close {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.workspace-tab-close:hover {
+    opacity: 1;
+    background-color: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+}
+
+.workspace-tab-add,
+.workspace-tabs-overflow {
+    flex: 0 0 auto;
+    width: 34px;
+    height: var(--top-bar-control-height);
+    padding: 0;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 1.15rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.workspace-tabs-overflow {
+    display: none;
+    border-style: solid;
+    font-size: 0.8rem;
+}
+
+.workspace-tabs.is-overflowing .workspace-tabs-overflow {
+    display: inline-block;
+}
+
+.workspace-tab-add:hover,
+.workspace-tabs-overflow:hover,
+.workspace-tabs-overflow[aria-expanded="true"] {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.workspace-tab-menu .example-menu-item {
+    width: 100%;
+    justify-content: space-between;
+}
+
+.workspace-tab-menu .example-menu-item.active {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.workspace-tab-menu-text {
+    min-width: 0;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.workspace-tab-menu-key {
+    font: inherit;
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+.workspace-tab-list-menu {
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
+}
+
+.example-menu.workspace-tab-menu {
+    z-index: 1400;
+    min-width: 160px;
 }
 
 /* Icon Buttons */

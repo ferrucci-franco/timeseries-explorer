@@ -255,4 +255,72 @@ const harness = new Harness();
     assert.equal(syncCount, 1);
 }
 
+// Pause and resume: the rows a first run appended are in the data already, and
+// entry.file is still the snapshot taken when the file was opened. Resuming has
+// to carry on from where the first run stopped reading, not from that snapshot
+// (which read the appended rows again and failed on a repeated timestamp until
+// the file was reloaded).
+{
+    const parser = new CsvParser();
+    const initial = 'time,temperature\n0,20\n1,21\n';
+    let content = initial;
+    const originalDesktop = globalThis.omvDesktop;
+    globalThis.omvDesktop = {
+        statFile: async () => ({ ok: true, size: textBytes(content).byteLength, lastModified: content.length }),
+        readFileSlice: async ({ start, end }) => {
+            const slice = textBytes(content).slice(start, end);
+            return { ok: true, bytes: slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength) };
+        },
+    };
+    try {
+        const live = new Harness();
+        live.capabilities = { isDesktop: true, canUseLiveUpdate: true };
+        live.activeFileId = null;
+        const data = makeData({ time: [0, 1], names: ['temperature'], values: { temperature: [20, 21] } });
+        data.metadata.csvProfile = parser.inspectSample(textBytes(initial));
+        live.files = new Map([['f1', { name: 'live', extension: '.csv', file: new File([initial], 'live.csv', { lastModified: 1 }) }]]);
+        live.plotManager = {
+            files: new Map([['f1', { data }]]),
+            setGlobalLiveViewPolicy() {},
+            updateFileData() {},
+        };
+        live._renderFilesList = () => {};
+        live._updateLiveUpdateTopBar = () => {};
+        live._scheduleLiveUpdate = () => {};
+        live._canUseLocalLiveApi = async () => false;
+        live._fileFingerprint = file => `${file?.size}:${file?.lastModified}`;
+        live._reapplyDerivedVariables = () => {};
+        live._ensureLiveUpdateState('f1').localPath = 'live.csv';
+
+        await live._startLiveUpdate('f1');
+        content += '2,22\n';
+        await live._pollLiveUpdate('f1');
+        assert.deepEqual(Array.from(data.variables.time.data), [0, 1, 2]);
+
+        live._stopLiveUpdate('f1', 'idle', 'paused');
+        content += '3,23\n';
+        await live._startLiveUpdate('f1');
+        const state = live.files.get('f1').liveUpdate;
+        assert.equal(state.status, 'ok', state.message);
+        assert.equal(state.enabled, true);
+        assert.deepEqual(Array.from(data.variables.time.data), [0, 1, 2, 3]);
+        assert.deepEqual(Array.from(data.variables.temperature.data), [20, 21, 22, 23]);
+
+        // A reload replaces the data object (and entry.file with the file as it
+        // is now): the next start reads from the end of that file.
+        live._stopLiveUpdate('f1', 'idle', 'paused');
+        const reloaded = makeData({ time: [0, 1, 2, 3], names: ['temperature'], values: { temperature: [20, 21, 22, 23] } });
+        reloaded.metadata.csvProfile = data.metadata.csvProfile;
+        live.plotManager.files.get('f1').data = reloaded;
+        live.files.get('f1').file = new File([content], 'live.csv', { lastModified: 2 });
+        content += '4,24\n';
+        await live._startLiveUpdate('f1');
+        assert.equal(state.status, 'ok', state.message);
+        assert.deepEqual(Array.from(reloaded.variables.time.data), [0, 1, 2, 3, 4]);
+    } finally {
+        if (originalDesktop === undefined) delete globalThis.omvDesktop;
+        else globalThis.omvDesktop = originalDesktop;
+    }
+}
+
 console.log('Live Update logic checks passed.');

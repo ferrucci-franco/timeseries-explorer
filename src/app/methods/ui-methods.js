@@ -117,9 +117,7 @@ proto.initEventListeners = function() {
         event.preventDefault();
     });
 
-    document.querySelectorAll('.lang-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => this.setLanguage(e.target.getAttribute('data-lang')));
-    });
+    this._initLanguageMenu();
 
     document.getElementById('theme-toggle').addEventListener('click', () => this.toggleTheme());
 
@@ -562,6 +560,7 @@ proto._closePeerMenus = function(except = '') {
     if (except !== 'open-file') this._closeOpenFileMenu?.();
     if (except !== 'example') this._closeExampleMenu?.();
     if (except !== 'extra') this._closeExtraMenu?.();
+    if (except !== 'language') this._closeLanguageMenu?.();
 };
 
 proto._setReloadAsNewVersionMode = function(enabled) {
@@ -1503,6 +1502,46 @@ proto.showDisplaySettings = function() {
 
     requestAnimationFrame(() => overlay.classList.add('show'));
     setTimeout(() => visualTab.focus(), 100);
+};
+
+// One button with the current language, the four in a menu under it: the
+// row of four took the room of five other buttons in the top bar.
+proto._initLanguageMenu = function() {
+    const btn = document.getElementById('language-menu-btn');
+    const menu = document.getElementById('language-menu');
+    document.querySelectorAll('.lang-btn').forEach(item => {
+        item.addEventListener('click', (e) => {
+            this._closeLanguageMenu?.();
+            this.setLanguage(e.currentTarget.getAttribute('data-lang'));
+        });
+    });
+    if (!btn || !menu) return;
+
+    const close = () => {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+    };
+    const open = () => {
+        this._closePeerMenus('language');
+        menu.hidden = false;
+        placeTopBarMenu(menu, btn);
+        btn.setAttribute('aria-expanded', 'true');
+        menu.querySelector('.lang-btn.active')?.focus();
+    };
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.hidden ? open() : close();
+    });
+    document.addEventListener('click', (e) => {
+        if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) close();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !menu.hidden) {
+            close();
+            btn.focus();
+        }
+    });
+    this._closeLanguageMenu = close;
 };
 
 proto._initExtraMenu = function() {

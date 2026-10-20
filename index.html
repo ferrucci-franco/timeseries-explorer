@@ -55,13 +55,20 @@
             </div>
             <span id="runtime-badge" class="runtime-badge">Light Web</span>
         </div>
+        <!-- Tabs (Full Desktop): src/app/methods/tab-methods.js -->
+        <div id="workspace-tabs" class="workspace-tabs" role="tablist" data-i18n-aria-label="tabsLabel" aria-label="Tabs" hidden></div>
         <div class="top-bar-right">
             <!-- Language Selector -->
-            <div class="language-selector">
-                <button class="lang-btn active" data-lang="en">EN</button>
-                <button class="lang-btn" data-lang="fr">FR</button>
-                <button class="lang-btn" data-lang="es">ES</button>
-                <button class="lang-btn" data-lang="it">IT</button>
+            <div class="example-menu-wrap language-selector">
+                <button id="language-menu-btn" class="icon-btn language-menu-btn" type="button" title="Language" aria-label="Language" data-i18n-title="languageMenuTitle" data-i18n-aria-label="languageMenuTitle" aria-haspopup="true" aria-expanded="false">
+                    <span class="language-menu-code">EN</span><span class="language-menu-caret" aria-hidden="true">▾</span>
+                </button>
+                <div id="language-menu" class="example-menu language-menu" role="menu" hidden>
+                    <button class="example-menu-item lang-btn active" type="button" role="menuitemradio" aria-checked="true" data-lang="en"><span class="lang-code">EN</span><span class="lang-name">English</span></button>
+                    <button class="example-menu-item lang-btn" type="button" role="menuitemradio" aria-checked="false" data-lang="fr"><span class="lang-code">FR</span><span class="lang-name">Français</span></button>
+                    <button class="example-menu-item lang-btn" type="button" role="menuitemradio" aria-checked="false" data-lang="es"><span class="lang-code">ES</span><span class="lang-name">Español</span></button>
+                    <button class="example-menu-item lang-btn" type="button" role="menuitemradio" aria-checked="false" data-lang="it"><span class="lang-code">IT</span><span class="lang-name">Italiano</span></button>
+                </div>
             </div>
 
             <!-- Action Buttons -->

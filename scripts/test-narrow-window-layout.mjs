@@ -52,7 +52,7 @@ assert.match(rule(base, '.top-bar-fade'), /position:\s*absolute/, 'the fades tak
 
 // Its menus escape the scroller's clipping.
 assert.match(scroll, /menu\.style\.position = 'fixed'/, 'top bar menus are placed with fixed coordinates');
-assert.equal(ui.match(/placeTopBarMenu\(menu, /g)?.length, 2, 'the example and extra menus are placed under their button');
+assert.equal(ui.match(/placeTopBarMenu\(menu, /g)?.length, 3, 'the example, extra and language menus are placed under their button');
 assert.match(live, /placeTopBarMenu\(menu, /, 'the live update menu is placed under its button');
 assert.doesNotMatch(scroll, /mask-image/, 'no mask: it would hide the menus too');
 assert.doesNotMatch(base, /\.top-bar-right[^{]*\{[^}]*mask-image/, 'no mask on the row');

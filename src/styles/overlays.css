@@ -1227,6 +1227,90 @@
     max-width: min(560px, calc(100vw - 32px));
 }
 
+/* A saved view's files, each with the open file that stands in for it
+   (src/ui/session-file-remap-dialog.js). */
+.modal-dialog-session-remap {
+    min-width: min(480px, calc(100vw - 32px));
+    max-width: min(640px, calc(100vw - 32px));
+}
+
+.session-remap-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    max-height: 52vh;
+    overflow-y: auto;
+    margin: 0 0 1rem;
+    text-align: left;
+}
+
+.session-remap-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+}
+
+.session-remap-needed,
+.session-remap-pick {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    min-width: 0;
+}
+
+.session-remap-caption {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.session-remap-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.session-remap-signals {
+    flex-basis: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.session-remap-select {
+    flex: 1 1 14rem;
+    min-width: 0;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.session-remap-status {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.session-remap-status.ok {
+    color: var(--success-color);
+}
+
+.session-remap-status.warn {
+    color: var(--warning-color);
+}
+
 .excel-sheet-list {
     max-height: 46vh;
     overflow-y: auto;

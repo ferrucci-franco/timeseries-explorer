@@ -681,6 +681,39 @@ export function installPlotMarksMethods(TargetClass) {
         this._syncMarksControls(panelId);
     };
 
+    // ── The same choice for every plot ──
+    //
+    // Each plot keeps its own options; Shift+click on one in the Marks or View
+    // menu gives every time plot the state just picked here, on screen and in
+    // the other tabs (onApplyToAllPlots, an app hook). The plots that already
+    // have it are left alone, so nothing that was right is redrawn.
+
+    proto._applyMarkToAllPlots = function(panelId, key, toggle) {
+        const source = this.plots.get(panelId);
+        if (!source || source.mode !== 'timeseries') return;
+        const value = !source[key];
+        const targets = [...this.plots]
+            .filter(([id, plot]) => id !== panelId && plot.mode === 'timeseries' && !!plot[key] !== value)
+            // Samples are not drawn on a stacked plot (its item is disabled there).
+            .filter(([, plot]) => !(key === 'showSamples' && plot.timeseriesStacked));
+        for (const [id, plot] of targets) {
+            // Gaps opens its settings the first time in a panel: once, for the
+            // panel clicked, not for every plot of the screen.
+            if (key === 'showGaps') plot._gapsPanelShown = true;
+            toggle(id);
+        }
+        // Last, so whatever the clicked plot opens (the gaps settings) stays.
+        toggle(panelId);
+        this.onApplyToAllPlots?.({ key, value });
+    };
+
+    proto._setLineShapeOnAllPlots = function(shape) {
+        for (const [id, plot] of this.plots) {
+            if (plot.mode === 'timeseries' && plot.traces?.length) this._setPanelLineShape(id, shape);
+        }
+        this.onApplyToAllPlots?.({ lineShape: shape === 'hv' || shape === 'linear' ? shape : 'auto' });
+    };
+
     // ── Marks menu ──
 
     // The items, from the plot state. `run` is what a click does. Marks are
@@ -695,10 +728,10 @@ export function installPlotMarksMethods(TargetClass) {
         if (has && repeatedAvailability === 'none') repeatedTitle = 'timeseriesRepeatedNone';
         else if (repeatedWaiting) repeatedTitle = 'timeseriesRepeatedLazy';
         return [
-            { key: 'nan', label: 'timeseriesNaNLabel', title: 'timeseriesNaNToggle', checked: !!plot?.showNaN, disabled: !has, run: () => this._toggleNaN(panelId) },
-            { key: 'gaps', label: 'timeseriesGapsLabel', title: 'timeseriesGapsToggle', checked: !!plot?.showGaps, disabled: !has, run: () => this._toggleGaps(panelId), settings: () => this._openGapsPanel(panelId) },
-            { key: 'repeated', label: 'timeseriesRepeatedLabel', title: repeatedTitle, checked: !!plot?.showRepeated, disabled: !has || repeatedAvailability === 'none', waiting: !!repeatedWaiting, run: () => this._toggleRepeated(panelId) },
-            { key: 'samples', label: 'timeseriesSamplesLabel', title: samplesWaiting ? (samplesWaiting === 'lazy' ? 'timeseriesSamplesLazy' : 'timeseriesSamplesZoomIn') : 'timeseriesSamplesToggle', checked: !!plot?.showSamples, disabled: !has || !!plot?.timeseriesStacked, waiting: !!samplesWaiting, run: () => this._toggleSamples(panelId) },
+            { key: 'nan', label: 'timeseriesNaNLabel', title: 'timeseriesNaNToggle', checked: !!plot?.showNaN, disabled: !has, run: () => this._toggleNaN(panelId), runAll: () => this._applyMarkToAllPlots(panelId, 'showNaN', id => this._toggleNaN(id)) },
+            { key: 'gaps', label: 'timeseriesGapsLabel', title: 'timeseriesGapsToggle', checked: !!plot?.showGaps, disabled: !has, run: () => this._toggleGaps(panelId), runAll: () => this._applyMarkToAllPlots(panelId, 'showGaps', id => this._toggleGaps(id)), settings: () => this._openGapsPanel(panelId) },
+            { key: 'repeated', label: 'timeseriesRepeatedLabel', title: repeatedTitle, checked: !!plot?.showRepeated, disabled: !has || repeatedAvailability === 'none', waiting: !!repeatedWaiting, run: () => this._toggleRepeated(panelId), runAll: () => this._applyMarkToAllPlots(panelId, 'showRepeated', id => this._toggleRepeated(id)) },
+            { key: 'samples', label: 'timeseriesSamplesLabel', title: samplesWaiting ? (samplesWaiting === 'lazy' ? 'timeseriesSamplesLazy' : 'timeseriesSamplesZoomIn') : 'timeseriesSamplesToggle', checked: !!plot?.showSamples, disabled: !has || !!plot?.timeseriesStacked, waiting: !!samplesWaiting, run: () => this._toggleSamples(panelId), runAll: () => this._applyMarkToAllPlots(panelId, 'showSamples', id => this._toggleSamples(id)) },
         ];
     };
 
@@ -835,6 +868,7 @@ export function installPlotMarksMethods(TargetClass) {
                     ['hv', 'lineShapeStairs', 'lineShapeStairsTitle'],
                 ];
                 const select = item.onSelect || ((value) => this._setPanelLineShape(panelId, value));
+                const selectAll = item.onSelectAll || (item.onSelect ? null : (value) => this._setLineShapeOnAllPlots(value));
                 for (const [value, key, title] of options) {
                     const option = document.createElement('button');
                     option.type = 'button';
@@ -848,7 +882,8 @@ export function installPlotMarksMethods(TargetClass) {
                     option.disabled = !!item.disabled;
                     option.addEventListener('click', (event) => {
                         event.stopPropagation();
-                        select(value);
+                        if (event.shiftKey && selectAll) selectAll(value);
+                        else select(value);
                     });
                     row.appendChild(option);
                 }
@@ -960,7 +995,8 @@ export function installPlotMarksMethods(TargetClass) {
             button.append(box, text);
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
-                item.run();
+                if (event.shiftKey && item.runAll) item.runAll();
+                else item.run();
             });
             row.appendChild(button);
             if (item.settings) {
@@ -979,6 +1015,16 @@ export function installPlotMarksMethods(TargetClass) {
                 row.appendChild(gear);
             }
             menu.appendChild(row);
+        }
+        // Said where it can be used: in a menu that has such an item, and only
+        // while there is more than one plot for it to reach.
+        const reachesAll = items.some(item => item.runAll || (item.radio && !item.onSelect && !item.disabled));
+        const timePlots = [...this.plots.values()].filter(plot => plot.mode === 'timeseries').length;
+        if (reachesAll && (timePlots > 1 || this.applyToAllReachesOtherTabs?.())) {
+            const note = document.createElement('div');
+            note.className = 'marks-menu-footnote';
+            note.textContent = i18n.t('applyToAllPlotsHint');
+            menu.appendChild(note);
         }
     };
 

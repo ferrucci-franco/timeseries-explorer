@@ -23,7 +23,11 @@ const openMenus = new Map();
 // along the bottom of the top bar says it plainly, and shows how much: drawn
 // here rather than left to the browser, whose scrollbar is hidden until
 // hovered on many systems (Firefox and Windows 11 by default).
+//
+// `row` is the element that scrolls, or a function returning it for one that
+// is replaced as it is redrawn (the tab strip's).
 function createScrollbar(topBar, row) {
+    const rowOf = typeof row === 'function' ? row : () => row;
     const track = document.createElement('div');
     track.className = 'top-bar-scrollbar';
     track.setAttribute('aria-hidden', 'true');
@@ -35,10 +39,12 @@ function createScrollbar(topBar, row) {
 
     // Dragging the thumb moves the row with it; a click elsewhere on the track
     // brings that part of the row into view.
-    const ratio = () => row.scrollWidth / Math.max(1, track.clientWidth);
+    const ratio = () => rowOf().scrollWidth / Math.max(1, track.clientWidth);
     thumb.addEventListener('pointerdown', (event) => {
         event.preventDefault();
         event.stopPropagation();
+        const row = rowOf();
+        if (!row) return;
         const startX = event.clientX;
         const startScroll = row.scrollLeft;
         const scale = ratio();
@@ -56,7 +62,8 @@ function createScrollbar(topBar, row) {
         thumb.addEventListener('pointercancel', end);
     });
     track.addEventListener('pointerdown', (event) => {
-        if (event.target !== track) return;
+        const row = rowOf();
+        if (event.target !== track || !row) return;
         event.preventDefault();
         const x = event.clientX - track.getBoundingClientRect().left;
         row.scrollTo({ left: x * ratio() - row.clientWidth / 2, behavior: 'smooth' });
@@ -75,6 +82,22 @@ function updateScrollbar(track, row) {
     const thumb = track.firstElementChild;
     thumb.style.width = `${thumbWidth}px`;
     thumb.style.transform = `translateX(${(width - thumbWidth) * (row.scrollLeft / max)}px)`;
+}
+
+/**
+ * The same slim bar for another row of the top bar (the tabs): `getRow`
+ * returns the element that scrolls, or null while there is none. Returns the
+ * function that brings the bar up to date; call it on every scroll and
+ * resize of the row.
+ */
+export function createTopBarScrollIndicator(topBar, getRow, className = '') {
+    const track = createScrollbar(topBar, getRow);
+    if (className) track.classList.add(className);
+    return () => {
+        const row = getRow();
+        if (row) updateScrollbar(track, row);
+        else track.hidden = true;
+    };
 }
 
 function createFade(topBar, side) {
@@ -151,8 +174,19 @@ function updateBrand(topBar, brand, row) {
     const badge = brand.querySelector('.runtime-badge');
     if (badge?.offsetWidth) badgeWidth = badge.offsetWidth;
     const style = getComputedStyle(topBar);
+    // The tab strip of Full Desktop comes out of the same room: as wide as
+    // its tabs, between its minimum and half the bar (base.css).
+    const tabs = topBar.querySelector('.workspace-tabs:not([hidden])');
+    const tabsStyle = tabs ? getComputedStyle(tabs) : null;
+    // Its natural width: the tabs it scrolls, plus + and the list button.
+    const scroller = tabs?.querySelector('.workspace-tabs-scroll');
+    const tabsWanted = tabs ? tabs.scrollWidth - (scroller?.clientWidth || 0) + (scroller?.scrollWidth || 0) : 0;
+    const tabsReserve = tabsStyle
+        ? Math.max(parseFloat(tabsStyle.minWidth) || 0, Math.min(tabsWanted, topBar.clientWidth / 2))
+            + (parseFloat(tabsStyle.marginLeft) || 0) + (parseFloat(tabsStyle.marginRight) || 0)
+        : 0;
     const room = topBar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-        - row.scrollWidth;
+        - row.scrollWidth - tabsReserve;
     const gap = parseFloat(getComputedStyle(brand).columnGap) || 0;
     // The text, not the heading: a block, it is as wide as the brand.
     const range = document.createRange();
@@ -188,6 +222,9 @@ export function initTopBarScroll(row) {
         observer.observe(topBar || row);
         const title = brand?.querySelector('h1');
         if (title) observer.observe(title);
+        // And the tab strip, which grows with every tab added or renamed.
+        const tabs = topBar?.querySelector('.workspace-tabs');
+        if (tabs) observer.observe(tabs);
     }
 
     row.addEventListener('wheel', (event) => {
