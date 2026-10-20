@@ -301,6 +301,8 @@ proto._prepareTabLeave = function() {
 proto._afterTabChange = function() {
     this._renderTabs();
     this._updateActionButtons?.();
+    // The dashboards held at an instant are this tab's now.
+    this.plotManager?.renderDashboardTimeMarks?.();
 };
 
 proto.addTab = async function() {

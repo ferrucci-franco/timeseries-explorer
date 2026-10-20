@@ -488,6 +488,8 @@ export function installPlotDashboardMethods(TargetClass) {
         plot._dashboardObserver = null;
         plot.dashboardEl.remove();
         plot.dashboardEl = null;
+        // Its line goes from the other plots once the panel has moved on.
+        queueMicrotask(() => this.renderDashboardTimeMarks());
     };
 
     proto._renderDashboardCards = function(panelId) {
@@ -780,6 +782,7 @@ export function installPlotDashboardMethods(TargetClass) {
         live.hidden = !(time === null && this._dashboardIsLive(plot));
         container.classList.toggle('is-following', time === null);
         this._fitDashboardSpans(plot);
+        this.renderDashboardTimeMarks();
     };
 
     // The columns the grid has now; a card's span is held to them.
@@ -801,6 +804,148 @@ export function installPlotDashboardMethods(TargetClass) {
         for (const [panelId, plot] of this.plots) {
             if (plot.mode === 'dashboard' && plot.dashboardEl) this._refreshDashboard(panelId);
         }
+    };
+
+    // ── The dashboard's instant, on the time plots ──
+    //
+    // A dashboard held at an instant (not on Latest) marks it with a vertical
+    // line on the time plots on screen, the way Audio marks where the sound
+    // is; the panel's own time plot, when its dashboard is the one put away,
+    // marks the instant that dashboard holds. On Latest there is nothing to
+    // mark. The line is dragged to move the dashboard's time, and a
+    // double-click on it goes back to Latest.
+
+    // The instants to mark on this plot: [{ panelId, time }].
+    proto._dashboardTimeMarks = function(panelId, plot) {
+        if (plot?.mode !== 'timeseries' || !plot.div) return [];
+        const marks = [];
+        const held = state => state && !state.follow && Number.isFinite(state.time);
+        for (const [otherId, other] of this.plots) {
+            if (otherId === panelId) continue;
+            if (other.mode === 'dashboard' && other.dashboardEl && held(other.dashboard)) {
+                marks.push({ panelId: otherId, time: other.dashboard.time });
+            }
+        }
+        if (held(plot.dashboard)) marks.push({ panelId, time: plot.dashboard.time });
+        return marks;
+    };
+
+    proto.renderDashboardTimeMarks = function() {
+        for (const [panelId, plot] of this.plots) this._drawDashboardTimeMarks(panelId, plot);
+    };
+
+    // Re-placed with the cursors and the playhead, after a zoom, a pan, a resize.
+    proto._refreshDashboardTimeMarks = function(plot) {
+        for (const [panelId, candidate] of this.plots) {
+            if (candidate === plot) { this._drawDashboardTimeMarks(panelId, plot); return; }
+        }
+    };
+
+    // Drawn inside Plotly's first SVG, as the playhead is: above the traces,
+    // below the legend. Moved in place, never rebuilt, so a drag keeps its
+    // pointer.
+    proto._drawDashboardTimeMarks = function(panelId, plot) {
+        const svg = plot?.div?.isConnected ? plot.div.querySelector('svg.main-svg') : null;
+        const marks = svg ? this._dashboardTimeMarks(panelId, plot) : [];
+        const existing = plot?.div ? [...plot.div.querySelectorAll('.dashboard-time-mark')] : [];
+        for (const head of existing) {
+            if (!marks.some(mark => mark.panelId === head.dataset.dashboard)) head.remove();
+        }
+        if (!svg) return;
+        const ns = 'http://www.w3.org/2000/svg';
+        for (const mark of marks) {
+            let head = svg.querySelector(`.dashboard-time-mark[data-dashboard="${mark.panelId}"]`);
+            if (!head) {
+                head = document.createElementNS(ns, 'g');
+                head.setAttribute('class', 'dashboard-time-mark');
+                head.dataset.dashboard = mark.panelId;
+                const line = document.createElementNS(ns, 'rect');
+                line.setAttribute('class', 'dashboard-time-mark-line');
+                const arrow = document.createElementNS(ns, 'path');
+                arrow.setAttribute('class', 'dashboard-time-mark-head');
+                const hit = document.createElementNS(ns, 'rect');
+                hit.setAttribute('class', 'dashboard-time-mark-hit');
+                const title = document.createElementNS(ns, 'title');
+                title.textContent = i18n.t('dashboardTimeMarkTitle');
+                hit.appendChild(title);
+                head.append(line, arrow, hit);
+                svg.appendChild(head);
+                this._makeDashboardTimeMarkDraggable(panelId, mark.panelId, hit);
+            }
+            const geometry = this._hoverOverlayGeometry?.(plot, mark.time);
+            const inside = geometry && Number.isFinite(geometry.left)
+                && geometry.left >= geometry.leftAxis && geometry.left <= geometry.rightAxis;
+            head.style.display = inside ? '' : 'none';
+            if (!inside) continue;
+            const x = geometry.left;
+            const top = geometry.topAxis;
+            const height = Math.max(0, geometry.bottomAxis - geometry.topAxis);
+            const [line, arrow, hit] = head.children;
+            line.setAttribute('x', String(x - 1));
+            line.setAttribute('y', String(top));
+            line.setAttribute('width', '2');
+            line.setAttribute('height', String(height));
+            arrow.setAttribute('d', `M${x - 6},${top} L${x + 6},${top} L${x},${top + 9} Z`);
+            hit.setAttribute('x', String(x - 6));
+            hit.setAttribute('y', String(top));
+            hit.setAttribute('width', '12');
+            hit.setAttribute('height', String(height));
+        }
+    };
+
+    // The data time under a pixel of this plot's X axis, held to the axis.
+    proto._dashboardTimeAtPixel = function(plot, clientX) {
+        const xa = plot?.div?._fullLayout?.xaxis;
+        if (!xa?.range || !xa._length) return null;
+        const r0 = this._coerceAxisValue(xa.range[0]);
+        const r1 = this._coerceAxisValue(xa.range[1]);
+        if (!Number.isFinite(r0) || !Number.isFinite(r1) || r0 === r1) return null;
+        const px = clientX - plot.div.getBoundingClientRect().left - (xa._offset || 0);
+        const fraction = Math.min(Math.max(px / xa._length, 0), 1);
+        return r0 + fraction * (r1 - r0);
+    };
+
+    proto._setDashboardTime = function(panelId, time) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !Number.isFinite(time)) return;
+        const state = this._ensureDashboardState(plot);
+        const range = this._dashboardRange(plot);
+        state.follow = false;
+        state.time = range ? Math.min(Math.max(time, range[0]), range[1]) : time;
+        if (plot.dashboardEl) this._refreshDashboard(panelId);
+        else this.renderDashboardTimeMarks();
+    };
+
+    proto._makeDashboardTimeMarkDraggable = function(plotId, dashboardId, hit) {
+        // Plotly zooms on a press in the plot, the cursors and the audio seek
+        // read it too: this one is the line's.
+        const own = event => { event.stopPropagation(); event.preventDefault(); };
+        hit.addEventListener('mousedown', own);
+        hit.addEventListener('click', own);
+        hit.addEventListener('dblclick', event => {
+            own(event);
+            this._setDashboardFollow(dashboardId, true);
+            if (!this.plots.get(dashboardId)?.dashboardEl) this.renderDashboardTimeMarks();
+        });
+        hit.addEventListener('pointerdown', event => {
+            if (event.button !== 0) return;
+            own(event);
+            hit.setPointerCapture?.(event.pointerId);
+            hit.closest('.dashboard-time-mark')?.classList.add('dragging');
+            const move = moveEvent => {
+                const time = this._dashboardTimeAtPixel(this.plots.get(plotId), moveEvent.clientX);
+                if (time !== null) this._setDashboardTime(dashboardId, time);
+            };
+            const end = () => {
+                hit.removeEventListener('pointermove', move);
+                hit.removeEventListener('pointerup', end);
+                hit.removeEventListener('pointercancel', end);
+                hit.closest('.dashboard-time-mark')?.classList.remove('dragging');
+            };
+            hit.addEventListener('pointermove', move);
+            hit.addEventListener('pointerup', end);
+            hit.addEventListener('pointercancel', end);
+        });
     };
 
     // The background of a card or a separator: no colour, one of the palette,

@@ -860,6 +860,8 @@ class PlotManager {
         // The playhead is placed in pixels like the cursors are, so it has to
         // be re-placed for the same reasons: a zoom, a pan, a resize.
         this._refreshAudioPlayhead?.(plot);
+        // So is a held dashboard's instant.
+        this._refreshDashboardTimeMarks?.(plot);
     }
 
     autoZoomAll() {
