@@ -434,6 +434,7 @@ proto._transposeMatlabMatrixNode = async function(node) {
     data.metadata.numTimevarying = Object.values(data.variables)
         .filter(variable => variable.kind === 'variable').length;
     fileEntry._transformCache = null;
+    fileEntry.dataEpoch = (fileEntry.dataEpoch || 0) + 1;
 
     for (const [panelId, plot] of this.plotManager.plots) {
         const beforeTraces = plot.traces.length;

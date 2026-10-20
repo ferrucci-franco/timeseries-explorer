@@ -215,6 +215,9 @@ export function initTopBarScroll(row) {
         updateScrollHints(row, hints);
         replaceOpenMenus();
     }, { passive: true });
+    // What the bar holds changed without its size changing: tabs added,
+    // renamed or closed in a strip that keeps its width (tab-methods.js).
+    topBar?.addEventListener('top-bar-content-change', refresh);
     window.addEventListener('resize', refresh);
     if (typeof ResizeObserver === 'function') {
         // The bar for the window, the title for a change of language.

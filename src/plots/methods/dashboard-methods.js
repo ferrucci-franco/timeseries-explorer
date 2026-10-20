@@ -155,6 +155,7 @@ export function installPlotDashboardMethods(TargetClass) {
         entry.unitOverrides = { ...(entry.unitOverrides || {}) };
         if (clean) entry.unitOverrides[varName] = clean;
         else delete entry.unitOverrides[varName];
+        entry.dataEpoch = (entry.dataEpoch || 0) + 1;
         this._applyUnitOverride(entry.data?.variables?.[varName], clean);
         // Every other panel that writes the unit (legend, hover, axis titles).
         for (const [panelId, plot] of this.plots) {
@@ -184,6 +185,7 @@ export function installPlotDashboardMethods(TargetClass) {
             if (!clean[name]) this._applyUnitOverride(entry.data?.variables?.[name], '');
         }
         entry.unitOverrides = clean;
+        entry.dataEpoch = (entry.dataEpoch || 0) + 1;
         this._applyUnitOverrides(fileId);
     };
 

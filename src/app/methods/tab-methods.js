@@ -6,18 +6,38 @@ import { createTopBarScrollIndicator, placeTopBarMenu } from '../../ui/top-bar-s
  * Tabs: several screens of panels over the same open files, in the web build
  * and in Full Desktop alike (not in the phone layout, which has no top bar).
  *
- * Only the tab on screen has panels. The others are kept the way a saved view
- * keeps them — the layout tree and each panel's plot session — and a switch
- * puts one back through the same code that restores a view
- * (_applySessionLayout / _applySessionPlots). So a tab survives what a view
- * survives: a file closed meanwhile only takes its traces with it, a reload
- * that renamed a signal only drops that trace.
+ * A tab left is parked as it is: its panels, their charts and their state
+ * move off screen, untouched, and come back the same — nothing is drawn or
+ * computed again (a Fourier spectrum, a correlation, a fit). That holds while
+ * nothing they draw changed meanwhile: the files, their data (Live Update, a
+ * reload, a data tool) and the settings that decide how a plot looks. When
+ * something did, or when more tabs are parked than MAX_PARKED_TABS, a tab is
+ * kept the way a saved view keeps it — the layout tree and each panel's plot
+ * session — and comes back through the code that restores a view
+ * (_applySessionLayout / _applySessionPlots), drawn again from what is there
+ * now. So a tab survives what a view survives: a file closed meanwhile only
+ * takes its traces with it, a reload that renamed a signal only drops that
+ * trace.
  *
  * In a saved view (session-methods.js) `tabs` lists every tab. The one on
  * screen is the view's own `layout` and `plots`, so a view written before
  * tabs existed opens as one tab, and one written with tabs still opens, as
  * that one tab, in a version that has none.
  */
+// Parked tabs keep their charts. A chart drawn with WebGL (a long series, a
+// 3D scene) holds a WebGL context, of which a browser gives a page about 16
+// and silently drops the oldest past that, blanking its chart. So the canvases
+// of every chart, on screen and parked, are held under a budget: past it, the
+// parked tab seen longest ago that has any gives its charts up and is kept as
+// a saved view. Charts drawn in SVG cost no context; their tabs are only held
+// to a count.
+const MAX_PARKED_TABS = 12;
+const MAX_WEBGL_CANVASES = 12;
+
+function webglCanvasCount(root) {
+    return root ? root.querySelectorAll('canvas.gl-canvas, .gl-container canvas').length : 0;
+}
+
 export function installTabMethods(TargetClass) {
     const proto = TargetClass.prototype;
 
@@ -70,6 +90,162 @@ proto._captureActiveTabSnapshot = function() {
     };
 };
 
+// ── Parking ──
+
+// The settings that change how a panel is drawn without changing its data.
+proto._tabSettingsStamp = function() {
+    const pm = this.plotManager;
+    return JSON.stringify([
+        this.theme, i18n.currentLang, this.files.size,
+        pm.legendPosition, pm.legendOverlayCorner, pm.legendUnits, pm.hoverInfoCorner, pm.hoverProximity,
+        pm.timeseriesVisualMaxPoints, pm.phaseVisualMaxPoints, pm.syncAxes,
+        this.advancedSettings || {},
+    ]);
+};
+
+// The files a set of panels draws from, and what each held when they were drawn.
+proto._tabFileStamps = function(plots) {
+    const ids = new Set();
+    for (const plot of plots.values()) {
+        for (const trace of plot.traces || []) ids.add(trace.fileId);
+        for (const trace of plot.phaseTraces || []) ids.add(trace.fileId);
+        if (plot.phasePending?.fileId) ids.add(plot.phasePending.fileId);
+        if (plot.stateSlots?.fileId) ids.add(plot.stateSlots.fileId);
+    }
+    return [...ids].filter(Boolean).map(fileId => {
+        const entry = this.plotManager.files.get(fileId);
+        return [fileId, entry?.data || null, entry?.dataEpoch || 0];
+    });
+};
+
+proto._parkedTabIsCurrent = function(parked) {
+    if (!parked || parked.settings !== this._tabSettingsStamp()) return false;
+    return parked.files.every(([fileId, data, epoch]) => {
+        const entry = this.plotManager.files.get(fileId);
+        return !!entry && this.files.has(fileId) && entry.data === data && (entry.dataEpoch || 0) === epoch;
+    });
+};
+
+/**
+ * The tab on screen leaves as it is. Its elements move to a holder of the same
+ * size off screen — not hidden: a chart that is not displayed is refused by
+ * Plotly, and a size that drops to nothing would have every chart redraw
+ * itself for it — and its panel states leave the plot manager, so nothing
+ * that walks the panels on screen (Live Update, a setting, Clear all) reaches
+ * them.
+ */
+proto._parkActiveTab = function(item) {
+    const container = this.layoutManager.container;
+    const holder = document.createElement('div');
+    holder.className = `${container.className} workspace-tab-parked`;
+    holder.setAttribute('aria-hidden', 'true');
+    holder.inert = true;
+    holder.style.width = `${container.clientWidth}px`;
+    holder.style.height = `${container.clientHeight}px`;
+    holder.append(...container.childNodes);
+    (container.parentNode || document.body).appendChild(holder);
+    const plots = new Map();
+    for (const panelId of this.layoutManager._collectPanelIds(this.layoutManager.root)) {
+        const plot = this.plotManager.plots.get(panelId);
+        if (!plot) continue;
+        plots.set(panelId, plot);
+        this.plotManager.plots.delete(panelId);
+    }
+    item.snapshot = null;
+    item.parked = {
+        root: this.layoutManager.root,
+        plots,
+        holder,
+        scrollTop: container.scrollTop,
+        files: this._tabFileStamps(plots),
+        settings: this._tabSettingsStamp(),
+    };
+    item.lastShown = (this._tabClock = (this._tabClock || 0) + 1);
+    this._limitParkedTabs();
+};
+
+proto._unparkTab = function(item) {
+    const parked = item.parked;
+    item.parked = null;
+    const container = this.layoutManager.container;
+    container.replaceChildren(...parked.holder.childNodes);
+    parked.holder.remove();
+    this.layoutManager.root = parked.root;
+    for (const [panelId, plot] of parked.plots) this.plotManager.plots.set(panelId, plot);
+    container.scrollTop = parked.scrollTop || 0;
+    // The window may have changed size meanwhile.
+    requestAnimationFrame(() => this.plotManager.resizeAll?.());
+};
+
+// A parked tab gives its charts up: kept as a saved view (unless it is being
+// closed), its panels torn down the way a closed panel is.
+proto._disposeParkedTab = function(item, { keepSnapshot = true } = {}) {
+    const parked = item?.parked;
+    if (!parked) return;
+    if (keepSnapshot) {
+        item.snapshot = {
+            layout: this._cloneSerializable(parked.root),
+            plots: this._capturePlotSessions(parked.plots),
+        };
+    }
+    for (const [panelId, plot] of parked.plots) {
+        this.plotManager.plots.set(panelId, plot);
+        this.plotManager.onPanelUnmount(panelId);
+    }
+    parked.holder.remove();
+    item.parked = null;
+};
+
+proto._limitParkedTabs = function() {
+    const parked = this._ensureTabsState().items.filter(item => item.parked);
+    parked.sort((a, b) => (a.lastShown || 0) - (b.lastShown || 0));
+    while (parked.length > MAX_PARKED_TABS) this._disposeParkedTab(parked.shift());
+    const onScreen = webglCanvasCount(this.layoutManager.container);
+    let total = onScreen + parked.reduce((sum, item) => sum + webglCanvasCount(item.parked.holder), 0);
+    for (const item of [...parked]) {
+        if (total <= MAX_WEBGL_CANVASES) break;
+        const count = webglCanvasCount(item.parked.holder);
+        if (!count) continue;
+        this._disposeParkedTab(item);
+        total -= count;
+    }
+};
+
+// What a tab off screen would be saved as.
+proto._tabSnapshotOf = function(item) {
+    if (item?.parked) {
+        return {
+            layout: this._cloneSerializable(item.parked.root),
+            plots: this._capturePlotSessions(item.parked.plots),
+        };
+    }
+    return this._cloneSerializable(item?.snapshot || null);
+};
+
+proto._showTab = async function(item) {
+    item.lastShown = (this._tabClock = (this._tabClock || 0) + 1);
+    if (item.parked && this._parkedTabIsCurrent(item.parked)) {
+        this._unparkTab(item);
+        return;
+    }
+    // Drawn again: new charts, maybe new WebGL contexts, so the parked ones
+    // are held to the budget once these are up.
+    const settle = () => this._limitParkedTabs();
+    this._disposeParkedTab(item);
+    const snapshot = item.snapshot;
+    item.snapshot = null;
+    await this._restoreTabSnapshot(snapshot);
+    setTimeout(settle, 1000);
+};
+
+// The panels on screen, gone for good (their tab is being closed).
+proto._discardActiveTabPanels = function() {
+    for (const panelId of this.layoutManager._collectPanelIds(this.layoutManager.root)) {
+        this.layoutManager.onPanelUnmount?.(panelId);
+    }
+    this.layoutManager.container.replaceChildren();
+};
+
 proto._identityFileMap = function() {
     return new Map([...this.files.keys()].map(fileId => [fileId, fileId]));
 };
@@ -95,13 +271,12 @@ proto.switchTab = async function(index) {
     this._tabSwitching = (async () => {
         try {
             this._prepareTabLeave();
-            tabs.items[tabs.activeIndex].snapshot = this._captureActiveTabSnapshot();
+            // A data tool's draft preview is a drawing, not a trace: never kept.
+            this._clearDataToolPreview?.();
+            this._parkActiveTab(tabs.items[tabs.activeIndex]);
             tabs.activeIndex = index;
-            const target = tabs.items[index];
-            const snapshot = target.snapshot;
-            target.snapshot = null;
             this._renderTabs();
-            await this._restoreTabSnapshot(snapshot);
+            await this._showTab(tabs.items[index]);
             this._afterTabChange();
         } finally {
             this._tabSwitching = null;
@@ -116,6 +291,9 @@ proto.switchTab = async function(index) {
 proto._prepareTabLeave = function() {
     this._closeTabMenu?.();
     this.plotManager._closeMarksMenu?.();
+    this.plotManager._closeDashboardCardEditor?.();
+    // Nothing plays from a panel that is not on screen.
+    this.plotManager.stopAudioPlayback?.();
     // The map of a gridded dataset covers the panels: they are what is changing.
     if (typeof this._griddedState === 'function' && this._griddedState().visibleFileId) this._hideGriddedView?.();
 };
@@ -140,7 +318,7 @@ proto.duplicateTab = async function(index) {
     const tabs = this._ensureTabsState();
     const source = tabs.items[index];
     if (!source) return;
-    const snapshot = index === tabs.activeIndex ? this._captureActiveTabSnapshot() : this._cloneSerializable(source.snapshot);
+    const snapshot = index === tabs.activeIndex ? this._captureActiveTabSnapshot() : this._tabSnapshotOf(source);
     const copy = this._newTabItem(source.name ? `${source.name} (2)` : '');
     copy.snapshot = this._withFreshPanelIds(snapshot);
     tabs.items.splice(index + 1, 0, copy);
@@ -170,8 +348,9 @@ proto._withFreshPanelIds = function(snapshot) {
 proto._tabHasContent = function(index) {
     const tabs = this._ensureTabsState();
     if (index === tabs.activeIndex) return !!this.plotManager.hasAnyTraces?.();
-    return (tabs.items[index]?.snapshot?.plots || [])
-        .some(plot => plot.traces?.length || plot.phaseTraces?.length);
+    const item = tabs.items[index];
+    const plots = item?.parked ? [...item.parked.plots.values()] : (item?.snapshot?.plots || []);
+    return plots.some(plot => plot.traces?.length || plot.phaseTraces?.length);
 };
 
 proto.closeTab = async function(index, options = {}) {
@@ -186,19 +365,18 @@ proto.closeTab = async function(index, options = {}) {
         if (!ok) return false;
     }
     if (index !== tabs.activeIndex) {
+        this._disposeParkedTab(tabs.items[index], { keepSnapshot: false });
         tabs.items.splice(index, 1);
         if (index < tabs.activeIndex) tabs.activeIndex -= 1;
         this._renderTabs();
         return true;
     }
     this._prepareTabLeave();
+    this._discardActiveTabPanels();
     tabs.items.splice(index, 1);
     tabs.activeIndex = Math.min(index, tabs.items.length - 1);
-    const target = tabs.items[tabs.activeIndex];
-    const snapshot = target.snapshot;
-    target.snapshot = null;
     this._renderTabs();
-    this._tabSwitching = this._restoreTabSnapshot(snapshot);
+    this._tabSwitching = this._showTab(tabs.items[tabs.activeIndex]);
     try { await this._tabSwitching; } finally { this._tabSwitching = null; }
     this._afterTabChange();
     // A switch asked for while the tab beside it was being put back.
@@ -354,6 +532,8 @@ proto._renderTabs = function() {
     }
     scroller.querySelector('.workspace-tab.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     this._syncTabOverflow();
+    // How much of the title still fits depends on how many tabs there are.
+    strip.dispatchEvent(new Event('top-bar-content-change', { bubbles: true }));
 };
 
 // Whether the tabs fit: the list button shows only when they do not, and a
@@ -543,11 +723,10 @@ proto._captureTabsForSession = function() {
         items: tabs.items.map((item, index) => (index === tabs.activeIndex
             // The tab on screen is the view's own layout and plots.
             ? { name: item.name || '', active: true }
-            : {
-                name: item.name || '',
-                layout: this._cloneSerializable(item.snapshot?.layout || null),
-                plots: this._cloneSerializable(item.snapshot?.plots || []),
-            })),
+            : (() => {
+                const snapshot = this._tabSnapshotOf(item);
+                return { name: item.name || '', layout: snapshot?.layout || null, plots: snapshot?.plots || [] };
+            })())),
     };
 };
 
@@ -562,6 +741,8 @@ proto._sessionHiddenTabPlots = function(session) {
 // Called while a view is applied, once its file ids can be mapped (after the
 // derived datasets are back) and before its own layout goes up.
 proto._applySessionTabs = function(session, fileMap) {
+    // The view replaces every tab: the parked ones give their charts up.
+    for (const item of this.tabs?.items || []) this._disposeParkedTab(item, { keepSnapshot: false });
     this._nextTabNumber = 0;
     const saved = this._tabsEnabled() ? session?.tabs?.items : null;
     if (!Array.isArray(saved) || !saved.length) {
@@ -604,6 +785,21 @@ proto._applyPlotPatchToHiddenTabs = function(patch) {
     const tabs = this._ensureTabsState();
     tabs.items.forEach((item, index) => {
         if (index === tabs.activeIndex) return;
+        if (item.parked) {
+            // How the next append is followed changes nothing drawn: the
+            // parked panels take it as they are.
+            if (patch.liveView) {
+                for (const plot of item.parked.plots.values()) {
+                    const timeseries = plot.mode === 'timeseries';
+                    if (plot.mode !== 'state-anim' && timeseries === (patch.liveView.family === 'timeseries')) {
+                        plot.liveView = { ...(plot.liveView || {}), ...patch.liveView.patch };
+                    }
+                }
+                return;
+            }
+            // A mark or a line shape is drawn: the tab is drawn again when shown.
+            this._disposeParkedTab(item);
+        }
         for (const plot of item.snapshot?.plots || []) {
             if (patch.liveView) {
                 const timeseries = plot.mode === 'timeseries';

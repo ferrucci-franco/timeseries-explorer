@@ -75,6 +75,9 @@ try {
     });
     await page.waitForFunction(() => [...window.app.plotManager.plots.values()].every(p => p.div?._fullLayout));
 
+    // The charts of tab 1, to know whether they are drawn again when it comes back.
+    await page.evaluate(() => { window.__tab1Charts = [...window.app.plotManager.plots.values()].map(plot => plot.div); });
+
     // Tab 2, by keyboard, with one panel of a; renamed by a double-click.
     await page.locator('.top-bar').click({ position: { x: 5, y: 5 } });
     await page.keyboard.press('Control+t');
@@ -101,6 +104,46 @@ try {
     s = await tabState(page);
     assert.equal(s.panels, 2, 'the first tab has its two panels back');
     assert.deepEqual(s.traces, ['a', 'b'], 'with their traces');
+    assert.equal(await page.evaluate(() => [...window.app.plotManager.plots.values()]
+        .every((plot, index) => plot.div === window.__tab1Charts[index])), true,
+    'the very same charts: nothing drawn or computed again');
+
+    // An analysis comes back without being computed again; data that changed
+    // while its tab was away is drawn again.
+    const fftPanel = await page.evaluate(() => document.querySelector('.layout-panel').dataset.id);
+    await page.evaluate(id => window.app.plotManager._setMode(id, 'fft', null, { preserveTimeTraces: true }), fftPanel);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?._fftSpectra?.length, fftPanel, { timeout: 30000 });
+    await page.evaluate(() => {
+        const pm = window.app.plotManager;
+        window.__fftComputations = 0;
+        const original = pm._fftSeriesForTrace;
+        pm._fftSeriesForTrace = function(...args) { window.__fftComputations++; return original.apply(this, args); };
+        window.__fftDiv = pm.plots.get(document.querySelector('.layout-panel').dataset.id).fftDiv;
+    });
+    await page.evaluate(() => window.app.switchTab(1));
+    await page.waitForFunction(() => !window.app._tabSwitching);
+    await page.evaluate(() => window.app.switchTab(0));
+    await page.waitForFunction(() => !window.app._tabSwitching);
+    assert.deepEqual(await page.evaluate(id => ({
+        same: window.app.plotManager.plots.get(id)?.fftDiv === window.__fftDiv,
+        computations: window.__fftComputations,
+    }), fftPanel), { same: true, computations: 0 }, 'Fourier is not computed again on coming back');
+    await page.evaluate(() => window.app.switchTab(1));
+    await page.waitForFunction(() => !window.app._tabSwitching);
+    await page.evaluate(() => {
+        const app = window.app;
+        const fileId = [...app.plotManager.files.keys()][0];
+        app.plotManager.updateFileData(fileId, app.plotManager.files.get(fileId).data, { liveAppend: true });
+    });
+    // Started, not awaited inside the page: the wait below sees it through
+    // (and would time out on a page that started over).
+    await page.evaluate(() => { window.app.switchTab(0); });
+    await page.waitForFunction(id => !window.app._tabSwitching && window.app.tabs.activeIndex === 0
+        && window.app.plotManager.plots.get(id)?._fftSpectra?.length, fftPanel, { timeout: 30000 });
+    assert.equal(await page.evaluate(id => window.app.plotManager.plots.get(id)?.fftDiv !== window.__fftDiv, fftPanel), true,
+        'data changed while away: the tab is drawn again from it');
+    await page.evaluate(id => window.app.plotManager._setMode(id, 'timeseries', null, { preserveTimeTraces: true }), fftPanel);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, fftPanel);
 
     // ── Shift+click: every time plot, the tab off screen included ──
     const firstPanel = await page.evaluate(() => document.querySelector('.layout-panel').dataset.id);
@@ -222,12 +265,13 @@ try {
     assert.equal(ctrlTaken, false, 'Ctrl+1 is left to the browser');
 
     // ── Many tabs: still one row, + and the list of them all in reach ──
-    const sameHeight = await web.evaluate(() => {
-        const tab = document.querySelector('#workspace-tabs .workspace-tab').getBoundingClientRect().height;
-        const button = document.getElementById('load-new-file').getBoundingClientRect().height;
-        return Math.abs(tab - button) < 0.5;
-    });
-    assert.equal(sameHeight, true, 'a tab is as tall as the buttons of the top bar');
+    const heights = await web.evaluate(() => ({
+        tab: document.querySelector('#workspace-tabs .workspace-tab').getBoundingClientRect().height,
+        add: document.querySelector('#workspace-tabs .workspace-tab-add').getBoundingClientRect().height,
+        button: document.getElementById('load-new-file').getBoundingClientRect().height,
+    }));
+    assert.ok(heights.tab < heights.button && Math.abs(heights.tab - heights.add) < 0.5,
+        `tabs and + one height, lower than the buttons (${JSON.stringify(heights)})`);
     assert.equal(await web.isVisible('#workspace-tabs .workspace-tabs-overflow'), false, 'no list while the tabs fit');
     assert.equal(await web.evaluate(() => document.querySelector('.workspace-tabs-scrollbar')?.hidden), true, 'nor a scrollbar');
     await web.evaluate(async () => { for (let i = 0; i < 14; i++) await window.app.addTab(); });
@@ -239,6 +283,10 @@ try {
         return { rows: tops.size, addInView: add.right <= strip.getBoundingClientRect().right + 0.5 && add.width > 0 };
     });
     assert.equal(row.rows, 1, 'sixteen tabs stay on one row');
+    assert.equal(await web.evaluate(() => {
+        const buttons = document.querySelector('.top-bar-right');
+        return buttons.scrollWidth <= buttons.clientWidth + 1;
+    }), true, 'the tabs scroll, not the row of buttons beside them');
     assert.equal(row.addInView, true, 'with + still in view');
     assert.equal(await web.isVisible('#workspace-tabs .workspace-tabs-overflow'), true, 'and the list of every tab');
     // The slim bar under the tabs: shown now, as wide as the tabs' row, and
@@ -286,6 +334,29 @@ try {
     assert.deepEqual(await tabIds(), idsBefore, 'no tab moved');
 
     await webContext.close();
+
+    // ── A narrower window: the title gives way and the tabs scroll; the
+    // row of buttons beside them does not ──
+    const narrowContext = await browser.newContext({ viewport: { width: 1150, height: 800 } });
+    await narrowContext.addInitScript(() => { window.omvDesktop = {}; });
+    const narrow = await narrowContext.newPage();
+    narrow.on('pageerror', e => errors.push(e.message));
+    await narrow.goto(baseUrl);
+    await narrow.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+    await narrow.evaluate(async () => { for (let i = 0; i < 8; i++) await window.app.addTab(); });
+    await narrow.waitForTimeout(400);
+    const narrowBar = await narrow.evaluate(() => {
+        const buttons = document.querySelector('.top-bar-right');
+        const tabs = document.querySelector('#workspace-tabs .workspace-tabs-scroll');
+        return {
+            buttonsScroll: buttons.scrollWidth > buttons.clientWidth + 1,
+            tabsScroll: tabs.scrollWidth > tabs.clientWidth + 1,
+            titleGaveWay: document.querySelector('.top-bar-left').classList.contains('is-squeezed'),
+        };
+    });
+    assert.deepEqual(narrowBar, { buttonsScroll: false, tabsScroll: true, titleGaveWay: true },
+        'nine tabs in a narrow window: only the tabs scroll');
+    await narrowContext.close();
 
     assert.deepEqual(errors, [], 'no page errors');
     console.log('Workspace tabs end-to-end checks passed.');
