@@ -155,8 +155,11 @@ function updateBrand(topBar, brand, row) {
     // its tabs, between its minimum and half the bar (base.css).
     const tabs = topBar.querySelector('.workspace-tabs:not([hidden])');
     const tabsStyle = tabs ? getComputedStyle(tabs) : null;
+    // Its natural width: the tabs it scrolls, plus + and the list button.
+    const scroller = tabs?.querySelector('.workspace-tabs-scroll');
+    const tabsWanted = tabs ? tabs.scrollWidth - (scroller?.clientWidth || 0) + (scroller?.scrollWidth || 0) : 0;
     const tabsReserve = tabsStyle
-        ? Math.max(parseFloat(tabsStyle.minWidth) || 0, Math.min(tabs.scrollWidth, topBar.clientWidth / 2))
+        ? Math.max(parseFloat(tabsStyle.minWidth) || 0, Math.min(tabsWanted, topBar.clientWidth / 2))
             + (parseFloat(tabsStyle.marginLeft) || 0) + (parseFloat(tabsStyle.marginRight) || 0)
         : 0;
     const room = topBar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)

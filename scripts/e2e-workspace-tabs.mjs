@@ -220,6 +220,37 @@ try {
         return event.defaultPrevented || window.app.tabs.activeIndex !== 1;
     });
     assert.equal(ctrlTaken, false, 'Ctrl+1 is left to the browser');
+
+    // ── Many tabs: still one row, + and the list of them all in reach ──
+    const sameHeight = await web.evaluate(() => {
+        const tab = document.querySelector('#workspace-tabs .workspace-tab').getBoundingClientRect().height;
+        const button = document.getElementById('load-new-file').getBoundingClientRect().height;
+        return Math.abs(tab - button) < 0.5;
+    });
+    assert.equal(sameHeight, true, 'a tab is as tall as the buttons of the top bar');
+    assert.equal(await web.isVisible('#workspace-tabs .workspace-tabs-overflow'), false, 'no list while the tabs fit');
+    await web.evaluate(async () => { for (let i = 0; i < 14; i++) await window.app.addTab(); });
+    await web.waitForFunction(() => window.app.tabs.items.length === 16 && !window.app._tabSwitching);
+    const row = await web.evaluate(() => {
+        const strip = document.getElementById('workspace-tabs');
+        const tops = new Set([...strip.querySelectorAll('.workspace-tab')].map(tab => Math.round(tab.getBoundingClientRect().top)));
+        const add = strip.querySelector('.workspace-tab-add').getBoundingClientRect();
+        return { rows: tops.size, addInView: add.right <= strip.getBoundingClientRect().right + 0.5 && add.width > 0 };
+    });
+    assert.equal(row.rows, 1, 'sixteen tabs stay on one row');
+    assert.equal(row.addInView, true, 'with + still in view');
+    assert.equal(await web.isVisible('#workspace-tabs .workspace-tabs-overflow'), true, 'and the list of every tab');
+    await web.click('#workspace-tabs .workspace-tabs-overflow');
+    const names = await web.$$eval('.workspace-tab-list-menu .workspace-tab-menu-text', items => items.map(item => item.textContent));
+    assert.equal(names.length, 16, 'the list names every tab');
+    await web.click('.workspace-tab-list-menu .example-menu-item >> nth=0');
+    await web.waitForFunction(() => window.app.tabs.activeIndex === 0 && !window.app._tabSwitching);
+    const firstInView = await web.evaluate(() => {
+        const scroller = document.querySelector('#workspace-tabs .workspace-tabs-scroll').getBoundingClientRect();
+        const tab = document.querySelector('#workspace-tabs .workspace-tab.active').getBoundingClientRect();
+        return tab.left >= scroller.left - 0.5 && tab.right <= scroller.right + 0.5;
+    });
+    assert.equal(firstInView, true, 'picking one from the list brings it into view');
     await webContext.close();
 
     assert.deepEqual(errors, [], 'no page errors');

@@ -414,31 +414,59 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     color: white;
 }
 
-/* Tabs (Full Desktop, src/app/methods/tab-methods.js): the room between the
-   title and the row of buttons. The strip scrolls sideways when there are
-   more tabs than fit. */
+/* Tabs (src/app/methods/tab-methods.js): the room between the title and
+   the row of buttons, one row as tall as those buttons. The tabs scroll
+   sideways inside it; + and the list of every tab stay at its end. */
 .workspace-tabs {
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 4px;
     /* As wide as its tabs, up to half the bar: the subtitle, then the title
-       give way first (top-bar-scroll.js), and past that the strip scrolls. */
+       give way first (top-bar-scroll.js), and past that the tabs scroll. */
     flex: 1000 1 auto;
     min-width: 9rem;
     max-width: 50%;
     margin: 0 0.75rem;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-    padding: 3px 0;
+    height: var(--top-bar-control-height);
 }
 
 .workspace-tabs[hidden] {
     display: none;
 }
 
-.workspace-tabs::-webkit-scrollbar {
+.workspace-tabs-scroll {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 1 auto;
+    min-width: 0;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    /* Room for the focus ring. */
+    padding: 0 2px;
+}
+
+.workspace-tabs-scroll::-webkit-scrollbar {
     display: none;
+}
+
+/* A fade on the end that has more tabs past it. */
+.workspace-tabs-scroll.more-before {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+    mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+
+.workspace-tabs-scroll.more-after {
+    -webkit-mask-image: linear-gradient(to left, transparent, #000 28px);
+    mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+
+.workspace-tabs-scroll.more-before.more-after {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
 }
 
 .workspace-tab {
@@ -447,13 +475,13 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     flex: 0 0 auto;
     gap: 0.15rem;
     max-width: 12rem;
-    height: 30px;
-    padding: 0 0.25rem 0 0.65rem;
+    height: var(--top-bar-control-height);
+    padding: 0 0.35rem 0 0.8rem;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     background-color: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 0.82rem;
+    font-size: 0.85rem;
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
@@ -479,7 +507,7 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 
 .workspace-tab:focus-visible {
     outline: 2px solid var(--primary-color);
-    outline-offset: 1px;
+    outline-offset: -2px;
 }
 
 .workspace-tab-label {
@@ -492,7 +520,7 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 .workspace-tab-input {
     width: 8rem;
     min-width: 0;
-    padding: 0.1rem 0.25rem;
+    padding: 0.15rem 0.3rem;
     border: 1px solid var(--primary-color);
     border-radius: 4px;
     background: var(--bg-primary);
@@ -502,14 +530,14 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 
 .workspace-tab-close {
     flex: 0 0 auto;
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     padding: 0;
     border: none;
     border-radius: 4px;
     background: none;
     color: inherit;
-    font-size: 0.95rem;
+    font-size: 1rem;
     line-height: 1;
     cursor: pointer;
     opacity: 0.55;
@@ -520,23 +548,64 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     background-color: color-mix(in srgb, var(--text-secondary) 20%, transparent);
 }
 
-.workspace-tab-add {
+.workspace-tab-add,
+.workspace-tabs-overflow {
     flex: 0 0 auto;
-    width: 28px;
-    height: 28px;
+    width: 34px;
+    height: var(--top-bar-control-height);
     padding: 0;
     border: 1px dashed var(--border-color);
     border-radius: 8px;
     background: none;
     color: var(--text-secondary);
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     line-height: 1;
     cursor: pointer;
 }
 
-.workspace-tab-add:hover {
+.workspace-tabs-overflow {
+    display: none;
+    border-style: solid;
+    font-size: 0.8rem;
+}
+
+.workspace-tabs.is-overflowing .workspace-tabs-overflow {
+    display: inline-block;
+}
+
+.workspace-tab-add:hover,
+.workspace-tabs-overflow:hover,
+.workspace-tabs-overflow[aria-expanded="true"] {
     color: var(--primary-color);
     border-color: var(--primary-color);
+}
+
+.workspace-tab-menu .example-menu-item {
+    width: 100%;
+    justify-content: space-between;
+}
+
+.workspace-tab-menu .example-menu-item.active {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.workspace-tab-menu-text {
+    min-width: 0;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.workspace-tab-menu-key {
+    font: inherit;
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+.workspace-tab-list-menu {
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
 }
 
 .example-menu.workspace-tab-menu {

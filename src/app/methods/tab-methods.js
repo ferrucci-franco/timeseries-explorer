@@ -230,7 +230,12 @@ proto._renderTabs = function() {
     strip.hidden = !enabled;
     if (!enabled) return;
     const tabs = this._ensureTabsState();
-    strip.replaceChildren();
+    // One row whatever the number of tabs: the tabs scroll sideways inside
+    // it, while + and the list of every tab (shown once they no longer fit)
+    // stay in reach at its end.
+    const scroller = document.createElement('div');
+    scroller.className = 'workspace-tabs-scroll';
+    strip.replaceChildren(scroller);
     tabs.items.forEach((item, index) => {
         const active = index === tabs.activeIndex;
         const tab = document.createElement('div');
@@ -296,7 +301,7 @@ proto._renderTabs = function() {
             event.stopPropagation();
             this.moveTab(from, index);
         });
-        strip.appendChild(tab);
+        scroller.appendChild(tab);
     });
 
     const add = document.createElement('button');
@@ -306,9 +311,49 @@ proto._renderTabs = function() {
     add.title = this._tabCtrlShortcuts() ? `${i18n.t('tabNew')} (Ctrl+T)` : i18n.t('tabNew');
     add.setAttribute('aria-label', i18n.t('tabNew'));
     add.addEventListener('click', () => this.addTab());
-    strip.appendChild(add);
 
-    strip.querySelector('.workspace-tab.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    const list = document.createElement('button');
+    list.type = 'button';
+    list.className = 'workspace-tabs-overflow';
+    list.textContent = '▾';
+    list.title = i18n.t('tabList');
+    list.setAttribute('aria-label', i18n.t('tabList'));
+    list.setAttribute('aria-haspopup', 'menu');
+    list.addEventListener('click', event => {
+        event.stopPropagation();
+        if (this._closeTabMenu) this._closeTabMenu();
+        else this._openTabListMenu(list);
+    });
+    strip.append(add, list);
+
+    // A vertical wheel moves the row sideways: a mouse has no other way to.
+    scroller.addEventListener('wheel', event => {
+        if (event.ctrlKey || scroller.scrollWidth <= scroller.clientWidth) return;
+        if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+        const lineScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientWidth : 1;
+        scroller.scrollLeft += event.deltaY * lineScale;
+        event.preventDefault();
+    }, { passive: false });
+    scroller.addEventListener('scroll', () => this._syncTabOverflow(), { passive: true });
+    if (!this._tabStripObserver && typeof ResizeObserver === 'function') {
+        this._tabStripObserver = new ResizeObserver(() => this._syncTabOverflow());
+        this._tabStripObserver.observe(strip);
+    }
+    scroller.querySelector('.workspace-tab.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    this._syncTabOverflow();
+};
+
+// Whether the tabs fit: the list button shows only when they do not, and a
+// fade on either end says there are more tabs that way.
+proto._syncTabOverflow = function() {
+    const strip = document.getElementById('workspace-tabs');
+    const scroller = strip?.querySelector('.workspace-tabs-scroll');
+    if (!scroller) return;
+    const max = scroller.scrollWidth - scroller.clientWidth;
+    const overflowing = max > 1;
+    strip.classList.toggle('is-overflowing', overflowing);
+    scroller.classList.toggle('more-before', overflowing && scroller.scrollLeft > 1);
+    scroller.classList.toggle('more-after', overflowing && scroller.scrollLeft < max - 1);
 };
 
 proto._startTabRename = function(index) {
@@ -317,6 +362,7 @@ proto._startTabRename = function(index) {
     const label = tab?.querySelector('.workspace-tab-label');
     const item = this._ensureTabsState().items[index];
     if (!tab || !label || !item) return;
+    tab.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'workspace-tab-input';
@@ -345,31 +391,59 @@ proto._startTabRename = function(index) {
 };
 
 proto._openTabMenu = function(index, anchor) {
-    this._closeTabMenu?.();
     const tabs = this._ensureTabsState();
+    this._showTabStripMenu(anchor, [
+        { text: i18n.t('tabRename'), run: () => this._startTabRename(index) },
+        { text: i18n.t('tabDuplicate'), run: () => this.duplicateTab(index) },
+        { text: i18n.t('tabClose'), disabled: tabs.items.length <= 1, run: () => this.closeTab(index) },
+    ]);
+};
+
+// Every tab by name, for when the row no longer shows them all.
+proto._openTabListMenu = function(anchor) {
+    const tabs = this._ensureTabsState();
+    this._showTabStripMenu(anchor, tabs.items.map((item, index) => ({
+        text: this._tabDisplayName(item),
+        shortcut: index < 8 ? `Alt+${index + 1}` : (index === tabs.items.length - 1 ? 'Alt+9' : ''),
+        checked: index === tabs.activeIndex,
+        run: () => this.switchTab(index),
+    })), 'workspace-tab-list-menu');
+};
+
+proto._showTabStripMenu = function(anchor, entries, extraClass = '') {
+    this._closeTabMenu?.();
     const menu = document.createElement('div');
-    menu.className = 'example-menu workspace-tab-menu';
+    menu.className = `example-menu workspace-tab-menu ${extraClass}`.trim();
     menu.setAttribute('role', 'menu');
-    const add = (labelKey, disabled, run) => {
+    for (const entry of entries) {
         const item = document.createElement('button');
         item.type = 'button';
-        item.className = 'example-menu-item';
-        item.setAttribute('role', 'menuitem');
-        item.textContent = i18n.t(labelKey);
-        item.disabled = !!disabled;
+        item.className = `example-menu-item${entry.checked ? ' active' : ''}`;
+        item.setAttribute('role', entry.checked === undefined ? 'menuitem' : 'menuitemradio');
+        if (entry.checked !== undefined) item.setAttribute('aria-checked', String(!!entry.checked));
+        const text = document.createElement('span');
+        text.className = 'workspace-tab-menu-text';
+        text.textContent = entry.text;
+        item.appendChild(text);
+        if (entry.shortcut) {
+            const kbd = document.createElement('kbd');
+            kbd.className = 'workspace-tab-menu-key';
+            kbd.textContent = entry.shortcut;
+            item.appendChild(kbd);
+        }
+        item.disabled = !!entry.disabled;
         item.addEventListener('click', event => {
             event.stopPropagation();
             this._closeTabMenu();
-            run();
+            entry.run();
         });
         menu.appendChild(item);
-    };
-    add('tabRename', false, () => this._startTabRename(index));
-    add('tabDuplicate', false, () => this.duplicateTab(index));
-    add('tabClose', tabs.items.length <= 1, () => this.closeTab(index));
+    }
     document.body.appendChild(menu);
     placeTopBarMenu(menu, anchor);
-    const onPointer = event => { if (!menu.contains(event.target)) this._closeTabMenu(); };
+    anchor.setAttribute('aria-expanded', 'true');
+    menu.querySelector('.example-menu-item.active, .example-menu-item:not(:disabled)')?.focus?.();
+    const onPointer = event => { if (!menu.contains(event.target) && !anchor.contains(event.target)) this._closeTabMenu(); };
     const onKey = event => { if (event.key === 'Escape') this._closeTabMenu(); };
     setTimeout(() => {
         if (!menu.isConnected) return;
@@ -379,6 +453,7 @@ proto._openTabMenu = function(index, anchor) {
     this._closeTabMenu = () => {
         document.removeEventListener('pointerdown', onPointer, true);
         document.removeEventListener('keydown', onKey, true);
+        anchor.setAttribute('aria-expanded', 'false');
         menu.remove();
         this._closeTabMenu = null;
     };
