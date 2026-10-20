@@ -587,6 +587,9 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     // After the generated variables: a dataset may have been built from one.
     // Before the plots: they reference the datasets by the ids this maps.
     await this._applySessionDerivedDatasets(session, fileMap);
+    // Again, now that the formula, data-tool and dataset signals exist: a
+    // unit set on one of those is written into the variable rebuilt above.
+    this._applySessionUnitOverrides(session, fileMap);
     // The tabs off screen keep their plots as saved, so their file ids are
     // translated now, with the map that is complete only from here on.
     this._applySessionTabs?.(session, fileMap);

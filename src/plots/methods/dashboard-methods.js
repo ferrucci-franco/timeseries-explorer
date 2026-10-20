@@ -36,6 +36,17 @@ export const CARD_SPANS = [1, 2, 3];
 const SLIDER_STEPS = 1000;
 const CARD_DRAG_TYPE = 'application/x-omv-card';
 
+// What a card drag carries: its panel and its place there. A card let go over
+// another dashboard is not one of that dashboard's cards.
+function readCardDrag(dataTransfer, panelId) {
+    try {
+        const payload = JSON.parse(dataTransfer?.getData(CARD_DRAG_TYPE) || 'null');
+        return payload && payload.panelId === panelId && Number.isInteger(payload.index) ? payload.index : null;
+    } catch {
+        return null;
+    }
+}
+
 export function normalizeDashboardState(raw = {}) {
     const time = Number(raw?.time);
     return {
@@ -333,8 +344,8 @@ export function installPlotDashboardMethods(TargetClass) {
             event.preventDefault();
             event.stopPropagation();
             if (event.target !== grid) return;
-            const from = Number(event.dataTransfer.getData(CARD_DRAG_TYPE));
-            if (Number.isInteger(from)) this._moveDashboardCard(panelId, from, plot.traces.length);
+            const from = readCardDrag(event.dataTransfer, panelId);
+            if (from !== null) this._moveDashboardCard(panelId, from, plot.traces.length);
         });
 
         const bar = document.createElement('div');
@@ -450,7 +461,7 @@ export function installPlotDashboardMethods(TargetClass) {
             return event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
         };
         card.addEventListener('dragstart', event => {
-            event.dataTransfer?.setData(CARD_DRAG_TYPE, String(index));
+            event.dataTransfer?.setData(CARD_DRAG_TYPE, JSON.stringify({ panelId, index }));
             if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
             card.classList.add('dragging');
         });
@@ -469,8 +480,8 @@ export function installPlotDashboardMethods(TargetClass) {
             event.preventDefault();
             event.stopPropagation();
             card.classList.remove('drop-before', 'drop-after');
-            const from = Number(event.dataTransfer.getData(CARD_DRAG_TYPE));
-            if (!Number.isInteger(from)) return;
+            const from = readCardDrag(event.dataTransfer, panelId);
+            if (from === null) return;
             this._moveDashboardCard(panelId, from, side(event) === 'before' ? index : index + 1);
         });
         return card;

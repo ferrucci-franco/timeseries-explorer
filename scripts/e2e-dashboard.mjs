@@ -166,11 +166,23 @@ try {
     assert.match(c[0].foot, /\b30\b/);
     assert.equal(await page.evaluate(card => card.isConnected, firstCard), true, 'the cards were not rebuilt');
 
+    // A card on a formula variable, with a unit of its own: the variable is
+    // rebuilt when a view is applied, and has to get the unit again.
+    await page.evaluate(id => {
+        const app = window.app;
+        document.getElementById('derived-name').value = 'temp_k';
+        document.getElementById('derived-formula').value = 'temp + 273.15';
+        app.createDerivedVariable();
+        app.plotManager._addDroppedVariables(id, ['temp_k'], document.querySelector(`.layout-panel[data-id="${id}"]`));
+        app.plotManager.setVariableUnit([...app.plotManager.files.keys()][0], 'temp_k', 'K');
+    }, panelId);
+    assert.equal(await page.evaluate(() => window.app.plotManager._varUnit('temp_k')), 'K');
+
     // ── A saved view brings it all back ──
     await page.evaluate(id => window.app.plotManager._setDashboardSize(id, 'l'), panelId);
     const viewJson = await page.evaluate(() => JSON.stringify(window.app._createSessionSnapshot({ includeData: false })));
     const view = JSON.parse(viewJson);
-    assert.deepEqual(view.files[0].unitOverrides, { temp: '°C' }, 'the unit is saved with the file');
+    assert.deepEqual(view.files[0].unitOverrides, { temp: '°C', temp_k: 'K' }, 'the units are saved with the file');
     assert.equal(view.plots[0].mode, 'dashboard');
     assert.equal(view.plots[0].dashboard.size, 'l');
     assert.equal(view.plots[0].traces[2].card.title, 'Temperatura');
@@ -187,8 +199,10 @@ try {
     assert.equal(await applying, true);
     await page.waitForSelector('.dashboard-card');
     c = await cards(page);
-    assert.deepEqual(c.map(card => card.title), ['pressure', 'flow', 'Temperatura', 'state'], 'the cards, in their order');
+    assert.deepEqual(c.map(card => card.title), ['pressure', 'flow', 'Temperatura', 'state', 'temp_k'], 'the cards, in their order');
     assert.equal(c[2].unit, '°C', 'with the unit');
+    assert.equal(c[4].title, 'temp_k');
+    assert.equal(c[4].unit, 'K', 'a formula variable too, rebuilt with the view');
     assert.equal(c[2].bg, 'rgb(251, 140, 0)', 'and the colour');
     assert.equal(await page.evaluate(() => document.querySelector('.dashboard-grid').classList.contains('size-l')), true, 'and the size');
 
@@ -197,7 +211,27 @@ try {
     await page.click(`.layout-panel[data-id="${restoredId}"] .mode-btn[data-mode="timeseries"]`);
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, restoredId);
     const traces = await page.evaluate(id => window.app.plotManager.plots.get(id).traces.map(t => t.varName), restoredId);
-    assert.deepEqual(traces, ['pressure', 'flow', 'temp'], 'the text signal stays behind');
+    assert.deepEqual(traces, ['pressure', 'flow', 'temp', 'temp_k'], 'the text signal stays behind');
+    assert.equal(await page.locator(`.layout-panel[data-id="${restoredId}"] .dashboard-tools-group`).count(), 0,
+        'the card size buttons go with the dashboard');
+
+    // ── Two dashboards: a card dragged onto the other one moves nothing there ──
+    const [left, right] = await page.evaluate(id => {
+        const app = window.app;
+        app.plotManager._setMode(id, 'dashboard', null, { preserveTimeTraces: true });
+        app.layoutManager.splitPanel(id, 'v');
+        const other = [...document.querySelectorAll('.layout-panel')].map(el => el.dataset.id).find(pid => pid !== id);
+        app.plotManager._setMode(other, 'dashboard');
+        app.plotManager._addDroppedVariables(other, ['flow', 'pressure'], document.querySelector(`.layout-panel[data-id="${other}"]`));
+        return [id, other];
+    }, restoredId);
+    await page.waitForSelector(`.layout-panel[data-id="${right}"] .dashboard-card`);
+    const order = id => page.evaluate(pid => window.app.plotManager.plots.get(pid).traces.map(t => t.varName), id);
+    const leftBefore = await order(left);
+    const rightBefore = await order(right);
+    await page.dragAndDrop(`.layout-panel[data-id="${left}"] .dashboard-card >> nth=0`, `.layout-panel[data-id="${right}"] .dashboard-card >> nth=1`);
+    assert.deepEqual(await order(right), rightBefore, 'the other dashboard keeps its order');
+    assert.deepEqual(await order(left), leftBefore, 'and so does the first one');
 
     assert.deepEqual(errors, [], 'no page errors');
     console.log('Dashboard end-to-end checks passed.');

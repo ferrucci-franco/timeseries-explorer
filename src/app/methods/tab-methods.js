@@ -127,6 +127,8 @@ proto._afterTabChange = function() {
 
 proto.addTab = async function() {
     if (this._tabSwitching) await this._tabSwitching;
+    // An index asked for before the tabs changed names another tab now.
+    this._pendingTabIndex = null;
     const tabs = this._ensureTabsState();
     tabs.items.splice(tabs.activeIndex + 1, 0, this._newTabItem());
     await this.switchTab(tabs.activeIndex + 1);
@@ -134,6 +136,7 @@ proto.addTab = async function() {
 
 proto.duplicateTab = async function(index) {
     if (this._tabSwitching) await this._tabSwitching;
+    this._pendingTabIndex = null;
     const tabs = this._ensureTabsState();
     const source = tabs.items[index];
     if (!source) return;
@@ -198,6 +201,10 @@ proto.closeTab = async function(index, options = {}) {
     this._tabSwitching = this._restoreTabSnapshot(snapshot);
     try { await this._tabSwitching; } finally { this._tabSwitching = null; }
     this._afterTabChange();
+    // A switch asked for while the tab beside it was being put back.
+    const pending = this._pendingTabIndex;
+    this._pendingTabIndex = null;
+    if (Number.isInteger(pending) && pending !== tabs.activeIndex) await this.switchTab(pending);
     return true;
 };
 
@@ -294,8 +301,12 @@ proto._renderTabs = function() {
         });
         tab.addEventListener('dragleave', () => tab.classList.remove('drag-over'));
         tab.addEventListener('drop', event => {
-            const from = Number(event.dataTransfer?.getData('application/x-omv-tab'));
             tab.classList.remove('drag-over');
+            // Only a tab being moved: a file dragged in from the desktop and let
+            // go over a tab is the document's to open (ui-methods.js).
+            if (!event.dataTransfer?.types?.includes('application/x-omv-tab')) return;
+            const raw = event.dataTransfer.getData('application/x-omv-tab');
+            const from = raw === '' ? NaN : Number(raw);
             if (!Number.isInteger(from)) return;
             event.preventDefault();
             event.stopPropagation();
@@ -608,6 +619,8 @@ proto._applyPlotPatchToHiddenTabs = function(patch) {
                     else trace.lineShape = patch.lineShape;
                 }
             }
+            // As on screen: no samples on a stacked plot.
+            if (patch.key === 'showSamples' && plot.timeseriesStacked) continue;
             if (patch.key) plot[patch.key] = !!patch.value;
         }
     });

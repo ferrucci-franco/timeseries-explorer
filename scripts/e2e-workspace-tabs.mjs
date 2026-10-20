@@ -270,6 +270,21 @@ try {
         return tab.left >= scroller.left - 0.5 && tab.right <= scroller.right + 0.5;
     });
     assert.equal(firstInView, true, 'picking one from the list brings it into view');
+
+    // ── A file dragged from the desktop onto a tab opens; the tabs stay ──
+    const tabIds = () => web.evaluate(() => window.app.tabs.items.map(item => item.id));
+    const idsBefore = await tabIds();
+    await web.evaluate(() => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(['time,x\n0,1\n1,2\n'], 'dropped.csv', { type: 'text/csv' }));
+        const target = document.querySelectorAll('#workspace-tabs .workspace-tab')[1];
+        for (const type of ['dragenter', 'dragover', 'drop']) {
+            target.dispatchEvent(new DragEvent(type, { dataTransfer: transfer, bubbles: true, cancelable: true }));
+        }
+    });
+    await web.waitForFunction(() => window.app.plotManager.files.size === 2, null, { timeout: 30000 });
+    assert.deepEqual(await tabIds(), idsBefore, 'no tab moved');
+
     await webContext.close();
 
     assert.deepEqual(errors, [], 'no page errors');

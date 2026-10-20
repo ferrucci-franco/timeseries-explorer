@@ -262,6 +262,8 @@ proto._serializeDerivedDataset = function(fileId) {
         params: this._cloneSerializable(recipe.params || {}),
         transform: this._normalizeFileTransform(entry.transform),
         invertedVariables: [...(this.plotManager.files.get(fileId)?.invertedVariables || [])],
+        // Units set from a dashboard card (plots/methods/dashboard-methods.js).
+        unitOverrides: this.plotManager.getUnitOverrides?.(fileId) || {},
         transformPanelExpanded: !!this._expandedFileTransforms?.has(fileId),
         // Datasets built from this one, so a chain restores in order.
         derivedDatasets: this._derivedDatasetsOf(fileId)
@@ -298,6 +300,7 @@ proto._restoreDerivedDatasets = async function(records, sourceFileId, fileMap) {
             entry.transform = this._normalizeFileTransform(record.transform);
             this.plotManager.setFileTransform?.(fileId, entry.transform);
         }
+        if (record.unitOverrides) this.plotManager.setUnitOverrides?.(fileId, record.unitOverrides);
         const plotEntry = this.plotManager.files.get(fileId);
         if (plotEntry) {
             plotEntry.invertedVariables = new Set(
