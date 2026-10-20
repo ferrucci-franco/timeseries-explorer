@@ -2324,7 +2324,7 @@ const translations = {
             spellcheckNoSuggestions: 'No suggestions',
             feedbackNoFiles: 'No screenshots or files added yet.',
             feedbackSafetyNote: 'Screenshots and files stay on your computer until you press Send. The report becomes a public issue in the project repository, so remove anything confidential first.',
-            feedbackSendNote: 'Send files the report with its attachments. Nothing else is needed: no GitHub account, no email program. The app version, the page address and your browser name travel with it so the problem can be reproduced.',
+            feedbackSendNote: 'Pressing Send files the report with its attachments. Nothing else is needed: no GitHub account, no email program. The app version, the page address and your browser name travel with it so the problem can be reproduced.',
             feedbackSend: 'Send',
             feedbackSending: 'Sending…',
             feedbackClose: 'Close',
