@@ -1,7 +1,7 @@
 {
   "name": "timeseries-explorer",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Desktop and web time-series explorer for MATLAB, Modelica, tabular, netCDF and GRIB (climate grids on a map), and Micro-Cap data.",
   "author": "Franco Ferrucci",
   "license": "MIT",
