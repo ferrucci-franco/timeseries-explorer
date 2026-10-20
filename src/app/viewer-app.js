@@ -72,6 +72,12 @@ class OpenModelicaViewer {
         // Long jobs inside PlotManager borrow the app's loading overlay. Kept
         // as a hook, like the one above: the plot manager owns no UI of its own.
         this.plotManager.onBusyOverlay = (options) => this._showBusyOverlay(options);
+        // Dashboard cards (plots/methods/dashboard-methods.js): LIVE while their
+        // file is followed, and the sidebar redrawn when a card sets a unit.
+        this.plotManager.isFileLive = (fileId) => !!this.files.get(fileId)?.liveUpdate?.enabled;
+        this.plotManager.onVariableUnitChanged = (fileId) => {
+            if (fileId === this.activeFileId && this._currentTree) this._renderFilteredTree?.();
+        };
 
         this.applyTheme(this.theme);
         this.initEventListeners();

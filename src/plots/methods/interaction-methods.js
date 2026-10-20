@@ -4642,6 +4642,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
         { id: 'state-anim', label: '▶x 2D',  titleKey: 'modeStateAnim2d', stateAnimDim: 2 },
         { id: 'state-anim', label: '▶x 3D',  titleKey: 'modeStateAnim3d', stateAnimDim: 3 },
+        { id: 'dashboard',  label: '🔢',     titleKey: 'modeDashboard' },
     ];
     modes.forEach(m => {
         const btn = document.createElement('button');
@@ -4658,6 +4659,22 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         modeGroup.appendChild(btn);
     });
     toolbar.appendChild(modeGroup);
+
+    // A dashboard has nothing to zoom, measure, compare or listen to: its own
+    // card size, and the button that clears the panel.
+    if (currentMode === 'dashboard') {
+        toolbar.appendChild(this._createDashboardToolsGroup(panelId, plot));
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'layout-toolbar-btn panel-action-btn trash-panel-btn';
+        clearBtn.textContent = '🗑️';
+        clearBtn.title = i18n.t('clearPlot');
+        clearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._clearPanel(panelId);
+        });
+        toolbar.appendChild(clearBtn);
+        return;
+    }
 
     if (isTimeseriesFamily) {
         const timeseriesToolsGroup = document.createElement('div');
@@ -4842,7 +4859,7 @@ proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
         this._dismissModeChangeWarning(panelId);
         return;
     }
-    const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
+    const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'dashboard']);
     const preservesTimeTraces = timeTraceModes.has(plot.mode) && timeTraceModes.has(mode);
     if (preservesTimeTraces) {
         this._setMode(panelId, mode, stateAnimDim, { preserveTimeTraces: true });
@@ -5583,6 +5600,9 @@ proto._updatePlaceholder = function(panelId, panelEl) {
             break;
         case 'integral':
             msg = i18n.t('integralDrop');
+            break;
+        case 'dashboard':
+            msg = i18n.t('dashboardDrop');
             break;
         default: // timeseries
             msg = i18n.t('dropTimeseriesMulti');

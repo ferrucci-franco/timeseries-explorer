@@ -132,6 +132,7 @@ const MODE_LABEL_KEYS = {
     phase2dt: 'modePhase2dt',
     phase3d: 'modePhase3d',
     correlation: 'modeCorrelationLabel',
+    dashboard: 'modeDashboard',
 };
 
 const FULLSCREEN_DIALOGS = [

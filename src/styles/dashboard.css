@@ -1,0 +1,331 @@
+/* Dashboard mode (src/plots/methods/dashboard-methods.js): a panel of cards,
+   one per signal, with the time slider under them. */
+
+.dashboard-container {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg-primary);
+}
+
+.dashboard-grid {
+    --dashboard-card-min: 210px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--dashboard-card-min), 1fr));
+    grid-auto-rows: min-content;
+    align-content: start;
+    gap: 12px;
+    padding: 12px;
+}
+
+.dashboard-grid.size-s { --dashboard-card-min: 150px; }
+.dashboard-grid.size-l { --dashboard-card-min: 320px; }
+
+.dashboard-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+    padding: 0.7rem 0.85rem 0.6rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    /* The value is sized from the card's own width. */
+    container-type: inline-size;
+    cursor: grab;
+    user-select: none;
+}
+
+/* The trace colour, as a strip on the left, while the card has no colour of its own. */
+.dashboard-card:not(.has-bg)::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 4px;
+    border-radius: 0 3px 3px 0;
+    background: var(--dashboard-accent, var(--primary-color));
+}
+
+.dashboard-card.has-bg {
+    border-color: transparent;
+}
+
+.dashboard-card.dragging {
+    opacity: 0.4;
+}
+
+.dashboard-card.drop-before { box-shadow: -3px 0 0 var(--primary-color); }
+.dashboard-card.drop-after  { box-shadow: 3px 0 0 var(--primary-color); }
+
+.dashboard-card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.dashboard-card-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.85rem;
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+.dashboard-card-edit {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    color: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.dashboard-card:hover .dashboard-card-edit,
+.dashboard-card-edit:focus-visible {
+    opacity: 0.7;
+}
+
+.dashboard-card-edit:hover {
+    opacity: 1;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.dashboard-card-value {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.dashboard-card-number {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: clamp(1.4rem, 17cqw, 4.2rem);
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.dashboard-card-unit {
+    flex: 0 0 auto;
+    font-size: clamp(0.8rem, 7cqw, 1.6rem);
+    font-weight: 500;
+    opacity: 0.75;
+}
+
+.dashboard-card-foot {
+    min-height: 1em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    opacity: 0.65;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Time bar ── */
+
+.dashboard-timebar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.75rem;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 0.8rem;
+}
+
+.dashboard-slider {
+    flex: 1 1 auto;
+    min-width: 80px;
+    accent-color: var(--primary-color);
+}
+
+.dashboard-time {
+    flex: 0 0 auto;
+    min-width: 7rem;
+    text-align: right;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.dashboard-latest-btn {
+    flex: 0 0 auto;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.dashboard-latest-btn.active {
+    border-color: transparent;
+    background: var(--primary-color);
+    color: white;
+}
+
+.dashboard-live-badge {
+    flex: 0 0 auto;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--danger-color) 16%, transparent);
+    color: var(--danger-color);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.dashboard-live-badge[hidden] {
+    display: none;
+}
+
+/* ── Toolbar ── */
+
+.dashboard-tools-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: 0.5rem;
+}
+
+.dashboard-tools-caption {
+    margin-right: 0.25rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.dashboard-size-btn.active {
+    background: var(--primary-color);
+    color: white;
+}
+
+/* ── Card editor ── */
+
+.dashboard-card-editor {
+    position: fixed;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    width: 280px;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    font-size: 0.85rem;
+}
+
+.dashboard-editor-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.dashboard-editor-caption {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.dashboard-editor-hint {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+}
+
+.dashboard-card-editor input[type="text"],
+.dashboard-card-editor select {
+    padding: 0.3rem 0.45rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.dashboard-editor-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.dashboard-swatch,
+.dashboard-swatch-custom {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.dashboard-swatch.active {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 1px;
+}
+
+.dashboard-swatch-none {
+    background:
+        linear-gradient(to top right, transparent calc(50% - 1px), var(--danger-color) 50%, transparent calc(50% + 1px)),
+        var(--bg-secondary);
+}
+
+.dashboard-swatch-custom {
+    background: none;
+}
+
+.dashboard-editor-buttons {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.2rem;
+}
+
+.dashboard-editor-remove,
+.dashboard-editor-done {
+    padding: 0.35rem 0.7rem;
+    border-radius: 6px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.dashboard-editor-remove {
+    border: 1px solid color-mix(in srgb, var(--danger-color) 50%, var(--border-color));
+    background: none;
+    color: var(--danger-color);
+}
+
+.dashboard-editor-done {
+    border: none;
+    background: var(--primary-color);
+    color: white;
+}

@@ -53,6 +53,10 @@ Owns plot state and every Plotly-driven behavior.
   - state animation mode
 - `methods/interaction-methods.js`
   - hover sync, cursors, 3D controls, toolbar actions
+- `methods/dashboard-methods.js`
+  - Dashboard mode: the panel's traces as cards with their value (the last
+    one read, or the one at the instant of a time slider); a card's unit is
+    written into the variable's description and saved with the file
 
 ### `src/parsers`
 

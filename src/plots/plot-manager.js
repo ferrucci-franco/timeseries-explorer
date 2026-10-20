@@ -17,6 +17,7 @@ import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
+import { installPlotDashboardMethods } from './methods/dashboard-methods.js';
 import { sceneAspectUpdate, sceneZoomAspect } from '../ui/plot-3d-gestures.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { streamColumns } from '../data/column-stream.js';
@@ -129,6 +130,11 @@ class PlotManager {
         // whether there are such plots at all.
         this.onApplyToAllPlots = null;
         this.applyToAllReachesOtherTabs = null;
+        // Optional app hooks for the Dashboard mode (dashboard-methods.js):
+        // whether a file is being followed by Live Update (its cards say LIVE),
+        // and a variable's unit changed from a card (the sidebar shows units).
+        this.isFileLive = null;
+        this.onVariableUnitChanged = null;
         // Ctrl+Z: back to the previous zoom/pan view (view-history-methods.js).
         this._installViewUndoShortcut();
         // A finger pans a 3D scene after a slow double tap, in every layout:
@@ -222,6 +228,8 @@ class PlotManager {
         const previousData = entry.data;
         entry.data = newData;
         entry._transformCache = null;
+        // Units set from a dashboard card are the user's: data read again keeps them.
+        this._applyUnitOverrides?.(fileId);
         // A lazy (DuckDB-backed) dataset owns a view, a registered file handle and
         // a File snapshot pinned in the ~3 GB WASM worker. Replacing it here — a
         // Reload, or an adjust-CSV re-parse, both of which register a FRESH lazy
@@ -255,6 +263,13 @@ class PlotManager {
             // the bands recompute against the new data instead of persisting.
             plot._missSig = null; plot._missCache = null;
             plot._fftGapsSig = null; plot._fftGapsCache = null;
+            // A dashboard's cards stay; their values are read again. Rebuilding
+            // them on every Live Update poll would drop a card being dragged
+            // or edited.
+            if (plot.mode === 'dashboard' && plot.dashboardEl && !panels.has(panelId)) {
+                this._refreshDashboard(panelId);
+                continue;
+            }
             if (plot.mode === 'temporal-profile') {
                 this._invalidateTemporalProfileForDataChange?.(plot, fileId);
             }
@@ -897,12 +912,20 @@ class PlotManager {
         const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
         if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
         this._dismissModeChangeWarning?.(panelId);
-        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
+        // The dashboard shows the same signals as cards: they go with it both ways.
+        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'dashboard']);
         const preserveTimeTraces = !!options.preserveTimeTraces
             && timeTraceModes.has(previousMode)
             && timeTraceModes.has(mode);
+        // A card can show what a plot cannot draw (a text signal, a parameter):
+        // those stay behind when the dashboard turns back into a plot.
+        const drawable = trace => {
+            if (previousMode !== 'dashboard' || mode === 'dashboard') return true;
+            const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+            return !!variable && variable.plottable !== false && variable.kind !== 'abscissa' && variable.dataType !== 'string';
+        };
         const preservedTraces = preserveTimeTraces
-            ? plot.traces.map(trace => {
+            ? plot.traces.filter(drawable).map(trace => {
                 const clone = { ...trace, axis: 'y' };
                 // _fullVisualCache is deliberately non-enumerable so saved
                 // sessions never traverse its large source-array references.
@@ -996,6 +1019,7 @@ class PlotManager {
             : (this._defaultCorrelationState?.() || plot.correlation);
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
+        if (mode === 'dashboard') this._ensureDashboardState(plot);
 
         // Update UI — re-inject all buttons so view labels reflect the new mode
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
@@ -1030,7 +1054,7 @@ class PlotManager {
         panelEl.appendChild(overlay);
 
         const getPlaceholder = () => panelEl.querySelector('.layout-panel-placeholder');
-        const hasChart = () => { const p = this.plots.get(panelId); return !!(p && p.div); };
+        const hasChart = () => { const p = this.plots.get(panelId); return !!(p && (p.div || p.dashboardEl)); };
 
         const showDragHint = (event = null) => {
             const axis = this._timeseriesDropAxis(panelId, panelEl, event);
@@ -1248,6 +1272,13 @@ class PlotManager {
         }
         if (!this.plots.has(panelId)) this.plots.set(panelId, this._makeState());
         const plot = this.plots.get(panelId);
+        if (plot.mode === 'dashboard') {
+            this._addDashboardCards(panelId, varNames.filter(varName => {
+                const variable = this.data?.variables?.[varName];
+                return variable && variable.kind !== 'abscissa';
+            }), panelEl);
+            return;
+        }
         const names = varNames.filter(varName => {
             const variable = this.data?.variables?.[varName];
             return variable && variable.plottable !== false && variable.kind !== 'abscissa' && variable.dataType !== 'string';
@@ -1359,6 +1390,10 @@ class PlotManager {
         const mode = plot.mode;
         const n    = plot.phaseTraces.length; // completed traces
 
+        if (mode === 'dashboard') {
+            return plot.traces.length === 0 ? i18n.t('dashboardDrop') : i18n.t('dashboardDropMore');
+        }
+
         // Timeseries: always accept more variables
         if (mode === 'timeseries') {
             if (plot.timeseriesY2Enabled) {
@@ -1430,6 +1465,11 @@ class PlotManager {
 
     addTrace(panelId, varName, panelEl, options = {}) {
         if (!this.data) return;
+        // A card shows a text signal as well as a number.
+        if (this.plots.get(panelId)?.mode === 'dashboard') {
+            this._addDashboardCards(panelId, [varName], panelEl);
+            return;
+        }
         const variable = this.data.variables[varName];
         if (!variable || variable.plottable === false || variable.kind === 'abscissa' || variable.dataType === 'string') return;
 
@@ -1693,6 +1733,10 @@ class PlotManager {
     _createChart(panelId, panelEl) {
         const plot = this.plots.get(panelId);
         if (!this._hasContent(plot)) return;
+        if (plot.mode === 'dashboard') {
+            this._createDashboard(panelId, panelEl);
+            return;
+        }
         if (plot.mode === 'fft') {
             this._createFftChart(panelId, panelEl);
             return;
@@ -2257,6 +2301,7 @@ class PlotManager {
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        this._destroyDashboard?.(plot);
         this._teardownAudioForPanel?.(panelId, plot);
         plot._eagerInitialDetailToken = null;
         delete plot._eagerInitialDetailDeferred;
@@ -3934,6 +3979,7 @@ class PlotManager {
         if (plot.mode === 'heatmap') return plot.traces.length > 0;
         if (plot.mode === 'temporal-profile') return plot.traces.length > 0;
         if (plot.mode === 'integral') return plot.traces.length > 0;
+        if (plot.mode === 'dashboard') return plot.traces.length > 0;
         if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
         return plot.phaseTraces.length > 0;
     }
@@ -4501,6 +4547,8 @@ class PlotManager {
     _makeState() {
         return {
             div: null, mode: 'timeseries',
+            dashboardEl: null,
+            dashboard: this._defaultDashboardState?.() || null,
             traces: [],                                    // timeseries: [{varName, color}]
             phaseTraces: [],                               // phase: [{x, y, z, color}] — completed traces
             phasePending: { x: null, y: null, z: null, fileId: null },  // phase trace being built
@@ -5139,6 +5187,7 @@ installPlotCalendarHeatmapMethods(PlotManager);
 installPlotTemporalProfileMethods(PlotManager);
 installPlotIntegralMethods(PlotManager);
 installPlotExportMethods(PlotManager);
+installPlotDashboardMethods(PlotManager);
 installPlotAudioMethods(PlotManager);
 installPlotViewHistoryMethods(PlotManager);
 

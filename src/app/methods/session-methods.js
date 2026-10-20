@@ -264,6 +264,8 @@ proto._createSessionSnapshot = function(options = {}) {
             derived,
             dataTools,
             invertedVariables,
+            // Units set from a dashboard card (plots/methods/dashboard-methods.js).
+            unitOverrides: this.plotManager.getUnitOverrides?.(fileId) || {},
             gapSettings: gapSettings ? this._cloneSerializable(gapSettings) : null,
             transformPanelExpanded: !!this._expandedFileTransforms?.has(fileId),
             archivePath,
@@ -373,6 +375,7 @@ proto._capturePlotSessions = function() {
             showGaps: !!plot.showGaps,
             showSamples: !!plot.showSamples,
             showRepeated: !!plot.showRepeated,
+            dashboard: this._cloneSerializable(plot.dashboard || this.plotManager._defaultDashboardState?.() || null),
             modeViews: this._cloneSerializable(plot._modeViews || {}),
             view: this.plotManager._capturePlotView(plot),
         });
@@ -568,6 +571,7 @@ proto._applySessionSnapshot = async function(session, options = {}) {
         projectData: options.source === 'project',
         userMappedFileIds,
     });
+    this._applySessionUnitOverrides(session, fileMap);
     // Before the derived variables and the panels: both may name a series
     // extracted on a map, which only exists once the map is put back.
     this._applySessionGriddedViews(session, fileMap);
@@ -1045,6 +1049,17 @@ proto._applySessionFileMetadata = async function(session, fileMap, options = {})
  * was showing. The dataset itself was opened by `_loadProjectDataFromZip`,
  * from all of its files.
  */
+// The units a view's cards gave its signals, on the files it is applied to
+// (the file picked in place of the saved one included). A file the view has
+// none for gets its own units back.
+proto._applySessionUnitOverrides = function(session, fileMap) {
+    if (typeof this.plotManager.setUnitOverrides !== 'function') return;
+    for (const meta of session.files || []) {
+        const fileId = fileMap.get(meta.id);
+        if (fileId) this.plotManager.setUnitOverrides(fileId, meta.unitOverrides || {});
+    }
+};
+
 proto._applySessionGriddedViews = function(session, fileMap) {
     if (typeof this._griddedRestoreSession !== 'function') return;
     const state = this._griddedState();
@@ -1267,6 +1282,7 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.showGaps = !!(saved.showGaps ?? saved.showMissingData);
         plot.showSamples = !!saved.showSamples;
         plot.showRepeated = !!saved.showRepeated;
+        plot.dashboard = this.plotManager._normalizeDashboardState?.(saved.dashboard || {}) || plot.dashboard;
         plot._modeViews = this._cloneSerializable(saved.modeViews || {});
         if (!plot.timeseriesY2Enabled) plot.traces.forEach(trace => { trace.axis = 'y'; });
         plot.stateSlots = this._mappedStateSlots(saved.stateSlots, fileMap);

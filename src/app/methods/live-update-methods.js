@@ -67,6 +67,8 @@ proto._updateLiveUpdateTopBar = function() {
         toggle.title = state?.message || (entry ? this._liveUpdateSupportMessage(entry) : i18n.t('liveUpdateTitle'));
         menuBtn.title = i18n.t('liveUpdateOptions');
     }
+    // A dashboard following a file says LIVE while the file is followed.
+    this.plotManager?.refreshDashboards?.();
 };
 
 proto._ensureLiveUpdateState = function(fileId) {
