@@ -340,9 +340,11 @@ proto._captureSessionSettings = function() {
     };
 };
 
-proto._capturePlotSessions = function() {
+// `source`: the panel states to capture; those on screen unless a tab off
+// screen hands its own (tab-methods.js).
+proto._capturePlotSessions = function(source = this.plotManager.plots) {
     const plots = [];
-    for (const [panelId, plot] of this.plotManager.plots) {
+    for (const [panelId, plot] of source) {
         plots.push({
             panelId,
             mode: plot.mode,

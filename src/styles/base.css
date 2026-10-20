@@ -415,19 +415,23 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 }
 
 /* Tabs (src/app/methods/tab-methods.js): the room between the title and
-   the row of buttons, one row as tall as those buttons. The tabs scroll
-   sideways inside it; + and the list of every tab stay at its end. */
+   the row of buttons, in one row of tabs lower than those buttons. The tabs
+   scroll sideways inside it; + and the list of every tab stay at its end. */
 .workspace-tabs {
     display: flex;
     align-items: center;
     gap: 4px;
-    /* As wide as its tabs, up to half the bar: the subtitle, then the title
-       give way first (top-bar-scroll.js), and past that the tabs scroll. */
-    flex: 1000 1 auto;
+    /* Only the room the row of buttons leaves: the strip takes what is free
+       and never pushes the buttons, so tabs that do not fit scroll inside it
+       and the row of buttons scrolls only once the strip is down to its
+       minimum. The title gives way first for it (top-bar-scroll.js keeps up
+       to half the bar for the tabs). */
+    flex: 1000 1 0;
     min-width: 9rem;
     max-width: 50%;
     margin: 0 0.75rem;
     height: var(--top-bar-control-height);
+    --workspace-tab-height: 30px;
 }
 
 .workspace-tabs[hidden] {
@@ -475,13 +479,13 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     flex: 0 0 auto;
     gap: 0.15rem;
     max-width: 12rem;
-    height: var(--top-bar-control-height);
-    padding: 0 0.35rem 0 0.8rem;
+    height: var(--workspace-tab-height);
+    padding: 0 0.3rem 0 0.7rem;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     background-color: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
@@ -561,8 +565,8 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 .workspace-tab-add,
 .workspace-tabs-overflow {
     flex: 0 0 auto;
-    width: 34px;
-    height: var(--top-bar-control-height);
+    width: 30px;
+    height: var(--workspace-tab-height);
     padding: 0;
     border: 1px dashed var(--border-color);
     border-radius: 8px;
@@ -616,6 +620,19 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 .workspace-tab-list-menu {
     max-height: calc(100vh - 90px);
     overflow-y: auto;
+}
+
+/* A tab left behind keeps its panels as they are, off screen, at the size
+   they were drawn at (tab-methods.js). Not display: none — Plotly refuses a
+   chart that is not displayed, and every chart would redraw for a size of
+   nothing. */
+.plots-area.workspace-tab-parked {
+    position: fixed;
+    left: -200000px;
+    top: 0;
+    visibility: hidden;
+    pointer-events: none;
+    contain: strict;
 }
 
 .example-menu.workspace-tab-menu {

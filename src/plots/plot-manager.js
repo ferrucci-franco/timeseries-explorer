@@ -167,6 +167,11 @@ class PlotManager {
             transform: this._normalizeFileTransform(transform),
             invertedVariables: new Set(),
             _transformCache: null,
+            // Counts every change to what this file's panels draw (its data,
+            // a transform, a variable's values or name). A tab off screen keeps
+            // its panels as they were drawn, and compares this to know whether
+            // they still are (app/methods/tab-methods.js).
+            dataEpoch: 0,
         });
         this.activeFileId = fileId;
         // If going 1→2 files, rebuild all panels so legend labels gain [filename]
@@ -228,6 +233,7 @@ class PlotManager {
         const previousData = entry.data;
         entry.data = newData;
         entry._transformCache = null;
+        entry.dataEpoch = (entry.dataEpoch || 0) + 1;
         // Units set from a dashboard card are the user's: data read again keeps them.
         this._applyUnitOverrides?.(fileId);
         // A lazy (DuckDB-backed) dataset owns a view, a registered file handle and
@@ -360,6 +366,7 @@ class PlotManager {
         }
         entry.transform = nextTransform;
         entry._transformCache = null;
+        entry.dataEpoch = (entry.dataEpoch || 0) + 1;
         // Changing a file's time axis must not silently make it render-incompatible
         // with the traces it is already overlaid with (that would draw them at the
         // wrong place, e.g. elapsed seconds interpreted as epoch-ms → 1970). If it
@@ -369,6 +376,7 @@ class PlotManager {
             if (breakReason) {
                 entry.transform = previousTransform;
                 entry._transformCache = null;
+                entry.dataEpoch = (entry.dataEpoch || 0) + 1;
                 this._alertIncompatibleTimeAxes(breakReason);
                 return false;
             }
@@ -498,6 +506,7 @@ class PlotManager {
         if (inverted) entry.invertedVariables.add(varName);
         else entry.invertedVariables.delete(varName);
         entry._transformCache = null;
+        entry.dataEpoch = (entry.dataEpoch || 0) + 1;
 
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId && t.varName === varName)
@@ -3827,7 +3836,10 @@ class PlotManager {
      */
     invalidateTransformCache(fileId) {
         const entry = this.files.get(fileId);
-        if (entry) entry._transformCache = null;
+        if (entry) {
+            entry._transformCache = null;
+            entry.dataEpoch = (entry.dataEpoch || 0) + 1;
+        }
     }
 
     /**
@@ -3906,6 +3918,8 @@ class PlotManager {
      * a variable created later under that name would be served these values.
      */
     renameTransformCacheEntries(fileId, oldName, newName) {
+        const touched = this.files.get(fileId);
+        if (touched) touched.dataEpoch = (touched.dataEpoch || 0) + 1;
         const series = this.files.get(fileId)?._transformCache?.series;
         if (!series) return;
         const prefix = `${oldName}\u0000`;
@@ -3922,6 +3936,8 @@ class PlotManager {
      * reads again would keep that memory for as long as the file is open.
      */
     forgetVariableCache(fileId, varName) {
+        const touched = this.files.get(fileId);
+        if (touched) touched.dataEpoch = (touched.dataEpoch || 0) + 1;
         const series = this.files.get(fileId)?._transformCache?.series;
         if (!series) return;
         const prefix = `${varName}\u0000`;
@@ -3960,6 +3976,7 @@ class PlotManager {
         // The values are read through the transform cache, which still holds the
         // previous ones.
         entry._transformCache = null;
+        entry.dataEpoch = (entry.dataEpoch || 0) + 1;
         for (const [panelId, plot] of this.plots) {
             if (!drawsIt(plot)) continue;
             // Same reason updateFileData drops these: the overlays memoize on a
