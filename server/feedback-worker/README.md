@@ -54,11 +54,11 @@ npx wrangler secret put GITHUB_TOKEN
 npx wrangler deploy
 ```
 
-Wrangler prints the URL, `https://timeseries-explorer-feedback.<your-subdomain>.workers.dev`.
-Check it answers:
+Wrangler prints the addresses it deployed to: the custom domain below, and the
+`workers.dev` one beside it. Check it answers:
 
 ```sh
-curl https://timeseries-explorer-feedback.<your-subdomain>.workers.dev
+curl https://feedback.unditas.com
 # {"ok":true,"service":"timeseries-explorer-feedback"}
 ```
 
@@ -72,13 +72,23 @@ build:
 OMV_FEEDBACK_ENDPOINT=https://… npm run build
 ```
 
-### Optional: your own domain
+### The address it answers on
 
-`unditas.com` is already on this Cloudflare account, so the worker can live at
-`feedback.unditas.com` instead of `workers.dev`: Cloudflare dashboard → Compute
-→ Workers → this worker → Settings → Domains & Routes → Add → Custom domain.
-Then set `OMV_FEEDBACK_ENDPOINT` to the new URL. A `workers.dev` URL works just
-as well; a custom domain only survives moving away from Cloudflare.
+`wrangler.toml` declares `feedback.unditas.com` as a custom domain, on a zone
+this account already holds, and `wrangler deploy` creates it along with its DNS
+record. Declared in the file rather than clicked in the dashboard so that the
+hostname the app is built against lives beside the code that answers on it.
+
+The dashboard route for this is Compute → Workers → this worker → Domains →
+Custom Domains and Routes → **+ Add Domain**. Do not take the "Connect your
+domain" wizard that asks about bots and ad monetization: that one onboards a
+whole new zone, which is not what a worker hostname is.
+
+To deploy this worker somewhere else, change the pattern or drop `routes`
+entirely — a `workers.dev` URL works just as well. Be aware that a brand-new
+`workers.dev` subdomain can serve no certificate at all for its first hour
+(`SSL_ERROR_NO_CYPHER_OVERLAP` from every client, on every network); that is
+the subdomain warming up, not a broken deploy.
 
 ### Optional: rate limiting
 

@@ -2,6 +2,23 @@ name = "timeseries-explorer-feedback"
 main = "src/worker.js"
 compatibility_date = "2026-10-01"
 
+# The endpoint's address, on a zone this account already holds. Declared here
+# rather than clicked in the dashboard so that the hostname the app is built
+# against lives beside the code that answers on it: `wrangler deploy` creates
+# the custom domain and its DNS record, and says so when it does.
+#
+# A fresh workers.dev subdomain served no certificate for the first hour of
+# its life (SSL_ERROR_NO_CYPHER_OVERLAP from every client and network), which
+# is what sent this to the zone's own certificate. The workers.dev URL still
+# answers once its certificate catches up; nothing depends on it.
+routes = [
+  { pattern = "feedback.unditas.com", custom_domain = true }
+]
+
+# Every deployment otherwise gets its own public preview hostname. One public
+# door is enough for an endpoint that takes reports from strangers.
+preview_urls = false
+
 # Everything here is public: it ships inside the deployed worker. The GitHub
 # token is NOT here -- it is a secret (`wrangler secret put GITHUB_TOKEN`).
 [vars]
