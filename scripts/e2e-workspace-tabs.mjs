@@ -229,6 +229,7 @@ try {
     });
     assert.equal(sameHeight, true, 'a tab is as tall as the buttons of the top bar');
     assert.equal(await web.isVisible('#workspace-tabs .workspace-tabs-overflow'), false, 'no list while the tabs fit');
+    assert.equal(await web.evaluate(() => document.querySelector('.workspace-tabs-scrollbar')?.hidden), true, 'nor a scrollbar');
     await web.evaluate(async () => { for (let i = 0; i < 14; i++) await window.app.addTab(); });
     await web.waitForFunction(() => window.app.tabs.items.length === 16 && !window.app._tabSwitching);
     const row = await web.evaluate(() => {
@@ -240,6 +241,24 @@ try {
     assert.equal(row.rows, 1, 'sixteen tabs stay on one row');
     assert.equal(row.addInView, true, 'with + still in view');
     assert.equal(await web.isVisible('#workspace-tabs .workspace-tabs-overflow'), true, 'and the list of every tab');
+    // The slim bar under the tabs: shown now, as wide as the tabs' row, and
+    // dragging its thumb scrolls them.
+    const bar = await web.evaluate(() => {
+        const track = document.querySelector('.top-bar-scrollbar.workspace-tabs-scrollbar');
+        const scroller = document.querySelector('#workspace-tabs .workspace-tabs-scroll').getBoundingClientRect();
+        const rect = track.getBoundingClientRect();
+        return { hidden: track.hidden, left: rect.left - scroller.left, width: rect.width - scroller.width };
+    });
+    assert.equal(bar.hidden, false, 'the tabs that do not fit show a scrollbar');
+    assert.ok(Math.abs(bar.left) < 1 && Math.abs(bar.width) < 1, `under the tabs (${JSON.stringify(bar)})`);
+    const before = await web.evaluate(() => document.querySelector('#workspace-tabs .workspace-tabs-scroll').scrollLeft);
+    const thumb = await web.locator('.workspace-tabs-scrollbar .top-bar-scrollbar-thumb').boundingBox();
+    await web.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+    await web.mouse.down();
+    await web.mouse.move(thumb.x + thumb.width / 2 - 200, thumb.y + thumb.height / 2, { steps: 5 });
+    await web.mouse.up();
+    const after = await web.evaluate(() => document.querySelector('#workspace-tabs .workspace-tabs-scroll').scrollLeft);
+    assert.ok(after < before, `dragging the thumb scrolls the tabs (${before} → ${after})`);
     await web.click('#workspace-tabs .workspace-tabs-overflow');
     const names = await web.$$eval('.workspace-tab-list-menu .workspace-tab-menu-text', items => items.map(item => item.textContent));
     assert.equal(names.length, 16, 'the list names every tab');

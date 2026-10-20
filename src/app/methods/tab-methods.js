@@ -1,6 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import { placeTopBarMenu } from '../../ui/top-bar-scroll.js';
+import { createTopBarScrollIndicator, placeTopBarMenu } from '../../ui/top-bar-scroll.js';
 
 /**
  * Tabs: several screens of panels over the same open files, in the web build
@@ -338,6 +338,8 @@ proto._renderTabs = function() {
     if (!this._tabStripObserver && typeof ResizeObserver === 'function') {
         this._tabStripObserver = new ResizeObserver(() => this._syncTabOverflow());
         this._tabStripObserver.observe(strip);
+        // The strip can move without changing size (the title giving way).
+        window.addEventListener('resize', () => this._syncTabOverflow());
     }
     scroller.querySelector('.workspace-tab.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     this._syncTabOverflow();
@@ -349,6 +351,17 @@ proto._syncTabOverflow = function() {
     const strip = document.getElementById('workspace-tabs');
     const scroller = strip?.querySelector('.workspace-tabs-scroll');
     if (!scroller) return;
+    // The slim bar under the tabs, the one the row of buttons has too.
+    if (!this._updateTabScrollbar) {
+        const topBar = strip.closest('.top-bar');
+        this._updateTabScrollbar = topBar
+            ? createTopBarScrollIndicator(topBar, () => {
+                const current = document.getElementById('workspace-tabs');
+                return current && !current.hidden ? current.querySelector('.workspace-tabs-scroll') : null;
+            }, 'workspace-tabs-scrollbar')
+            : () => {};
+    }
+    this._updateTabScrollbar();
     const max = scroller.scrollWidth - scroller.clientWidth;
     const overflowing = max > 1;
     strip.classList.toggle('is-overflowing', overflowing);
