@@ -8,10 +8,15 @@
 //   - a card's title, colour and decimals are its own; its unit is the
 //     signal's, and the plots show it too;
 //   - cards are reordered by dragging one onto another;
+//   - a right-click puts in a separator (title, colour) on the free part or
+//     before a card; a card dragged past it joins its section;
 //   - a Live Update append changes the values in place, without rebuilding
 //     the cards;
-//   - a saved view brings the dashboard back as it was, units included;
-//   - turned back into a plot, the panel keeps the signals it can draw.
+//   - a saved view brings the dashboard back as it was, units and
+//     separators included;
+//   - turned back into a plot, the panel keeps the signals it can draw;
+//   - a dashboard held at an instant marks it on the time plots with a line
+//     that drags its time; Latest hides it.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:dashboard`. Not part
 // of test:release, which stays offline and browser-free.
@@ -149,6 +154,59 @@ try {
     c = await cards(page);
     assert.deepEqual(c.map(card => card.title), ['pressure', 'flow', 'Temperatura', 'state'], 'and on again');
 
+    // ── Separators: right-click on the free part of the dashboard ──
+    const items = () => page.evaluate(() => [...document.querySelectorAll('.dashboard-grid > *')]
+        .map(el => el.classList.contains('dashboard-separator') ? `| ${el.querySelector('.dashboard-separator-title').textContent}` : el.querySelector('.dashboard-card-title').textContent));
+    const gridBox = await page.locator('.dashboard-grid').boundingBox();
+    await page.mouse.click(gridBox.x + gridBox.width / 2, gridBox.y + gridBox.height - 20, { button: 'right' });
+    await page.waitForSelector('.dashboard-context-menu');
+    assert.equal(await page.locator('.dashboard-context-menu .example-menu-item').count(), 1, 'on the free part: only "add a separator"');
+    await page.click('.dashboard-context-menu .example-menu-item');
+    assert.equal(await page.locator('.dashboard-context-menu').count(), 0, 'the menu closes');
+    await page.waitForSelector('.dashboard-separator-editor');
+    await page.fill('.dashboard-separator-editor .dashboard-editor-title', 'Estado');
+    await page.click('.dashboard-separator-editor .dashboard-swatch[data-color="#1976d2"]');
+    await page.click('.dashboard-separator-editor .dashboard-editor-done');
+    assert.deepEqual(await items(page), ['pressure', 'flow', 'Temperatura', 'state', '| Estado'], 'below the last card');
+    const sepStyle = await page.evaluate(() => {
+        const sep = document.querySelector('.dashboard-separator');
+        const grid = sep.parentElement.getBoundingClientRect();
+        return { bg: sep.style.backgroundColor, filled: sep.classList.contains('has-bg'), full: sep.getBoundingClientRect().width / grid.width };
+    });
+    assert.equal(sepStyle.bg, 'rgb(25, 118, 210)', 'its colour');
+    assert.equal(sepStyle.filled, true);
+    assert.ok(sepStyle.full > 0.9, 'across the whole width');
+
+    // On a card: a separator before it.
+    await page.click('.dashboard-card >> nth=0', { button: 'right' });
+    await page.waitForSelector('.dashboard-context-menu');
+    assert.equal(await page.locator('.dashboard-context-menu .example-menu-item').count(), 3, 'on a card: edit, separator before, remove');
+    await page.click('.dashboard-context-menu .example-menu-item >> nth=1');
+    await page.waitForSelector('.dashboard-separator-editor');
+    await page.fill('.dashboard-separator-editor .dashboard-editor-title', 'Proceso');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.dashboard-separator-editor').count(), 0, 'Escape closes the editor');
+    assert.deepEqual(await items(page), ['| Proceso', 'pressure', 'flow', 'Temperatura', 'state', '| Estado']);
+
+    // A card dragged under a separator joins that section.
+    const sepBox = await page.locator('.dashboard-separator >> nth=1').boundingBox();
+    await page.dragAndDrop('.dashboard-card >> nth=3', '.dashboard-separator >> nth=1', {
+        targetPosition: { x: 40, y: sepBox.height * 0.8 },
+    });
+    assert.deepEqual(await items(page), ['| Proceso', 'pressure', 'flow', 'Temperatura', '| Estado', 'state'], 'state, now under "Estado"');
+
+    // A separator dragged, and its menu.
+    await page.click('.dashboard-separator >> nth=1', { button: 'right' });
+    assert.equal(await page.locator('.dashboard-context-menu .example-menu-item').count(), 2, 'on a separator: edit, remove');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.dashboard-context-menu').count(), 0, 'Escape closes the menu');
+    await page.dblclick('.dashboard-separator >> nth=1');
+    await page.click('.dashboard-separator-editor .move-before');
+    await page.click('.dashboard-separator-editor .dashboard-editor-done');
+    assert.deepEqual(await items(page), ['| Proceso', 'pressure', 'flow', '| Estado', 'Temperatura', 'state'], 'the separator moved back one');
+    const savedSeparators = await page.evaluate(id => window.app.plotManager.plots.get(id).dashboard.separators.map(s => [s.title, s.at, s.bg]), panelId);
+    assert.deepEqual(savedSeparators, [['Proceso', 0, ''], ['Estado', 2, '#1976d2']], 'kept as "after how many cards"');
+
     // ── Live Update: values change in place ──
     const firstCard = await page.evaluateHandle(() => document.querySelector('.dashboard-card'));
     await page.evaluate(() => {
@@ -204,6 +262,7 @@ try {
     assert.equal(c[4].title, 'temp_k');
     assert.equal(c[4].unit, 'K', 'a formula variable too, rebuilt with the view');
     assert.equal(c[2].bg, 'rgb(251, 140, 0)', 'and the colour');
+    assert.deepEqual(await items(page), ['| Proceso', 'pressure', 'flow', '| Estado', 'Temperatura', 'state', 'temp_k'], 'and the separators');
     assert.equal(await page.evaluate(() => document.querySelector('.dashboard-grid').classList.contains('size-l')), true, 'and the size');
 
     // ── Back to a plot: the signals it can draw ──
@@ -232,6 +291,70 @@ try {
     await page.dragAndDrop(`.layout-panel[data-id="${left}"] .dashboard-card >> nth=0`, `.layout-panel[data-id="${right}"] .dashboard-card >> nth=1`);
     assert.deepEqual(await order(right), rightBefore, 'the other dashboard keeps its order');
     assert.deepEqual(await order(left), leftBefore, 'and so does the first one');
+
+    // ── The dashboard's instant, as a line on the time plot beside it ──
+    await page.click(`.layout-panel[data-id="${right}"] .mode-btn[data-mode="timeseries"]`);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, right);
+    const modeOrder = await page.$$eval(`.layout-panel[data-id="${left}"] .mode-btn`, buttons => buttons.map(b => b.dataset.mode));
+    assert.deepEqual(modeOrder.slice(0, 2), ['timeseries', 'dashboard'], 'the dashboard button next to the time series one');
+    const markIn = id => page.evaluate(pid => {
+        const plot = window.app.plotManager.plots.get(pid);
+        const head = plot.div?.querySelector('svg.main-svg .dashboard-time-mark');
+        if (!head || head.style.display === 'none') return null;
+        const line = head.querySelector('.dashboard-time-mark-line').getBoundingClientRect();
+        return { x: line.left + line.width / 2, y: line.top + line.height / 2 };
+    }, id);
+    assert.equal(await markIn(right), null, 'on Latest: no line');
+    await page.evaluate(id => {
+        const slider = document.querySelector(`.layout-panel[data-id="${id}"] .dashboard-slider`);
+        slider.value = '500';
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+    }, left);
+    const heldAt = await page.evaluate(id => window.app.plotManager.plots.get(id).dashboard.time, left);
+    let mark = await markIn(right);
+    assert.ok(mark, 'held at an instant: the line on the other plot');
+    const expectedX = await page.evaluate(([id, t]) => {
+        const plot = window.app.plotManager.plots.get(id);
+        return plot.div.getBoundingClientRect().left + window.app.plotManager._hoverOverlayGeometry(plot, t).left;
+    }, [right, heldAt]);
+    assert.ok(Math.abs(mark.x - expectedX) < 1.5, `at the dashboard's time (${mark.x} vs ${expectedX})`);
+
+    // Dragged: the dashboard follows it.
+    const xRange = id => page.evaluate(pid => window.app.plotManager.plots.get(pid).div._fullLayout.xaxis.range.join(), id);
+    const rangeBefore = await xRange(right);
+    const sliderBefore = await page.$eval(`.layout-panel[data-id="${left}"] .dashboard-slider`, el => Number(el.value));
+    await page.mouse.move(mark.x, mark.y);
+    await page.mouse.down();
+    await page.mouse.move(mark.x - 120, mark.y, { steps: 6 });
+    await page.mouse.up();
+    const movedTo = await page.evaluate(id => window.app.plotManager.plots.get(id).dashboard.time, left);
+    assert.ok(movedTo < heldAt, `dragged back, the dashboard's time goes back (${heldAt} → ${movedTo})`);
+    const sliderAfter = await page.$eval(`.layout-panel[data-id="${left}"] .dashboard-slider`, el => Number(el.value));
+    assert.ok(sliderAfter < sliderBefore, 'and so does its slider');
+    const after = await markIn(right);
+    assert.ok(Math.abs(after.x - (mark.x - 120)) < 3, 'the line is where it was let go');
+    assert.equal(await xRange(right), rangeBefore, 'the drag moved the line, it did not zoom');
+
+    // Latest: the line goes.
+    await page.click(`.layout-panel[data-id="${left}"] .dashboard-latest-btn`);
+    assert.equal(await markIn(right), null, 'Latest hides the line');
+
+    // The dashboard put away: its own time plot marks the instant it holds;
+    // a double-click on the line goes back to Latest.
+    await page.evaluate(id => {
+        const slider = document.querySelector(`.layout-panel[data-id="${id}"] .dashboard-slider`);
+        slider.value = '300';
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+    }, left);
+    await page.click(`.layout-panel[data-id="${left}"] .mode-btn[data-mode="timeseries"]`);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, left);
+    await page.waitForTimeout(100);
+    assert.equal(await markIn(right), null, 'the other plot no longer shows it');
+    mark = await markIn(left);
+    assert.ok(mark, 'its own plot does');
+    await page.mouse.dblclick(mark.x, mark.y);
+    assert.equal(await page.evaluate(id => window.app.plotManager.plots.get(id).dashboard.follow, left), true, 'double-click: Latest');
+    assert.equal(await markIn(left), null, 'and the line goes');
 
     assert.deepEqual(errors, [], 'no page errors');
     console.log('Dashboard end-to-end checks passed.');

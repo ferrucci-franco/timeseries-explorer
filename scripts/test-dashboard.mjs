@@ -10,6 +10,7 @@ import {
     normalizeCardSettings,
     normalizeDashboardState,
     readableTextColor,
+    installPlotDashboardMethods,
 } from '../src/plots/methods/dashboard-methods.js';
 
 // The last sample at or before the instant: a value holds until the next one.
@@ -62,9 +63,16 @@ import {
 
 // Saved state read back: anything unknown falls back to the defaults.
 {
-    assert.deepEqual(normalizeDashboardState({}), { follow: true, time: null, size: 'm' });
-    assert.deepEqual(normalizeDashboardState({ follow: false, time: 12.5, size: 'l' }), { follow: false, time: 12.5, size: 'l' });
-    assert.deepEqual(normalizeDashboardState({ follow: 'x', time: 'soon', size: 'xxl' }), { follow: true, time: null, size: 'm' });
+    assert.deepEqual(normalizeDashboardState({}), { follow: true, time: null, size: 'm', separators: [] });
+    assert.deepEqual(normalizeDashboardState({ follow: false, time: 12.5, size: 'l' }), { follow: false, time: 12.5, size: 'l', separators: [] });
+    assert.deepEqual(normalizeDashboardState({ follow: 'x', time: 'soon', size: 'xxl' }), { follow: true, time: null, size: 'm', separators: [] });
+    assert.deepEqual(
+        normalizeDashboardState({ separators: [{ id: 's1', title: 'Reactor', bg: '#FB8C00', at: 2.7 }, { at: -3 }] }).separators.map(({ id, ...rest }) => rest),
+        [{ title: 'Reactor', bg: '#fb8c00', at: 2 }, { title: '', bg: '', at: 0 }],
+        'a separator: its title, colour and the cards before it',
+    );
+    assert.equal(normalizeDashboardState({ separators: [{ id: 's1' }] }).separators[0].id, 's1', 'its id kept');
+    assert.ok(normalizeDashboardState({ separators: [{}] }).separators[0].id, 'or given one');
     assert.deepEqual(
         normalizeCardSettings({ title: 'T', description: 'Reactor inlet', bg: '#FF9800', decimals: 2, span: 2 }),
         { title: 'T', description: 'Reactor inlet', bg: '#ff9800', decimals: '2', span: 2 },
@@ -74,6 +82,46 @@ import {
         { title: '', description: '', bg: '', decimals: 'auto', span: 1 },
         'only #rrggbb, only 0–6 decimals, only 1–3 columns',
     );
+}
+
+// Cards and separators as one sequence: a separator is kept by the number of
+// cards before it, and moving any item counts them again.
+{
+    class Harness {
+        constructor() { this.plots = new Map(); }
+    }
+    installPlotDashboardMethods(Harness);
+    const pm = new Harness();
+    // No DOM here: what draws is left out.
+    for (const name of ['_renderDashboardCards', '_closeDashboardCardEditor', '_rebuildPanel', '_refreshActionBtns']) pm[name] = () => {};
+    const trace = name => ({ varName: name, fileId: 'f1' });
+    const plot = {
+        traces: ['a', 'b', 'c', 'd'].map(trace),
+        dashboard: normalizeDashboardState({ separators: [{ id: 'top', at: 0 }, { id: 'mid', at: 2 }, { id: 'end', at: 9 }] }),
+    };
+    pm.plots.set('p', plot);
+    const order = () => pm._dashboardItems(plot).map(item => item.type === 'card' ? item.trace.varName : item.sep.id);
+    assert.deepEqual(order(), ['top', 'a', 'b', 'mid', 'c', 'd', 'end'], 'a separator past the last card goes at the end');
+
+    // A card dragged over the separator: it joins the section below.
+    pm._moveDashboardItem('p', 1, 4); // a, dropped before c
+    assert.deepEqual(order(), ['top', 'b', 'mid', 'a', 'c', 'd', 'end']);
+    assert.deepEqual(plot.traces.map(t => t.varName), ['b', 'a', 'c', 'd'], 'the cards in their new order');
+    assert.deepEqual(plot.dashboard.separators.map(sep => [sep.id, sep.at]), [['top', 0], ['mid', 1], ['end', 4]]);
+
+    // A separator moved takes no card with it.
+    pm._moveDashboardItem('p', 2, 0); // mid, before top
+    assert.deepEqual(order(), ['mid', 'top', 'b', 'a', 'c', 'd', 'end']);
+
+    // A card removed: the separators after it keep their place among the others.
+    pm._removeDashboardCard('p', 0); // b
+    assert.deepEqual(order(), ['mid', 'top', 'a', 'c', 'd', 'end']);
+
+    // Added where asked; a card added later goes after the last separator.
+    pm._addDashboardSeparator('p', 4, { title: 'Pressures' });
+    assert.deepEqual(order().map(id => (id.startsWith('sep_') ? 'new' : id)), ['mid', 'top', 'a', 'c', 'new', 'd', 'end']);
+    pm._removeDashboardSeparator('p', 'end');
+    assert.ok(!order().includes('end'));
 }
 
 console.log('Dashboard checks passed.');

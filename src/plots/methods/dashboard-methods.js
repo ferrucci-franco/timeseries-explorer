@@ -13,8 +13,12 @@ import i18n from '../../i18n/index.js';
  * the plots, the hover and the statistics show too.
  *
  * `plot.dashboard` holds the rest: whether the cards follow the last value
- * (`follow`, what a Live Update panel wants) or show the instant `time`, and
- * the size of the cards.
+ * (`follow`, what a Live Update panel wants) or show the instant `time`, the
+ * size of the cards, and the separators between them. A separator (a title
+ * across the grid, with a colour of its own) is kept by how many cards come
+ * before it (`at`), so it stays in place through a saved view applied to
+ * other files; on screen, cards and separators are one sequence of items
+ * (_dashboardItems) that dragging and the move buttons reorder.
  *
  * Nothing here is drawn by Plotly: the panel's chart is `plot.dashboardEl`, and
  * `plot.div` stays null, so the code that walks every chart leaves it alone.
@@ -36,15 +40,25 @@ export const CARD_SPANS = [1, 2, 3];
 const SLIDER_STEPS = 1000;
 const CARD_DRAG_TYPE = 'application/x-omv-card';
 
-// What a card drag carries: its panel and its place there. A card let go over
-// another dashboard is not one of that dashboard's cards.
+// What a drag carries: its panel and the place of the card or separator in
+// its sequence of items. One let go over another dashboard is not one of that
+// dashboard's items.
 function readCardDrag(dataTransfer, panelId) {
     try {
         const payload = JSON.parse(dataTransfer?.getData(CARD_DRAG_TYPE) || 'null');
-        return payload && payload.panelId === panelId && Number.isInteger(payload.index) ? payload.index : null;
+        return payload && payload.panelId === panelId && Number.isInteger(payload.item) ? payload.item : null;
     } catch {
         return null;
     }
+}
+
+let separatorCounter = 0;
+
+export function normalizeSeparator(raw = {}) {
+    const bg = typeof raw?.bg === 'string' && /^#[0-9a-f]{6}$/i.test(raw.bg) ? raw.bg.toLowerCase() : '';
+    const at = Math.max(0, Math.floor(Number(raw?.at) || 0));
+    const id = typeof raw?.id === 'string' && raw.id ? raw.id.slice(0, 40) : `sep_${Date.now().toString(36)}_${++separatorCounter}`;
+    return { id, title: String(raw?.title || '').slice(0, 80), bg, at };
 }
 
 export function normalizeDashboardState(raw = {}) {
@@ -53,6 +67,7 @@ export function normalizeDashboardState(raw = {}) {
         follow: raw?.follow !== false,
         time: Number.isFinite(time) ? time : null,
         size: DASHBOARD_SIZES.includes(raw?.size) ? raw.size : 'm',
+        separators: (Array.isArray(raw?.separators) ? raw.separators : []).slice(0, 100).map(normalizeSeparator),
     };
 }
 
@@ -132,7 +147,76 @@ export function installPlotDashboardMethods(TargetClass) {
 
     proto._ensureDashboardState = function(plot) {
         if (!plot.dashboard) plot.dashboard = this._defaultDashboardState();
+        if (!Array.isArray(plot.dashboard.separators)) plot.dashboard.separators = [];
         return plot.dashboard;
+    };
+
+    // ── Items: the cards and the separators, in their order on screen ──
+
+    proto._dashboardItems = function(plot) {
+        const separators = [...this._ensureDashboardState(plot).separators]
+            .map((sep, order) => ({ sep, order }))
+            .sort((a, b) => (a.sep.at - b.sep.at) || (a.order - b.order))
+            .map(entry => entry.sep);
+        const items = [];
+        let next = 0;
+        const count = plot.traces.length;
+        for (let index = 0; index <= count; index++) {
+            while (next < separators.length && Math.min(separators[next].at, count) <= index) {
+                items.push({ type: 'separator', sep: separators[next++] });
+            }
+            if (index < count) items.push({ type: 'card', trace: plot.traces[index], index });
+        }
+        return items;
+    };
+
+    // The cards in their new order, and every separator counted again by the
+    // cards before it.
+    proto._setDashboardItems = function(plot, items) {
+        const traces = [];
+        const separators = [];
+        for (const item of items) {
+            if (item.type === 'card') traces.push(item.trace);
+            else {
+                item.sep.at = traces.length;
+                separators.push(item.sep);
+            }
+        }
+        plot.traces = traces;
+        this._ensureDashboardState(plot).separators = separators;
+    };
+
+    // `gap`: where it goes, as a position between the items as they are now
+    // (0 before the first, items.length after the last).
+    proto._moveDashboardItem = function(panelId, from, gap) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const items = this._dashboardItems(plot);
+        if (!items[from] || gap < 0 || gap > items.length || gap === from || gap === from + 1) return;
+        const [item] = items.splice(from, 1);
+        items.splice(gap > from ? gap - 1 : gap, 0, item);
+        this._setDashboardItems(plot, items);
+        this._renderDashboardCards(panelId);
+    };
+
+    proto._addDashboardSeparator = function(panelId, gap, settings = {}) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return null;
+        const items = this._dashboardItems(plot);
+        const sep = normalizeSeparator({ ...settings, id: '' });
+        items.splice(Math.max(0, Math.min(gap, items.length)), 0, { type: 'separator', sep });
+        this._setDashboardItems(plot, items);
+        this._renderDashboardCards(panelId);
+        return sep;
+    };
+
+    proto._removeDashboardSeparator = function(panelId, id) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const state = this._ensureDashboardState(plot);
+        state.separators = state.separators.filter(sep => sep.id !== id);
+        this._closeDashboardCardEditor();
+        this._renderDashboardCards(panelId);
     };
 
     proto._normalizeDashboardState = function(raw) {
@@ -238,19 +322,13 @@ export function installPlotDashboardMethods(TargetClass) {
     proto._removeDashboardCard = function(panelId, index) {
         const plot = this.plots.get(panelId);
         if (!plot || !plot.traces[index]) return;
-        plot.traces.splice(index, 1);
+        const trace = plot.traces[index];
+        // Through the items, so the separators after it keep their place.
+        this._setDashboardItems(plot, this._dashboardItems(plot).filter(item => item.trace !== trace));
         this._closeDashboardCardEditor();
         if (plot.traces.length) this._renderDashboardCards(panelId);
         else this._rebuildPanel(panelId);
         this._refreshActionBtns(panelId);
-    };
-
-    proto._moveDashboardCard = function(panelId, from, to) {
-        const plot = this.plots.get(panelId);
-        if (!plot || from === to || !plot.traces[from] || to < 0 || to > plot.traces.length) return;
-        const [trace] = plot.traces.splice(from, 1);
-        plot.traces.splice(to > from ? to - 1 : to, 0, trace);
-        this._renderDashboardCards(panelId);
     };
 
     proto._setDashboardSize = function(panelId, size) {
@@ -335,6 +413,12 @@ export function installPlotDashboardMethods(TargetClass) {
         const grid = document.createElement('div');
         grid.className = `dashboard-grid size-${plot.dashboard.size}`;
         grid.setAttribute('role', 'list');
+        // Right-click: what can be added or done where it was clicked.
+        grid.addEventListener('contextmenu', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this._openDashboardContextMenu(panelId, event);
+        });
         // A card dragged past the last one goes to the end.
         grid.addEventListener('dragover', event => {
             if (!event.dataTransfer?.types?.includes(CARD_DRAG_TYPE)) return;
@@ -347,7 +431,7 @@ export function installPlotDashboardMethods(TargetClass) {
             event.stopPropagation();
             if (event.target !== grid) return;
             const from = readCardDrag(event.dataTransfer, panelId);
-            if (from !== null) this._moveDashboardCard(panelId, from, plot.traces.length);
+            if (from !== null) this._moveDashboardItem(panelId, from, this._dashboardItems(plot).length);
         });
 
         const bar = document.createElement('div');
@@ -399,10 +483,13 @@ export function installPlotDashboardMethods(TargetClass) {
     proto._destroyDashboard = function(plot) {
         if (!plot?.dashboardEl) return;
         this._closeDashboardCardEditor();
+        this._closeDashboardContextMenu();
         plot._dashboardObserver?.disconnect();
         plot._dashboardObserver = null;
         plot.dashboardEl.remove();
         plot.dashboardEl = null;
+        // Its line goes from the other plots once the panel has moved on.
+        queueMicrotask(() => this.renderDashboardTimeMarks());
     };
 
     proto._renderDashboardCards = function(panelId) {
@@ -410,15 +497,18 @@ export function installPlotDashboardMethods(TargetClass) {
         const grid = plot?.dashboardEl?.querySelector('.dashboard-grid');
         if (!grid) return;
         grid.replaceChildren();
-        plot.traces.forEach((trace, index) => grid.appendChild(this._buildDashboardCard(panelId, trace, index)));
+        this._dashboardItems(plot).forEach((item, itemIndex) => grid.appendChild(item.type === 'card'
+            ? this._buildDashboardCard(panelId, item.trace, item.index, itemIndex)
+            : this._buildDashboardSeparator(panelId, item.sep, itemIndex)));
         this._refreshDashboard(panelId);
     };
 
-    proto._buildDashboardCard = function(panelId, trace, index) {
+    proto._buildDashboardCard = function(panelId, trace, index, itemIndex = index) {
         const card = document.createElement('div');
         card.className = 'dashboard-card';
         card.setAttribute('role', 'listitem');
         card.dataset.index = String(index);
+        card.dataset.item = String(itemIndex);
         card.draggable = true;
 
         const head = document.createElement('div');
@@ -458,35 +548,159 @@ export function installPlotDashboardMethods(TargetClass) {
 
         // Reordering: dropped on the left half of a card, the dragged one goes
         // before it; on the right half, after it.
-        const side = event => {
+        this._makeDashboardItemDraggable(panelId, card, itemIndex, event => {
             const rect = card.getBoundingClientRect();
             return event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-        };
-        card.addEventListener('dragstart', event => {
-            event.dataTransfer?.setData(CARD_DRAG_TYPE, JSON.stringify({ panelId, index }));
-            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-            card.classList.add('dragging');
         });
-        card.addEventListener('dragend', () => card.classList.remove('dragging'));
-        card.addEventListener('dragover', event => {
+        return card;
+    };
+
+    // A card or a separator: dragged, and a place to drop one. `side(event)`
+    // says whether a drop over it goes before or after it.
+    proto._makeDashboardItemDraggable = function(panelId, element, itemIndex, side) {
+        element.addEventListener('dragstart', event => {
+            event.dataTransfer?.setData(CARD_DRAG_TYPE, JSON.stringify({ panelId, item: itemIndex }));
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+            element.classList.add('dragging');
+        });
+        element.addEventListener('dragend', () => element.classList.remove('dragging'));
+        element.addEventListener('dragover', event => {
             if (!event.dataTransfer?.types?.includes(CARD_DRAG_TYPE)) return;
             event.preventDefault();
             event.stopPropagation();
             const where = side(event);
-            card.classList.toggle('drop-before', where === 'before');
-            card.classList.toggle('drop-after', where === 'after');
+            element.classList.toggle('drop-before', where === 'before');
+            element.classList.toggle('drop-after', where === 'after');
         });
-        card.addEventListener('dragleave', () => card.classList.remove('drop-before', 'drop-after'));
-        card.addEventListener('drop', event => {
+        element.addEventListener('dragleave', () => element.classList.remove('drop-before', 'drop-after'));
+        element.addEventListener('drop', event => {
             if (!event.dataTransfer?.types?.includes(CARD_DRAG_TYPE)) return;
             event.preventDefault();
             event.stopPropagation();
-            card.classList.remove('drop-before', 'drop-after');
+            element.classList.remove('drop-before', 'drop-after');
             const from = readCardDrag(event.dataTransfer, panelId);
             if (from === null) return;
-            this._moveDashboardCard(panelId, from, side(event) === 'before' ? index : index + 1);
+            this._moveDashboardItem(panelId, from, side(event) === 'before' ? itemIndex : itemIndex + 1);
         });
-        return card;
+    };
+
+    proto._buildDashboardSeparator = function(panelId, sep, itemIndex) {
+        const row = document.createElement('div');
+        row.className = 'dashboard-separator';
+        row.setAttribute('role', 'separator');
+        row.dataset.item = String(itemIndex);
+        row.dataset.separator = sep.id;
+        row.draggable = true;
+        const title = document.createElement('span');
+        title.className = 'dashboard-separator-title';
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'dashboard-card-edit dashboard-separator-edit';
+        edit.textContent = '✎';
+        edit.title = i18n.t('dashboardEditSeparator');
+        edit.setAttribute('aria-label', i18n.t('dashboardEditSeparator'));
+        edit.addEventListener('click', event => {
+            event.stopPropagation();
+            this._openDashboardSeparatorEditor(panelId, sep.id, row);
+        });
+        row.append(title, edit);
+        row.addEventListener('dblclick', event => {
+            event.preventDefault();
+            this._openDashboardSeparatorEditor(panelId, sep.id, row);
+        });
+        // A separator spans the row: dropped on its upper half, an item goes
+        // before it (end of the section above); on its lower half, after it.
+        this._makeDashboardItemDraggable(panelId, row, itemIndex, event => {
+            const rect = row.getBoundingClientRect();
+            return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+        });
+        return row;
+    };
+
+    // Where a click on the free part of the grid falls among the items: before
+    // the first item that comes after it in reading order.
+    proto._dashboardGapAt = function(grid, x, y) {
+        const elements = [...grid.querySelectorAll(':scope > .dashboard-card, :scope > .dashboard-separator')];
+        for (const element of elements) {
+            const rect = element.getBoundingClientRect();
+            if (y < rect.top || (y <= rect.bottom && x < rect.left + rect.width / 2)) return Number(element.dataset.item);
+        }
+        return elements.length;
+    };
+
+    proto._closeDashboardContextMenu = function() {
+        document.querySelector('.dashboard-context-menu')?._close?.();
+    };
+
+    proto._openDashboardContextMenu = function(panelId, event) {
+        this._closeDashboardContextMenu();
+        this._closeDashboardCardEditor();
+        const plot = this.plots.get(panelId);
+        const grid = plot?.dashboardEl?.querySelector('.dashboard-grid');
+        if (!grid) return;
+        const card = event.target.closest?.('.dashboard-card');
+        const separator = event.target.closest?.('.dashboard-separator');
+        const entries = [];
+        if (card) {
+            const index = Number(card.dataset.index);
+            entries.push(
+                { labelKey: 'dashboardEditCard', run: () => this._openDashboardCardEditor(panelId, index, card) },
+                { labelKey: 'dashboardAddSeparatorBefore', run: () => this._addAndEditDashboardSeparator(panelId, Number(card.dataset.item)) },
+                { labelKey: 'dashboardRemoveCard', danger: true, run: () => this._removeDashboardCard(panelId, index) },
+            );
+        } else if (separator) {
+            const id = separator.dataset.separator;
+            entries.push(
+                { labelKey: 'dashboardEditSeparator', run: () => this._openDashboardSeparatorEditor(panelId, id, separator) },
+                { labelKey: 'dashboardRemoveSeparator', danger: true, run: () => this._removeDashboardSeparator(panelId, id) },
+            );
+        } else {
+            const gap = this._dashboardGapAt(grid, event.clientX, event.clientY);
+            entries.push({ labelKey: 'dashboardAddSeparator', run: () => this._addAndEditDashboardSeparator(panelId, gap) });
+        }
+
+        const menu = document.createElement('div');
+        menu.className = 'example-menu dashboard-context-menu';
+        menu.setAttribute('role', 'menu');
+        for (const entry of entries) {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = `example-menu-item${entry.danger ? ' is-danger' : ''}`;
+            item.setAttribute('role', 'menuitem');
+            item.textContent = i18n.t(entry.labelKey);
+            item.addEventListener('click', clickEvent => {
+                clickEvent.stopPropagation();
+                close();
+                entry.run();
+            });
+            menu.appendChild(item);
+        }
+        document.body.appendChild(menu);
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+        menu.style.left = `${Math.round(Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)))}px`;
+        menu.style.top = `${Math.round(Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)))}px`;
+        const onPointer = pointerEvent => { if (!menu.contains(pointerEvent.target)) close(); };
+        const onKey = keyEvent => { if (keyEvent.key === 'Escape') close(); };
+        const close = () => {
+            document.removeEventListener('pointerdown', onPointer, true);
+            document.removeEventListener('keydown', onKey, true);
+            menu.remove();
+        };
+        menu._close = close;
+        document.addEventListener('keydown', onKey, true);
+        setTimeout(() => {
+            if (menu.isConnected) document.addEventListener('pointerdown', onPointer, true);
+        }, 0);
+        menu.querySelector('button')?.focus();
+    };
+
+    // A separator is put in, and opened to be named.
+    proto._addAndEditDashboardSeparator = function(panelId, gap) {
+        const sep = this._addDashboardSeparator(panelId, gap);
+        const plot = this.plots.get(panelId);
+        const row = sep && plot?.dashboardEl?.querySelector(`.dashboard-separator[data-separator="${sep.id}"]`);
+        if (row) this._openDashboardSeparatorEditor(panelId, sep.id, row);
     };
 
     /**
@@ -534,6 +748,18 @@ export function installPlotDashboardMethods(TargetClass) {
             card.dataset.span = String(settings.span);
         });
 
+        const separators = new Map(state.separators.map(sep => [sep.id, sep]));
+        container.querySelectorAll('.dashboard-separator').forEach(row => {
+            const sep = separators.get(row.dataset.separator);
+            if (!sep) return;
+            const title = row.querySelector('.dashboard-separator-title');
+            title.textContent = sep.title;
+            row.classList.toggle('has-title', !!sep.title);
+            row.classList.toggle('has-bg', !!sep.bg);
+            row.style.backgroundColor = sep.bg || '';
+            row.style.color = sep.bg ? readableTextColor(sep.bg) : '';
+        });
+
         const slider = container.querySelector('.dashboard-slider');
         const timeLabel = container.querySelector('.dashboard-time');
         const latest = container.querySelector('.dashboard-latest-btn');
@@ -556,6 +782,7 @@ export function installPlotDashboardMethods(TargetClass) {
         live.hidden = !(time === null && this._dashboardIsLive(plot));
         container.classList.toggle('is-following', time === null);
         this._fitDashboardSpans(plot);
+        this.renderDashboardTimeMarks();
     };
 
     // The columns the grid has now; a card's span is held to them.
@@ -577,6 +804,211 @@ export function installPlotDashboardMethods(TargetClass) {
         for (const [panelId, plot] of this.plots) {
             if (plot.mode === 'dashboard' && plot.dashboardEl) this._refreshDashboard(panelId);
         }
+    };
+
+    // ── The dashboard's instant, on the time plots ──
+    //
+    // A dashboard held at an instant (not on Latest) marks it with a vertical
+    // line on the time plots on screen, the way Audio marks where the sound
+    // is; the panel's own time plot, when its dashboard is the one put away,
+    // marks the instant that dashboard holds. On Latest there is nothing to
+    // mark. The line is dragged to move the dashboard's time, and a
+    // double-click on it goes back to Latest.
+
+    // The instants to mark on this plot: [{ panelId, time }].
+    proto._dashboardTimeMarks = function(panelId, plot) {
+        if (plot?.mode !== 'timeseries' || !plot.div) return [];
+        const marks = [];
+        const held = state => state && !state.follow && Number.isFinite(state.time);
+        for (const [otherId, other] of this.plots) {
+            if (otherId === panelId) continue;
+            if (other.mode === 'dashboard' && other.dashboardEl && held(other.dashboard)) {
+                marks.push({ panelId: otherId, time: other.dashboard.time });
+            }
+        }
+        if (held(plot.dashboard)) marks.push({ panelId, time: plot.dashboard.time });
+        return marks;
+    };
+
+    proto.renderDashboardTimeMarks = function() {
+        for (const [panelId, plot] of this.plots) this._drawDashboardTimeMarks(panelId, plot);
+    };
+
+    // Re-placed with the cursors and the playhead, after a zoom, a pan, a resize.
+    proto._refreshDashboardTimeMarks = function(plot) {
+        for (const [panelId, candidate] of this.plots) {
+            if (candidate === plot) { this._drawDashboardTimeMarks(panelId, plot); return; }
+        }
+    };
+
+    // Drawn inside Plotly's first SVG, as the playhead is: above the traces,
+    // below the legend. Moved in place, never rebuilt, so a drag keeps its
+    // pointer.
+    proto._drawDashboardTimeMarks = function(panelId, plot) {
+        const svg = plot?.div?.isConnected ? plot.div.querySelector('svg.main-svg') : null;
+        const marks = svg ? this._dashboardTimeMarks(panelId, plot) : [];
+        const existing = plot?.div ? [...plot.div.querySelectorAll('.dashboard-time-mark')] : [];
+        for (const head of existing) {
+            if (!marks.some(mark => mark.panelId === head.dataset.dashboard)) head.remove();
+        }
+        if (!svg) return;
+        const ns = 'http://www.w3.org/2000/svg';
+        for (const mark of marks) {
+            let head = svg.querySelector(`.dashboard-time-mark[data-dashboard="${mark.panelId}"]`);
+            if (!head) {
+                head = document.createElementNS(ns, 'g');
+                head.setAttribute('class', 'dashboard-time-mark');
+                head.dataset.dashboard = mark.panelId;
+                const line = document.createElementNS(ns, 'rect');
+                line.setAttribute('class', 'dashboard-time-mark-line');
+                const arrow = document.createElementNS(ns, 'path');
+                arrow.setAttribute('class', 'dashboard-time-mark-head');
+                const hit = document.createElementNS(ns, 'rect');
+                hit.setAttribute('class', 'dashboard-time-mark-hit');
+                const title = document.createElementNS(ns, 'title');
+                title.textContent = i18n.t('dashboardTimeMarkTitle');
+                hit.appendChild(title);
+                head.append(line, arrow, hit);
+                svg.appendChild(head);
+                this._makeDashboardTimeMarkDraggable(panelId, mark.panelId, hit);
+            }
+            const geometry = this._hoverOverlayGeometry?.(plot, mark.time);
+            const inside = geometry && Number.isFinite(geometry.left)
+                && geometry.left >= geometry.leftAxis && geometry.left <= geometry.rightAxis;
+            head.style.display = inside ? '' : 'none';
+            if (!inside) continue;
+            const x = geometry.left;
+            const top = geometry.topAxis;
+            const height = Math.max(0, geometry.bottomAxis - geometry.topAxis);
+            const [line, arrow, hit] = head.children;
+            line.setAttribute('x', String(x - 1));
+            line.setAttribute('y', String(top));
+            line.setAttribute('width', '2');
+            line.setAttribute('height', String(height));
+            arrow.setAttribute('d', `M${x - 6},${top} L${x + 6},${top} L${x},${top + 9} Z`);
+            hit.setAttribute('x', String(x - 6));
+            hit.setAttribute('y', String(top));
+            hit.setAttribute('width', '12');
+            hit.setAttribute('height', String(height));
+        }
+    };
+
+    // The data time under a pixel of this plot's X axis, held to the axis.
+    proto._dashboardTimeAtPixel = function(plot, clientX) {
+        const xa = plot?.div?._fullLayout?.xaxis;
+        if (!xa?.range || !xa._length) return null;
+        const r0 = this._coerceAxisValue(xa.range[0]);
+        const r1 = this._coerceAxisValue(xa.range[1]);
+        if (!Number.isFinite(r0) || !Number.isFinite(r1) || r0 === r1) return null;
+        const px = clientX - plot.div.getBoundingClientRect().left - (xa._offset || 0);
+        const fraction = Math.min(Math.max(px / xa._length, 0), 1);
+        return r0 + fraction * (r1 - r0);
+    };
+
+    proto._setDashboardTime = function(panelId, time) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !Number.isFinite(time)) return;
+        const state = this._ensureDashboardState(plot);
+        const range = this._dashboardRange(plot);
+        state.follow = false;
+        state.time = range ? Math.min(Math.max(time, range[0]), range[1]) : time;
+        if (plot.dashboardEl) this._refreshDashboard(panelId);
+        else this.renderDashboardTimeMarks();
+    };
+
+    proto._makeDashboardTimeMarkDraggable = function(plotId, dashboardId, hit) {
+        // Plotly zooms on a press in the plot, the cursors and the audio seek
+        // read it too: this one is the line's.
+        const own = event => { event.stopPropagation(); event.preventDefault(); };
+        hit.addEventListener('mousedown', own);
+        hit.addEventListener('click', own);
+        hit.addEventListener('dblclick', event => {
+            own(event);
+            this._setDashboardFollow(dashboardId, true);
+            if (!this.plots.get(dashboardId)?.dashboardEl) this.renderDashboardTimeMarks();
+        });
+        hit.addEventListener('pointerdown', event => {
+            if (event.button !== 0) return;
+            own(event);
+            hit.setPointerCapture?.(event.pointerId);
+            hit.closest('.dashboard-time-mark')?.classList.add('dragging');
+            const move = moveEvent => {
+                const time = this._dashboardTimeAtPixel(this.plots.get(plotId), moveEvent.clientX);
+                if (time !== null) this._setDashboardTime(dashboardId, time);
+            };
+            const end = () => {
+                hit.removeEventListener('pointermove', move);
+                hit.removeEventListener('pointerup', end);
+                hit.removeEventListener('pointercancel', end);
+                hit.closest('.dashboard-time-mark')?.classList.remove('dragging');
+            };
+            hit.addEventListener('pointermove', move);
+            hit.addEventListener('pointerup', end);
+            hit.addEventListener('pointercancel', end);
+        });
+    };
+
+    // The background of a card or a separator: no colour, one of the palette,
+    // or one's own.
+    proto._dashboardColorField = function(getColor, setColor) {
+        const swatches = document.createElement('div');
+        swatches.className = 'dashboard-editor-swatches';
+        const syncSwatches = () => swatches.querySelectorAll('button').forEach(button => {
+            button.classList.toggle('active', (button.dataset.color || '') === getColor());
+        });
+        const setBg = color => { setColor(color); syncSwatches(); custom.value = color || '#2196f3'; };
+        const none = document.createElement('button');
+        none.type = 'button';
+        none.className = 'dashboard-swatch dashboard-swatch-none';
+        none.dataset.color = '';
+        none.title = i18n.t('dashboardColorNone');
+        none.setAttribute('aria-label', i18n.t('dashboardColorNone'));
+        none.addEventListener('click', event => { event.preventDefault(); setBg(''); });
+        const palette = document.createElement('div');
+        palette.className = 'dashboard-editor-palette';
+        for (const color of DASHBOARD_COLORS) {
+            const swatch = document.createElement('button');
+            swatch.type = 'button';
+            swatch.className = 'dashboard-swatch';
+            swatch.dataset.color = color.toLowerCase();
+            swatch.style.backgroundColor = color;
+            swatch.setAttribute('aria-label', color);
+            swatch.addEventListener('click', event => { event.preventDefault(); setBg(color.toLowerCase()); });
+            palette.appendChild(swatch);
+        }
+        const custom = document.createElement('input');
+        custom.type = 'color';
+        custom.className = 'dashboard-swatch-custom';
+        custom.value = getColor() || '#2196f3';
+        custom.title = i18n.t('dashboardColorCustom');
+        custom.setAttribute('aria-label', i18n.t('dashboardColorCustom'));
+        custom.addEventListener('input', () => setBg(custom.value.toLowerCase()));
+        // No colour and a colour of one's own, then the palette.
+        const extras = document.createElement('div');
+        extras.className = 'dashboard-editor-swatch-extras';
+        extras.append(none, custom);
+        swatches.append(extras, palette);
+        syncSwatches();
+        const colorRow = document.createElement('div');
+        colorRow.className = 'dashboard-editor-field';
+        const colorCaption = document.createElement('span');
+        colorCaption.className = 'dashboard-editor-caption';
+        colorCaption.textContent = i18n.t('dashboardCardColor');
+        colorRow.append(colorCaption, swatches);
+        return colorRow;
+    };
+
+    // Under (or over) what it edits, inside the window.
+    proto._placeDashboardEditor = function(editor, anchor) {
+        const rect = anchor.getBoundingClientRect();
+        const width = editor.offsetWidth;
+        const height = editor.offsetHeight;
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+        const below = rect.bottom + 6;
+        const above = rect.top - height - 6;
+        const top = below + height <= window.innerHeight - 8 ? below : (above >= 8 ? above : 8);
+        editor.style.left = `${Math.round(left)}px`;
+        editor.style.top = `${Math.round(top)}px`;
     };
 
     // ── Card editor ──
@@ -685,51 +1117,7 @@ export function installPlotDashboardMethods(TargetClass) {
         widthRow.append(widthCaption, widths);
         editor.appendChild(widthRow);
 
-        const swatches = document.createElement('div');
-        swatches.className = 'dashboard-editor-swatches';
-        const syncSwatches = () => swatches.querySelectorAll('button').forEach(button => {
-            button.classList.toggle('active', (button.dataset.color || '') === settings.bg);
-        });
-        const setBg = color => { settings.bg = color; syncSwatches(); custom.value = color || '#2196f3'; refresh(); };
-        const none = document.createElement('button');
-        none.type = 'button';
-        none.className = 'dashboard-swatch dashboard-swatch-none';
-        none.dataset.color = '';
-        none.title = i18n.t('dashboardColorNone');
-        none.setAttribute('aria-label', i18n.t('dashboardColorNone'));
-        none.addEventListener('click', event => { event.preventDefault(); setBg(''); });
-        const palette = document.createElement('div');
-        palette.className = 'dashboard-editor-palette';
-        for (const color of DASHBOARD_COLORS) {
-            const swatch = document.createElement('button');
-            swatch.type = 'button';
-            swatch.className = 'dashboard-swatch';
-            swatch.dataset.color = color.toLowerCase();
-            swatch.style.backgroundColor = color;
-            swatch.setAttribute('aria-label', color);
-            swatch.addEventListener('click', event => { event.preventDefault(); setBg(color.toLowerCase()); });
-            palette.appendChild(swatch);
-        }
-        const custom = document.createElement('input');
-        custom.type = 'color';
-        custom.className = 'dashboard-swatch-custom';
-        custom.value = settings.bg || '#2196f3';
-        custom.title = i18n.t('dashboardColorCustom');
-        custom.setAttribute('aria-label', i18n.t('dashboardColorCustom'));
-        custom.addEventListener('input', () => setBg(custom.value.toLowerCase()));
-        // No colour and a colour of one's own, then the palette.
-        const extras = document.createElement('div');
-        extras.className = 'dashboard-editor-swatch-extras';
-        extras.append(none, custom);
-        swatches.append(extras, palette);
-        syncSwatches();
-        const colorRow = document.createElement('div');
-        colorRow.className = 'dashboard-editor-field';
-        const colorCaption = document.createElement('span');
-        colorCaption.className = 'dashboard-editor-caption';
-        colorCaption.textContent = i18n.t('dashboardCardColor');
-        colorRow.append(colorCaption, swatches);
-        editor.appendChild(colorRow);
+        editor.appendChild(this._dashboardColorField(() => settings.bg, color => { settings.bg = color; refresh(); }));
 
         // Moving a card without dragging it: the keyboard, and a touch screen.
         const moves = document.createElement('div');
@@ -743,15 +1131,19 @@ export function installPlotDashboardMethods(TargetClass) {
             button.addEventListener('click', event => {
                 event.preventDefault();
                 if (unit.value !== this._varUnit(trace.varName, trace.fileId)) this.setVariableUnit(trace.fileId, trace.varName, unit.value);
-                this._moveDashboardCard(panelId, index, target);
+                this._moveDashboardItem(panelId, itemIndex, target);
                 const newIndex = plot.traces.indexOf(trace);
                 const card = plot.dashboardEl?.querySelectorAll('.dashboard-card')[newIndex];
                 if (card) this._openDashboardCardEditor(panelId, newIndex, card, { focus: className });
             });
             moves.appendChild(button);
         };
-        move('dashboardMoveBefore', 'move-before', index - 1, index === 0);
-        move('dashboardMoveAfter', 'move-after', index + 2, index >= plot.traces.length - 1);
+        // One item back or on: past a separator, the card goes into the
+        // section beside it.
+        const items = this._dashboardItems(plot);
+        const itemIndex = items.findIndex(item => item.trace === trace);
+        move('dashboardMoveBefore', 'move-before', itemIndex - 1, itemIndex <= 0);
+        move('dashboardMoveAfter', 'move-after', itemIndex + 2, itemIndex >= items.length - 1);
         const moveRow = document.createElement('div');
         moveRow.className = 'dashboard-editor-field';
         const moveCaption = document.createElement('span');
@@ -779,15 +1171,7 @@ export function installPlotDashboardMethods(TargetClass) {
         editor.appendChild(buttons);
 
         document.body.appendChild(editor);
-        const rect = anchor.getBoundingClientRect();
-        const width = editor.offsetWidth;
-        const height = editor.offsetHeight;
-        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-        const below = rect.bottom + 6;
-        const above = rect.top - height - 6;
-        const top = below + height <= window.innerHeight - 8 ? below : (above >= 8 ? above : 8);
-        editor.style.left = `${Math.round(left)}px`;
-        editor.style.top = `${Math.round(top)}px`;
+        this._placeDashboardEditor(editor, anchor);
 
         const onPointer = event => {
             if (editor.contains(event.target)) return;
@@ -811,6 +1195,103 @@ export function installPlotDashboardMethods(TargetClass) {
         }, 0);
         // Moved with a button: the focus stays on it, so the next press moves
         // the card on.
+        const keep = options.focus ? editor.querySelector(`.dashboard-move-btn.${options.focus}`) : null;
+        if (keep && !keep.disabled) keep.focus();
+        else {
+            title.focus();
+            title.select();
+        }
+    };
+
+    // ── Separator editor ──
+
+    proto._openDashboardSeparatorEditor = function(panelId, id, anchor, options = {}) {
+        this._closeDashboardCardEditor();
+        const plot = this.plots.get(panelId);
+        const sep = plot ? this._ensureDashboardState(plot).separators.find(item => item.id === id) : null;
+        if (!sep) return;
+        const refresh = () => this._refreshDashboard(panelId);
+
+        const editor = document.createElement('div');
+        editor.className = 'dashboard-card-editor dashboard-separator-editor';
+        editor.setAttribute('role', 'dialog');
+        editor.setAttribute('aria-label', i18n.t('dashboardEditSeparator'));
+
+        const titleRow = document.createElement('label');
+        titleRow.className = 'dashboard-editor-field';
+        const caption = document.createElement('span');
+        caption.className = 'dashboard-editor-caption';
+        caption.textContent = i18n.t('dashboardCardTitle');
+        const title = document.createElement('input');
+        title.type = 'text';
+        title.className = 'dashboard-editor-title';
+        title.maxLength = 80;
+        title.value = sep.title;
+        title.placeholder = i18n.t('dashboardSeparatorPlaceholder');
+        title.addEventListener('input', () => { sep.title = title.value; refresh(); });
+        titleRow.append(caption, title);
+        editor.appendChild(titleRow);
+
+        editor.appendChild(this._dashboardColorField(() => sep.bg, color => { sep.bg = color; refresh(); }));
+
+        const moves = document.createElement('div');
+        moves.className = 'dashboard-editor-moves';
+        const items = this._dashboardItems(plot);
+        const itemIndex = items.findIndex(item => item.sep === sep);
+        const move = (labelKey, className, target, disabled) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `dashboard-move-btn ${className}`;
+            button.textContent = i18n.t(labelKey);
+            button.disabled = disabled;
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                this._moveDashboardItem(panelId, itemIndex, target);
+                const row = plot.dashboardEl?.querySelector(`.dashboard-separator[data-separator="${id}"]`);
+                if (row) this._openDashboardSeparatorEditor(panelId, id, row, { focus: className });
+            });
+            moves.appendChild(button);
+        };
+        move('dashboardMoveBefore', 'move-before', itemIndex - 1, itemIndex <= 0);
+        move('dashboardMoveAfter', 'move-after', itemIndex + 2, itemIndex >= items.length - 1);
+        const moveRow = document.createElement('div');
+        moveRow.className = 'dashboard-editor-field';
+        const moveCaption = document.createElement('span');
+        moveCaption.className = 'dashboard-editor-caption';
+        moveCaption.textContent = i18n.t('dashboardCardPosition');
+        moveRow.append(moveCaption, moves);
+        editor.appendChild(moveRow);
+
+        const buttons = document.createElement('div');
+        buttons.className = 'dashboard-editor-buttons';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'dashboard-editor-remove';
+        remove.textContent = i18n.t('dashboardRemoveSeparator');
+        remove.addEventListener('click', () => this._removeDashboardSeparator(panelId, id));
+        const done = document.createElement('button');
+        done.type = 'button';
+        done.className = 'dashboard-editor-done';
+        done.textContent = i18n.t('dashboardDone');
+        done.addEventListener('click', () => this._closeDashboardCardEditor());
+        buttons.append(remove, done);
+        editor.appendChild(buttons);
+
+        document.body.appendChild(editor);
+        this._placeDashboardEditor(editor, anchor);
+        const onPointer = event => { if (!editor.contains(event.target)) this._closeDashboardCardEditor(); };
+        const onKey = event => {
+            if (event.key === 'Escape') { event.stopPropagation(); this._closeDashboardCardEditor(); }
+            if (event.key === 'Enter' && event.target === title) { event.preventDefault(); done.click(); }
+        };
+        editor._cleanup = () => {
+            document.removeEventListener('pointerdown', onPointer, true);
+            editor.removeEventListener('keydown', onKey);
+        };
+        editor.addEventListener('keydown', onKey);
+        setTimeout(() => {
+            if (editor.isConnected) document.addEventListener('pointerdown', onPointer, true);
+        }, 0);
         const keep = options.focus ? editor.querySelector(`.dashboard-move-btn.${options.focus}`) : null;
         if (keep && !keep.disabled) keep.focus();
         else {
@@ -843,6 +1324,19 @@ export function installPlotDashboardMethods(TargetClass) {
             });
             group.appendChild(button);
         }
+        // A separator at the end, for a screen with no right-click.
+        const separator = document.createElement('button');
+        separator.type = 'button';
+        separator.className = 'layout-toolbar-btn dashboard-add-separator-btn';
+        separator.textContent = i18n.t('dashboardAddSeparatorButton');
+        separator.title = i18n.t('dashboardAddSeparatorTitle');
+        separator.addEventListener('click', event => {
+            event.stopPropagation();
+            const current = this.plots.get(panelId);
+            if (!current?.dashboardEl) return;
+            this._addAndEditDashboardSeparator(panelId, this._dashboardItems(current).length);
+        });
+        group.appendChild(separator);
         return group;
     };
 }

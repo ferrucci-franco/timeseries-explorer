@@ -4635,20 +4635,25 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     const modeGroup = document.createElement('div');
     modeGroup.className = 'mode-btn-group';
 
+    // The dashboard sits next to the time series: the two show the same
+    // signals, and a panel goes from one to the other keeping them. Its icon
+    // is a gauge, in currentColor so it turns white when the mode is on.
+    const DASHBOARD_MODE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4.5 17.5a8 8 0 1 1 15 0"/><path d="M12 14.5l4-5"/><circle cx="12" cy="14.5" r="1.3" fill="currentColor"/></svg>';
     const modes = [
         { id: 'timeseries', label: '📈', titleKey: 'modeTimeseries' },
+        { id: 'dashboard',  icon: DASHBOARD_MODE_ICON, titleKey: 'modeDashboard' },
         { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
         { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
         { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
         { id: 'state-anim', label: '▶x 2D',  titleKey: 'modeStateAnim2d', stateAnimDim: 2 },
         { id: 'state-anim', label: '▶x 3D',  titleKey: 'modeStateAnim3d', stateAnimDim: 3 },
-        { id: 'dashboard',  label: '🔢',     titleKey: 'modeDashboard' },
     ];
     modes.forEach(m => {
         const btn = document.createElement('button');
         const isActive = m.id === activePrimaryMode && (m.id !== 'state-anim' || (plot?.stateAnimDim || 2) === m.stateAnimDim);
-        btn.className = 'layout-toolbar-btn mode-btn' + (isActive ? ' active' : '');
-        btn.textContent = m.label;
+        btn.className = 'layout-toolbar-btn mode-btn' + (m.icon ? ' mode-btn-icon' : '') + (isActive ? ' active' : '');
+        if (m.icon) btn.innerHTML = m.icon;
+        else btn.textContent = m.label;
         btn.dataset.mode = m.id;
         if (m.stateAnimDim) btn.dataset.stateAnimDim = String(m.stateAnimDim);
         btn.title = i18n.t(m.titleKey);

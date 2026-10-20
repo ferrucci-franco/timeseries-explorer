@@ -1687,6 +1687,18 @@
     padding-left: 8px;
 }
 
+/* The Dashboard button carries an SVG gauge rather than a glyph. */
+.mode-btn.mode-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.mode-btn.mode-btn-icon svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+}
+
 /* Contextual options belong to the selected plot family. A stronger divider
    keeps them visually distinct from the primary plot-type buttons. */
 .timeseries-tools-group,
@@ -4348,6 +4360,19 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     fill: var(--audio-idle-mark);
 }
 
+/* A held dashboard's instant on the time plots: the playhead's shape, in the
+   colour of the dashboard's slider. Only the wide, invisible strip over it
+   takes the mouse, to drag it. */
+.dashboard-time-mark {
+    fill: var(--primary-color);
+    pointer-events: none;
+}
+.dashboard-time-mark .dashboard-time-mark-hit {
+    fill: transparent;
+    pointer-events: all;
+    cursor: ew-resize;
+    touch-action: none;
+}
 .panel-audio-btn.active {
     border-color: var(--audio-accent);
     color: var(--audio-accent);

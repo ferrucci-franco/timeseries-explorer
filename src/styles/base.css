@@ -594,6 +594,11 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     border-color: var(--primary-color);
 }
 
+.workspace-tab-menu-rule {
+    margin: 4px 2px;
+    border-top: 1px solid var(--border-color);
+}
+
 .workspace-tab-menu .example-menu-item {
     width: 100%;
     justify-content: space-between;

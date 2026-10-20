@@ -301,6 +301,8 @@ proto._prepareTabLeave = function() {
 proto._afterTabChange = function() {
     this._renderTabs();
     this._updateActionButtons?.();
+    // The dashboards held at an instant are this tab's now.
+    this.plotManager?.renderDashboardTimeMarks?.();
 };
 
 proto.addTab = async function() {
@@ -383,6 +385,28 @@ proto.closeTab = async function(index, options = {}) {
     const pending = this._pendingTabIndex;
     this._pendingTabIndex = null;
     if (Number.isInteger(pending) && pending !== tabs.activeIndex) await this.switchTab(pending);
+    return true;
+};
+
+// Every tab closed, one empty tab left in their place; the files stay open.
+proto.closeAllTabs = async function(options = {}) {
+    if (this._tabSwitching) await this._tabSwitching;
+    const tabs = this._ensureTabsState();
+    if (!options.force) {
+        const ok = await Modal.confirm(
+            i18n.t('tabCloseAllConfirm').replace('{count}', String(tabs.items.length)),
+            { icon: '⚠️', title: i18n.t('tabCloseAll'), confirmText: i18n.t('tabCloseAll') },
+        );
+        if (!ok) return false;
+    }
+    this._pendingTabIndex = null;
+    this._prepareTabLeave();
+    for (const item of tabs.items) this._disposeParkedTab(item, { keepSnapshot: false });
+    this._discardActiveTabPanels();
+    this._nextTabNumber = 0;
+    this.tabs = { items: [this._newTabItem()], activeIndex: 0 };
+    this.layoutManager.reset();
+    this._afterTabChange();
     return true;
 };
 
@@ -600,6 +624,7 @@ proto._openTabMenu = function(index, anchor) {
         { text: i18n.t('tabRename'), run: () => this._startTabRename(index) },
         { text: i18n.t('tabDuplicate'), run: () => this.duplicateTab(index) },
         { text: i18n.t('tabClose'), disabled: tabs.items.length <= 1, run: () => this.closeTab(index) },
+        { text: i18n.t('tabCloseAll'), separatorBefore: true, run: () => this.closeAllTabs() },
     ]);
 };
 
@@ -620,6 +645,12 @@ proto._showTabStripMenu = function(anchor, entries, extraClass = '') {
     menu.className = `example-menu workspace-tab-menu ${extraClass}`.trim();
     menu.setAttribute('role', 'menu');
     for (const entry of entries) {
+        if (entry.separatorBefore) {
+            const rule = document.createElement('div');
+            rule.className = 'workspace-tab-menu-rule';
+            rule.setAttribute('role', 'separator');
+            menu.appendChild(rule);
+        }
         const item = document.createElement('button');
         item.type = 'button';
         item.className = `example-menu-item${entry.checked ? ' active' : ''}`;
