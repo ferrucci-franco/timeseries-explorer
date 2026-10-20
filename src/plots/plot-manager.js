@@ -121,6 +121,14 @@ class PlotManager {
         // Given { title, hint, token }, returns { progress(text), close() }.
         // When absent the work still runs; it just runs silently.
         this.onBusyOverlay = null;
+        // Optional app hooks for Shift+click in the Marks/View menus, which
+        // gives every time plot the option just picked (marks-methods.js): the
+        // plots of the tabs off screen are the app's, not this manager's.
+        // onApplyToAllPlots({ key, value } | { lineShape } | { liveView: { family,
+        // patch } }), the last from setGlobalLiveViewPolicy; the other says
+        // whether there are such plots at all.
+        this.onApplyToAllPlots = null;
+        this.applyToAllReachesOtherTabs = null;
         // Ctrl+Z: back to the previous zoom/pan view (view-history-methods.js).
         this._installViewUndoShortcut();
         // A finger pans a 3D scene after a slow double tap, in every layout:
@@ -4594,6 +4602,8 @@ class PlotManager {
             if (plot.mode === 'state-anim') continue;
             plot.liveView = { ...(plot.liveView || {}), ...this._normalizeLiveViewPolicy(plot), ...patch };
         }
+        // The plots of the tabs off screen take the same choice.
+        if (Object.keys(patch).length) this.onApplyToAllPlots?.({ liveView: { family: key, patch: { ...patch } } });
         if (options.applyNow) this._applyLiveViewPolicyToCurrentPlots(key);
     }
 

@@ -1,6 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from '../../../node_modules/fflate/esm/browser.js';
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import SessionFileRemapDialog from '../../ui/session-file-remap-dialog.js';
 import { APP_VERSION, RESULT_FILE_EXTENSIONS } from '../constants.js';
 
 const SESSION_FORMAT = 'openmodelica-viewer-session';
@@ -293,6 +294,9 @@ proto._createSessionSnapshot = function(options = {}) {
         activeFileId: this.activeFileId || null,
         layout: this._cloneSerializable(this.layoutManager.root),
         plots: this._capturePlotSessions(),
+        // Full Desktop's tabs (tab-methods.js); the one on screen is the
+        // layout and plots above.
+        tabs: this._captureTabsForSession?.() || null,
     };
 };
 
@@ -516,8 +520,29 @@ proto._rollbackProjectTransaction = async function(transaction) {
 };
 
 proto._applySessionSnapshot = async function(session, options = {}) {
-    const fileMap = options.fileMap instanceof Map ? options.fileMap : this._matchSessionFiles(session);
-    const missing = this._missingSessionFiles(session, fileMap);
+    const givenMap = options.fileMap instanceof Map;
+    const fileMap = givenMap ? options.fileMap : this._matchSessionFiles(session);
+    // The files the user stood in for the ones the view was saved with: their
+    // signals are not required to all be there, and the view's own CSV
+    // parsing applies to them whatever their content.
+    const userMappedFileIds = new Set();
+    let missing = this._missingSessionFiles(session, fileMap);
+    const toConfirm = givenMap ? [] : this._sessionFilesToConfirm(session, fileMap);
+    const remapCandidates = toConfirm.length ? this._sessionRemapCandidates(session, fileMap, toConfirm) : [];
+    if (remapCandidates.length) {
+        const picks = await this._promptSessionFileRemap(session, fileMap, remapCandidates, toConfirm);
+        if (!picks) return false;
+        for (const meta of toConfirm) {
+            if (picks.has(meta.id)) {
+                fileMap.set(meta.id, picks.get(meta.id));
+                userMappedFileIds.add(picks.get(meta.id));
+            } else {
+                // Left unassigned: the panels that plot from it come back empty.
+                fileMap.delete(meta.id);
+            }
+        }
+        missing = [];
+    }
     if (missing.length) {
         const list = missing
             .map(item => `<li title="${this._escapeSessionHTML(item)}">${this._escapeSessionHTML(item)}</li>`)
@@ -539,7 +564,10 @@ proto._applySessionSnapshot = async function(session, options = {}) {
         : (session.settings || {});
     this._applySessionSettings(settings);
     this._clearGeneratedVariablesForSession(fileMap);
-    await this._applySessionFileMetadata(session, fileMap, { projectData: options.source === 'project' });
+    await this._applySessionFileMetadata(session, fileMap, {
+        projectData: options.source === 'project',
+        userMappedFileIds,
+    });
     // Before the derived variables and the panels: both may name a series
     // extracted on a map, which only exists once the map is put back.
     this._applySessionGriddedViews(session, fileMap);
@@ -550,6 +578,9 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     // After the generated variables: a dataset may have been built from one.
     // Before the plots: they reference the datasets by the ids this maps.
     await this._applySessionDerivedDatasets(session, fileMap);
+    // The tabs off screen keep their plots as saved, so their file ids are
+    // translated now, with the map that is complete only from here on.
+    this._applySessionTabs?.(session, fileMap);
     this._applySessionLayout(session.layout);
     await this._applySessionPlots(session.plots || [], fileMap);
 
@@ -572,9 +603,15 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     }
 
     if (!options.silent) {
+        let body = i18n.t(options.source === 'project' ? 'sessionProjectLoadedBody' : 'sessionViewAppliedBody');
+        const leftOut = this._sessionSignalsLeftOut(session, fileMap, userMappedFileIds);
+        if (leftOut.length) {
+            const shown = leftOut.slice(0, 8).join(', ') + (leftOut.length > 8 ? ', …' : '');
+            body += `\n\n${i18n.t('sessionRemapLeftOut').replace('{names}', shown)}`;
+        }
         await Modal.alert(
             i18n.t('sessionAppliedTitle'),
-            i18n.t(options.source === 'project' ? 'sessionProjectLoadedBody' : 'sessionViewAppliedBody'),
+            body,
             { icon: options.source === 'project' ? 'ZIP' : 'JSON' },
         );
     }
@@ -641,19 +678,108 @@ proto._scoreSessionFileMatch = function(session, meta, fileId, entry) {
     return hasRequired || sameHash || sameName ? score : 0;
 };
 
+proto._missingSessionFileMetas = function(session, fileMap) {
+    return (session.files || []).filter(meta => {
+        const fileId = fileMap.get(meta.id);
+        const variables = fileId ? this.plotManager.files.get(fileId)?.data?.variables : null;
+        if (!variables) return true;
+        return this._sessionRequiredVariables(meta.id, session).some(name => !variables[name]);
+    });
+};
+
 proto._missingSessionFiles = function(session, fileMap) {
-    return (session.files || [])
-        .filter(meta => {
-            const fileId = fileMap.get(meta.id);
-            const variables = fileId ? this.plotManager.files.get(fileId)?.data?.variables : null;
-            if (!variables) return true;
-            return this._sessionRequiredVariables(meta.id, session).some(name => !variables[name]);
-        })
+    return this._missingSessionFileMetas(session, fileMap)
         .map(meta => {
             const required = this._sessionRequiredVariables(meta.id, session);
             const suffix = required.length ? ` (${required.slice(0, 5).join(', ')}${required.length > 5 ? ', ...' : ''})` : '';
             return `${meta.displayName || `${meta.name || 'results'}${meta.extension || ''}`}${suffix}`;
         });
+};
+
+// The same file the view was saved with: by content, or by name.
+proto._sessionFileIsSameFile = function(meta, entry) {
+    if (!entry) return false;
+    if (meta.contentHash && entry.contentHash && meta.contentHash === entry.contentHash) return true;
+    const displayName = this._fileDisplayName(entry);
+    return String(meta.displayName || '').toLowerCase() === displayName.toLowerCase()
+        || (String(meta.name || '').toLowerCase() === String(entry.name || '').toLowerCase()
+            && String(meta.extension || '').toLowerCase() === String(entry.extension || '').toLowerCase());
+};
+
+// The files of a view the user is asked about: the ones with no open file
+// that has their signals, and the ones matched to another file only because it
+// has them (the same logger's file of the next hour). The latter is usually
+// right, and is preselected, but it is a different file: the user says so, and
+// the view's own CSV parsing then applies to it.
+proto._sessionFilesToConfirm = function(session, fileMap) {
+    const missingIds = new Set(this._missingSessionFileMetas(session, fileMap).map(meta => meta.id));
+    return (session.files || []).filter(meta => missingIds.has(meta.id)
+        || !this._sessionFileIsSameFile(meta, this.files.get(fileMap.get(meta.id))));
+};
+
+// The open files that can stand in for one the view needs: every one not
+// already serving another of its files. A dataset derived from another file
+// comes back with the session's own recipes, so it is never offered.
+proto._sessionRemapCandidates = function(session, fileMap, toConfirm) {
+    const askedIds = new Set(toConfirm.map(meta => meta.id));
+    const used = new Set([...fileMap].filter(([metaId]) => !askedIds.has(metaId)).map(([, fileId]) => fileId));
+    const candidates = [];
+    for (const [fileId, entry] of this.files) {
+        if (used.has(fileId)) continue;
+        if (this._derivedDatasetRecipe?.(entry)) continue;
+        const data = this.plotManager.files.get(fileId)?.data;
+        if (!data?.variables) continue;
+        candidates.push({
+            fileId,
+            name: this._fileDisplayName(entry),
+            variables: new Set(Object.keys(data.variables)),
+        });
+    }
+    return candidates;
+};
+
+proto._promptSessionFileRemap = function(session, fileMap, candidates, toConfirm) {
+    const taken = new Set();
+    const rows = toConfirm.map(meta => {
+        const required = this._sessionRequiredVariables(meta.id, session);
+        // What the automatic match found, else the open file that has the most
+        // of the signals (the first one, when none has any).
+        const matched = fileMap.get(meta.id);
+        let selected = matched && candidates.some(item => item.fileId === matched) && !taken.has(matched) ? matched : '';
+        if (!selected) {
+            let best = -1;
+            for (const candidate of candidates) {
+                if (taken.has(candidate.fileId)) continue;
+                const found = required.filter(name => candidate.variables.has(name)).length;
+                if (found > best) { best = found; selected = candidate.fileId; }
+            }
+        }
+        if (selected) taken.add(selected);
+        return {
+            id: meta.id,
+            needed: meta.displayName || `${meta.name || 'results'}${meta.extension || ''}`,
+            required,
+            csvProfile: meta.csvProfile?.profileSource === 'user',
+            selected,
+        };
+    });
+    return SessionFileRemapDialog.open({ rows, candidates });
+};
+
+// The signals of the files the user picked that the picked file does not have:
+// their traces were left out, which is worth saying once the view is up.
+proto._sessionSignalsLeftOut = function(session, fileMap, userMappedFileIds) {
+    if (!userMappedFileIds?.size) return [];
+    const names = new Set();
+    for (const meta of session.files || []) {
+        const fileId = fileMap.get(meta.id);
+        if (!fileId || !userMappedFileIds.has(fileId)) continue;
+        const variables = this.plotManager.files.get(fileId)?.data?.variables || {};
+        for (const name of this._sessionRequiredVariables(meta.id, session)) {
+            if (!variables[name]) names.add(name);
+        }
+    }
+    return [...names];
 };
 
 proto._sessionRequiredVariables = function(sessionFileId, session) {
@@ -674,7 +800,7 @@ proto._sessionRequiredVariables = function(sessionFileId, session) {
         .filter(Boolean));
     const generatedNames = new Set([...derivedNames, ...dataToolNames, ...griddedNames]);
     const names = new Set();
-    for (const plot of session.plots || []) {
+    for (const plot of [...(session.plots || []), ...(this._sessionHiddenTabPlots?.(session) || [])]) {
         for (const trace of plot.traces || []) {
             if (trace.fileId === sessionFileId && !generatedNames.has(trace.varName)) names.add(trace.varName);
         }
@@ -859,8 +985,11 @@ proto._applySessionFileMetadata = async function(session, fileMap, options = {})
         }
         if (meta.csvProfile?.profileSource !== 'user') continue;
 
+        // A file picked to stand in for the saved one is another file by
+        // definition: the parsing is what the user asked to reuse on it.
         const currentHash = entry.contentHash || '';
-        if (meta.contentHash && currentHash && meta.contentHash !== currentHash) {
+        const userMapped = !!options.userMappedFileIds?.has(fileId);
+        if (!userMapped && meta.contentHash && currentHash && meta.contentHash !== currentHash) {
             skippedProfiles.push(meta.displayName || `${meta.name || 'results'}${meta.extension || ''}`);
             continue;
         }

@@ -151,8 +151,16 @@ function updateBrand(topBar, brand, row) {
     const badge = brand.querySelector('.runtime-badge');
     if (badge?.offsetWidth) badgeWidth = badge.offsetWidth;
     const style = getComputedStyle(topBar);
+    // The tab strip of Full Desktop comes out of the same room: as wide as
+    // its tabs, between its minimum and half the bar (base.css).
+    const tabs = topBar.querySelector('.workspace-tabs:not([hidden])');
+    const tabsStyle = tabs ? getComputedStyle(tabs) : null;
+    const tabsReserve = tabsStyle
+        ? Math.max(parseFloat(tabsStyle.minWidth) || 0, Math.min(tabs.scrollWidth, topBar.clientWidth / 2))
+            + (parseFloat(tabsStyle.marginLeft) || 0) + (parseFloat(tabsStyle.marginRight) || 0)
+        : 0;
     const room = topBar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-        - row.scrollWidth;
+        - row.scrollWidth - tabsReserve;
     const gap = parseFloat(getComputedStyle(brand).columnGap) || 0;
     // The text, not the heading: a block, it is as wide as the brand.
     const range = document.createRange();
@@ -188,6 +196,9 @@ export function initTopBarScroll(row) {
         observer.observe(topBar || row);
         const title = brand?.querySelector('h1');
         if (title) observer.observe(title);
+        // And the tab strip, which grows with every tab added or renamed.
+        const tabs = topBar?.querySelector('.workspace-tabs');
+        if (tabs) observer.observe(tabs);
     }
 
     row.addEventListener('wheel', (event) => {

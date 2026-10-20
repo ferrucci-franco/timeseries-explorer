@@ -20,6 +20,7 @@ import { installFilterMethods } from './methods/filter-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
 import { installLiveUpdateMethods } from './methods/live-update-methods.js';
+import { installTabMethods } from './methods/tab-methods.js';
 import { installCompactMethods } from './methods/compact-methods.js';
 import { installCompactCursorMethods } from './methods/compact-cursor-methods.js';
 import { initialCapabilities, resolveCapabilities } from './capabilities.js';
@@ -84,6 +85,7 @@ class OpenModelicaViewer {
         this.initCompactLayout();
 
         this.layoutManager.render();
+        this.initTabs();
         this._updateActionButtons();
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
@@ -135,8 +137,13 @@ class OpenModelicaViewer {
         this.language = i18n.currentLang;
         this.plotManager.setLanguage(this.language);
         document.querySelectorAll('.lang-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.getAttribute('data-lang') === this.language);
+            const active = btn.getAttribute('data-lang') === this.language;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-checked', String(active));
         });
+        const languageCode = document.querySelector('#language-menu-btn .language-menu-code');
+        if (languageCode) languageCode.textContent = this.language.toUpperCase();
+        this._renderTabs?.();
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
         this._syncSidebarEdgeToggle?.();
@@ -192,6 +199,7 @@ class OpenModelicaViewer {
     _applyCapabilitiesToUi() {
         const caps = this.capabilities || initialCapabilities();
         document.body.dataset.omvRuntime = caps.runtime;
+        this._renderTabs?.();
 
         const badge = document.getElementById('runtime-badge');
         if (badge) {
@@ -383,6 +391,7 @@ installFilterMethods(OpenModelicaViewer);
 installTreeMethods(OpenModelicaViewer);
 installSessionMethods(OpenModelicaViewer);
 installLiveUpdateMethods(OpenModelicaViewer);
+installTabMethods(OpenModelicaViewer);
 installCompactMethods(OpenModelicaViewer);
 installCompactCursorMethods(OpenModelicaViewer);
 

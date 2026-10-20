@@ -177,7 +177,7 @@ textarea,
     display: none;
 }
 
-.top-bar-left.is-squeezed + .top-bar-right {
+.top-bar-left.is-squeezed ~ .top-bar-right {
     margin-left: auto;
 }
 
@@ -376,35 +376,172 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     cursor: grabbing;
 }
 
-/* Language Selector */
+/* Language Selector: one button, the languages in a menu under it */
 .language-selector {
-    display: flex;
-    gap: 0.25rem;
-    margin-right: 1rem;
-    background-color: var(--bg-tertiary);
-    padding: 0.25rem;
-    border-radius: 8px;
+    margin-right: 0.5rem;
 }
 
-.lang-btn {
-    padding: 0.4rem 0.8rem;
-    border: none;
-    background-color: transparent;
-    color: var(--text-primary);
-    cursor: pointer;
+.language-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     font-size: 0.85rem;
-    transition: all 0.2s;
-    border-radius: 6px;
+    font-weight: 600;
+    padding: 0.4rem 0.6rem;
 }
 
-.lang-btn:hover {
+.language-menu-caret {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.example-menu.language-menu {
+    min-width: 160px;
+}
+
+.language-menu .lang-btn {
+    width: 100%;
+}
+
+.language-menu .lang-code {
+    display: inline-block;
+    min-width: 1.8em;
+    font-weight: 700;
+}
+
+.language-menu .lang-btn.active {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+/* Tabs (Full Desktop, src/app/methods/tab-methods.js): the room between the
+   title and the row of buttons. The strip scrolls sideways when there are
+   more tabs than fit. */
+.workspace-tabs {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    /* As wide as its tabs, up to half the bar: the subtitle, then the title
+       give way first (top-bar-scroll.js), and past that the strip scrolls. */
+    flex: 1000 1 auto;
+    min-width: 9rem;
+    max-width: 50%;
+    margin: 0 0.75rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    padding: 3px 0;
+}
+
+.workspace-tabs[hidden] {
+    display: none;
+}
+
+.workspace-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.workspace-tab {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.15rem;
+    max-width: 12rem;
+    height: 30px;
+    padding: 0 0.25rem 0 0.65rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.workspace-tab:hover {
+    color: var(--text-primary);
     background-color: var(--hover-bg);
 }
 
-.lang-btn.active {
-    background-color: var(--primary-color);
-    color: white;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+.workspace-tab.active {
+    border-color: var(--primary-color);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--primary-color);
+}
+
+.workspace-tab.drag-over {
+    outline: 2px dashed var(--primary-color);
+    outline-offset: -2px;
+}
+
+.workspace-tab:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.workspace-tab-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 0.2rem;
+}
+
+.workspace-tab-input {
+    width: 8rem;
+    min-width: 0;
+    padding: 0.1rem 0.25rem;
+    border: 1px solid var(--primary-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.workspace-tab-close {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.workspace-tab-close:hover {
+    opacity: 1;
+    background-color: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+}
+
+.workspace-tab-add {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.workspace-tab-add:hover {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.example-menu.workspace-tab-menu {
+    z-index: 1400;
+    min-width: 160px;
 }
 
 /* Icon Buttons */

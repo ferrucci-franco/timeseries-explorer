@@ -20,7 +20,7 @@ The app is split by runtime capability, not by duplicated source branches:
 
 - **Light Web**: the hosted web version ([www.unditas.com](https://www.unditas.com/), served by GitHub Pages). It runs in the browser sandbox and keeps the core viewer features.
 - **Web Preview**: the same web app launched with `serve.bat`; useful for checking the GitHub Pages behavior before pushing.
-- **Full Desktop**: the Electron wrapper. It reuses the same app code and is the base for Live Update, native local-file features, and very large files.
+- **Full Desktop**: the Electron wrapper. It reuses the same app code and is the base for Live Update, tabs (several screens of panels over the same files), native local-file features, and very large files.
 
 Use the local server helper for Web Preview:
 
