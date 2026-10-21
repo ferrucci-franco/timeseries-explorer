@@ -1136,7 +1136,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
     const yOptions = [
         { label: i18n.t('liveViewExpandY'), patch: { yMode: 'expand' } },
         { label: i18n.t('liveViewAutoscaleY'), patch: { yMode: 'autoscale' } },
-        { label: i18n.t('liveViewKeepY'), patch: { yMode: 'keep' } },
+        { label: i18n.t('liveViewManual'), patch: { yMode: 'keep' } },
     ];
     yOptions.forEach(option => {
         addRadio(ySection, 'live-view-timeseries-y', option.label, option.patch.yMode === tsPolicy.yMode, false, () => setTimeseriesLiveViewPolicy(option.patch));

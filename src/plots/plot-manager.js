@@ -4803,34 +4803,16 @@ class PlotManager {
             const y2Extent = plot.timeseriesY2Enabled
                 ? this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays, nextView.xRange || null, 'y2')
                 : null;
-            const oldRange = captured.yRange?.map(Number);
-            if (!yExtent) {
-                nextView.yRange = captured.yRange;
-            } else if (oldRange?.every(Number.isFinite)) {
-                const oldMin = Math.min(oldRange[0], oldRange[1]);
-                const oldMax = Math.max(oldRange[0], oldRange[1]);
-                const min = Math.min(oldMin, yExtent.min);
-                const max = Math.max(oldMax, yExtent.max);
-                const expanded = min === oldMin && max === oldMax
-                    ? captured.yRange
-                    : (oldRange[0] <= oldRange[1] ? [min, max] : [max, min]);
-                nextView.yRange = min === max ? this._padAxisRange({ min, max }, this._axisIsLog(plot, 'y')) : expanded;
-            } else {
-                nextView.yRange = this._padAxisRange(yExtent, this._axisIsLog(plot, 'y'));
-            }
+            nextView.yRange = this._liveExpandedYRange(plot, captured.yRange, yExtent, 'y');
             if (plot.timeseriesY2Enabled) {
-                const oldY2Range = captured.y2Range?.map(Number);
-                if (!y2Extent) {
-                    nextView.y2Range = captured.y2Range;
-                } else if (oldY2Range?.every(Number.isFinite)) {
-                    const oldMin = Math.min(oldY2Range[0], oldY2Range[1]);
-                    const oldMax = Math.max(oldY2Range[0], oldY2Range[1]);
-                    const min = Math.min(oldMin, y2Extent.min);
-                    const max = Math.max(oldMax, y2Extent.max);
-                    nextView.y2Range = min === max ? this._padAxisRange({ min, max }, this._axisIsLog(plot, 'y2')) : (oldY2Range[0] <= oldY2Range[1] ? [min, max] : [max, min]);
-                } else {
-                    nextView.y2Range = this._padAxisRange(y2Extent, this._axisIsLog(plot, 'y2'));
-                }
+                nextView.y2Range = this._liveExpandedYRange(plot, captured.y2Range, y2Extent, 'y2');
+            }
+            // A lazy file holds only a thinned overview in memory: a peak that
+            // fell between its samples is missing from the extent above, yet
+            // the viewport detail DuckDB sends next draws it. Expand once more
+            // from what is drawn, when that detail arrives.
+            if (visibleTraces.some(t => this.files.get(t.fileId)?.data?._duckdb)) {
+                plot._liveExpandYAfterDetail = true;
             }
         } else {
             nextView.yRange = captured.yRange;
@@ -4838,6 +4820,62 @@ class PlotManager {
         }
 
         return nextView;
+    }
+
+    /**
+     * Live "Expand if needed": the range only grows, on the side the new data
+     * crosses, with the same headroom an added trace gets, so a rising signal
+     * is not drawn along the frame. `extent` is in axis units.
+     */
+    _liveExpandedYRange(plot, currentRange, extent, axis = 'y') {
+        if (!extent) return currentRange;
+        const isLog = this._axisIsLog(plot, axis);
+        if (!currentRange?.map(Number).every(Number.isFinite)) return this._padAxisRange(extent, isLog);
+        const expanded = expandedAxisRangeForExtent(currentRange, extent);
+        if (!expanded) return currentRange;
+        return Number(expanded[0]) === Number(expanded[1]) ? this._padAxisRange(extent, isLog) : expanded;
+    }
+
+    /**
+     * The lazy half of live "Expand if needed" (see _timeseriesLiveAppendView):
+     * grows Y and Y2 to the values drawn in the current X window, once the
+     * viewport detail is on screen. Never shrinks them.
+     */
+    _expandTimeseriesYToDrawnData(plot) {
+        const fl = plot?.div?._fullLayout;
+        if (!fl || plot.mode !== 'timeseries') return Promise.resolve();
+        const series = [];
+        const yArrays = [];
+        const seriesY2 = [];
+        const y2Arrays = [];
+        plot.traces.forEach((t, index) => {
+            if (!this._isVisible(t)) return;
+            if (!this.files.get(t.fileId)?.data?.variables?.[t.varName]) return;
+            const drawn = this._drawnLazySeries(plot, t, index);
+            const x = drawn?.x ?? this._getTransformedTimeDataForVariable(t.fileId, t.varName);
+            const y = drawn?.y ?? this._getTransformedVariableData(t.fileId, t.varName);
+            if (this._traceYAxis(t, plot) === 'y2') { seriesY2.push({ x, y }); y2Arrays.push(y); }
+            else { series.push({ x, y }); yArrays.push(y); }
+        });
+        const xRange = Array.isArray(fl.xaxis?.range) ? fl.xaxis.range : null;
+        const update = {};
+        const yRange = fl.yaxis?.range;
+        const nextY = this._liveExpandedYRange(plot, yRange, this._timeseriesYExtentForSeries(plot, series, yArrays, xRange), 'y');
+        if (nextY && nextY !== yRange) {
+            update['yaxis.range'] = nextY;
+            update['yaxis.autorange'] = false;
+        }
+        if (plot.timeseriesY2Enabled && fl.yaxis2) {
+            const y2Range = fl.yaxis2.range;
+            const y2Extent = this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, seriesY2, y2Arrays, xRange, 'y2');
+            const nextY2 = this._liveExpandedYRange(plot, y2Range, y2Extent, 'y2');
+            if (nextY2 && nextY2 !== y2Range) {
+                update['yaxis2.range'] = nextY2;
+                update['yaxis2.autorange'] = false;
+            }
+        }
+        if (!Object.keys(update).length) return Promise.resolve();
+        return Plotly.relayout(plot.div, update);
     }
 
     _finiteYExtentInXRange(series, xRange, options = {}) {

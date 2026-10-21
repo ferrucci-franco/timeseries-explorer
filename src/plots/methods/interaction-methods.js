@@ -548,8 +548,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
     if (previewResults.length && this._zoomTokens.get(panelId) === token) {
         this._applyBatchedTimeseriesRestyle(plot, previewResults);
     }
+    let immediateRestyle = Promise.resolve();
     if (immediateResults.length && this._zoomTokens.get(panelId) === token) {
-        this._applyBatchedTimeseriesRestyle(plot, immediateResults);
+        immediateRestyle = this._applyBatchedTimeseriesRestyle(plot, immediateResults);
     }
     if (lazyQueryCount > 0) this._setLazyDetailLoading(plot, true, targetInfo);
     else this._setLazyDetailLoading(plot, false);
@@ -563,6 +564,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
     }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
     if (lazyQueryCount === 0) {
+        Promise.resolve(immediateRestyle)
+            .then(() => this._liveExpandYAfterLazyDetail(panelId, plot, token))
+            .catch(() => { /* the view stays as it was */ });
         const settledNoQuery = Promise.resolve(immediateResults);
         this._lastLazyRefresh = settledNoQuery;
         this._finishLazyPerf(perf, { status: 'cache-or-overview', results: immediateResults });
@@ -624,6 +628,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
             try { this._syncCursorDisplay(panelId, plot); } catch (_) { /* ignore */ }
         }
         this._setLazyDetailLoading(plot, false);
+        return this._liveExpandYAfterLazyDetail(panelId, plot, token);
     }).catch(() => { /* per-trace errors already handled */ });
     settled.finally(() => {
         if (this._zoomTokens.get(panelId) === token) {
@@ -631,6 +636,16 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
         }
     });
     return settled;
+};
+
+// Live "Expand if needed" on a lazy file asked for one more look once the
+// viewport detail is drawn (_timeseriesLiveAppendView). A refresh superseded
+// by a newer zoom leaves the request to that one.
+proto._liveExpandYAfterLazyDetail = function(panelId, plot, token) {
+    if (!plot?._liveExpandYAfterDetail || this._zoomTokens.get(panelId) !== token) return Promise.resolve();
+    delete plot._liveExpandYAfterDetail;
+    if (this._normalizeLiveViewPolicy(plot).yMode !== 'expand') return Promise.resolve();
+    return this._expandTimeseriesYToDrawnData(plot);
 };
 
 proto._refreshPhaseVisualsLazy = function(panelId, plot = this.plots.get(panelId)) {

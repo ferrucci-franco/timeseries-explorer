@@ -47,6 +47,7 @@
     "test:capabilities": "node scripts/test-runtime-capabilities.mjs",
     "test:runtime-badge-tooltip": "node scripts/test-runtime-badge-tooltip.mjs",
     "test:live-update": "node scripts/test-live-update-logic.mjs",
+    "test:live-view-y-expand": "node scripts/test-live-view-y-expand.mjs",
     "test:local-file-http": "node scripts/test-local-file-http.mjs",
     "test:loading-overlay-layout": "node scripts/test-loading-overlay-layout.mjs",
     "test:sidebar-resize": "node scripts/test-sidebar-resize.mjs",
