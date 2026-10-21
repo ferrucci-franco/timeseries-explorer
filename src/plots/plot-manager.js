@@ -316,6 +316,8 @@ class PlotManager {
             const restoreView = options.liveAppend
                 ? this._liveAppendRestoreView(plot, fileId, captured, previousData, newData)
                 : captured;
+            if (options.liveAppend && !panels.has(panelId)
+                && this._liveAppendUpdateInPlace(panelId, plot, restoreView)) continue;
             this._rebuildPanel(panelId, { restoreView });
         }
         return dropped;
@@ -4742,6 +4744,71 @@ class PlotManager {
             return policy.viewMode === 'autoscale' ? null : captured;
         }
         return captured;
+    }
+
+    // A Live Update poll on a time-series panel: the chart stays, only its data
+    // and its view move, in one Plotly.update — what a pan does, not what
+    // opening the panel does. Rebuilding every panel on every poll (purge,
+    // newPlot, restore the view, then the zoom restyle on top) blocked the
+    // page for most of a second with six panels on a 20k-row recording, and
+    // dropped whatever the user was doing on a chart (a hover, a drag) every
+    // two seconds. Plotly.update fires no plotly_relayout, so the move is not
+    // an axis-sync source for the other panels (each is updated on its own
+    // here) nor a Ctrl+Z step; the view-history baseline is reset as a
+    // rebuild does. Returns false, and the caller rebuilds, wherever the
+    // in-place path cannot draw exactly what a rebuild would.
+    _liveAppendUpdateInPlace(panelId, plot, view) {
+        if (plot?.mode !== 'timeseries' || view?.mode !== '2d') return false;
+        const div = plot.div;
+        if (!div?._fullLayout || !div.isConnected) return false;
+        if (plot._eagerInitialDetailDeferred || plot._eagerInitialDetailReady) return false;
+        if (!plot.traces.length || (div.data?.length || 0) < plot.traces.length) return false;
+        if (plot.traces.some(t => this.files.get(t.fileId)?.data?._duckdb)) return false;
+        // A trace switches to WebGL past GL_POINT_THRESHOLD drawn points, and a
+        // restyle cannot change a trace's type. Every downsampling limit stays
+        // far under it; with no limit, or a GL trace already there, rebuild.
+        const limit = this.timeseriesVisualMaxPoints;
+        if (!(limit > 0) || limit * 4 >= PlotManager.GL_POINT_THRESHOLD) return false;
+        if (div.data.some(trace => trace?.type === 'scattergl')) return false;
+
+        let buildRange = view.xRange;
+        if (!buildRange) {
+            // X on autoscale: draw the whole series, and let Plotly fit it.
+            let min = Infinity;
+            let max = -Infinity;
+            for (const t of plot.traces) {
+                const x = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
+                const extent = this._finiteExtent([[x?.[0], x?.[x.length - 1]]]);
+                if (!extent) continue;
+                min = Math.min(min, extent.min);
+                max = Math.max(max, extent.max);
+            }
+            if (!(max > min)) return false;
+            const primaryFileId = plot.traces[0].fileId;
+            buildRange = this._plotlyTimeArray(primaryFileId, [min, max], this._getTimeVar(primaryFileId));
+        }
+        const layoutUpdate = {};
+        const setAxis = (axis, range) => {
+            if (range) {
+                layoutUpdate[`${axis}.range`] = range;
+                layoutUpdate[`${axis}.autorange`] = false;
+            } else {
+                layoutUpdate[`${axis}.autorange`] = true;
+            }
+        };
+        setAxis('xaxis', view.xRange);
+        setAxis('yaxis', view.yRange);
+        if (plot.timeseriesY2Enabled) setAxis('yaxis2', view.y2Range);
+
+        const drawn = this._refreshTimeseriesVisuals(panelId, plot, buildRange, { layoutUpdate });
+        Promise.resolve(drawn).then(() => {
+            if (this.plots.get(panelId) !== plot || plot.div !== div) return;
+            this._refreshPanelDomOverlays(plot);
+            this._refreshActionBtns(panelId);
+            plot._viewCurrent = null;
+            this._markViewHistoryDirty?.(panelId);
+        }).catch(err => console.warn('Live update redraw failed.', err));
+        return true;
     }
 
     _timeseriesLiveAppendView(plot, fileId, captured, policy) {

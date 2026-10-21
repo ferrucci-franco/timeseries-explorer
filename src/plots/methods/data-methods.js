@@ -99,6 +99,21 @@ export function expandedAxisRangeForExtent(currentRange, extent, padding = 0.05)
     return reversed ? [nextMax, nextMin] : [nextMin, nextMax];
 }
 
+function plotlyCalendarString(value) {
+    // ISO-8601 stops at three decimals, so on a signal sampled faster than
+    // 1 kHz whole groups of samples stringify to the same instant: a 44.1 kHz
+    // recording promoted to a calendar put 663 drawn points onto 16 timestamps,
+    // and Plotly drew the vertical span of each millisecond instead of the
+    // waveform. Plotly parses more decimals than the standard prints, and reads
+    // the string as the same wall clock either way, so the extra digits cost
+    // nothing and no displayed time moves.
+    if (value === Math.floor(value)) return new Date(value).toISOString();
+    const totalMicroseconds = Math.round(value * 1000);
+    const baseMs = Math.floor(totalMicroseconds / 1000);
+    const microseconds = totalMicroseconds - baseMs * 1000;
+    return `${new Date(baseMs).toISOString().slice(0, -1)}${String(microseconds).padStart(3, '0')}`;
+}
+
 export function installPlotDataMethods(TargetClass) {
     const proto = TargetClass.prototype;
     const PlotManager = TargetClass;
@@ -704,23 +719,15 @@ proto._plotlyTimeValue = function(fileId, value, timeVar = null) {
     if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return value;
     if (!Number.isFinite(value)) return value;
     if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) return value;
-    // ISO-8601 stops at three decimals, so on a signal sampled faster than
-    // 1 kHz whole groups of samples stringify to the same instant: a 44.1 kHz
-    // recording promoted to a calendar put 663 drawn points onto 16 timestamps,
-    // and Plotly drew the vertical span of each millisecond instead of the
-    // waveform. Plotly parses more decimals than the standard prints, and reads
-    // the string as the same wall clock either way, so the extra digits cost
-    // nothing and no displayed time moves.
-    if (value === Math.floor(value)) return new Date(value).toISOString();
-    const totalMicroseconds = Math.round(value * 1000);
-    const baseMs = Math.floor(totalMicroseconds / 1000);
-    const microseconds = totalMicroseconds - baseMs * 1000;
-    return `${new Date(baseMs).toISOString().slice(0, -1)}${String(microseconds).padStart(3, '0')}`;
+    return plotlyCalendarString(value);
 };
 
+// The questions above are about the file, not the sample: asked once per
+// array, not once per point. Asked per point they cost more than the strings.
 proto._plotlyTimeArray = function(fileId, values, timeVar = null) {
     if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return values;
-    return Array.from(values || [], value => this._plotlyTimeValue(fileId, value, timeVar));
+    if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) return Array.from(values || []);
+    return Array.from(values || [], value => (Number.isFinite(value) ? plotlyCalendarString(value) : value));
 };
 
 proto._elapsedDateTimeAxisConfig = function(rangeOrValues, fileId = null) {
