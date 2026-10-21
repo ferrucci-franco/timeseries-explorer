@@ -359,6 +359,7 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const fftSkipGlobalGaps = fftMode && this._fftShouldSkipGlobalGapScan(plot);
     const fftGapInfo = fftMode && !fftSkipGlobalGaps ? this._fftGapInfo(plot) : null;
     const fftGapsByFile = fftGapInfo ? new Map(fftGapInfo.perFile.map(f => [f.fileId, f])) : null;
+    let drawn = null;
     plot.traces.forEach((t, idx) => {
         const breaks = tsMode ? this._traceBreakIntervals(plot, t, viewLo, viewHi) : null;
         const attachSourceX = !!breaks || fftMode;
@@ -388,7 +389,13 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
                 update.hovertemplate = hovers;
             }
         }
-        Plotly.restyle(plot.div, update, indices);
+        // A Live Update poll moves the view in the same call (see
+        // _liveAppendUpdateInPlace): one redraw instead of two.
+        drawn = options.layoutUpdate
+            ? Plotly.update(plot.div, update, options.layoutUpdate, indices)
+            : Plotly.restyle(plot.div, update, indices);
+    } else if (options.layoutUpdate) {
+        drawn = Plotly.update(plot.div, {}, options.layoutUpdate);
     }
     if (plot.mode === 'timeseries') this._refreshSamplesNotice(plot);
     // Keep the overlays in step with the zoom: gap bands (adaptive width),
@@ -405,6 +412,7 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     if (tsMode && plot.div) this._refreshGapsNotice(plot, gapsDense);
     if (plot.mode === 'timeseries' && !options.live) this._refreshRepeatedNotice(plot);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
+    return drawn;
 };
 
 // Repaint the NaN/Inf and Gaps overlays after a legend visibility change.

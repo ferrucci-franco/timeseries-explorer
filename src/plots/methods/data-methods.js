@@ -700,10 +700,16 @@ proto._isElapsedTimeForVar = function(fileId, timeVar = null) {
     return mode === 'elapsedDateTime' || mode === 'elapsedSeconds';
 };
 
-proto._plotlyTimeValue = function(fileId, value, timeVar = null) {
-    if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return value;
-    if (!Number.isFinite(value)) return value;
-    if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) return value;
+// `fileChecked`: the caller has already asked the questions that are about
+// the file, not the sample (calendar axis, not high resolution) and the value
+// is finite. _plotlyTimeArray asks them once per array; asked per point they
+// cost more than the strings.
+proto._plotlyTimeValue = function(fileId, value, timeVar = null, fileChecked = false) {
+    if (!fileChecked) {
+        if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return value;
+        if (!Number.isFinite(value)) return value;
+        if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) return value;
+    }
     // ISO-8601 stops at three decimals, so on a signal sampled faster than
     // 1 kHz whole groups of samples stringify to the same instant: a 44.1 kHz
     // recording promoted to a calendar put 663 drawn points onto 16 timestamps,
@@ -720,7 +726,10 @@ proto._plotlyTimeValue = function(fileId, value, timeVar = null) {
 
 proto._plotlyTimeArray = function(fileId, values, timeVar = null) {
     if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return values;
-    return Array.from(values || [], value => this._plotlyTimeValue(fileId, value, timeVar));
+    if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) return Array.from(values || []);
+    return Array.from(values || [], value => (Number.isFinite(value)
+        ? this._plotlyTimeValue(fileId, value, timeVar, true)
+        : value));
 };
 
 proto._elapsedDateTimeAxisConfig = function(rangeOrValues, fileId = null) {
