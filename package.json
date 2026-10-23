@@ -39,6 +39,7 @@
     "build:all": "npm run build:portable && npm run build:web",
     "fetch:duckdb-extensions": "node scripts/fetch-duckdb-extensions.mjs",
     "test:csv": "node scripts/test-csv-fixtures.mjs",
+    "test:csv-nan-cells": "node scripts/test-csv-nan-cells.mjs",
     "test:excel": "node scripts/test-excel-parser.mjs",
     "test:csv-folders-settings": "node scripts/test-csv-folders-and-settings.mjs",
     "test:matlab": "node scripts/test-matlab-parser.mjs",

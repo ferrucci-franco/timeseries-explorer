@@ -26,6 +26,14 @@ export function stripUnitBrackets(unit) {
     return match ? (match[1] ?? match[2] ?? match[3]).trim() : unit;
 }
 
+// "NaN" (any case, optionally signed, as C/Python/LabVIEW print it) is a missing number, not text: a logger
+// that writes NaN for an absent sensor must not turn its first data row into a header, nor a column of
+// mostly-missing values into a string column.
+const MISSING_NUMBER_CELL = /^[+-]?nan$/i;
+export function isMissingNumberCell(cell) {
+    return MISSING_NUMBER_CELL.test(String(cell ?? '').trim());
+}
+
 function isMostlyNumericColumn(column) {
     if (!column || column.nonEmptyCount <= 0) return true;
     return (column.finiteCount / column.nonEmptyCount) > NUMERIC_COLUMN_MIN_RATIO;
@@ -123,7 +131,7 @@ export default class CsvParser {
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
                 column.stringValues.push(rawValue);
-                if (rawValue !== '') column.nonEmptyCount++;
+                if (rawValue !== '' && !isMissingNumberCell(rawValue)) column.nonEmptyCount++;
                 if (Number.isFinite(numericValue)) {
                     column.finiteCount++;
                 }
@@ -454,7 +462,7 @@ export default class CsvParser {
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
                 column.stringValues.push(rawValue);
-                if (rawValue !== '') column.nonEmptyCount++;
+                if (rawValue !== '' && !isMissingNumberCell(rawValue)) column.nonEmptyCount++;
                 if (Number.isFinite(numericValue)) {
                     column.finiteCount++;
                 }
@@ -645,7 +653,7 @@ export default class CsvParser {
             let finiteCount = 0;
             for (const row of rows) {
                 const rawValue = String(row?.[columnIndex] ?? '').trim();
-                if (!rawValue) continue;
+                if (!rawValue || isMissingNumberCell(rawValue)) continue;
                 nonEmptyCount++;
                 if (Number.isFinite(parseCsvNumber(rawValue, delimiter, decimalSeparator))) finiteCount++;
             }
@@ -826,7 +834,7 @@ export default class CsvParser {
     }
 
     _looksLikeHeaderRow(row, followingRows = [], delimiter = ',') {
-        const cells = (row || []).map(cell => String(cell ?? '').trim()).filter(Boolean);
+        const cells = (row || []).map(cell => String(cell ?? '').trim()).filter(cell => cell && !isMissingNumberCell(cell));
         if (!cells.length) return true;
         if (this._isDataLikeRow(row, delimiter)
             && followingRows.some(following => this._isDataLikeRow(following, delimiter))) {
@@ -837,7 +845,7 @@ export default class CsvParser {
 
         const sampledRows = followingRows.slice(0, 5);
         const followingNumeric = sampledRows.filter(r => {
-            const values = (r || []).map(cell => String(cell ?? '').trim()).filter(Boolean);
+            const values = (r || []).map(cell => String(cell ?? '').trim()).filter(cell => cell && !isMissingNumberCell(cell));
             return values.length && values.filter(cell => Number.isFinite(parseCsvNumber(cell, delimiter))).length === values.length;
         }).length;
 
@@ -951,7 +959,7 @@ export default class CsvParser {
 
     _isDataLikeRow(row, delimiter = ',') {
         const cells = row || [];
-        const nonEmpty = cells.filter(cell => String(cell ?? '').trim() !== '');
+        const nonEmpty = cells.filter(cell => String(cell ?? '').trim() !== '' && !isMissingNumberCell(cell));
         if (nonEmpty.length < 2) return false;
         const numericCount = nonEmpty.filter(cell => Number.isFinite(parseCsvNumber(cell, delimiter))).length;
         const dateTimeCount = nonEmpty.filter(cell => this._looksLikeDateTimeCell(cell)).length;
