@@ -158,13 +158,48 @@ export function timeBaseForAxis(kind, axisUnit) {
 // also keep it out of the prefix arithmetic below, so it can never become "kh".
 export const UNKNOWN_UNIT = '[?]';
 
+// Spellings of a "per time" denominator that the integration undoes exactly.
+// Free text, so a small, predictable set rather than a parser: what is not
+// recognised keeps its spelling and gets the `·h`, which is never wrong.
+const PER_TIME_DENOMINATORS = {
+    h: ['/h', '/hr', '/hour', '/hours'],
+    s: ['/s', '/sec', '/second', '/seconds'],
+};
+
+/**
+ * The signal's own unit with a trailing "per <factor>" removed, or '' when
+ * there is none to remove.
+ *
+ * Only an EXACT match cancels. A flow in m³/s integrated over HOURS is not
+ * m³ — it is m³ times 3600 — and that is a conversion, not a cancellation, so
+ * the label keeps saying `m³/s·h` rather than quietly claiming a number the
+ * arithmetic never produced.
+ */
+function cancelPerTimeUnit(unit, factor) {
+    const text = String(unit || '').trim();
+    for (const suffix of PER_TIME_DENOMINATORS[factor] || []) {
+        if (!text.toLowerCase().endsWith(suffix)) continue;
+        const numerator = text.slice(0, text.length - suffix.length).trim();
+        // "/h" on its own has nothing to give back; a unit cannot cancel into
+        // being dimensionless here.
+        if (numerator) return numerator;
+    }
+    return '';
+}
+
 // The unit the totals carry: the signal's unit times the chosen time unit. Same
 // spelling the calendar heatmap already uses for its per-cell integral, so a
 // power in MW reads MW·h in both places.
+//
+// A signal already expressed PER that same time unit integrates back to its own
+// numerator instead: rain in mm/h accumulated over hours is mm, not mm/h·h.
+// That is what a rainfall record asks for, and writing it the long way made a
+// correct total unreadable.
 export function integralResultUnit(unit, integralUnit, timeKind, samplesLabel = 'samples') {
     const base = unit || UNKNOWN_UNIT;
     if (timeKind === 'index') return `${base}·${samplesLabel}`;
-    return `${base}·${integralUnit === 'second' ? 's' : 'h'}`;
+    const factor = integralUnit === 'second' ? 's' : 'h';
+    return cancelPerTimeUnit(base, factor) || `${base}·${factor}`;
 }
 
 export function splitUnitPrefix(unit) {
@@ -415,9 +450,18 @@ export function buildIntegralPresentation(models, state, options = {}) {
         const candidate = plotted(row);
         return Number.isFinite(candidate) ? Math.max(max, Math.abs(candidate)) : max;
     }, 0);
-    const exponent = state.scale === 'auto'
+    const candidate = state.scale === 'auto'
         ? autoExponent(maxAbs)
         : (INTEGRAL_SCALE_EXPONENTS[state.scale] ?? 0);
+    // An AUTOMATIC prefix is only worth taking when the unit can absorb it.
+    // 2400 MW·h reading 2.4 GW·h is a gain: the unit carries the decade and the
+    // bar still says what it means. 1311 mm reading "1.311" is not: the decade
+    // goes to the axis title and the reader has to carry it back to every bar —
+    // and where thousands are grouped with a dot, "1.311" is then the very
+    // number it was standing in for. A prefix the user pinned by hand is their
+    // call and is applied as asked, decade stated separately if need be.
+    const absorbed = !scaleUnitLabel(mixedUnits ? '' : quantityUnit, candidate).residual;
+    const exponent = state.scale === 'auto' && !absorbed ? 0 : candidate;
     const factor = 10 ** exponent;
     const { label, residual } = scaleUnitLabel(mixedUnits ? '' : quantityUnit, exponent);
     // Mixed units get NO axis unit: picking one of them would be a lie, and

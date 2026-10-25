@@ -163,10 +163,10 @@ try {
     assert.equal(integral.barmode, 'group', 'drawn side by side');
     assert.deepEqual(integral.barX[0], ['2019', '2020', '2021'], 'with the years on the category axis');
     assert.equal(integral.categoryAxisTitle, 'Period', 'which says what it carries');
-    // `mm` takes no SI prefix of its own (millimetres, not metres), so the
-    // shared decade is stated as ×10ⁿ instead of folded into the unit.
-    assert.match(integral.valueAxisTitle, /Integral \[mm·h ×10³\]/,
-        `and the value axis keeps the unit (${integral.valueAxisTitle})`);
+    // `mm` takes no SI prefix of its own (millimetres, not metres), so no
+    // automatic decade is taken and the columns show the totals themselves.
+    assert.equal(integral.valueAxisTitle, 'Integral [mm·h]',
+        `and the value axis keeps the unit, undecorated (${integral.valueAxisTitle})`);
 
     const rain = integral.series.find(entry => entry.name.startsWith('rain'));
     const drizzle = integral.series.find(entry => entry.name.startsWith('drizzle'));
@@ -191,6 +191,10 @@ try {
     assert.equal(integral.barText[0].length, 3, 'each column is labelled with its value');
     assert.ok(integral.barText[0].every(label => !label.includes('mm')),
         `without repeating the axis unit (${integral.barText[0].join(', ')})`);
+    // And the label IS the accumulation, not a mantissa the reader has to
+    // multiply by a decade printed somewhere else.
+    assert.ok(integral.barText[0][0].replace(/[^0-9]/g, '').startsWith('8760'),
+        `the first column reads its own total (${integral.barText[0][0]})`);
     if (shots) await page.screenshot({ path: `${shots}/integral-grouped-by-year.png` });
 
     // A coarser-to-finer switch keeps the identity: twelve months of 2019 plus
@@ -219,6 +223,27 @@ try {
         `the first day is one millimetre over one day (${dailyRain.values[0]} mm·h)`);
     assert.equal(integral.barText[0], null,
         'and at that density the printed values are dropped rather than overlapped');
+    await setIntegralOption(page, panelId, 'Group by', 'none');
+
+    // Declaring the signal as a RATE in mm/h — which is what a rain gauge
+    // writing "mm in this hour" is, at an hourly step — makes the accumulation
+    // read in mm rather than mm·h. The numbers do not move; the label does.
+    await page.evaluate((id) => {
+        const pm = window.app.plotManager;
+        const input = pm._integralOptionsPanel(pm.plots.get(id)).querySelector('.integral-unit-input');
+        input.value = 'mm/h';
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, panelId);
+    await page.waitForTimeout(900);
+    await setIntegralOption(page, panelId, 'Group by', 'year');
+    integral = await integralState(page, panelId);
+    assert.equal(integral.valueAxisTitle, 'Integral [mm]',
+        `a per-hour rate accumulates to mm, not mm/h·h (${integral.valueAxisTitle})`);
+    assert.deepEqual(integral.series[0].units ?? integral.series.map(entry => entry.unit), ['mm/h', 'mm/h'],
+        'while each signal is still the rate it was declared as');
+    const declaredRain = integral.series.find(entry => entry.name.startsWith('rain'));
+    assert.ok(Math.abs(declaredRain.values[0] - expected[0]) < 1e-6,
+        'and naming the unit moved no number');
     await setIntegralOption(page, panelId, 'Group by', 'none');
 
     // ── Temporal profile, Multi-year ──

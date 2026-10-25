@@ -210,11 +210,15 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     eq(view.meanUnit, '[?]', 'and the mean');
     eq(view.undeclaredUnits, true, 'the panel knows to say so');
 
-    // The marker cannot absorb a prefix, so a big total shows the decade
-    // instead of inventing "kh".
+    // The marker cannot absorb a prefix, so a big total is neither given one
+    // nor scaled behind the reader's back: inventing "kh" would be a lie, and
+    // moving the decimal point to put a "×10⁶" in the axis title only hides
+    // the size of the number the bars are there to show.
     const big = buildIntegralPresentation(makeModels([flat('gen', '', 1e6)]), state());
     ok(!/^k|^M|^G/.test(big.axisUnit), `no SI prefix is folded into the marker: ${big.axisUnit}`);
-    ok(big.axisUnit.includes('×10'), 'the decade is stated separately instead');
+    eq(big.exponent, 0, 'and no automatic decade is taken that the unit cannot carry');
+    eq(big.axisUnit, '[?]·h', 'so the axis says exactly what the total is in');
+    close(big.rows[0].scaled, big.rows[0].value, 'and the bar carries the number itself');
 }
 
 // ─── 2c. A unit typed into the panel ──────────────────────────────────────
@@ -320,11 +324,18 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     close(manual.rows[0].scaled, 2.4, 'a manual prefix scales the same way');
     eq(manual.axisUnit, 'GW·h', 'and combines with the unit the same way');
 
-    // A unit with no recognised prefix cannot absorb the factor, so the decade
-    // is stated instead of silently dropped.
+    // A unit with no recognised prefix cannot absorb the factor, so there is
+    // nothing to gain by taking one automatically: the bar shows the total.
     const noPrefix = buildIntegralPresentation(makeModels([flat('flow', 'p.u.', 100)]), state());
-    ok(noPrefix.axisUnit.includes('p.u.·h'), 'the unprefixable unit is kept');
-    ok(/×10/.test(noPrefix.axisUnit), 'and the leftover decade is stated, not hidden');
+    eq(noPrefix.axisUnit, 'p.u.·h', 'the unprefixable unit is kept, with no decade appended');
+    eq(noPrefix.exponent, 0, 'and no automatic prefix is taken');
+    close(noPrefix.rows[0].scaled, 2400, 'so the bar reads 2400, not 2.4 with the decade elsewhere');
+
+    // Pinned by hand it still scales, and the decade it cannot fold is stated
+    // rather than dropped — the user asked for the prefix, so they get it.
+    const pinned = buildIntegralPresentation(makeModels([flat('flow', 'p.u.', 100)]), state({ scale: 'k' }));
+    close(pinned.rows[0].scaled, 2.4, 'a pinned prefix is applied as asked');
+    ok(/×10/.test(pinned.axisUnit), `and its leftover decade is stated, not hidden (${pinned.axisUnit})`);
 }
 
 // ─── 4b. Per day and mean ─────────────────────────────────────────────────
@@ -768,9 +779,11 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     // anywhere in it: a per-period prefix would make the columns incomparable.
     const scaledBack = view.series[0].points.map(point => point.scaled * view.factor);
     close(scaledBack[0], view.series[0].points[0].value, 'scaling is reversible, so the bars carry the real value');
-    const biggest = Math.max(...view.series.flatMap(entry => entry.points.map(point => Math.abs(point.value))));
-    ok(view.factor <= biggest && biggest / view.factor < 1000,
-        'and the exponent is the one the largest column needs');
+    // `mm·h` carries no SI prefix, so nothing is scaled and the columns show
+    // the totals themselves.
+    eq(view.exponent, 0, 'a unit that cannot take a prefix is not scaled automatically');
+    close(view.series[0].points[0].scaled, view.series[0].points[0].value,
+        'so the column carries the number itself');
 
     // Grouped, the columns are a timeline: sorting them by size would destroy
     // the one thing a timeline is for, so `sort` is ignored.
@@ -854,6 +867,50 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
             'and without grouping no period columns appear at all');
         eq(plain.rows.length, 2, 'one row per signal');
     }
+}
+
+// ─── 12b. A rate already expressed per the integration unit ──────────────
+//
+// Rainfall in mm/h accumulated over hours is mm. Writing it `mm/h·h` is not
+// wrong, it is unreadable — and it was the one label a rainfall record, the
+// case this whole feature exists for, was guaranteed to hit.
+{
+    const groupState = (overrides = {}) =>
+        normalizeIntegralState(overrides, INTEGRAL_MISSING_POLICIES, INTEGRAL_GROUPINGS);
+
+    eq(integralResultUnit('mm/h', 'hour', 'datetime'), 'mm', 'per-hour cancels against hours');
+    eq(integralResultUnit('mm/hour', 'hour', 'datetime'), 'mm', 'however the denominator is spelt');
+    eq(integralResultUnit('m3/s', 'second', 'datetime'), 'm3', 'and per-second against seconds');
+    // The one that must NOT cancel: the arithmetic there is a factor of 3600,
+    // and a label that cancelled would claim a number nobody computed.
+    eq(integralResultUnit('m3/s', 'hour', 'datetime'), 'm3/s·h',
+        'a mismatched denominator is a conversion, not a cancellation, and is left visible');
+    eq(integralResultUnit('MW', 'hour', 'datetime'), 'MW·h', 'a plain rate is unaffected');
+    eq(integralResultUnit('W/m2', 'hour', 'datetime'), 'W/m2·h',
+        'and a "/m2" is not a time denominator');
+    eq(integralResultUnit('/h', 'hour', 'datetime'), '/h·h',
+        'a bare denominator has no numerator to cancel into');
+    eq(integralResultUnit('mm/h', 'hour', 'index', 'samples'), 'mm/h·samples',
+        'an index axis has no hours to cancel');
+
+    // The whole reading, as the rainfall panel shows it: the derived figures
+    // follow the total, and the mean stays the rate it always was.
+    const rain = makeModels([flat('rain', 'mm/h', 2)]);
+    const view = buildIntegralPresentation(rain, groupState());
+    eq(view.resultUnit, 'mm', 'the total is an accumulation in mm');
+    eq(view.meanUnit, 'mm/h', 'the mean is still the rate');
+    eq(view.perDayUnit, 'mm/d', 'and the daily figure is mm per day');
+    eq(view.axisUnit, 'mm', 'the axis says mm');
+    close(view.rows[0].value, 48, '24 h at 2 mm/h is 48 mm');
+    close(view.rows[0].scaled, 48, 'shown at full size, since mm takes no prefix');
+    eq(buildIntegralPresentation(rain, groupState({ quantity: 'mean' })).axisUnit, 'mm/h',
+        'and the mean axis names the rate');
+
+    // The export spells the same unit out, so the file is auditable.
+    const table = buildIntegralExportTable(view, {});
+    const row = Object.fromEntries(table.headers.map((header, i) => [header, table.rows[0][i]]));
+    eq(row.integral_unit, 'mm', 'the exported total carries the cancelled unit');
+    eq(row.mean_unit, 'mm/h', 'and the exported mean the rate');
 }
 
 // ─── 13. The grouping control and its wiring ──────────────────────────────
