@@ -376,8 +376,20 @@ assert.match(
 );
 assert.match(
     temporalMethodAssignment('_resetTemporalProfileAnalysisView'),
-    /period === 'day' \? 24 : period === 'week' \? 168 : period === 'month' \? 31 \* 24 : 366 \* 24/,
+    /profileAxisWindow\(period, plot\._temporalProfileModels \|\| \[\]\)/,
     'Temporal Profile double-click restores the complete calendar domain',
+);
+// The folded periods have a fixed domain; multi-year lays its bins out on the
+// real timeline, so its window has to be read off the bins themselves.
+assert.match(
+    temporalProfileMethodsSource,
+    /period === 'day' \? 24 : period === 'week' \? 168 : period === 'month' \? 31 \* 24 : 366 \* 24/,
+    'and the folded periods keep their complete template domain',
+);
+assert.match(
+    temporalProfileMethodsSource,
+    /function profileAxisWindow\(period, models = \[\]\)[\s\S]*?bin\.startHours/,
+    'while multi-year takes its window from the calendar-year bins',
 );
 assert.match(
     temporalProfileMethodsSource,
@@ -468,10 +480,17 @@ assert.match(
     /heatmap-message[\s\S]*?kind === 'warning'/,
     'Heatmap side panel contains the full warning message',
 );
+// Both the eager kernel and the lazy query take their geometry from one helper,
+// so the two paths cannot be asked for different bins.
+assert.match(
+    temporalProfileMethodsSource,
+    /function profileGeometryArgs\(state\)[\s\S]*?resolutionUnit:\s*state\.period === 'year' && state\.yearResolution === 'month' \? 'month' : 'minute'/,
+    'Year Month resolution is sent to the calendar-aware kernel',
+);
 assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),
-    /resolutionUnit:\s*state\.period === 'year' && state\.yearResolution === 'month' \? 'month' : 'minute'/,
-    'Year Month resolution is sent to the calendar-aware kernel',
+    /buildTemporalProfile\(\{[\s\S]*?\.\.\.profileGeometryArgs\(state\)/,
+    'and the eager kernel is called with it',
 );
 assert.match(
     temporalMethodAssignment('_temporalProfileMinimumResolutionMinutes'),

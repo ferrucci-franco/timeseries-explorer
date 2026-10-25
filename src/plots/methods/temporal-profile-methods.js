@@ -22,11 +22,46 @@ const PROFILE_PERIOD_DURATION_MINUTES = Object.freeze({
     month: 31 * 24 * 60,
     year: 366 * 24 * 60,
 });
+// Multi-year has no resolution control: its bins are the calendar years the
+// recording spans and its sub-period is the UTC day.
+const PROFILE_FIXED_BIN_PERIODS = new Set(['multi-year']);
 
 function resolutionPresetsForPeriod(period) {
     return period === 'day'
         ? PROFILE_RESOLUTION_PRESETS.filter(minutes => minutes < 1440)
         : PROFILE_RESOLUTION_PRESETS;
+}
+
+// The geometry arguments the kernel and the lazy query both take, so the two
+// paths cannot be asked for different bins.
+function profileGeometryArgs(state) {
+    if (state.period === 'multi-year') return { period: state.period, resolutionMinutes: null, resolutionUnit: 'year' };
+    return {
+        period: state.period,
+        resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
+        resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
+    };
+}
+
+// The x window a period's bins naturally occupy, in hours. Folded periods start
+// at 0; multi-year bins sit on the real timeline, so the window comes from the
+// bins themselves.
+function profileAxisWindow(period, models = []) {
+    if (period !== 'multi-year') {
+        const xMax = period === 'day' ? 24 : period === 'week' ? 168 : period === 'month' ? 31 * 24 : 366 * 24;
+        return [0, xMax];
+    }
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const model of models) {
+        for (const category of model?.result?.categories || []) {
+            for (const bin of category.bins) {
+                if (Number.isFinite(bin.startHours)) lo = Math.min(lo, bin.startHours);
+                if (Number.isFinite(bin.endHours)) hi = Math.max(hi, bin.endHours);
+            }
+        }
+    }
+    return Number.isFinite(lo) && Number.isFinite(hi) && hi > lo ? [lo, hi] : null;
 }
 
 const fallbackText = {
@@ -48,6 +83,10 @@ const fallbackText = {
     temporalProfileWeek: 'Week',
     temporalProfileMonth: 'Month',
     temporalProfileYear: 'Year',
+    temporalProfileMultiYear: 'Multi-year',
+    temporalProfileMultiYearTip: 'One bin per calendar year of the record, laid out along the real timeline instead of folded onto a template. Each year carries the mean of its daily means, and ±1σ measures how much the days inside that year differed. For an annual total — accumulated rainfall, yearly energy — use the Integral analysis with Group by set to Year.',
+    temporalProfileResolutionYearly: '1 year (per calendar year)',
+    temporalProfileXAxisMultiYear: 'Calendar year [UTC]',
     temporalProfileCategories: 'Day categories',
     temporalProfileDayGrouping: 'Day grouping',
     temporalProfileAllDays: 'All days',
@@ -620,6 +659,7 @@ proto._temporalProfileDataStepMinutes = function(plot) {
 
 proto._temporalProfileMinimumResolutionMinutes = function(plot, period = this._ensureTemporalProfileState(plot).period) {
     const dataStep = this._temporalProfileDataStepMinutes(plot);
+    if (PROFILE_FIXED_BIN_PERIODS.has(period)) return Math.round((dataStep || 0) * 1e6) / 1e6;
     const binLimitMinimum = PROFILE_PERIOD_DURATION_MINUTES[period] / TEMPORAL_PROFILE_MAX_BINS;
     const minimum = Math.max(dataStep || 0, binLimitMinimum || 0);
     return Math.round(minimum * 1e6) / 1e6;
@@ -671,7 +711,9 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
     const dataStep = this._temporalProfileDataStepMinutes(plot);
     const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot, state.period);
     plot._temporalProfileMinimumResolutionMinutes = minimumResolution;
-    if (state.period === 'year' && state.yearResolution === 'day' && resolutionBelowStep(1440, dataStep)) {
+    if (PROFILE_FIXED_BIN_PERIODS.has(state.period)) {
+        // Nothing to reconcile: the bins are calendar years whatever the step is.
+    } else if (state.period === 'year' && state.yearResolution === 'day' && resolutionBelowStep(1440, dataStep)) {
         state.yearResolution = 'month';
         this._renderTemporalProfileOptionsPanel(panelId, plot);
     } else if (state.period !== 'year' && resolutionBelowStep(state.resolutionByPeriod[state.period], minimumResolution)) {
@@ -706,9 +748,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
             const result = buildTemporalProfile({
                 times,
                 values,
-                period: state.period,
-                resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
-                resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
+                ...profileGeometryArgs(state),
                 dayGrouping: state.dayGrouping,
                 combineWeekends: state.combineWeekends,
                 // Eager arrays are already cropped with binary bounds.
@@ -749,9 +789,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
             }
             try {
                 const result = await source.getTemporalProfileAggregates(data, entries.map(entry => entry.trace.varName), {
-                    period: state.period,
-                    resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
-                    resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
+                    ...profileGeometryArgs(state),
                     dayGrouping: state.dayGrouping,
                     combineWeekends: state.combineWeekends,
                     discardIncomplete: state.discardIncomplete,
@@ -799,7 +837,9 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
         const refreshedStep = this._temporalProfileDataStepMinutes(plot);
         const refreshedMinimum = this._temporalProfileMinimumResolutionMinutes(plot, state.period);
         let resolutionChanged = false;
-        if (state.period === 'year' && state.yearResolution === 'day' && resolutionBelowStep(1440, refreshedStep)) {
+        if (PROFILE_FIXED_BIN_PERIODS.has(state.period)) {
+            // Calendar-year bins: no resolution to reconcile.
+        } else if (state.period === 'year' && state.yearResolution === 'day' && resolutionBelowStep(1440, refreshedStep)) {
             state.yearResolution = 'month';
             resolutionChanged = true;
         } else if (state.period !== 'year' && resolutionBelowStep(state.resolutionByPeriod[state.period], refreshedMinimum)) {
@@ -855,10 +895,16 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
             const name = categoryLabel ? `${model.name} · ${categoryLabel}` : model.name;
             const x = category.bins.map(bin => bin.centerHours);
             const y = category.bins.map(bin => bin.mean);
-            const customdata = category.bins.map(bin => [bin.std, bin.nPeriods, bin.nExpectedPeriods, bin.coverage, bin.nInvalidSamples, bin.nGapPeriods]);
+            const years = model.result.binYears || null;
+            const customdata = category.bins.map((bin, index) => [bin.std, bin.nPeriods, bin.nExpectedPeriods, bin.coverage, bin.nInvalidSamples, bin.nGapPeriods, years?.[index] ?? null]);
             const meta = { temporalProfileTraceKey: profileTraceKey(model.trace) };
             const visible = model.trace.visible ?? true;
-            const hovertemplate = `<b>%{fullData.name}</b><br>x = %{x:.4g}<br>${text('temporalProfileMean')} = %{y:.6g}<br>${text('temporalProfileStd')} = %{customdata[0]:.6g}<br>${text('temporalProfileCoverage')} = %{customdata[1]}/%{customdata[2]} (%{customdata[3]:.1%})<br>${text('temporalProfileInvalid')} = %{customdata[4]}<br>${text('temporalProfileGaps')} = %{customdata[5]}<extra></extra>`;
+            // Multi-year x values are epoch hours, which say nothing on their
+            // own; the bin's year does, so the hover reads that instead.
+            const abscissa = model.result.absoluteBins
+                ? `${text('temporalProfileYear')} = %{customdata[6]}`
+                : 'x = %{x:.4g}';
+            const hovertemplate = `<b>%{fullData.name}</b><br>${abscissa}<br>${text('temporalProfileMean')} = %{y:.6g}<br>${text('temporalProfileStd')} = %{customdata[0]:.6g}<br>${text('temporalProfileCoverage')} = %{customdata[1]}/%{customdata[2]} (%{customdata[3]:.1%})<br>${text('temporalProfileInvalid')} = %{customdata[4]}<br>${text('temporalProfileGaps')} = %{customdata[5]}<extra></extra>`;
             if (state.renderMode === 'columns') {
                 const barTrace = {
                     type: 'bar', x, y,
@@ -916,11 +962,11 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
             });
         });
     }
-    const layout = this._buildTemporalProfileLayout(plot, { mixedUnits, unit: mixedUnits ? '' : [...visibleUnits][0] || '' });
+    const layout = this._buildTemporalProfileLayout(plot, { mixedUnits, unit: mixedUnits ? '' : [...visibleUnits][0] || '' }, models);
     return { traces, layout };
 };
 
-proto._buildTemporalProfileLayout = function(plot, units = {}) {
+proto._buildTemporalProfileLayout = function(plot, units = {}, models = []) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
     const state = this._ensureTemporalProfileState(plot);
     const unitSuffix = units.unit ? ` [${units.unit}]` : '';
@@ -940,7 +986,22 @@ proto._buildTemporalProfileLayout = function(plot, units = {}) {
         hovermode: 'closest',
         uirevision: `temporal-profile-${state.period}-${state.period === 'year' ? state.yearResolution : state.resolutionByPeriod[state.period]}`,
     };
-    if (state.period === 'day') {
+    if (state.period === 'multi-year') {
+        // One tick per year, at the middle of the year's bin. The bins are
+        // epoch hours, so the ticks have to be read off the bins themselves —
+        // there is no fixed template to label.
+        const reference = models.find(model => model?.result?.binYears?.length);
+        const years = reference?.result?.binYears || [];
+        const bins = reference?.result?.categories?.[0]?.bins || [];
+        const axisWindow = profileAxisWindow('multi-year', models);
+        Object.assign(layout.xaxis, {
+            tickmode: 'array',
+            tickvals: bins.map(bin => bin.centerHours),
+            ticktext: years.map(String),
+            title: { text: text('temporalProfileXAxisMultiYear'), font: { size: 10 } },
+        });
+        if (axisWindow) layout.xaxis.range = axisWindow;
+    } else if (state.period === 'day') {
         const ticks = Array.from({ length: 13 }, (_, index) => index * 2);
         Object.assign(layout.xaxis, { range: [0, 24], tickmode: 'array', tickvals: ticks, ticktext: ticks.map(hour => `${String(hour).padStart(2, '0')}:00`), title: { text: text('temporalProfileXAxisDay'), font: { size: 10 } } });
     } else if (state.period === 'week') {
@@ -1243,9 +1304,10 @@ proto._resetTemporalProfileView = function(panelId) {
 proto._resetTemporalProfileAnalysisView = function(plot) {
     if (!plot?.temporalProfileDiv) return Promise.resolve();
     const period = this._ensureTemporalProfileState(plot).period;
-    const xMax = period === 'day' ? 24 : period === 'week' ? 168 : period === 'month' ? 31 * 24 : 366 * 24;
+    const axisWindow = profileAxisWindow(period, plot._temporalProfileModels || []);
+    if (!axisWindow) return Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true });
     return Plotly.relayout(plot.temporalProfileDiv, {
-        'xaxis.range': [0, xMax],
+        'xaxis.range': axisWindow,
         'xaxis.autorange': false,
         'yaxis.autorange': true,
     });
@@ -1265,8 +1327,9 @@ proto._autoScaleTemporalProfileAxis = function(plot, axis) {
     if (!plot?.temporalProfileDiv) return Promise.resolve();
     if (axis !== 'x') return Plotly.relayout(plot.temporalProfileDiv, { 'yaxis.autorange': true });
     const period = this._ensureTemporalProfileState(plot).period;
-    const xMax = period === 'day' ? 24 : period === 'week' ? 168 : period === 'month' ? 31 * 24 : 366 * 24;
-    return Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.range': [0, xMax], 'xaxis.autorange': false });
+    const axisWindow = profileAxisWindow(period, plot._temporalProfileModels || []);
+    if (!axisWindow) return Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.autorange': true });
+    return Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.range': axisWindow, 'xaxis.autorange': false });
 };
 
 proto._installTemporalProfileSplitterHandlers = function(panelId, plot) {
@@ -1428,6 +1491,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         { label: text('temporalProfileWeek'), value: 'week' },
         { label: text('temporalProfileMonth'), value: 'month' },
         { label: text('temporalProfileYear'), value: 'year' },
+        { label: text('temporalProfileMultiYear'), value: 'multi-year', title: text('temporalProfileMultiYearTip') },
     ], state.period, period => {
         state.period = period;
         this._renderTemporalProfileOptionsPanel(panelId, plot);
@@ -1489,7 +1553,14 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     }
     const select = document.createElement('select');
     select.className = 'fft-select';
-    if (state.period === 'year') {
+    if (state.period === 'multi-year') {
+        // There is nothing to choose: one bin per calendar year, averaged over
+        // the days inside it. Saying so beats a disabled dropdown.
+        const fixed = document.createElement('span');
+        fixed.className = 'hist-option-value';
+        fixed.textContent = text('temporalProfileResolutionYearly');
+        row(text('temporalProfileResolution'), fixed, text('temporalProfileMultiYearTip'));
+    } else if (state.period === 'year') {
         const dayOption = document.createElement('option');
         dayOption.value = 'day';
         dayOption.textContent = text('temporalProfileDay');
@@ -1562,7 +1633,9 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
             this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
         }));
     }
-    const discardKey = state.period === 'day' ? 'temporalProfileDiscardDay'
+    // The label names the period the checkbox actually discards. Multi-year
+    // aggregates days, so what it drops is a day, not a year.
+    const discardKey = state.period === 'day' || state.period === 'multi-year' ? 'temporalProfileDiscardDay'
         : state.period === 'week' ? 'temporalProfileDiscardWeek'
             : state.period === 'month' ? 'temporalProfileDiscardMonth'
                 : 'temporalProfileDiscardYear';

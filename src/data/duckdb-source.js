@@ -3144,9 +3144,11 @@ export default class DuckDbSource {
         }
         if (!usable.length) return { ok: true, blocked, traces: [], medianStepMs: null };
 
-        const period = ['day', 'week', 'month', 'year'].includes(options.period) ? options.period : 'day';
-        const resolutionUnit = period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute';
-        const resolutionMinutes = resolutionUnit === 'month' ? null : Number(options.resolutionMinutes);
+        const period = ['day', 'week', 'month', 'year', 'multi-year'].includes(options.period) ? options.period : 'day';
+        const resolutionUnit = period === 'multi-year'
+            ? 'year'
+            : (period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute');
+        const resolutionMinutes = resolutionUnit === 'minute' ? Number(options.resolutionMinutes) : null;
         const shiftMs = Math.trunc(Number(options.timeShiftMs) || 0);
         const rawCropRange = Array.isArray(options.cropRange) ? options.cropRange.map(Number) : null;
         let cropRange = rawCropRange?.length >= 2
@@ -3193,7 +3195,16 @@ export default class DuckDbSource {
             const scopeStart = selectionRange?.[0] ?? (stats.min_t == null ? null : Number(stats.min_t));
             const scopeEnd = selectionRange?.[1] ?? (stats.max_t == null ? null : Number(stats.max_t));
             const boundaryToleranceMs = Number.isFinite(medianStepMs) ? medianStepMs * 1.5 : 0;
+            // Multi-year bins are the calendar years the DATA spans, not the
+            // years the selection band covers: a band opened in 2017 over a
+            // file that starts in 2019 must not grow two empty year bins. The
+            // stats query already applies the selection, so its extent is the
+            // same one the eager kernel reads off its cropped arrays.
+            const spanStartMs = stats.min_t == null ? null : Number(stats.min_t);
+            const spanEndMs = stats.max_t == null ? null : Number(stats.max_t);
             const aggregate = buildTemporalProfileFinalSql({
+                spanStartMs,
+                spanEndMs,
                 tableName: this._fromSql(legacyData, usable.map(item => item.variable)),
                 timeExpression: tExpr,
                 whereSql,
@@ -3217,6 +3228,8 @@ export default class DuckDbSource {
                 period,
                 resolutionUnit,
                 resolutionMinutes,
+                spanStartMs,
+                spanEndMs,
                 dayGrouping: options.dayGrouping,
                 discardIncomplete: options.discardIncomplete,
                 valueCount: usable.length,

@@ -4,8 +4,17 @@ import vm from 'node:vm';
 import {
     buildTemporalProfile,
     inferTemporalProfileStepMs,
+    multiYearBinEdges,
     TEMPORAL_PROFILE_MAX_BINS,
+    TEMPORAL_PROFILE_PERIODS,
 } from '../src/utils/temporal-profile.js';
+
+import {
+    buildTemporalProfileFinalSql,
+    temporalProfilesFromAggregateRows,
+} from '../src/data/temporal-profile-sql.js';
+
+const DAY = 86_400_000;
 
 const temporalProfileMethodsSource = readFileSync(
     new URL('../src/plots/methods/temporal-profile-methods.js', import.meta.url),
@@ -333,6 +342,220 @@ const close = (actual, expected, epsilon = 1e-12, message = '') => {
     const tooFine = buildTemporalProfile({ period: 'month', resolutionMinutes: 0.01 });
     assert.equal(tooFine.reason, 'tooManyBins');
     assert.ok(tooFine.binCount > TEMPORAL_PROFILE_MAX_BINS);
+}
+
+// ─── Multi-year ───────────────────────────────────────────────────────────
+//
+// The one period that does NOT fold: its bins are the calendar years of the
+// record, laid out along the real timeline, and its sub-period is the UTC day.
+{
+    assert.ok(TEMPORAL_PROFILE_PERIODS.has('multi-year'), 'multi-year is a period');
+
+    // Bin edges: one per calendar year the span touches, leap years included.
+    const edges = multiYearBinEdges(Date.UTC(2019, 5, 10), Date.UTC(2021, 1, 3));
+    assert.deepEqual(edges.years, [2019, 2020, 2021], 'every year the span touches gets a bin');
+    assert.deepEqual(edges.edgesMs, [Date.UTC(2019, 0, 1), Date.UTC(2020, 0, 1), Date.UTC(2021, 0, 1), Date.UTC(2022, 0, 1)],
+        'and the edges are the 1 January boundaries, one more than the bins');
+    assert.equal(edges.edgesMs[2] - edges.edgesMs[1], 366 * DAY, '2020 is 366 days long');
+    assert.deepEqual(multiYearBinEdges(Date.UTC(2019, 0, 1), Date.UTC(2019, 11, 31)).years, [2019],
+        'a single-year record makes a single bin');
+    assert.equal(multiYearBinEdges(Date.UTC(2021, 0, 1), Date.UTC(2019, 0, 1)), null,
+        'a backwards span has no bins');
+    assert.equal(multiYearBinEdges(NaN, 0), null, 'nor has an unreadable one');
+
+    // Three years of daily samples, one constant value per year: each year bin
+    // then reads exactly that value, and the day-to-day spread is zero.
+    const times = [];
+    const values = [];
+    for (let t = Date.UTC(2019, 0, 1); t < Date.UTC(2022, 0, 1); t += DAY) {
+        times.push(t);
+        values.push(new Date(t).getUTCFullYear() - 2018);
+    }
+    const profile = buildTemporalProfile({ times, values, period: 'multi-year' });
+    assert.equal(profile.ok, true, 'a multi-year profile is produced');
+    assert.equal(profile.binCount, 3, 'one bin per year');
+    assert.deepEqual(profile.binYears, [2019, 2020, 2021], 'and the years are named');
+    assert.equal(profile.absoluteBins, true, 'the bins sit on the real timeline, which the result says');
+    assert.equal(profile.resolutionUnit, 'year', 'there is no sub-resolution to choose');
+    assert.equal(profile.resolutionMinutes, null, 'so no resolution is reported');
+    assert.deepEqual(profile.categories.map(category => category.id), ['all'],
+        'day-type categories belong to the folded day profile, not to a timeline');
+    const bins = profile.categories[0].bins;
+    assert.deepEqual(bins.map(bin => bin.mean), [1, 2, 3], 'each year carries its own level');
+    assert.deepEqual(bins.map(bin => bin.std), [0, 0, 0], 'a constant year has no day-to-day spread');
+    assert.deepEqual(bins.map(bin => bin.nPeriods), [365, 366, 365],
+        'the periods counted per year are its days, leap year included');
+    assert.deepEqual(bins.map(bin => bin.coverage), [1, 1, 1], 'all of which have data');
+    // The x values are epoch hours of the real year boundaries, which is what
+    // lets the axis label them with the year rather than an offset.
+    assert.equal(new Date(bins[0].startHours * 3600000).toISOString(), '2019-01-01T00:00:00.000Z',
+        'the first bin opens on 1 January of the first year');
+    assert.equal(new Date(bins[2].endHours * 3600000).toISOString(), '2022-01-01T00:00:00.000Z',
+        'and the last closes on 1 January after the last');
+
+    // The mean is a mean of DAILY means, so a densely sampled day does not
+    // outvote a sparse one — the same rule the folded periods follow.
+    {
+        const t = [];
+        const v = [];
+        const year = Date.UTC(2020, 0, 1);
+        // Day 0: twenty-four samples of 0. Day 1: one sample of 24.
+        for (let hour = 0; hour < 24; hour++) { t.push(year + hour * 3600000); v.push(0); }
+        t.push(year + DAY);
+        v.push(24);
+        const weighted = buildTemporalProfile({ times: t, values: v, period: 'multi-year' });
+        const bin = weighted.categories[0].bins[0];
+        assert.equal(bin.mean, 12, 'the year is the mean of its two daily means, not of its 25 samples');
+        assert.equal(bin.nPeriods, 2, 'two days contributed');
+        assert.ok(Math.abs(bin.std - Math.sqrt((144 + 144) / 1)) < 1e-9,
+            'and the deviation is the spread between those days');
+    }
+
+    // Years with no samples at all are not invented: the bins span the data.
+    {
+        const t = [Date.UTC(2015, 6, 1), Date.UTC(2015, 6, 2)];
+        const single = buildTemporalProfile({ times: t, values: [5, 7], period: 'multi-year' });
+        assert.deepEqual(single.binYears, [2015], 'two days in one year make one bin');
+        assert.equal(single.categories[0].bins[0].mean, 6, 'holding the mean of its days');
+    }
+
+    // A selection narrows the years to the data INSIDE it, not to the band.
+    {
+        const narrowed = buildTemporalProfile({
+            times, values, period: 'multi-year',
+            rangeStart: Date.UTC(2020, 5, 1),
+            rangeEnd: Date.UTC(2020, 7, 1),
+        });
+        assert.deepEqual(narrowed.binYears, [2020], 'only the selected year is binned');
+        assert.equal(narrowed.categories[0].bins[0].mean, 2, 'with the level of that year');
+        assert.ok(narrowed.stats.nOutOfRange > 0, 'and the samples outside are counted as such');
+    }
+
+    // An explicit span is honoured, which is how the lazy (DuckDB) path bins
+    // against exactly the years the eager kernel would have chosen.
+    {
+        const explicit = buildTemporalProfile({
+            times, values, period: 'multi-year',
+            spanStartMs: Date.UTC(2018, 0, 1),
+            spanEndMs: Date.UTC(2022, 11, 31),
+        });
+        assert.deepEqual(explicit.binYears, [2018, 2019, 2020, 2021, 2022],
+            'the declared span decides the bins');
+        assert.deepEqual(explicit.categories[0].bins.map(bin => bin.mean), [null, 1, 2, 3, null],
+            'and a year the data never reaches reads as no data rather than as zero');
+        assert.deepEqual(explicit.categories[0].bins.map(bin => bin.nExpectedPeriods), [0, 365, 366, 365, 0],
+            'an empty year expects nothing, so its coverage is not a false 100%');
+    }
+
+    // An incomplete sub-period is a DAY here, so discarding drops days.
+    {
+        const t = [];
+        const v = [];
+        for (let day = 0; day < 5; day++) {
+            for (let hour = 0; hour < 24; hour++) {
+                // The third day is missing its afternoon.
+                if (day === 2 && hour >= 12) continue;
+                t.push(Date.UTC(2022, 0, 1 + day, hour));
+                v.push(10);
+            }
+        }
+        const strict = buildTemporalProfile({ times: t, values: v, period: 'multi-year', discardIncomplete: true });
+        assert.equal(strict.categories[0].bins[0].nPeriods, 4, 'the cut day leaves the year bin');
+        assert.equal(strict.stats.nDiscardedPeriods, 1, 'and is counted as discarded');
+    }
+}
+
+// ─── Multi-year on the lazy (DuckDB) side ─────────────────────────────────
+//
+// scripts/test-temporal-profile-lazy.mjs runs the real query against DuckDB.
+// What is checked here is everything about that path that does NOT need the
+// native module: the reducer that folds the query's rows, and the query text
+// itself carrying the multi-year geometry.
+{
+    const spanStartMs = Date.UTC(2019, 4, 20);
+    const spanEndMs = Date.UTC(2021, 3, 2);
+    const options = { period: 'multi-year', spanStartMs, spanEndMs, valueCount: 1 };
+
+    // The query: the bin is the sample's calendar year, counted from the first
+    // year of the span, and a day expects only the bin of its own year.
+    const built = buildTemporalProfileFinalSql({
+        ...options,
+        tableName: 'src',
+        timeExpression: 't_ms',
+        whereSql: 'TRUE',
+        valueExpressions: ['v'],
+        numericLiteral: value => String(Number(value)),
+    });
+    assert.equal(built.ok, true, 'a multi-year query is built');
+    assert.equal(built.binCount, 3, 'with one bin per year of the span');
+    assert.ok(built.sql.includes('year(epoch_ms(CAST(t_ms AS BIGINT))) - 2019'),
+        'the bin index is the year, counted from the first year of the span');
+    assert.ok(built.sql.includes('bin_idx = year(epoch_ms(CAST(period_start AS BIGINT))) - 2019'),
+        'and a day only expects the bin of its own year');
+    // The sub-period is the day, so the per-period statistics are a day's.
+    assert.ok(built.sql.includes(`(period_start + ${86_400_000})`),
+        'the period a multi-year profile aggregates is the UTC day');
+
+    // The reducer, driven with rows shaped exactly as that query returns them.
+    const times = [];
+    const values = [];
+    for (let t = Date.UTC(2019, 11, 28); t < Date.UTC(2020, 0, 4); t += 6 * 3600_000) {
+        times.push(t);
+        // One value per day so the daily means, and hence the yearly means of
+        // those means, are known by hand.
+        values.push(new Date(t).getUTCDate() + (new Date(t).getUTCFullYear() - 2019) * 100);
+    }
+    const eager = buildTemporalProfile({ times, values, period: 'multi-year', spanStartMs, spanEndMs });
+    const firstYear = 2019;
+    const byDay = new Map();
+    for (let index = 0; index < times.length; index++) {
+        const dayStart = Math.floor(times[index] / DAY) * DAY;
+        if (!byDay.has(dayStart)) byDay.set(dayStart, { sum: 0, count: 0, first: times[index], last: times[index] });
+        const entry = byDay.get(dayStart);
+        entry.sum += values[index];
+        entry.count++;
+        entry.first = Math.min(entry.first, times[index]);
+        entry.last = Math.max(entry.last, times[index]);
+    }
+    const rows = [...byDay.entries()].map(([dayStart, entry]) => ({
+        period_start: dayStart,
+        bin_idx: new Date(dayStart).getUTCFullYear() - firstYear,
+        category: 'all',
+        first_t: entry.first,
+        last_t: entry.last,
+        has_gap: 0,
+        gap: 0,
+        s0: entry.sum,
+        nf0: entry.count,
+        ni0: 0,
+    }));
+    const reduced = temporalProfilesFromAggregateRows(rows, {
+        ...options,
+        medianStepMs: 6 * 3600_000,
+        scopeStart: times[0],
+        scopeEnd: times[times.length - 1],
+    });
+    assert.equal(reduced.ok, true, 'the reducer folds multi-year rows');
+    const lazyBins = reduced.results[0].categories[0].bins;
+    assert.equal(reduced.results[0].binCount, 3, 'keeping the three bins of the span');
+    assert.deepEqual(reduced.results[0].binYears, [2019, 2020, 2021], 'and naming their years');
+    assert.equal(reduced.results[0].absoluteBins, true, 'and saying the bins are absolute');
+    assert.deepEqual(
+        lazyBins.map(bin => [bin.mean, bin.nPeriods, bin.nExpectedPeriods]),
+        eager.categories[0].bins.map(bin => [bin.mean, bin.nPeriods, bin.nExpectedPeriods]),
+        'and agreeing with the eager kernel bin by bin',
+    );
+    assert.deepEqual(lazyBins.map(bin => bin.nPeriods), [4, 3, 0],
+        'four days in 2019, three in 2020, none in 2021 — the span declared a year the data never reaches');
+    assert.equal(lazyBins[2].nExpectedPeriods, 0, 'which therefore expects nothing');
+
+    // No readable timestamp anywhere: both paths answer with one placeholder
+    // bin and no years, rather than one of them failing with a reason.
+    const empty = temporalProfilesFromAggregateRows([], { period: 'multi-year', valueCount: 1 });
+    assert.equal(empty.ok, true, 'an empty multi-year scope is not an error');
+    assert.deepEqual(empty.results[0].binYears, [], 'it simply has no years');
+    assert.deepEqual(buildTemporalProfile({ times: [], values: [], period: 'multi-year' }).binYears, [],
+        'which is what the eager kernel says too');
 }
 
 console.log('temporal profile kernel tests passed');

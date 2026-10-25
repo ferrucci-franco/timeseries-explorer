@@ -2,10 +2,14 @@ import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import {
+    calendarPeriodWindows,
     collectMissingDays,
     computeDefiniteIntegral,
+    INTEGRAL_GROUPINGS,
+    INTEGRAL_MAX_GROUPS,
     INTEGRAL_MISSING_POLICIES,
     reduceDailyIntegral,
+    reduceDailyIntegralByPeriod,
 } from '../../compute/kernels/definite-integral.js';
 import {
     axisDuration,
@@ -33,6 +37,9 @@ import {
 
 const INTEGRAL_LAYOUTS = new Set(['horizontal', 'vertical']);
 const INTEGRAL_RECOMPUTE_DEBOUNCE_MS = 150;
+// Above this many calendar columns, the printed value on each bar stops being
+// readable and the chart is better off without it.
+const GROUPED_VALUE_LABEL_LIMIT = 24;
 
 const fallbackText = {
     integralMode: 'Integral (totals per signal)',
@@ -113,6 +120,21 @@ const fallbackText = {
     integralPerDay: 'Per day',
     integralMean: 'Mean value',
     integralLazyFailed: 'the file could not be queried for this total',
+    integralGroupBy: 'Group by',
+    integralGroupNone: 'Whole range',
+    integralGroupDay: 'Day',
+    integralGroupWeek: 'Week',
+    integralGroupMonth: 'Month',
+    integralGroupYear: 'Year',
+    integralGroupByTip: 'Integrate each calendar period (UTC) on its own instead of the whole range at once: one column per period, one colour per signal. This is what turns a rainfall record in mm into the accumulated rainfall of each year, or a power in MW into the energy of each month. The periods are exact and share their edges, so they always add back up to the whole-range total shown in the summary. Needs a calendar time axis.',
+    integralGroupPeriod: 'Period',
+    integralGroupTotal: 'Whole range',
+    integralTooManyGroups: 'that grouping would make more than {max} periods — pick a coarser period or a narrower range',
+    integralGroupNoRange: 'the range has no calendar extent to split into periods',
+    integralPieGroupedMany: 'the pie is hidden: with the totals split by period a pie would need one signal, not {count}',
+    integralStatusGrouped: '{count} signals totalled over {periods} {period} periods',
+    integralStatusGroupedOne: '1 signal totalled over {periods} {period} periods',
+    integralGroupMoreRows: '+{count} more periods — see the CSV export',
 };
 
 function text(key) {
@@ -183,7 +205,7 @@ proto._defaultIntegralState = function() {
 };
 
 proto._normalizeIntegralState = function(raw = {}) {
-    return normalizeIntegralState(raw, INTEGRAL_MISSING_POLICIES);
+    return normalizeIntegralState(raw, INTEGRAL_MISSING_POLICIES, INTEGRAL_GROUPINGS);
 };
 
 proto._ensureIntegralState = function(plot) {
@@ -953,6 +975,14 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
         sharedExcludedDays = [...union];
     }
 
+    // Calendar grouping: the whole-range total is still computed for every
+    // signal — it is what the summary and the status line report, and what the
+    // columns must add up to — and each period is then integrated separately
+    // over a window sharing its edges with its neighbours.
+    const groupWindows = this._integralGroupWindows(plot, state, warnings);
+    const groupBy = groupWindows ? state.groupBy : 'none';
+    plot._integralGroupBy = groupBy;
+
     let assumedSeconds = false;
     let indexAxis = false;
     // Measured over the real quadrature, before anything is drawn: if this says
@@ -971,6 +1001,9 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
                 unit: this._integralValueUnit(candidate.trace),
                 base: candidate.base,
                 result,
+                groups: groupWindows
+                    ? this._integralEagerGroups(state, candidate, groupWindows, sharedExcludedDays, result)
+                    : null,
             });
         }
     }, warnings);
@@ -978,7 +1011,7 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     for (const candidate of lazy) {
         const entry = lazyByTrace.get(candidate.trace);
         if (!entry) continue;
-        const result = reduceDailyIntegral(entry.days, {
+        const reduceParams = {
             method: state.method,
             missingPolicy: state.missingPolicy,
             rangeStart: entry.rangeStart,
@@ -992,7 +1025,8 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             extendLastSample: state.extendLastSample,
             explicitRangeEnd: !state.rangeFull,
             excludedDays: sharedExcludedDays,
-        });
+        };
+        const result = reduceDailyIntegral(entry.days, reduceParams);
         models.push({
             trace: candidate.trace,
             traceIndex: candidate.traceIndex,
@@ -1000,6 +1034,9 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             unit: this._integralValueUnit(candidate.trace),
             base: candidate.base,
             result,
+            groups: groupWindows
+                ? this._integralLazyGroups(entry, groupWindows, groupBy, reduceParams)
+                : null,
             lazy: true,
         });
     }
@@ -1054,7 +1091,11 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     // for one and the gate refused, say which condition it failed.
     const view = this._integralPresentation(plot, models);
     if (state.showPie && ready.length && !this._integralPieAllowed(view)) {
-        warnings.push(text(view.mixedUnits ? 'integralPieMixedUnits' : 'integralPieMixedSigns'));
+        warnings.push(view.mixedUnits
+            ? text('integralPieMixedUnits')
+            : view.grouped && view.series.length !== 1
+                ? text('integralPieGroupedMany').replace('{count}', String(view.series.length))
+                : text('integralPieMixedSigns'));
     }
 
     // Summed across signals, so each term has to be in the same unit first:
@@ -1086,11 +1127,18 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     // state something false about the other two, so it points at the summary.
     const summary = !ready.length
         ? ''
-        : unequalCoverage
-            ? text('integralStatusMixed').replace('{count}', String(ready.length))
-            : text(ready.length === 1 ? 'integralStatusOne' : 'integralStatusMany')
+        : groupBy !== 'none'
+            // Grouped, the duration of one signal says nothing useful: what the
+            // reader needs is how the range was cut up.
+            ? text(ready.length === 1 ? 'integralStatusGroupedOne' : 'integralStatusGrouped')
                 .replace('{count}', String(ready.length))
-                .replace('{time}', formatAxisDuration(ready[0], ready[0].result.coveredTime));
+                .replace('{periods}', String(groupWindows.length))
+                .replace('{period}', text(`integralGroup${groupBy[0].toUpperCase()}${groupBy.slice(1)}`).toLowerCase())
+            : unequalCoverage
+                ? text('integralStatusMixed').replace('{count}', String(ready.length))
+                : text(ready.length === 1 ? 'integralStatusOne' : 'integralStatusMany')
+                    .replace('{count}', String(ready.length))
+                    .replace('{time}', formatAxisDuration(ready[0], ready[0].result.coveredTime));
     this._setIntegralComputing(plot, false);
     this._setIntegralStatus(plot, summary, warnings, 'ready', notes);
 };
@@ -1184,6 +1232,65 @@ proto._setIntegralComputing = function(plot, loading) {
     }
 };
 
+// ─── Calendar grouping ────────────────────────────────────────────────────
+
+/**
+ * The calendar windows this pass will integrate, or null for one total.
+ *
+ * The windows are left WHOLE at the two ends when the range is the data's own
+ * extent, and clipped when the user drew a selection band: a band means exactly
+ * what it says, while the data extent is only where the samples happen to stop.
+ * Leaving the last window whole is also what lets `extendLastSample` give the
+ * final sample its period, so the columns still add up to the whole-range total.
+ */
+proto._integralGroupWindows = function(plot, state, warnings = []) {
+    // Periods are calendar facts; an index or numeric abscissa has none, and
+    // the panel disables the control rather than inventing a calendar.
+    if (state.groupBy === 'none' || !this._integralHasCalendarAxis(plot)) return null;
+    const [lo, hi] = this._activeIntegralRange(plot);
+    const built = calendarPeriodWindows(lo, hi, state.groupBy, { clip: !state.rangeFull });
+    if (built.ok) return built.windows;
+    warnings.push(built.reason === 'tooManyGroups'
+        ? text('integralTooManyGroups').replace('{max}', String(built.maxGroups ?? INTEGRAL_MAX_GROUPS))
+        : text('integralGroupNoRange'));
+    return null;
+};
+
+// One definite integral per window for an eager signal. Each window is read
+// from the source with one neighbouring sample on either side, so the kernel
+// interpolates the value at the period edge instead of starting from whatever
+// sample happens to be nearest — and so the trailing period of a MID window is
+// suppressed, because its last sample is not the series' last sample.
+proto._integralEagerGroups = function(state, candidate, windows, sharedExcludedDays, total) {
+    const base = this._integralKernelParams(state, candidate, null, sharedExcludedDays);
+    // The step the WHOLE series has, handed to every window: the result reports
+    // it in seconds on a calendar axis, the kernel wants raw abscissa units.
+    const nominalStep = total?.hasNominalStep && Number.isFinite(total.medianDt)
+        ? total.medianDt * (total.timeKind === 'datetime' ? 1000 : 1)
+        : null;
+    return windows.map((periodWindow) => {
+        const selected = this._integralSeriesForTrace(candidate.trace, [periodWindow.startMs, periodWindow.endMs]);
+        const time = base.time.values === null ? base.time : { values: selected.times, kind: base.time.kind };
+        return {
+            startMs: periodWindow.periodStartMs,
+            endMs: periodWindow.periodEndMs,
+            result: computeDefiniteIntegral(selected.values, time, {
+                ...base.options,
+                rangeStart: periodWindow.startMs,
+                rangeEnd: periodWindow.endMs,
+                nominalStep,
+            }),
+        };
+    });
+};
+
+// The same split for a lazy signal, from the per-day partials the file already
+// gave up. Every grouping period is a whole number of UTC days, so grouping is
+// a partition of those partials: no second query, and the same arithmetic.
+proto._integralLazyGroups = function(entry, windows, groupBy, reduceParams) {
+    return reduceDailyIntegralByPeriod(entry.days || [], windows, groupBy, reduceParams);
+};
+
 // The kernel's inputs for one candidate: the time context in raw abscissa units
 // (epoch ms on a calendar axis) plus the policy options from the panel.
 proto._integralKernelParams = function(state, candidate, range, sharedExcludedDays) {
@@ -1214,7 +1321,13 @@ proto._integralKernelParams = function(state, candidate, range, sharedExcludedDa
 // derived once so the four cannot disagree: the converted values, the shared
 // exponent and the unit label that goes with it.
 proto._integralPresentation = function(plot, models = []) {
-    return buildIntegralPresentation(models, this._ensureIntegralState(plot), {
+    const state = this._ensureIntegralState(plot);
+    // The view shows what was COMPUTED, not what the control is set to: a
+    // grouping the last pass refused (too many periods, no calendar axis) must
+    // not leave the chart claiming columns that no kernel ever produced.
+    const computed = plot?._integralGroupBy;
+    const resolved = computed != null && computed !== state.groupBy ? { ...state, groupBy: computed } : state;
+    return buildIntegralPresentation(models, resolved, {
         samplesLabel: text('integralSamples'),
     });
 };
@@ -1232,6 +1345,8 @@ proto._buildIntegralTraces = function(plot, models = []) {
             pieVisible: false,
         };
     }
+
+    if (view.grouped) return this._buildGroupedIntegralTraces(plot, models, view);
 
     const names = view.rows.map(row => row.model.name);
     const values = view.rows.map(row => row.scaled);
@@ -1293,6 +1408,85 @@ proto._buildIntegralTraces = function(plot, models = []) {
         hovertemplate: `<b>%{label}</b><br>%{value:.4g} ${escapeHtml(view.axisUnit)}<br>%{percent}<extra></extra>`,
         // Its own pane now, so it takes the whole plotting area rather than a
         // reserved slice of the bar chart's.
+        domain: { x: [0, 1], y: [0, 1] },
+        sort: false,
+        showlegend: false,
+    }] : [];
+
+    return {
+        traces,
+        layout: this._buildIntegralLayout(plot, { models, view }),
+        pieTraces,
+        pieLayout: this._buildIntegralPieLayout(plot),
+        pieVisible,
+    };
+};
+
+// Grouped by a calendar period, the chart becomes one column per period and one
+// colour per signal: the comparison the user is after is "this year against
+// last year", so the period is the category and the signal is the series.
+proto._buildGroupedIntegralTraces = function(plot, models, view) {
+    const state = view.state;
+    const horizontal = state.orientation === 'horizontal';
+    // Grouped, the label on a bar drops the unit the axis already states, and
+    // goes away entirely once there are more columns than a legible label can
+    // fit between them. A year of days is 365 columns: printed values there are
+    // not a reading, they are a texture.
+    const showValues = state.showValues && view.categories.length <= GROUPED_VALUE_LABEL_LIMIT;
+    const withUnit = (value, unit) => (value == null ? '—' : `${formatNumber(value, 6)}${unit ? ` ${unit}` : ''}`);
+    const traces = view.series.map((entry) => {
+        const values = entry.points.map(point => point.scaled);
+        const customdata = entry.points.map(point => [
+            withUnit(point.value, view.resultUnit),
+            withUnit(point.perDay, view.perDayUnit),
+            withUnit(point.mean, view.meanUnit),
+            point.result ? formatAxisDuration(entry.model, point.result.coveredTime) : '—',
+            point.result?.discardedDayCount ?? 0,
+            point.result?.sampleCount ?? 0,
+            entry.model.name,
+            point.label,
+        ]);
+        return {
+            type: 'bar',
+            orientation: horizontal ? 'h' : 'v',
+            x: horizontal ? values : view.categories,
+            y: horizontal ? view.categories : values,
+            name: entry.model.name,
+            marker: {
+                color: entry.model.trace.color,
+                line: { color: entry.model.trace.color, width: 1 },
+            },
+            text: showValues ? values.map(value => (value == null ? '' : formatNumber(value, 4))) : undefined,
+            textposition: showValues ? 'auto' : 'none',
+            // Horizontal or not at all: a rotated label inside a narrow column
+            // is a smear, and Plotly rotates by default when it does not fit.
+            textangle: 0,
+            cliponaxis: false,
+            showlegend: true,
+            customdata,
+            hovertemplate: `<b>%{customdata[6]}</b> · %{customdata[7]}<br>`
+                + `${escapeHtml(text('integralValue'))} = %{customdata[0]}<br>`
+                + `${escapeHtml(text('integralPerDay'))} = %{customdata[1]}<br>`
+                + `${escapeHtml(text('integralMean'))} = %{customdata[2]}<br>`
+                + `${escapeHtml(text('integralCoverage'))} = %{customdata[3]}<br>`
+                + `${escapeHtml(text('integralDiscarded'))} = %{customdata[4]} ${escapeHtml(text('integralDays'))}<br>`
+                + `${escapeHtml(text('integralSamples'))} = %{customdata[5]}<extra></extra>`,
+            xaxis: 'x',
+            yaxis: 'y',
+        };
+    });
+
+    const pieVisible = this._integralPieAllowed(view);
+    const slices = pieVisible ? view.series[0].points.filter(point => point.result?.ok) : [];
+    const pieTraces = pieVisible ? [{
+        type: 'pie',
+        labels: slices.map(point => point.label),
+        values: slices.map(point => Math.abs(point.scaled)),
+        // One colour per PERIOD here, not per signal: the slices are the years
+        // of a single signal, and painting them all its colour would hide them.
+        marker: { colors: slices.map((_, index) => this._nextColor(index)) },
+        textinfo: 'percent',
+        hovertemplate: `<b>%{label}</b><br>%{value:.4g} ${escapeHtml(view.axisUnit)}<br>%{percent}<extra></extra>`,
         domain: { x: [0, 1], y: [0, 1] },
         sort: false,
         showlegend: false,
@@ -1376,21 +1570,31 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
         type: 'category',
         automargin: true,
     };
+    // Grouped, the category axis carries the periods and each signal is a
+    // series, so it needs the legend the single-total chart never wanted: the
+    // colours are the only thing naming the signals.
+    const grouped = !!resolved.grouped;
+    if (grouped) {
+        categoryAxis.title = { text: text('integralGroupPeriod'), font: { size: 10 } };
+    }
     return {
         paper_bgcolor: bg,
         plot_bgcolor: bg,
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
-        showlegend: false,
+        showlegend: grouped && resolved.series.length > 1 && this.legendPosition !== 'hidden',
         legend: this._legendConfig(legendBg, gridColor),
+        barmode: grouped ? 'group' : 'overlay',
         bargap: 0.32,
+        bargroupgap: grouped ? 0.06 : 0,
         xaxis: horizontal ? valueAxis : categoryAxis,
         yaxis: horizontal ? categoryAxis : valueAxis,
         margin: { l: 62, r: 18, t: 12, b: 52 },
         autosize: true,
         hovermode: 'closest',
-        // Switching quantity changes the axis by orders of magnitude, so the
-        // view must not be preserved across it.
-        uirevision: `integral-${state.orientation}-${state.integralUnit}-${state.scale}-${state.quantity}`,
+        // Switching quantity changes the axis by orders of magnitude, and
+        // switching grouping changes what the categories even are, so the view
+        // must not be preserved across either.
+        uirevision: `integral-${state.orientation}-${state.integralUnit}-${state.scale}-${state.quantity}-${resolved.groupBy}`,
     };
 };
 
@@ -1462,22 +1666,80 @@ proto._renderIntegralSummary = function(plot, models = []) {
         ? '<td class="integral-num">—</td><td class="integral-group-end"></td>'
         : `<td class="integral-num">${escapeHtml(formatNumber(value, 5))}</td>`
             + `<td class="integral-group-end">${escapeHtml(unit)}</td>`);
-    const rows = view.rows.map(({ model, unit, value, perDay, mean }) => {
-        const result = model.result;
-        const coverage = result.timeKind === 'datetime' && result.dayCount
-            ? `${result.dayCount - result.discardedDayCount}/${result.dayCount} ${escapeHtml(text('integralDays'))}`
-            : formatAxisDuration(model, result.coveredTime);
-        const totalUnit = this._integralResultUnit(unit, view.state, result.timeKind);
+    const measurementRow = (label, swatch, { unit, value, perDay, mean, result, model }) => {
+        const coverage = result?.ok ? formatAxisDuration(model, result.coveredTime) : '—';
+        const totalUnit = this._integralResultUnit(unit, view.state, result?.timeKind || view.timeKind);
+        const name = swatch
+            ? `<span class="integral-swatch" style="background:${escapeHtml(swatch)}"></span>${escapeHtml(label)}`
+            : escapeHtml(label);
         return `<tr>
-            <td class="integral-group-end"><span class="integral-swatch" style="background:${escapeHtml(model.trace.color)}"></span>${escapeHtml(model.name)}</td>
+            <td class="integral-group-end">${name}</td>
             ${cell(value, totalUnit)}
             ${cell(perDay, `${totalUnit}/d`)}
             ${cell(mean, unit || UNKNOWN_UNIT)}
             <td>${coverage}</td>
         </tr>`;
-    }).join('');
+    };
+    let rows;
+    if (view.grouped) {
+        // One block per signal: its periods in calendar order, then the
+        // whole-range total they add up to. A column of numbers that does not
+        // show its own total invites the reader to add it up by eye and get it
+        // wrong. Long blocks are cut off rather than paged — the CSV export is
+        // the right place to read three thousand days.
+        const maxRows = 200;
+        const totalByModel = new Map(view.rows.map(row => [row.model, row]));
+        rows = view.series.map((entry) => {
+            const points = entry.points.filter(point => point.result);
+            const shown = points.slice(0, maxRows);
+            const hidden = points.length - shown.length;
+            const total = totalByModel.get(entry.model);
+            const header = `<tr class="integral-summary-group"><th colspan="8">`
+                + `<span class="integral-swatch" style="background:${escapeHtml(entry.model.trace.color)}"></span>`
+                + `${escapeHtml(entry.model.name)}</th></tr>`;
+            const body = shown.map(point => measurementRow(point.label, '', {
+                unit: entry.unit,
+                value: point.value,
+                perDay: point.perDay,
+                mean: point.mean,
+                result: point.result,
+                model: entry.model,
+            })).join('');
+            const more = hidden > 0
+                ? `<tr><td colspan="8" class="integral-summary-more">${escapeHtml(text('integralGroupMoreRows').replace('{count}', String(hidden)))}</td></tr>`
+                : '';
+            const totalRow = total
+                ? measurementRow(text('integralGroupTotal'), '', {
+                    unit: entry.unit,
+                    value: total.value,
+                    perDay: total.perDay,
+                    mean: total.mean,
+                    result: entry.model.result,
+                    model: entry.model,
+                })
+                : '';
+            return header + body + more + totalRow;
+        }).join('');
+    } else {
+        rows = view.rows.map(row => {
+            const result = row.model.result;
+            // Ungrouped, days are the natural reading of coverage because the
+            // whole-day policies are what remove time from the domain.
+            const coverage = result.timeKind === 'datetime' && result.dayCount
+                ? `${result.dayCount - result.discardedDayCount}/${result.dayCount} ${escapeHtml(text('integralDays'))}`
+                : formatAxisDuration(row.model, result.coveredTime);
+            const totalUnit = this._integralResultUnit(row.unit, view.state, result.timeKind);
+            return `<tr>
+                <td class="integral-group-end"><span class="integral-swatch" style="background:${escapeHtml(row.model.trace.color)}"></span>${escapeHtml(row.model.name)}</td>
+                ${cell(row.value, totalUnit)}
+                ${cell(row.perDay, `${totalUnit}/d`)}
+                ${cell(row.mean, row.unit || UNKNOWN_UNIT)}
+                <td>${coverage}</td>
+            </tr>`;
+        }).join('');
+    }
     host.innerHTML = `<table class="integral-summary-table"><thead><tr>
-        <th class="integral-group-end">${escapeHtml(text('integralSignal'))}</th>
+        <th class="integral-group-end">${escapeHtml(text(view.grouped ? 'integralGroupPeriod' : 'integralSignal'))}</th>
         <th class="integral-num integral-group-end" colspan="2">${escapeHtml(text('integralValue'))}</th>
         <th class="integral-num integral-group-end" colspan="2">${escapeHtml(text('integralPerDay'))}</th>
         <th class="integral-num integral-group-end" colspan="2">${escapeHtml(text('integralMean'))}</th>
@@ -1733,6 +1995,22 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
         this._scheduleIntegralRecompute(panelId, { immediate: true });
     }, calendar ? new Set() : new Set(['discard-day-own', 'discard-day-all'])), text('integralMissingTip'));
 
+    // Splitting the domain of integration into calendar periods. It belongs
+    // here rather than under Display: it changes WHAT is integrated, not how
+    // the result is drawn.
+    row(text('integralGroupBy'), select([
+        { value: 'none', label: text('integralGroupNone') },
+        { value: 'day', label: text('integralGroupDay') },
+        { value: 'week', label: text('integralGroupWeek') },
+        { value: 'month', label: text('integralGroupMonth') },
+        { value: 'year', label: text('integralGroupYear') },
+    ], calendar ? state.groupBy : 'none', value => {
+        state.groupBy = value;
+        this._renderIntegralOptionsPanel(panelId, plot);
+        this._scheduleIntegralRecompute(panelId, { immediate: true });
+    }, calendar ? new Set() : new Set(['day', 'week', 'month', 'year'])),
+    calendar ? text('integralGroupByTip') : `${text('integralGroupByTip')} — ${i18n.t('temporalProfileCalendarRequired')}`);
+
     // ── Display ──
     section(text('integralDisplay'));
     // Which of the three readings the bars carry. All three appear in the
@@ -1752,14 +2030,20 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
         state.orientation = value;
         this._scheduleIntegralRecompute(panelId, { immediate: true });
     }));
-    row(text('integralSort'), select([
+    // Order only has a meaning when the bars ARE the signals. Grouped, the
+    // categories are calendar periods and re-sorting them by size would throw
+    // away the sequence that is the whole point.
+    const grouped = calendar && state.groupBy !== 'none';
+    const sortSelect = select([
         { value: 'panel', label: text('integralSortPanel') },
         { value: 'desc', label: text('integralSortDesc') },
         { value: 'asc', label: text('integralSortAsc') },
-    ], state.sort, value => {
+    ], grouped ? 'panel' : state.sort, value => {
         state.sort = value;
         this._scheduleIntegralRecompute(panelId, { immediate: true });
-    }));
+    });
+    sortSelect.disabled = grouped;
+    row(text('integralSort'), sortSelect);
     row(text('integralShowPie'), checkbox(state.showPie, checked => {
         state.showPie = checked;
         this._scheduleIntegralRecompute(panelId, { immediate: true });
