@@ -49,6 +49,8 @@ El mensaje de progreso que acompaña a una exportación **sí** se puntúa: "12.
 
 Los dos campos van **apilados**, uno por fila, y no lado a lado como el resto de los formularios de Settings: la opción más larga es una frase ("Automatic (from the language)") y en media columna se truncaba — un menú que no se puede leer antes de abrirlo. La fila le da al select 16–24 rem en lugar de los 10–12 del formulario general. El ejemplo en vivo va separado por una línea, porque es contra lo que el lector compara la elección y no parte del texto de ayuda de arriba.
 
+Por debajo del breakpoint donde el diálogo ya reorganiza (760 px), la etiqueta pasa **arriba** del control. Esos 16 rem no dejan columna de etiqueta usable en un teléfono: medido, la caja de la etiqueta colapsaba a cero y su texto se pintaba encima del select en todo ancho hasta 560 px. Hace falta una regla propia porque la del escritorio le gana por especificidad a la genérica de pantallas angostas. La etiqueta además declara `minmax(min-content, 1fr)` en lugar de `minmax(0, 1fr)`: una pista que puede encogerse a nada deja que las palabras se derramen fuera de su caja, que es exactamente cómo se veía el defecto.
+
 ## 4. Arquitectura
 
 | Capa | Archivo | Qué hace |

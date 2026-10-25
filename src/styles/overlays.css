@@ -969,7 +969,11 @@
 }
 
 .number-format-grid .plot-settings-field {
-    grid-template-columns: minmax(0, 1fr) minmax(16rem, 24rem);
+    /* `min-content` on the label, not 0: a 1fr track that may shrink to
+       nothing lets the words spill out of their box and land on top of the
+       select. Narrow enough and this grid overflows instead, which is visible
+       and recoverable; the stacked layout below is what actually handles it. */
+    grid-template-columns: minmax(min-content, 1fr) minmax(16rem, 24rem);
 }
 
 /* The live sample is what the reader checks the choice against, so it is set
@@ -1161,6 +1165,15 @@
     }
 
     .plot-settings-form-compact {
+        grid-template-columns: 1fr;
+    }
+
+    /* The 16rem control does not leave a usable label column at these widths:
+       measured, the label box collapses and its text paints over the select
+       from 560px down. Label above control instead, as the generic field
+       already does on a phone — this rule exists because the desktop one
+       outranks that by specificity and would otherwise survive here. */
+    .number-format-grid .plot-settings-field {
         grid-template-columns: 1fr;
     }
 
