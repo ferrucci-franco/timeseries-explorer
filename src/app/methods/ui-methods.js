@@ -1183,8 +1183,11 @@ proto.showDisplaySettings = function() {
     numberIntro.className = 'plot-settings-section-intro';
     numberIntro.textContent = i18n.t('numberFormatSettingsIntro');
 
+    // One field per row rather than two side by side: "Automatic (from the
+    // language)" does not fit in half a panel, and a truncated option is a
+    // menu you cannot read before opening it.
     const numberGrid = document.createElement('div');
-    numberGrid.className = 'plot-settings-form';
+    numberGrid.className = 'plot-settings-form number-format-grid';
 
     const decimalControl = makeSelect(
         'decimal-separator',

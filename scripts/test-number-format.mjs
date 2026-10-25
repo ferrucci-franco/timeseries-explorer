@@ -201,6 +201,15 @@ const NARROW_SPACE = ' ';
         'Settings offers both controls');
     ok(ui.includes('plot-settings-number-tab'), 'under a topic of their own');
     ok(/numberPreview\.textContent = /.test(ui), 'with a live sample of the choice');
+    // Stacked, not side by side: the longest option is a sentence, and half a
+    // panel truncates it — a menu you cannot read before opening it.
+    ok(ui.includes("'plot-settings-form number-format-grid'"),
+        'the two fields get a column of their own');
+    const css = readFileSync(new URL('../src/styles/overlays.css', import.meta.url), 'utf8');
+    ok(/\.number-format-grid \{[^}]*grid-template-columns: minmax\(0, 1fr\)/s.test(css),
+        'which stacks them one per row');
+    ok(/\.number-format-grid \.plot-settings-field \{[^}]*minmax\(16rem, 24rem\)/s.test(css),
+        'and gives the select the width the two-column form could not');
     ok(/option\.disabled = !!character && character === chosenDecimal/.test(ui),
         'and the colliding option is taken off the menu rather than ignored afterwards');
     ok(/applyNumberSettings[\s\S]{0,900}layoutManager\.render\(\)/.test(ui),

@@ -960,6 +960,27 @@
     gap: 0.3rem 0.85rem;
 }
 
+/* The number-format fields stack instead of sitting side by side, and give the
+   control the room the two-column form could not: the longest option here is a
+   sentence ("Automatic (from the language)"), and a select that truncates it
+   hides the one thing the reader needs before opening the menu. */
+.number-format-grid {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.number-format-grid .plot-settings-field {
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 24rem);
+}
+
+/* The live sample is what the reader checks the choice against, so it is set
+   apart from the help text above rather than running on from it. */
+.plot-settings-number-preview {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-color);
+    font-variant-numeric: tabular-nums;
+}
+
 .plot-settings-form-compact {
     grid-template-columns: repeat(3, minmax(0, 1fr));
 }

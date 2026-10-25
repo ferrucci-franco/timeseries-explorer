@@ -45,6 +45,10 @@ Las dos exclusiones son deliberadas y están cubiertas por tests. Un CSV con dec
 
 El mensaje de progreso que acompaña a una exportación **sí** se puntúa: "12.345 de 61.368 filas" es prosa para un lector, no una celda.
 
+### 3.1 El panel
+
+Los dos campos van **apilados**, uno por fila, y no lado a lado como el resto de los formularios de Settings: la opción más larga es una frase ("Automatic (from the language)") y en media columna se truncaba — un menú que no se puede leer antes de abrirlo. La fila le da al select 16–24 rem en lugar de los 10–12 del formulario general. El ejemplo en vivo va separado por una línea, porque es contra lo que el lector compara la elección y no parte del texto de ayuda de arriba.
+
 ## 4. Arquitectura
 
 | Capa | Archivo | Qué hace |
