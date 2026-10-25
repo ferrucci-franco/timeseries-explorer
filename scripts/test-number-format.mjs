@@ -210,6 +210,15 @@ const NARROW_SPACE = ' ';
         'which stacks them one per row');
     ok(/\.number-format-grid \.plot-settings-field \{[^}]*minmax\(16rem, 24rem\)/s.test(css),
         'and gives the select the width the two-column form could not');
+    // That 16rem control leaves no usable label column on a phone: measured,
+    // the label box collapsed to zero and its text painted over the select at
+    // every width up to 560px. The desktop rule outranks the generic narrow
+    // one by specificity, so the narrow layout needs its own override.
+    ok(/\.number-format-grid \.plot-settings-field \{[^}]*minmax\(min-content, 1fr\)/s.test(css),
+        'the label track can never be crushed to zero');
+    const narrow = css.slice(css.indexOf('@media (max-width: 760px)'), css.indexOf('@media (max-width: 430px)'));
+    ok(/\.number-format-grid \.plot-settings-field \{\s*grid-template-columns: 1fr;/s.test(narrow),
+        'and below the dialog\'s narrow breakpoint the field stacks instead');
     ok(/option\.disabled = !!character && character === chosenDecimal/.test(ui),
         'and the colliding option is taken off the menu rather than ignored afterwards');
     ok(/applyNumberSettings[\s\S]{0,900}layoutManager\.render\(\)/.test(ui),
