@@ -3727,6 +3727,20 @@ body.cursor-pair-dragging .cursor-overlay-line {
     padding-right: 6px;
 }
 .integral-summary-table td.integral-num { padding-right: 3px; }
+/* Grouped by a calendar period the table is one block per signal, so each block
+   needs a heading naming it: the period column no longer says which signal a
+   row belongs to. The heading sticks because a block can be a hundred rows. */
+.integral-summary-table tr.integral-summary-group th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-secondary, var(--bg-primary));
+    border-bottom: 1px solid var(--border-color);
+    padding-top: 5px;
+}
+.integral-summary-table td.integral-summary-more {
+    color: var(--text-secondary);
+    font-style: italic;
+}
 .integral-summary-table td.integral-group-end + td.integral-num,
 .integral-summary-table th.integral-group-end + th { padding-left: 6px; }
 .integral-swatch {

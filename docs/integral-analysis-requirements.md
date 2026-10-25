@@ -352,7 +352,15 @@ Mientras la consulta corre, el panel muestra la misma píldora de progreso no bl
 
 ---
 
-## 17. Limitaciones conocidas
+## 17. Extensión: `Group by` (totales por período calendario)
+
+El análisis integra ahora **cada período calendario por separado** cuando se lo pide (`none | day | week | month | year`): una columna por período, un color por señal, y los períodos siempre suman el total del rango entero que muestra el resumen. Es lo que convierte un registro de lluvia en mm en la lluvia acumulada de cada año.
+
+Documentado aparte, junto con el período `Multi-year` del Temporal profile, en [`calendar-period-aggregation.md`](calendar-period-aggregation.md) — incluida la identidad Σ(grupos) = total y las tres condiciones que la sostienen.
+
+---
+
+## 18. Limitaciones conocidas
 
 1. **DST**: heredada de `detectSamplingGaps` — un salto de hora de reloj no se distingue de una hora faltante usando solo el vector de tiempo.
 2. **Cambio de tasa sesgado** (fixture 14): la misma limitación que documenta PR #18; el detector es compartido a propósito.

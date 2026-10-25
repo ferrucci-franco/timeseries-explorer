@@ -34,6 +34,31 @@ export const TIME_UNIT_SECONDS = {
     d: 86400, day: 86400, days: 86400,
 };
 
+// Integrating each calendar period separately: what turns "total rainfall over
+// the record" into "rainfall per year". The vocabulary matches the temporal
+// profile's periods so one word means one thing across the app.
+export const INTEGRAL_GROUP_LABEL_PERIODS = new Set(['day', 'week', 'month', 'year']);
+
+/**
+ * The label a calendar group carries on the category axis and in the export.
+ *
+ * Years read as `2019`, months as `2019-03`, days as `2019-03-05`. A week is
+ * labelled by the date of its Monday rather than an ISO week number: `2019-W10`
+ * would be shorter and would also be wrong one year in seven, because the ISO
+ * week year is not the calendar year of its Monday.
+ */
+export function integralPeriodLabel(startMs, period) {
+    const value = Number(startMs);
+    if (!Number.isFinite(value) || !INTEGRAL_GROUP_LABEL_PERIODS.has(period)) return '';
+    const date = new Date(value);
+    const year = String(date.getUTCFullYear()).padStart(4, '0');
+    if (period === 'year') return year;
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    if (period === 'month') return `${year}-${month}`;
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
 export function defaultIntegralState() {
     return {
         layout: 'vertical',
@@ -57,6 +82,7 @@ export function defaultIntegralState() {
         showValues: true,
         sort: 'panel',
         quantity: 'total',
+        groupBy: 'none',
         warnings: [],
     };
 }
@@ -71,13 +97,16 @@ function hasFinite(value) {
     return value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
 }
 
-// `missingPolicies` is injected rather than imported so this module stays
-// independent of the kernel; the caller passes the kernel's own set.
-export function normalizeIntegralState(raw = {}, missingPolicies) {
+// `missingPolicies` and `groupings` are injected rather than imported so this
+// module stays independent of the kernel; the caller passes the kernel's own
+// sets. A missing `groupings` set means grouping off — the safe reading, since
+// a state nobody can validate must not silently split the domain.
+export function normalizeIntegralState(raw = {}, missingPolicies, groupings) {
     const defaults = defaultIntegralState();
     const split = Number(raw.split);
     const pieSplit = Number(raw.pieSplit);
     const policyOk = missingPolicies ? missingPolicies.has(raw.missingPolicy) : false;
+    const groupOk = groupings ? groupings.has(raw.groupBy) : false;
     return {
         ...defaults,
         ...raw,
@@ -105,6 +134,7 @@ export function normalizeIntegralState(raw = {}, missingPolicies) {
         showValues: raw.showValues !== false,
         sort: INTEGRAL_SORTS.has(raw.sort) ? raw.sort : defaults.sort,
         quantity: INTEGRAL_QUANTITIES.has(raw.quantity) ? raw.quantity : defaults.quantity,
+        groupBy: groupOk ? raw.groupBy : defaults.groupBy,
         warnings: Array.isArray(raw.warnings) ? raw.warnings.slice(0, 20) : [],
     };
 }
@@ -284,11 +314,38 @@ export function integralQuantityUnit(unit, quantity, integralUnit, timeKind, sam
     return total;
 }
 
+// The three readings of one integral, in the unit the panel asked for. Shared
+// by the whole-range totals and by every calendar group, so a group can never
+// be converted differently from the total it is part of.
+function quantitiesFor(model, result, state) {
+    // The kernel answers in value-unit × abscissa-unit. Two conversions get it
+    // to the requested reading: the axis unit to seconds, then seconds to hours
+    // when asked. An index axis has neither, so it stays per-sample.
+    const isIndex = model.base?.kind === 'index';
+    const secondsPerUnit = isIndex ? 1 : (model.base?.secondsPerUnit ?? 1);
+    const seconds = (result?.value ?? 0) * secondsPerUnit;
+    const value = result?.ok
+        ? (!isIndex && state.integralUnit === 'hour' ? seconds / 3600 : seconds)
+        : null;
+    // Coverage in the abscissa's own units; converted to seconds the same way,
+    // so the division cancels the time factor exactly rather than approximately.
+    const coveredSeconds = (result?.coveredTime || 0) * secondsPerUnit;
+    const mean = result?.ok && coveredSeconds > 0 ? seconds / coveredSeconds : null;
+    // Per day only means something on a calendar axis; elsewhere there is no
+    // day to divide by and inventing one would be a fiction.
+    const perDay = (result?.ok && !isIndex && coveredSeconds > 0 && result.timeKind === 'datetime')
+        ? value / (coveredSeconds / SECONDS_PER_DAY)
+        : null;
+    return { value, mean, perDay, coveredSeconds };
+}
+
 /**
  * Turn the computed models into everything the four consumers need.
  *
  * A model is `{ name, unit, base, result }` where `result` is a
- * computeDefiniteIntegral() return value and `base` a timeBaseForAxis() one.
+ * computeDefiniteIntegral() return value and `base` a timeBaseForAxis() one. A
+ * model carrying `groups` — one `{ startMs, endMs, result }` per calendar
+ * period — also produces `series`/`categories`, the grouped reading.
  *
  * Every row carries all three quantities (`value`, `perDay`, `mean`) whatever
  * the panel is plotting, because the summary and the export show them together
@@ -299,27 +356,35 @@ export function integralQuantityUnit(unit, quantity, integralUnit, timeKind, sam
  */
 export function buildIntegralPresentation(models, state, options = {}) {
     const quantity = INTEGRAL_QUANTITIES.has(state.quantity) ? state.quantity : 'total';
+    const groupBy = INTEGRAL_GROUP_LABEL_PERIODS.has(state.groupBy) ? state.groupBy : 'none';
     const ready = models.filter(model => model?.result?.ok);
-    const rows = ready.map(model => {
-        // The kernel answers in value-unit × abscissa-unit. Two conversions get
-        // it to the requested reading: the axis unit to seconds, then seconds to
-        // hours when asked. An index axis has neither, so it stays per-sample.
-        const isIndex = model.base?.kind === 'index';
-        const secondsPerUnit = isIndex ? 1 : (model.base?.secondsPerUnit ?? 1);
-        const seconds = model.result.value * secondsPerUnit;
-        const value = !isIndex && state.integralUnit === 'hour' ? seconds / 3600 : seconds;
-        // Coverage in the abscissa's own units; converted to seconds the same
-        // way, so the division cancels the time factor exactly rather than
-        // approximately.
-        const coveredSeconds = (model.result.coveredTime || 0) * secondsPerUnit;
-        const mean = coveredSeconds > 0 ? seconds / coveredSeconds : null;
-        // Per day only means something on a calendar axis; elsewhere there is
-        // no day to divide by and inventing one would be a fiction.
-        const perDay = (!isIndex && coveredSeconds > 0 && model.result.timeKind === 'datetime')
-            ? value / (coveredSeconds / SECONDS_PER_DAY)
-            : null;
-        return { model, value, mean, perDay, coveredSeconds };
-    });
+    const rows = ready.map(model => ({ model, ...quantitiesFor(model, model.result, state) }));
+
+    // One series per signal, one point per calendar period. The categories are
+    // the union of every signal's periods in chronological order, so two
+    // signals with different extents still line up column by column.
+    const grouped = groupBy !== 'none';
+    const categoryStarts = grouped
+        ? [...new Set(ready.flatMap(model => (model.groups || []).map(group => group.startMs)))].sort((a, b) => a - b)
+        : [];
+    const categories = categoryStarts.map(startMs => integralPeriodLabel(startMs, groupBy));
+    const series = grouped ? ready.map((model) => {
+        const byStart = new Map((model.groups || []).map(group => [group.startMs, group]));
+        return {
+            model,
+            unit: String(state.unitOverride || '').trim() || model.unit,
+            points: categoryStarts.map((startMs, index) => {
+                const group = byStart.get(startMs);
+                return {
+                    startMs,
+                    endMs: group?.endMs ?? null,
+                    label: categories[index],
+                    result: group?.result || null,
+                    ...quantitiesFor(model, group?.result, state),
+                };
+            }),
+        };
+    }) : [];
 
     const timeKind = ready[0]?.result?.timeKind || 'datetime';
     // A unit the user typed replaces whatever the files said, for every signal
@@ -342,7 +407,11 @@ export function buildIntegralPresentation(models, state, options = {}) {
     const plotted = (row) => (quantity === 'mean' ? row.mean : quantity === 'per-day' ? row.perDay : row.value);
     const quantityUnit = integralQuantityUnit(baseUnit, quantity, state.integralUnit, timeKind, options.samplesLabel);
 
-    const maxAbs = rows.reduce((max, row) => {
+    // One exponent for everything that is drawn. Grouped, that is every point
+    // of every series — a per-period prefix would make the columns of one chart
+    // incomparable, which is the one thing a bar chart must never do.
+    const plottedPool = grouped ? series.flatMap(entry => entry.points) : rows;
+    const maxAbs = plottedPool.reduce((max, row) => {
         const candidate = plotted(row);
         return Number.isFinite(candidate) ? Math.max(max, Math.abs(candidate)) : max;
     }, 0);
@@ -361,8 +430,11 @@ export function buildIntegralPresentation(models, state, options = {}) {
 
     const ordered = rows.slice();
     const key = (row) => (Number.isFinite(plotted(row)) ? plotted(row) : -Infinity);
-    if (state.sort === 'desc') ordered.sort((a, b) => key(b) - key(a));
-    else if (state.sort === 'asc') ordered.sort((a, b) => key(a) - key(b));
+    // Grouped, the signals keep panel order and the columns keep calendar
+    // order: re-sorting a timeline by size would destroy the one thing it is
+    // for. The panel disables the control to say so.
+    if (!grouped && state.sort === 'desc') ordered.sort((a, b) => key(b) - key(a));
+    else if (!grouped && state.sort === 'asc') ordered.sort((a, b) => key(a) - key(b));
 
     return {
         state,
@@ -374,6 +446,21 @@ export function buildIntegralPresentation(models, state, options = {}) {
             unit: override || row.model.unit,
             plotted: plotted(row),
             scaled: Number.isFinite(plotted(row)) ? plotted(row) / factor : null,
+        })),
+        // Grouping leaves `rows` alone: those are still the whole-range totals,
+        // which the summary and the status line need in order to say what the
+        // columns add up to.
+        groupBy,
+        grouped,
+        categories,
+        categoryStarts,
+        series: series.map(entry => ({
+            ...entry,
+            points: entry.points.map(point => ({
+                ...point,
+                plotted: plotted(point),
+                scaled: Number.isFinite(plotted(point)) ? plotted(point) / factor : null,
+            })),
         })),
         exponent,
         factor,
@@ -398,30 +485,38 @@ export function buildIntegralPresentation(models, state, options = {}) {
  * Rows for the CSV export: one per signal, because the totals ARE the analysis
  * and the raw series would be the wrong table.
  *
+ * Grouped by a calendar period it is one row per signal AND period, with the
+ * period named and bounded in its own columns, plus the whole-range total as a
+ * final row per signal so the file carries what the columns add up to.
+ *
  * The UNSCALED value is exported with its unit spelt out — the panel's display
  * prefix exists for reading a chart, not for a spreadsheet — together with the
  * policy and the coverage, so a total can be audited away from the app.
  */
 export function buildIntegralExportTable(view, options = {}) {
     const fileNameFor = options.fileNameFor || (() => '');
-    const headers = ['signal', 'file', 'value_unit', 'value_unit_source', 'integral', 'integral_unit',
+    const grouped = !!view.grouped;
+    const headers = [
+        'signal', 'file',
+        ...(grouped ? ['group', 'period', 'period_start', 'period_end'] : []),
+        'value_unit', 'value_unit_source', 'integral', 'integral_unit',
         'per_day', 'per_day_unit', 'mean', 'mean_unit',
         'method', 'missing_policy', 'sample_reading',
         'range_start', 'range_end', 'covered', 'uncovered', 'discarded_days', 'days_in_range', 'samples'];
     const isCalendar = view.timeKind === 'datetime';
     const stamp = (value) => (isCalendar && Number.isFinite(value) ? new Date(value).toISOString() : value);
-    const rows = view.rows.map(({ model, unit, value, perDay, mean }) => {
-        const result = model.result;
+    const measurement = ({ model, unit, value, perDay, mean, result, group }) => {
         const total = integralResultUnit(unit, view.state.integralUnit, result.timeKind, options.samplesLabel);
         return [
             model.name,
             fileNameFor(model.trace?.fileId),
+            ...(grouped ? group : []),
             unit,
             // Where that unit came from. A total is not auditable without it:
             // "MW·h" read from the file and "MW·h" typed into the panel are the
             // same string and very different claims.
             unit ? (view.declaredUnit ? 'declared' : 'file') : 'none',
-            value,
+            value ?? '',
             total,
             // All three quantities go out together whatever the panel is
             // plotting: which one was on screen is a viewing choice, not a
@@ -442,7 +537,41 @@ export function buildIntegralExportTable(view, options = {}) {
             result.dayCount,
             result.sampleCount,
         ];
-    });
+    };
+    if (!grouped) {
+        return {
+            headers,
+            rows: view.rows.map(row => measurement({ ...row, result: row.model.result })),
+        };
+    }
+    const rows = [];
+    const totalByModel = new Map(view.rows.map(row => [row.model, row]));
+    for (const entry of view.series) {
+        for (const point of entry.points) {
+            // A period the signal has no data for is left out rather than
+            // exported as a zero: "no data" and "integrates to nothing" are
+            // different claims and a spreadsheet cannot tell them apart.
+            if (!point.result) continue;
+            rows.push(measurement({
+                model: entry.model,
+                unit: entry.unit,
+                value: point.value,
+                perDay: point.perDay,
+                mean: point.mean,
+                result: point.result,
+                group: [view.groupBy, point.label, stamp(point.startMs), stamp(point.endMs)],
+            }));
+        }
+        const total = totalByModel.get(entry.model);
+        if (total) {
+            rows.push(measurement({
+                ...total,
+                unit: entry.unit,
+                result: entry.model.result,
+                group: ['total', '', stamp(entry.model.result.rangeStart), stamp(entry.model.result.rangeEnd)],
+            }));
+        }
+    }
     return { headers, rows };
 }
 
@@ -452,10 +581,17 @@ export function buildIntegralExportTable(view, options = {}) {
 export function integralPieAllowed(view) {
     if (!view?.state?.showPie || !view.rows.length) return false;
     if (view.mixedUnits) return false;
+    // Grouped, the slices are the periods of ONE signal — the share each year
+    // took of the record. Two signals would put two wholes in one pie, which is
+    // not a share of anything.
+    const slices = view.grouped
+        ? (view.series.length === 1 ? view.series[0].points.filter(point => point.result) : null)
+        : view.rows;
+    if (!slices?.length) return false;
     // Judged on the PLOTTED quantity: per-day and mean are the total divided by
     // a positive duration, so the signs agree, but reading the plotted value
     // keeps the gate honest if that ever stops being true.
-    const positive = view.rows.some(row => row.plotted > 0);
-    const negative = view.rows.some(row => row.plotted < 0);
+    const positive = slices.some(slice => slice.plotted > 0);
+    const negative = slices.some(slice => slice.plotted < 0);
     return !(positive && negative);
 }

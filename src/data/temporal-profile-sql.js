@@ -4,6 +4,7 @@
 // lazy files produce the same Plotly model.
 
 import {
+    multiYearBinEdges,
     TEMPORAL_PROFILE_GAP_FACTOR,
     TEMPORAL_PROFILE_MAX_BINS,
     TEMPORAL_PROFILE_PERIODS,
@@ -30,6 +31,38 @@ function profileCategoryFor(category, period, dayGrouping, combineWeekends = fal
 
 function profileGeometry(options = {}) {
     const period = TEMPORAL_PROFILE_PERIODS.has(options.period) ? options.period : 'day';
+    // Multi-year does not fold: its bins are the calendar years the file spans,
+    // read from the same span the caller took from MIN/MAX(t) so the lazy bins
+    // land exactly where the eager kernel puts them. The sub-period is the day.
+    if (period === 'multi-year') {
+        // Nothing in scope has a readable timestamp means there are no years to
+        // bin. The eager kernel answers the same way — one placeholder bin and
+        // an empty year list — and the query built from it matches no row, so
+        // the two paths still agree on the empty profile instead of one of them
+        // failing with a reason the user would see.
+        const edges = multiYearBinEdges(options.spanStartMs, options.spanEndMs)
+            || { edgesMs: [0, DAY_MS], years: [] };
+        const binCount = Math.max(1, edges.years.length);
+        if (binCount > TEMPORAL_PROFILE_MAX_BINS) {
+            return { ok: false, reason: 'tooManyBins', binCount, maxBins: TEMPORAL_PROFILE_MAX_BINS };
+        }
+        return {
+            ok: true,
+            period,
+            resolutionUnit: 'year',
+            calendarMonthBins: false,
+            multiYear: true,
+            resolutionMinutes: null,
+            resolutionMs: null,
+            durationMs: edges.edgesMs[binCount] - edges.edgesMs[0],
+            binEdgesMs: edges.edgesMs,
+            binYears: edges.years,
+            // A placeholder year keeps the generated SQL valid; it can never
+            // match a row, because the span that produced it held none.
+            firstYear: edges.years[0] ?? 1970,
+            binCount,
+        };
+    }
     const resolutionUnit = period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute';
     const calendarMonthBins = resolutionUnit === 'month';
     const resolutionMinutes = calendarMonthBins ? null : Number(options.resolutionMinutes);
@@ -48,7 +81,7 @@ function profileGeometry(options = {}) {
     if (!Number.isInteger(binCount) || binCount < 1 || binCount > TEMPORAL_PROFILE_MAX_BINS) {
         return { ok: false, reason: 'tooManyBins', binCount, maxBins: TEMPORAL_PROFILE_MAX_BINS };
     }
-    return { ok: true, period, resolutionUnit, calendarMonthBins, resolutionMinutes, resolutionMs, durationMs, binEdgesMs, binCount };
+    return { ok: true, period, resolutionUnit, calendarMonthBins, multiYear: false, resolutionMinutes, resolutionMs, durationMs, binEdgesMs, binCount };
 }
 
 export function buildTemporalProfileTimeStatsSql(options = {}) {
@@ -76,6 +109,9 @@ export function buildTemporalProfileTimeStatsSql(options = {}) {
 function periodSql(period) {
     const timestamp = 'epoch_ms(CAST(t_ms AS BIGINT))';
     const dayStart = `(t_ms - (((t_ms % ${DAY_MS}) + ${DAY_MS}) % ${DAY_MS}))`;
+    // Multi-year aggregates days, like 'day', but without the day-type split:
+    // the categories belong to the folded profiles, not to a timeline.
+    if (period === 'multi-year') return { periodStart: dayStart, category: `'all'` };
     if (period === 'day') {
         return {
             periodStart: dayStart,
@@ -94,6 +130,7 @@ function periodSql(period) {
 
 function binIndexSql(geometry) {
     const timestamp = 'epoch_ms(CAST(t_ms AS BIGINT))';
+    if (geometry.multiYear) return `(year(${timestamp}) - ${geometry.firstYear})`;
     if (geometry.calendarMonthBins) return `(month(${timestamp}) - 1)`;
     if (geometry.period === 'year') {
         const yearStart = `date_trunc('year', ${timestamp})`;
@@ -184,13 +221,19 @@ export function buildTemporalProfileAggregateSql(options = {}) {
 }
 
 function periodEndSql(period) {
-    if (period === 'day') return `(period_start + ${DAY_MS})`;
+    if (period === 'day' || period === 'multi-year') return `(period_start + ${DAY_MS})`;
     if (period === 'week') return `(period_start + ${WEEK_MS})`;
     if (period === 'month') return `epoch_ms(epoch_ms(CAST(period_start AS BIGINT)) + INTERVAL 1 MONTH)`;
     return `epoch_ms(epoch_ms(CAST(period_start AS BIGINT)) + INTERVAL 1 YEAR)`;
 }
 
 function structuralPeriodBinSql(geometry) {
+    // A day belongs to one calendar year and to no other, so every other bin
+    // is structural for it. This is what keeps `nExpectedPeriods` equal to the
+    // days of that year rather than the days of the whole record.
+    if (geometry.multiYear) {
+        return `(bin_idx = year(epoch_ms(CAST(period_start AS BIGINT))) - ${geometry.firstYear})`;
+    }
     if (geometry.period === 'month') {
         return `(bin_idx * ${geometry.resolutionMs}) < (period_end - period_start)`;
     }
@@ -417,6 +460,8 @@ export function temporalProfilesFromFinalRows(rows = [], options = {}) {
             dayGrouping,
             binCount: geometry.binCount,
             durationHours: geometry.durationMs / HOUR_MS,
+            absoluteBins: !!geometry.multiYear,
+            binYears: geometry.binYears || null,
             categories,
             stats: {
                 nTime: nScope, nValues: nScope, nAligned: nScope, nScope, nFinite, nInvalid,
@@ -430,7 +475,7 @@ export function temporalProfilesFromFinalRows(rows = [], options = {}) {
 }
 
 function periodEnd(startMs, period) {
-    if (period === 'day') return startMs + DAY_MS;
+    if (period === 'day' || period === 'multi-year') return startMs + DAY_MS;
     if (period === 'week') return startMs + WEEK_MS;
     const date = new Date(startMs);
     if (period === 'month') return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
@@ -438,6 +483,9 @@ function periodEnd(startMs, period) {
 }
 
 function structuralBin(item, geometry, binIndex) {
+    if (geometry.multiYear) {
+        return binIndex !== new Date(item.startMs).getUTCFullYear() - geometry.firstYear;
+    }
     const start = geometry.binEdgesMs[binIndex];
     const end = geometry.binEdgesMs[binIndex + 1];
     if (geometry.period === 'month') return start >= item.endMs - item.startMs;
@@ -513,6 +561,8 @@ export function temporalProfilesFromAggregateRows(rows = [], options = {}) {
                 dayGrouping,
                 binCount: geometry.binCount,
                 durationHours: geometry.durationMs / HOUR_MS,
+                absoluteBins: !!geometry.multiYear,
+                binYears: geometry.binYears || null,
                 categories: [],
                 stats: {
                     nTime: 0, nValues: 0, nAligned: 0, nScope: 0, nFinite: 0, nInvalid: 0,
@@ -595,6 +645,8 @@ export function temporalProfilesFromAggregateRows(rows = [], options = {}) {
             dayGrouping,
             binCount: geometry.binCount,
             durationHours: geometry.durationMs / HOUR_MS,
+            absoluteBins: !!geometry.multiYear,
+            binYears: geometry.binYears || null,
             categories,
             stats: {
                 nTime: nScope,

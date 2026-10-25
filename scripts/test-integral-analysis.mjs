@@ -12,8 +12,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-import { computeDefiniteIntegral } from '../src/compute/kernels/definite-integral.js';
-import { INTEGRAL_MISSING_POLICIES } from '../src/compute/kernels/definite-integral.js';
+import {
+    calendarPeriodWindows,
+    computeDefiniteIntegral,
+    INTEGRAL_GROUPINGS,
+    INTEGRAL_MISSING_POLICIES,
+} from '../src/compute/kernels/definite-integral.js';
 import {
     axisDuration,
     buildIntegralExportTable,
@@ -21,6 +25,7 @@ import {
     defaultIntegralState,
     describeUnitScaling,
     formatIntegralDuration,
+    integralPeriodLabel,
     integralPieAllowed,
     integralQuantityUnit,
     integralResultUnit,
@@ -677,6 +682,210 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     // The methods module must stay free of raw NUL bytes: two older modules
     // carry them as key separators and are invisible to grep as a result.
     ok(!methods.includes(String.fromCharCode(0)), 'the mode module stays greppable (no NUL bytes)');
+}
+
+// ─── 12. Grouping the totals by calendar period ───────────────────────────
+//
+// The feature a rainfall record asks for: the accumulated rainfall of each
+// year, rather than one number for the whole file. The presentation layer's job
+// is to turn the per-period results into columns without ever letting them
+// disagree with the whole-range total they came from.
+{
+    const groupState = (overrides = {}) =>
+        normalizeIntegralState(overrides, INTEGRAL_MISSING_POLICIES, INTEGRAL_GROUPINGS);
+
+    // Labels name the period, not an offset into one.
+    eq(integralPeriodLabel(Date.UTC(2019, 0, 1), 'year'), '2019', 'a year is labelled by its number');
+    eq(integralPeriodLabel(Date.UTC(2019, 2, 1), 'month'), '2019-03', 'a month by year and month');
+    eq(integralPeriodLabel(Date.UTC(2019, 2, 5), 'day'), '2019-03-05', 'a day by its date');
+    eq(integralPeriodLabel(Date.UTC(2019, 2, 4), 'week'), '2019-03-04',
+        'and a week by the date of its Monday — an ISO week number would name a different year one year in seven');
+    eq(integralPeriodLabel(Date.UTC(2019, 0, 1), 'none'), '', 'no period, no label');
+    eq(integralPeriodLabel(NaN, 'year'), '', 'nor an unreadable instant');
+
+    // Grouping has to survive a round trip through a saved session, and must
+    // never be read from a state nobody could validate.
+    eq(defaultIntegralState().groupBy, 'none', 'a new panel groups nothing');
+    eq(groupState({ groupBy: 'year' }).groupBy, 'year', 'a valid period is kept');
+    eq(groupState({ groupBy: 'decade' }).groupBy, 'none', 'an invented one is refused');
+    eq(normalizeIntegralState({ groupBy: 'year' }, INTEGRAL_MISSING_POLICIES).groupBy, 'none',
+        'and with no vocabulary to check against, grouping stays off rather than guessed');
+
+    // Two signals over 400 hourly samples starting mid-month, so the first and
+    // last monthly periods are partial — the interesting case, because that is
+    // where a careless split loses or duplicates an hour.
+    const count = 24 * 70 + 5;
+    const start = Date.UTC(2021, 10, 18, 9);
+    const times = Float64Array.from({ length: count }, (_, i) => start + i * HOUR);
+    const time = { values: times, kind: 'datetime' };
+    const signals = [
+        { name: 'rain', unit: 'mm', values: Float64Array.from({ length: count }, (_, i) => 1 + (i % 7) * 0.5) },
+        { name: 'rain2', unit: 'mm', values: Float64Array.from({ length: count }, (_, i) => 2 + Math.sin(i / 5)) },
+    ];
+    const windows = calendarPeriodWindows(times[0], times[count - 1], 'month', { clip: false });
+    eq(windows.ok, true, 'the months of the record are laid out');
+    const models = signals.map((signal, index) => {
+        const total = computeDefiniteIntegral(signal.values, time, { extendLastSample: true });
+        return {
+            trace: { varName: signal.name, fileId: 'f1', color: index ? '#aa3333' : '#3333aa' },
+            traceIndex: index,
+            name: signal.name,
+            unit: signal.unit,
+            base: timeBaseForAxis('datetime', 'datetime'),
+            result: total,
+            groups: windows.windows.map(window => ({
+                startMs: window.periodStartMs,
+                endMs: window.periodEndMs,
+                result: computeDefiniteIntegral(signal.values, time, {
+                    extendLastSample: true,
+                    rangeStart: window.startMs,
+                    rangeEnd: window.endMs,
+                    nominalStep: total.medianDt * 1000,
+                }),
+            })),
+        };
+    });
+
+    const view = buildIntegralPresentation(models, groupState({ groupBy: 'month', unitOverride: 'mm' }));
+    ok(view.grouped, 'the view knows it is grouped');
+    eq(view.groupBy, 'month', 'and by what');
+    eq(view.categories, ['2021-11', '2021-12', '2022-01'], 'the categories are the months, in calendar order');
+    eq(view.series.map(entry => entry.model.name), ['rain', 'rain2'],
+        'one series per signal, in panel order');
+    eq(view.rows.map(row => row.model.name), ['rain', 'rain2'],
+        'and `rows` still carries the whole-range totals the columns add up to');
+
+    // The identity the whole feature rests on.
+    for (const entry of view.series) {
+        const total = view.rows.find(row => row.model === entry.model);
+        const summed = entry.points.reduce((sum, point) => sum + (point.value || 0), 0);
+        close(summed, total.value, `${entry.model.name}: the monthly totals sum to the whole-range total`, 1e-12);
+        const coverage = entry.points.reduce((sum, point) => sum + (point.coveredSeconds || 0), 0);
+        close(coverage, total.coveredSeconds, `${entry.model.name}: and cover the same duration`, 1e-12);
+    }
+
+    // One exponent for the whole chart, taken from the largest PLOTTED value
+    // anywhere in it: a per-period prefix would make the columns incomparable.
+    const scaledBack = view.series[0].points.map(point => point.scaled * view.factor);
+    close(scaledBack[0], view.series[0].points[0].value, 'scaling is reversible, so the bars carry the real value');
+    const biggest = Math.max(...view.series.flatMap(entry => entry.points.map(point => Math.abs(point.value))));
+    ok(view.factor <= biggest && biggest / view.factor < 1000,
+        'and the exponent is the one the largest column needs');
+
+    // Grouped, the columns are a timeline: sorting them by size would destroy
+    // the one thing a timeline is for, so `sort` is ignored.
+    const sorted = buildIntegralPresentation(models, groupState({ groupBy: 'month', sort: 'desc' }));
+    eq(sorted.categories, ['2021-11', '2021-12', '2022-01'], 'the periods keep calendar order whatever Order says');
+
+    // Per-day within a period is the reading that makes months of different
+    // length comparable, and it is still the total over the integrated days.
+    {
+        const perDay = buildIntegralPresentation(models, groupState({ groupBy: 'month', quantity: 'per-day' }));
+        const december = perDay.series[0].points[1];
+        close(december.perDay, december.value / (december.coveredSeconds / 86400),
+            'per day divides the period total by the days it actually integrated');
+        eq(perDay.series[0].points[1].plotted, december.perDay, 'and that is what the bar carries');
+    }
+
+    // A signal with no data in a period gets no column rather than a zero.
+    {
+        const shortened = [{
+            ...models[0],
+            groups: [
+                models[0].groups[0],
+                { startMs: models[0].groups[1].startMs, endMs: models[0].groups[1].endMs, result: { ok: false, reason: 'noData' } },
+                models[0].groups[2],
+            ],
+        }];
+        const gappy = buildIntegralPresentation(shortened, groupState({ groupBy: 'month' }));
+        eq(gappy.series[0].points[1].value, null, 'an empty period plots nothing');
+        eq(gappy.series[0].points[1].scaled, null, 'so no bar is drawn for it');
+        eq(gappy.series[0].points[0].value != null, true, 'while its neighbours are unaffected');
+    }
+
+    // Two signals whose records start in different years still line up: the
+    // categories are the union, in calendar order.
+    {
+        const late = {
+            ...models[1],
+            groups: models[1].groups.slice(1),
+        };
+        const union = buildIntegralPresentation([models[0], late], groupState({ groupBy: 'month' }));
+        eq(union.categories, ['2021-11', '2021-12', '2022-01'], 'the union of both signals, once each');
+        eq(union.series[1].points[0].result, null, 'the later signal has no point in the first month');
+        eq(union.series[1].points[0].value, null, 'and therefore no value');
+    }
+
+    // The pie: grouped it shows the share each period took of ONE signal.
+    {
+        const onePie = buildIntegralPresentation([models[0]], groupState({ groupBy: 'month', showPie: true, unitOverride: 'mm' }));
+        ok(integralPieAllowed(onePie), 'one signal split by period is a share of a whole');
+        const twoPies = buildIntegralPresentation(models, groupState({ groupBy: 'month', showPie: true, unitOverride: 'mm' }));
+        ok(!integralPieAllowed(twoPies), 'two signals would put two wholes in one pie');
+        const signed = [{
+            ...models[0],
+            groups: models[0].groups.map((group, index) => (index === 1
+                ? { ...group, result: { ...group.result, value: -group.result.value } }
+                : group)),
+        }];
+        const mixed = buildIntegralPresentation(signed, groupState({ groupBy: 'month', showPie: true, unitOverride: 'mm' }));
+        ok(!integralPieAllowed(mixed), 'and a sign change still cancels the pie');
+    }
+
+    // The export: one row per signal and period, the period named and bounded,
+    // then the whole-range total so the file carries what the rows add up to.
+    {
+        const table = buildIntegralExportTable(view, { fileNameFor: () => 'rain.csv' });
+        eq(table.headers.slice(0, 6), ['signal', 'file', 'group', 'period', 'period_start', 'period_end'],
+            'the grouped export names the period in its own columns');
+        eq(table.rows.length, (view.categories.length + 1) * view.series.length,
+            'one row per signal and period, plus a total row for each signal');
+        eq(table.rows[0].slice(0, 4), ['rain', 'rain.csv', 'month', '2021-11'], 'rows are labelled by period');
+        eq(table.rows[0][4], new Date(Date.UTC(2021, 10, 1)).toISOString(), 'with the period bounds as timestamps');
+        eq(table.rows[3].slice(2, 4), ['total', ''], 'and the signal is closed by its whole-range total');
+        const integralColumn = table.headers.indexOf('integral');
+        const periodRows = table.rows.slice(0, 3).map(row => row[integralColumn]);
+        close(periodRows.reduce((sum, value) => sum + value, 0), table.rows[3][integralColumn],
+            'which the exported period values add up to', 1e-12);
+        // Ungrouped, the table keeps exactly the shape it had before.
+        const plain = buildIntegralExportTable(
+            buildIntegralPresentation(models, groupState({ unitOverride: 'mm' })), {});
+        eq(plain.headers.slice(0, 3), ['signal', 'file', 'value_unit'],
+            'and without grouping no period columns appear at all');
+        eq(plain.rows.length, 2, 'one row per signal');
+    }
+}
+
+// ─── 13. The grouping control and its wiring ──────────────────────────────
+{
+    const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+    const methods = read('src/plots/methods/integral-methods.js');
+    const translations = read('src/i18n/translations.js');
+
+    ok(methods.includes("row(text('integralGroupBy'), select(["), 'the panel offers Group by');
+    ok(/integralGroupBy[\s\S]{0,600}calendar \? new Set\(\) : new Set\(\['day', 'week', 'month', 'year'\]\)/.test(methods),
+        'and disables the calendar periods when the axis has no calendar');
+    ok(methods.includes('_integralGroupWindows'), 'the mode lays out the windows');
+    ok(methods.includes('_integralEagerGroups'), 'integrates each window for eager signals');
+    ok(methods.includes('_integralLazyGroups'), 'and partitions the per-day partials for lazy ones');
+    ok(methods.includes('nominalStep'), 'handing the series step down so a short window keeps it');
+    ok(methods.includes('reduceDailyIntegralByPeriod(entry.days || [], windows, groupBy, reduceParams)'),
+        'through the kernel, which is where the trailing-period rule lives');
+    const kernel = read('src/compute/kernels/definite-integral.js');
+    ok(/extendLastSample: params\.extendLastSample === true && periodWindow\.periodStartMs === tailPeriod/.test(kernel),
+        'only the period holding the last sample may extend it');
+    ok(methods.includes("barmode: grouped ? 'group' : 'overlay'"), 'grouped bars are drawn side by side');
+    ok(methods.includes('sortSelect.disabled = grouped'), 'Order is disabled while the columns are a timeline');
+
+    for (const lang of ['en', 'fr', 'es', 'it']) {
+        const block = translations.slice(translations.indexOf(`        ${lang}: {`));
+        for (const key of ['integralGroupBy', 'integralGroupNone', 'integralGroupYear',
+            'integralGroupByTip', 'integralTooManyGroups', 'temporalProfileMultiYear',
+            'temporalProfileMultiYearTip']) {
+            ok(block.slice(0, block.indexOf('\n        },')).includes(`${key}:`),
+                `${lang} carries ${key}`);
+        }
+    }
 }
 
 console.log(`integral analysis: ${checks} checks passed`);

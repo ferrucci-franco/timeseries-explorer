@@ -9,11 +9,19 @@
 import assert from 'node:assert/strict';
 
 import {
+    calendarPeriodWindows,
     collectMissingDays,
     computeDefiniteIntegral,
+    groupDailyIntegralEntries,
+    INTEGRAL_GROUPINGS,
+    INTEGRAL_MAX_GROUPS,
     MS_PER_DAY,
     reduceDailyIntegral,
+    reduceDailyIntegralByPeriod,
     utcDayIndex,
+    utcDayStart,
+    utcPeriodEnd,
+    utcPeriodStart,
 } from '../src/compute/kernels/definite-integral.js';
 
 let checks = 0;
@@ -29,6 +37,11 @@ function close(actual, expected, label, tolerance = 1e-9) {
 
 function equal(actual, expected, label) {
     assert.deepEqual(actual, expected, label);
+    checks++;
+}
+
+function ok(condition, label) {
+    assert.ok(condition, label);
     checks++;
 }
 
@@ -397,6 +410,239 @@ function hourlyTime(count, start = day0) {
         rangeStart: day0, rangeEnd: day0 + MS_PER_DAY, missingPolicy: 'discard-day-own',
     });
     equal(none.reason, 'allDiscarded', 'discarding everything is its own answer');
+}
+
+// ─── Calendar grouping ────────────────────────────────────────────────────
+//
+// "Group by" must never change the total: it only says where the total came
+// from. Every check below is about that identity holding, because a split that
+// quietly loses or double-counts an hour is worse than no split at all.
+{
+    equal([...INTEGRAL_GROUPINGS].sort(), ['day', 'month', 'none', 'week', 'year'],
+        'the grouping vocabulary matches the temporal profile periods, plus "none"');
+
+    // Period boundaries are UTC calendar facts, not offsets.
+    const march5 = Date.UTC(2021, 2, 5, 13, 42, 7, 500);
+    equal(utcPeriodStart(march5, 'day'), Date.UTC(2021, 2, 5), 'a day starts at UTC midnight');
+    equal(utcPeriodStart(march5, 'month'), Date.UTC(2021, 2, 1), 'a month starts on the first');
+    equal(utcPeriodStart(march5, 'year'), Date.UTC(2021, 0, 1), 'a year starts on 1 January');
+    // 2021-03-05 was a Friday; the week it belongs to opens on Monday the 1st.
+    equal(utcPeriodStart(march5, 'week'), Date.UTC(2021, 2, 1), 'a week starts on its Monday');
+    // A Sunday belongs to the week that STARTED six days earlier, not the one
+    // about to start — the off-by-one that makes Sunday its own week.
+    equal(utcPeriodStart(Date.UTC(2021, 2, 7, 23), 'week'), Date.UTC(2021, 2, 1),
+        'and Sunday closes that same week');
+    equal(utcPeriodEnd(Date.UTC(2024, 1, 1), 'month'), Date.UTC(2024, 2, 1),
+        'February 2024 ends on 1 March — the leap day is inside it, not after');
+    equal(utcPeriodEnd(Date.UTC(2024, 1, 1), 'month') - Date.UTC(2024, 1, 1), 29 * MS_PER_DAY,
+        'so that February is 29 days long');
+    equal(utcPeriodEnd(Date.UTC(2023, 11, 1), 'year'), Date.UTC(2024, 0, 1),
+        'a year ends at the next 1 January whatever month it is read from');
+
+    // Windows: whole periods when the span is the data's own extent, clipped
+    // when the user drew the band.
+    const from = Date.UTC(2020, 10, 20, 6);
+    const to = Date.UTC(2021, 1, 10, 18);
+    const whole = calendarPeriodWindows(from, to, 'month', { clip: false });
+    equal(whole.ok, true, 'monthly windows are produced');
+    equal(whole.windows.map(w => new Date(w.startMs).toISOString().slice(0, 10)),
+        ['2020-11-01', '2020-12-01', '2021-01-01', '2021-02-01'],
+        'and cover every month the span touches');
+    equal(whole.windows[0].startMs, whole.windows[0].periodStartMs,
+        'unclipped, the first window opens at the period boundary');
+    equal(whole.windows.at(-1).endMs, Date.UTC(2021, 2, 1),
+        'and the last one closes at the next boundary, leaving room for the trailing period');
+    for (let index = 1; index < whole.windows.length; index++) {
+        equal(whole.windows[index].startMs, whole.windows[index - 1].endMs,
+            `window ${index} shares its edge with the one before it`);
+    }
+    const clipped = calendarPeriodWindows(from, to, 'month', { clip: true });
+    equal(clipped.windows[0].startMs, from, 'clipped, the first window honours the chosen start');
+    equal(clipped.windows.at(-1).endMs, to, 'and the last one the chosen end');
+    equal(clipped.windows[0].periodStartMs, Date.UTC(2020, 10, 1),
+        'while still naming the calendar period it belongs to');
+
+    equal(calendarPeriodWindows(from, to, 'none').ok, false, 'no grouping asked, no windows');
+    equal(calendarPeriodWindows(to, from, 'month').reason, 'noRange', 'a backwards span is refused');
+    const tooMany = calendarPeriodWindows(Date.UTC(2000, 0, 1), Date.UTC(2020, 0, 1), 'day');
+    equal(tooMany.ok, false, 'twenty years of days is refused rather than drawn');
+    equal(tooMany.reason, 'tooManyGroups', 'and says why');
+    equal(tooMany.maxGroups, INTEGRAL_MAX_GROUPS, 'naming the cap it hit');
+
+    // The identity. Thirteen months of hourly data starting mid-month, so the
+    // first and last periods are both partial.
+    const count = 24 * 400 + 7;
+    const time = hourlyTime(count, Date.UTC(2019, 2, 15));
+    const times = time.values;
+    // A ramp with a daily cycle on top: neither a constant (which hides edge
+    // interpolation) nor monotone (which hides sign-independent errors).
+    const values = Float64Array.from({ length: count }, (_, i) => 10 + i / 100 + Math.sin(i / 3.7));
+    for (const method of ['trapezoidal', 'rectangular']) {
+        for (const extendLastSample of [true, false]) {
+            const total = computeDefiniteIntegral(values, time, { method, extendLastSample });
+            // The step the whole series has, in raw ms: a one-day window cannot
+            // establish it from its own rows, so the panel hands it down.
+            const nominalStep = total.medianDt * 1000;
+            for (const period of ['year', 'month', 'week', 'day']) {
+                const built = calendarPeriodWindows(times[0], times[count - 1], period,
+                    { clip: false, maxGroups: 5000 });
+                let area = 0;
+                let covered = 0;
+                for (const window of built.windows) {
+                    const part = computeDefiniteIntegral(values, time, {
+                        method,
+                        extendLastSample,
+                        rangeStart: window.startMs,
+                        rangeEnd: window.endMs,
+                        nominalStep,
+                    });
+                    if (!part.ok) continue;
+                    area += part.value;
+                    covered += part.coveredTime;
+                }
+                close(area, total.value, `${method}/${extendLastSample}: ${period} groups sum to the total`, 1e-12);
+                close(covered, total.coveredTime,
+                    `${method}/${extendLastSample}: and integrate the same duration`, 1e-12);
+            }
+        }
+    }
+
+    // Without the handed-down step, the last day — two samples once sliced —
+    // cannot claim a nominal step, so the final sample loses its trailing
+    // period and the parts stop adding up. This is why `nominalStep` exists.
+    {
+        const dayCount = 24 * 3 + 1;
+        const dayTime = hourlyTime(dayCount);
+        const dayTimes = dayTime.values;
+        const dayValues = new Float64Array(dayCount).fill(4);
+        const total = computeDefiniteIntegral(dayValues, dayTime, { extendLastSample: true });
+        const built = calendarPeriodWindows(dayTimes[0], dayTimes[dayCount - 1], 'day', { clip: false });
+        const sumWith = built.windows.reduce((sum, window) => sum + (computeDefiniteIntegral(
+            dayValues.slice(0, dayCount), dayTime,
+            { extendLastSample: true, rangeStart: window.startMs, rangeEnd: window.endMs, nominalStep: HOUR },
+        ).value || 0), 0);
+        close(sumWith, total.value, 'with the step handed down, daily groups still sum to the total');
+        // The last window alone, left to judge for itself from a two-sample
+        // slice: the hour the final sample owns goes missing.
+        const lastWindow = built.windows.at(-1);
+        const tail = computeDefiniteIntegral(new Float64Array([4, 4]),
+            { values: new Float64Array([dayTimes[dayCount - 2], dayTimes[dayCount - 1]]), kind: 'datetime' },
+            { extendLastSample: true, rangeStart: lastWindow.startMs, rangeEnd: lastWindow.endMs });
+        equal(tail.hasNominalStep, false, 'a two-sample window establishes no step of its own');
+        const withStep = computeDefiniteIntegral(new Float64Array([4, 4]),
+            { values: new Float64Array([dayTimes[dayCount - 2], dayTimes[dayCount - 1]]), kind: 'datetime' },
+            { extendLastSample: true, rangeStart: lastWindow.startMs, rangeEnd: lastWindow.endMs, nominalStep: HOUR });
+        close(withStep.value, 4 * 3600, 'but with the step handed down it integrates its one hour');
+    }
+
+    // A missing row is read the same way inside a window as it is over the
+    // whole series, because the gap threshold comes from the same step.
+    {
+        const gapCount = 48;
+        const raw = [];
+        for (let i = 0; i < gapCount; i++) {
+            if (i === 30) continue;
+            raw.push(day0 + i * HOUR);
+        }
+        const gapTimes = Float64Array.from(raw);
+        const gapValues = new Float64Array(raw.length).fill(2);
+        const gapTime = { values: gapTimes, kind: 'datetime' };
+        const total = computeDefiniteIntegral(gapValues, gapTime, { extendLastSample: true });
+        const built = calendarPeriodWindows(gapTimes[0], gapTimes.at(-1), 'day', { clip: false });
+        let area = 0;
+        let uncovered = 0;
+        for (const window of built.windows) {
+            const part = computeDefiniteIntegral(gapValues, gapTime, {
+                extendLastSample: true,
+                rangeStart: window.startMs,
+                rangeEnd: window.endMs,
+                nominalStep: total.medianDt * 1000,
+            });
+            area += part.value || 0;
+            uncovered += part.uncoveredTime || 0;
+        }
+        close(area, total.value, 'a hole inside a window contributes nothing, exactly as ungrouped');
+        close(uncovered, total.uncoveredTime, 'and the same missing time is reported');
+        ok(uncovered > 0, 'the hole is reported at all');
+    }
+
+    // Lazy grouping is a partition of the per-day partials: every period is a
+    // whole number of UTC days, so no day can land in two groups or in none.
+    {
+        const firstDay = utcDayIndex(Date.UTC(2021, 0, 28));
+        const days = Array.from({ length: 10 }, (_, index) => ({ day: firstDay + index, areaMs: 1, coveredMs: 1, sampleCount: 1 }));
+        const byMonth = groupDailyIntegralEntries(days, 'month');
+        equal([...byMonth.keys()].sort((a, b) => a - b).map(ms => new Date(ms).toISOString().slice(0, 10)),
+            ['2021-01-01', '2021-02-01'], 'ten days across a month boundary make two monthly groups');
+        equal(byMonth.get(Date.UTC(2021, 0, 1)).length, 4, 'four of them are in January');
+        equal(byMonth.get(Date.UTC(2021, 1, 1)).length, 6, 'and six in February');
+        const total = [...byMonth.values()].reduce((sum, list) => sum + list.length, 0);
+        equal(total, days.length, 'and no day is lost or counted twice');
+        equal(groupDailyIntegralEntries([{ day: NaN }, {}], 'month').size, 0,
+            'entries with no day index are dropped rather than grouped under a guess');
+    }
+
+    // And the lazy reduction obeys the same identity as the eager one: the
+    // periods sum to the ungrouped total, with `extendLastSample` applied in
+    // exactly one of them.
+    {
+        const dayCount = 40;
+        const firstDay = utcDayIndex(Date.UTC(2021, 0, 20));
+        const level = 7;
+        const days = Array.from({ length: dayCount }, (_, index) => {
+            const day = firstDay + index;
+            const dayStartMs = utcDayStart(day);
+            const last = index === dayCount - 1;
+            // A full day of hourly samples: 24 ticks, the last of which only
+            // covers its hour once the samples are read as periods.
+            return {
+                day,
+                areaMs: level * (last ? 23 : 24) * HOUR,
+                coveredMs: (last ? 23 : 24) * HOUR,
+                uncoveredMs: 0,
+                hasHole: false,
+                sampleCount: 24,
+                firstT: dayStartMs,
+                lastT: dayStartMs + 23 * HOUR,
+                lastFiniteT: dayStartMs + 23 * HOUR,
+                lastValue: level,
+            };
+        });
+        const params = {
+            method: 'trapezoidal',
+            missingPolicy: 'zero',
+            medianDt: HOUR,
+            hasNominalStep: true,
+            extendLastSample: true,
+        };
+        const rangeStart = utcDayStart(firstDay);
+        const rangeEnd = utcDayStart(firstDay + dayCount - 1) + 23 * HOUR;
+        const whole = reduceDailyIntegral(days, { ...params, rangeStart, rangeEnd });
+        close(whole.coveredTime, dayCount * 24 * 3600,
+            'read as periods, forty days of hourly samples cover forty whole days');
+        for (const period of ['month', 'week', 'day']) {
+            const built = calendarPeriodWindows(rangeStart, rangeEnd, period, { clip: false });
+            const groups = reduceDailyIntegralByPeriod(days, built.windows, period, { ...params, rangeStart, rangeEnd });
+            equal(groups.length, built.windows.length, `${period}: one reduction per window`);
+            const area = groups.reduce((sum, group) => sum + (group.result.value || 0), 0);
+            const covered = groups.reduce((sum, group) => sum + (group.result.coveredTime || 0), 0);
+            close(area, whole.value, `${period}: the lazy groups sum to the lazy total`, 1e-12);
+            close(covered, whole.coveredTime, `${period}: and cover the same duration`, 1e-12);
+            const extending = groups.filter(group => group.result.extendLastSample).length;
+            equal(extending, 1, `${period}: only the period holding the last sample extends it`);
+            equal(groups.at(-1).result.extendLastSample, true, `${period}: and that is the last one`);
+        }
+        // With the trailing period off, the record is one step shorter and the
+        // groups still agree with the total.
+        const points = { ...params, extendLastSample: false };
+        const pointWhole = reduceDailyIntegral(days, { ...points, rangeStart, rangeEnd });
+        const pointGroups = reduceDailyIntegralByPeriod(
+            days, calendarPeriodWindows(rangeStart, rangeEnd, 'week', { clip: false }).windows, 'week',
+            { ...points, rangeStart, rangeEnd });
+        close(pointGroups.reduce((sum, group) => sum + (group.result.value || 0), 0), pointWhole.value,
+            'read as instants, the weekly groups still sum to the total', 1e-12);
+        ok(pointWhole.value < whole.value, 'and that total is the smaller of the two readings');
+    }
 }
 
 console.log(`definite integral: ${checks} checks passed`);

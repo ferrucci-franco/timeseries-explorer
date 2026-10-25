@@ -19,6 +19,8 @@ function normalizeResult(result) {
         period: result.period,
         resolutionUnit: result.resolutionUnit,
         binCount: result.binCount,
+        absoluteBins: !!result.absoluteBins,
+        binYears: result.binYears || null,
         categories: result.categories.map(category => ({
             id: category.id,
             total: category.total,
@@ -70,9 +72,15 @@ async function lazyProfile({ rows, config, expression = 'v', selectionRange = nu
     const medianStepMs = stats.median_step == null ? null : Number(stats.median_step);
     const scopeStart = selectionRange?.[0] ?? Number(stats.min_t);
     const scopeEnd = selectionRange?.[1] ?? Number(stats.max_t);
+    // Multi-year bins come from the extent of the DATA in scope, which is what
+    // duckdb-source.js hands the geometry — never from the selection bounds.
+    const spanStartMs = stats.min_t == null ? null : Number(stats.min_t);
+    const spanEndMs = stats.max_t == null ? null : Number(stats.max_t);
     const built = buildTemporalProfileFinalSql({
         ...base,
         ...config,
+        spanStartMs,
+        spanEndMs,
         valueExpressions: [expression],
         gapThresholdMs: medianStepMs == null ? null : medianStepMs * 1.5,
         boundaryToleranceMs: medianStepMs == null ? 0 : medianStepMs * 1.5,
@@ -86,6 +94,8 @@ async function lazyProfile({ rows, config, expression = 'v', selectionRange = nu
     const aggregateRows = await runDuckDb(connection, built.sql);
     const reduced = temporalProfilesFromFinalRows(aggregateRows, {
         ...config,
+        spanStartMs,
+        spanEndMs,
         valueCount: 1,
         medianStepMs,
         nScope: Number(stats.n_scope),
@@ -119,6 +129,11 @@ try {
         { period: 'month', resolutionMinutes: 1440 },
         { period: 'year', resolutionMinutes: 1440, resolutionUnit: 'minute' },
         { period: 'year', resolutionMinutes: 1440, resolutionUnit: 'month' },
+        // Multi-year: the one period whose bins are the calendar years of the
+        // record. Its geometry depends on the data extent, so lazy and eager
+        // must agree on the years before they can agree on anything else.
+        { period: 'multi-year' },
+        { period: 'multi-year', discardIncomplete: true },
     ];
     for (const config of cases) {
         const eager = buildTemporalProfile({
@@ -160,6 +175,21 @@ try {
         ...strictConfig,
     });
     assert.deepEqual(normalizeResult(selectedLazy), normalizeResult(selectedEager), 'selection/time-shift parity');
+
+    // Multi-year bins are the years the DATA covers inside the band, not the
+    // years the band itself touches: a band opened a year before the first
+    // sample must not grow an empty leading bin on either path.
+    const yearBand = [Date.parse('2022-06-01T00:00:00Z'), Date.parse('2023-04-01T00:00:00Z')];
+    const bandLazy = await lazyProfile({ rows, config: { period: 'multi-year' }, selectionRange: yearBand });
+    const bandEager = buildTemporalProfile({
+        times: eagerRows.map(row => row.time),
+        values: eagerRows.map(row => row.value),
+        rangeStart: yearBand[0],
+        rangeEnd: yearBand[1],
+        period: 'multi-year',
+    });
+    assert.deepEqual(bandEager.binYears, [2023], 'the band adds no year the data never reaches');
+    assert.deepEqual(normalizeResult(bandLazy), normalizeResult(bandEager), 'multi-year selection parity');
 
     // Several traces from one lazy file share a single aggregate query.
     const multiBase = { tableName: 'profile_data', timeExpression: 'epoch_ms(ts)', whereSql: 'ts IS NOT NULL' };

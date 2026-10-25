@@ -3,13 +3,23 @@
 // Samples are first reduced to one mean per calendar-period/bin. The displayed
 // mean and standard deviation are then calculated across those period means, so
 // a day with denser sampling never receives more weight than another day.
+//
+// 'day' … 'year' FOLD the recording onto one template period: every January in
+// the file lands on the same January. 'multi-year' is the one period that does
+// NOT fold — its bins are the calendar years themselves, laid out along the real
+// timeline, so a thirty-year record reads as thirty points. Its sub-period is
+// the UTC day, which is what gives each year bin a mean of daily means and a
+// standard deviation measuring day-to-day spread inside that year.
 
-export const TEMPORAL_PROFILE_PERIODS = new Set(['day', 'week', 'month', 'year']);
+export const TEMPORAL_PROFILE_PERIODS = new Set(['day', 'week', 'month', 'year', 'multi-year']);
 export const TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES = Object.freeze({
     day: 60,
     week: 60,
     month: 1440,
     year: 1440,
+    // Multi-year bins are calendar years; the value exists only so a saved
+    // state can carry one entry per period without a special case.
+    'multi-year': 1440,
 });
 export const TEMPORAL_PROFILE_MAX_BINS = 10_080;
 export const TEMPORAL_PROFILE_GAP_FACTOR = 1.5;
@@ -61,7 +71,38 @@ function nextUtcYear(ms) {
     return Date.UTC(new Date(ms).getUTCFullYear() + 1, 0, 1);
 }
 
+/**
+ * Calendar-year bin edges covering [startMs, endMs], in epoch ms.
+ *
+ * Shared with the lazy (DuckDB) reducer so eager and lazy multi-year profiles
+ * cannot disagree about how many years there are or where they begin.
+ *
+ * @returns {{ edgesMs: number[], years: number[] }|null}
+ */
+export function multiYearBinEdges(startMs, endMs) {
+    const lo = Number(startMs);
+    const hi = Number(endMs);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
+    const firstYear = new Date(floorUtcYear(lo)).getUTCFullYear();
+    const lastYear = new Date(floorUtcYear(hi)).getUTCFullYear();
+    if (!Number.isFinite(firstYear) || !Number.isFinite(lastYear) || lastYear < firstYear) return null;
+    const years = [];
+    const edgesMs = [];
+    for (let year = firstYear; year <= lastYear; year++) {
+        years.push(year);
+        edgesMs.push(Date.UTC(year, 0, 1));
+    }
+    edgesMs.push(Date.UTC(lastYear + 1, 0, 1));
+    return { edgesMs, years };
+}
+
 function periodInfo(ms, period) {
+    if (period === 'multi-year') {
+        // The sub-period is the UTC day: a day never straddles a year boundary,
+        // so each one belongs to exactly one bin.
+        const startMs = floorUtcDay(ms);
+        return { startMs, endMs: startMs + DAY_MS, category: 'all' };
+    }
     if (period === 'day') {
         const startMs = floorUtcDay(ms);
         const weekday = new Date(startMs).getUTCDay();
@@ -165,13 +206,39 @@ function normalizeRange(start, end) {
     return { ok: true, active: true, startMs, endMs };
 }
 
-function createPeriod(info, binCount) {
+// The widest in-scope timestamps, used to lay out the multi-year bins before
+// the binning pass can run. An explicit span wins: the lazy path knows the
+// file's extent from SQL and must bin against exactly the same years.
+function scopeSpanMs(options, range) {
+    const explicitStart = Number(options.spanStartMs);
+    const explicitEnd = Number(options.spanEndMs);
+    if (Number.isFinite(explicitStart) && Number.isFinite(explicitEnd)) {
+        return explicitStart <= explicitEnd ? [explicitStart, explicitEnd] : [explicitEnd, explicitStart];
+    }
+    const times = options.times || [];
+    const values = options.values || [];
+    const length = Math.min(Number(times.length) || 0, Number(values.length) || 0);
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let index = 0; index < length; index++) {
+        const timestampMs = epochMs(times[index]);
+        if (!Number.isFinite(timestampMs)) continue;
+        if (range.active && (timestampMs < range.startMs || timestampMs > range.endMs)) continue;
+        if (timestampMs < lo) lo = timestampMs;
+        if (timestampMs > hi) hi = timestampMs;
+    }
+    return Number.isFinite(lo) && Number.isFinite(hi) ? [lo, hi] : null;
+}
+
+// `slots` is one per bin for the folded periods, and exactly one for
+// multi-year, where a sub-period belongs to a single bin.
+function createPeriod(info, slots) {
     return {
         ...info,
-        sums: new Float64Array(binCount),
-        counts: new Uint32Array(binCount),
-        invalidByBin: new Uint32Array(binCount),
-        gapByBin: new Uint8Array(binCount),
+        sums: new Float64Array(slots),
+        counts: new Uint32Array(slots),
+        invalidByBin: new Uint32Array(slots),
+        gapByBin: new Uint8Array(slots),
         timestamps: [],
         nInvalid: 0,
         hasGap: false,
@@ -215,31 +282,54 @@ function onlinePush(acc, value) {
 
 export function buildTemporalProfile(options = {}) {
     const period = TEMPORAL_PROFILE_PERIODS.has(options.period) ? options.period : 'day';
-    const resolutionUnit = period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute';
+    const multiYear = period === 'multi-year';
+    const resolutionUnit = multiYear
+        ? 'year'
+        : (period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute');
     const calendarMonthBins = resolutionUnit === 'month';
-    const resolutionMinutes = calendarMonthBins ? null : (options.resolutionMinutes == null
+    const fixedBins = calendarMonthBins || multiYear;
+    const resolutionMinutes = fixedBins ? null : (options.resolutionMinutes == null
         ? TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES[period]
         : Number(options.resolutionMinutes));
-    if (!calendarMonthBins && (!Number.isFinite(resolutionMinutes) || resolutionMinutes <= 0)) {
+    if (!fixedBins && (!Number.isFinite(resolutionMinutes) || resolutionMinutes <= 0)) {
         return { ok: false, reason: 'invalidResolution' };
     }
-    const resolutionMs = calendarMonthBins ? null : resolutionMinutes * MINUTE_MS;
-    const durationMs = templateDurationMs(period);
-    const binEdgesMs = calendarMonthBins
-        ? YEAR_MONTH_START_DAYS.map(day => day * DAY_MS)
-        : Array.from({ length: Math.ceil(durationMs / resolutionMs) + 1 }, (_, index) => Math.min(durationMs, index * resolutionMs));
+    const resolutionMs = fixedBins ? null : resolutionMinutes * MINUTE_MS;
+
+    const range = normalizeRange(options.rangeStart, options.rangeEnd);
+    if (!range.ok) return { ok: false, reason: range.reason };
+
+    // Multi-year bins are the calendar years the data actually spans, so the
+    // geometry has to be read off the timestamps before the binning pass.
+    const span = multiYear ? scopeSpanMs(options, range) : null;
+    const multiYearEdges = multiYear && span ? multiYearBinEdges(span[0], span[1]) : null;
+    const binEdgesMs = multiYear
+        ? (multiYearEdges?.edgesMs || [0, DAY_MS])
+        : calendarMonthBins
+            ? YEAR_MONTH_START_DAYS.map(day => day * DAY_MS)
+            : Array.from({ length: Math.ceil(templateDurationMs(period) / resolutionMs) + 1 },
+                (_, index) => Math.min(templateDurationMs(period), index * resolutionMs));
+    const durationMs = multiYear
+        ? binEdgesMs[binEdgesMs.length - 1] - binEdgesMs[0]
+        : templateDurationMs(period);
+    const binYears = multiYear ? (multiYearEdges?.years || []) : null;
     const binCount = binEdgesMs.length - 1;
     if (!Number.isInteger(binCount) || binCount < 1 || binCount > TEMPORAL_PROFILE_MAX_BINS) {
         return { ok: false, reason: 'tooManyBins', binCount, maxBins: TEMPORAL_PROFILE_MAX_BINS };
     }
-    const binIndexForTimestamp = (timestampMs, info) => calendarMonthBins
-        ? new Date(timestampMs).getUTCMonth()
-        : Math.floor(profileOffsetMs(timestampMs, info, period) / resolutionMs);
+    // Each multi-year sub-period (a UTC day) touches exactly one bin, so one
+    // accumulator slot per period is enough — binCount slots per day would cost
+    // a megabyte per decade of daily data and all but one would stay zero.
+    const slotsPerPeriod = multiYear ? 1 : binCount;
+    const firstYear = binYears?.[0] ?? 0;
+    const binIndexForTimestamp = (timestampMs, info) => multiYear
+        ? new Date(timestampMs).getUTCFullYear() - firstYear
+        : calendarMonthBins
+            ? new Date(timestampMs).getUTCMonth()
+            : Math.floor(profileOffsetMs(timestampMs, info, period) / resolutionMs);
     const dayGrouping = period === 'day' && options.dayGrouping === 'all' ? 'all' : 'day-type';
     const combineWeekends = period === 'day' && dayGrouping === 'day-type' && options.combineWeekends === true;
 
-    const range = normalizeRange(options.rangeStart, options.rangeEnd);
-    if (!range.ok) return { ok: false, reason: range.reason };
     const times = options.times || [];
     const values = options.values || [];
     const alignedLength = Math.min(Number(times.length) || 0, Number(values.length) || 0);
@@ -266,8 +356,15 @@ export function buildTemporalProfile(options = {}) {
         const info = periodInfo(timestampMs, period);
         const binIndex = binIndexForTimestamp(timestampMs, info);
         if (binIndex < 0 || binIndex >= binCount) continue;
-        if (!periods.has(info.startMs)) periods.set(info.startMs, createPeriod(info, binCount));
+        if (!periods.has(info.startMs)) {
+            const created = createPeriod(info, slotsPerPeriod);
+            // The one bin a multi-year sub-period belongs to; every sample in
+            // the day shares it, so it is recorded once rather than per sample.
+            created.binIndex = multiYear ? binIndex : -1;
+            periods.set(info.startMs, created);
+        }
         const item = periods.get(info.startMs);
+        const slot = multiYear ? 0 : binIndex;
         item.timestamps.push(timestampMs);
         validTimestamps.push(timestampMs);
         minimumTime = Math.min(minimumTime, timestampMs);
@@ -276,12 +373,12 @@ export function buildTemporalProfile(options = {}) {
         const sample = values[index];
         if (!finiteNumber(sample)) {
             item.nInvalid++;
-            item.invalidByBin[binIndex]++;
+            item.invalidByBin[slot]++;
             nInvalid++;
             continue;
         }
-        item.sums[binIndex] += sample;
-        item.counts[binIndex]++;
+        item.sums[slot] += sample;
+        item.counts[slot]++;
         nFinite++;
     }
 
@@ -295,6 +392,8 @@ export function buildTemporalProfile(options = {}) {
             resolutionUnit,
             dayGrouping,
             binCount,
+            absoluteBins: multiYear,
+            binYears,
             categories: [],
             stats: { nScope, nFinite, nInvalid, nInvalidTimestamps, nOutOfRange, nPeriods: 0, nDiscardedPeriods: 0 },
             warnings: nInvalidTimestamps ? ['invalidTimestamps'] : ['noData'],
@@ -314,6 +413,10 @@ export function buildTemporalProfile(options = {}) {
         for (let index = 1; gapThresholdMs != null && index < item.timestamps.length; index++) {
             if (item.timestamps[index] - item.timestamps[index - 1] > gapThresholdMs) {
                 item.hasGap = true;
+                if (multiYear) {
+                    item.gapByBin[0] = 1;
+                    continue;
+                }
                 const firstBin = Math.max(0, binIndexForTimestamp(item.timestamps[index - 1], item));
                 const lastBin = Math.min(binCount - 1, binIndexForTimestamp(item.timestamps[index], item));
                 for (let binIndex = firstBin; binIndex <= lastBin; binIndex++) item.gapByBin[binIndex] = 1;
@@ -351,17 +454,22 @@ export function buildTemporalProfile(options = {}) {
             continue;
         }
         stats.included++;
-            for (let binIndex = 0; binIndex < binCount; binIndex++) {
-                const binStartMs = binEdgesMs[binIndex];
-                const binEndMs = binEdgesMs[binIndex + 1];
-                if (!calendarMonthBins && binIsStructural(item, period, binStartMs, binEndMs)) continue;
-                const acc = accumulators[binIndex];
+        // A multi-year sub-period contributes to its own year and to no other:
+        // every other bin is structural for it, so the loop visits just the one.
+        const firstBin = multiYear ? item.binIndex : 0;
+        const lastBin = multiYear ? item.binIndex : binCount - 1;
+        for (let binIndex = firstBin; binIndex <= lastBin; binIndex++) {
+            const binStartMs = binEdgesMs[binIndex];
+            const binEndMs = binEdgesMs[binIndex + 1];
+            if (!fixedBins && binIsStructural(item, period, binStartMs, binEndMs)) continue;
+            const acc = accumulators[binIndex];
+            const slot = multiYear ? 0 : binIndex;
             acc.expected++;
-            acc.invalidSamples += item.invalidByBin[binIndex];
-            if (item.gapByBin[binIndex]) acc.gapPeriods++;
-            const count = item.counts[binIndex];
+            acc.invalidSamples += item.invalidByBin[slot];
+            if (item.gapByBin[slot]) acc.gapPeriods++;
+            const count = item.counts[slot];
             if (!count) continue;
-            onlinePush(acc, item.sums[binIndex] / count);
+            onlinePush(acc, item.sums[slot] / count);
         }
     }
 
@@ -393,6 +501,12 @@ export function buildTemporalProfile(options = {}) {
         dayGrouping,
         binCount,
         durationHours: durationMs / HOUR_MS,
+        // Multi-year bins sit on the real timeline, so their hours are epoch
+        // hours rather than an offset into a folded template. `binYears` names
+        // them, and `absoluteBins` is what tells the axis which of the two it
+        // is looking at.
+        absoluteBins: multiYear,
+        binYears,
         categories,
         stats: {
             nTime: Number(times.length) || 0,

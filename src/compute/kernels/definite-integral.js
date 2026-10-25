@@ -28,7 +28,7 @@
 // detectSamplingGaps, so the two features never disagree about what is missing.
 
 import { asFloat64, INTEGRAL_METHODS, normalizeTimeContext } from './shared.js';
-import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
+import { detectGapIndices, detectSamplingGaps, GAP_THRESHOLD_FACTOR } from '../../utils/sampling-gaps.js';
 import { bridgeNonFinite } from './integral.js';
 
 export const MS_PER_DAY = 86400000;
@@ -66,6 +66,153 @@ function lastDayIndex(endMs) {
 
 export function utcDayStart(dayIndex) {
     return dayIndex * MS_PER_DAY;
+}
+
+// ─── Calendar grouping ────────────────────────────────────────────────────
+//
+// The definite integral answers "how much in total". Splitting the domain into
+// calendar periods answers "how much per year / month / week / day", which is
+// the question a rainfall record asks: the yearly accumulation is the integral
+// of the same signal over each calendar year separately.
+//
+// The split is exact rather than approximate because the kernel already honours
+// its range boundaries to the millisecond, interpolating the value at an edge
+// that falls between two samples. Integrating consecutive windows that share an
+// edge therefore sums back to the integral over the whole span — so "Group by"
+// never changes the total, it only shows where the total came from.
+
+export const INTEGRAL_GROUPINGS = new Set(['none', 'day', 'week', 'month', 'year']);
+
+// A hard stop on how many bars the panel will draw (and kernel passes it will
+// run). Daily grouping over a decade is 3650 columns of two pixels each: the
+// honest answer is to say the grouping is too fine, not to draw it.
+export const INTEGRAL_MAX_GROUPS = 2000;
+
+/** Start of the UTC calendar period `ms` falls in. */
+export function utcPeriodStart(ms, period) {
+    const value = Number(ms);
+    if (!Number.isFinite(value)) return NaN;
+    if (period === 'day') return Math.floor(value / MS_PER_DAY) * MS_PER_DAY;
+    if (period === 'week') {
+        // Monday-based, as the temporal profile's weeks are.
+        const dayStart = Math.floor(value / MS_PER_DAY) * MS_PER_DAY;
+        const weekday = new Date(dayStart).getUTCDay();
+        return dayStart - ((weekday === 0 ? 6 : weekday - 1) * MS_PER_DAY);
+    }
+    const date = new Date(value);
+    if (period === 'month') return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+    return Date.UTC(date.getUTCFullYear(), 0, 1);
+}
+
+/** Start of the UTC calendar period after the one beginning at `startMs`. */
+export function utcPeriodEnd(startMs, period) {
+    const value = Number(startMs);
+    if (!Number.isFinite(value)) return NaN;
+    if (period === 'day') return value + MS_PER_DAY;
+    if (period === 'week') return value + 7 * MS_PER_DAY;
+    const date = new Date(value);
+    if (period === 'month') return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+    return Date.UTC(date.getUTCFullYear() + 1, 0, 1);
+}
+
+/**
+ * The calendar windows covering [startMs, endMs].
+ *
+ * `clip` decides what happens at the two ends. A window is clipped to the
+ * requested span when the user chose that span (a selection band means what it
+ * says); left whole when the span is merely the data's own extent, so the last
+ * window still has room for the trailing period `extendLastSample` grants the
+ * final sample — which is what keeps the sum of the groups equal to the
+ * ungrouped total.
+ *
+ * @returns {{ ok: true, windows: Array<{startMs,endMs,periodStartMs,periodEndMs}> }
+ *           | { ok: false, reason: string, count?: number, maxGroups?: number }}
+ */
+export function calendarPeriodWindows(startMs, endMs, period, options = {}) {
+    if (!INTEGRAL_GROUPINGS.has(period) || period === 'none') return { ok: false, reason: 'noGrouping' };
+    const from = Number(startMs);
+    const to = Number(endMs);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return { ok: false, reason: 'noRange' };
+    const clip = options.clip === true;
+    const maxGroups = Number.isFinite(Number(options.maxGroups)) ? Number(options.maxGroups) : INTEGRAL_MAX_GROUPS;
+    const windows = [];
+    let periodStartMs = utcPeriodStart(from, period);
+    // A corrupt timestamp must not spin here; the cap is checked each turn.
+    while (periodStartMs <= to) {
+        const periodEndMs = utcPeriodEnd(periodStartMs, period);
+        if (!Number.isFinite(periodEndMs) || periodEndMs <= periodStartMs) break;
+        windows.push({
+            periodStartMs,
+            periodEndMs,
+            startMs: clip ? Math.max(periodStartMs, from) : periodStartMs,
+            endMs: clip ? Math.min(periodEndMs, to) : periodEndMs,
+        });
+        if (windows.length > maxGroups) {
+            return { ok: false, reason: 'tooManyGroups', count: windows.length, maxGroups };
+        }
+        periodStartMs = periodEndMs;
+    }
+    if (!windows.length) return { ok: false, reason: 'noRange' };
+    return { ok: true, windows };
+}
+
+/**
+ * Split per-UTC-day integral partials into calendar groups.
+ *
+ * The lazy path receives one partial per day, and every grouping period is a
+ * whole number of UTC days, so grouping is a partition of those partials — no
+ * second query, and byte-for-byte the same arithmetic the ungrouped total runs.
+ *
+ * @returns {Map<number, object[]>} period start (epoch ms) → its day entries
+ */
+export function groupDailyIntegralEntries(days = [], period) {
+    const byPeriod = new Map();
+    for (const entry of days) {
+        const dayIndex = Number(entry?.day);
+        if (!Number.isFinite(dayIndex)) continue;
+        const key = utcPeriodStart(utcDayStart(dayIndex), period);
+        if (!Number.isFinite(key)) continue;
+        if (!byPeriod.has(key)) byPeriod.set(key, []);
+        byPeriod.get(key).push(entry);
+    }
+    return byPeriod;
+}
+
+/**
+ * One reduced integral per calendar window, from per-UTC-day partials.
+ *
+ * The lazy counterpart of integrating each window separately, and the place the
+ * one asymmetry lives: `extendLastSample` means "each sample lasts until the
+ * next one", and only the LAST sample of the record has no next one. Applied in
+ * every period it would invent a step of area per period out of samples that do
+ * have a successor — and the groups would then over-count the total.
+ *
+ * @param {object[]} days  per-day partials, as getDefiniteIntegralByDay returns
+ * @param {Array<{periodStartMs:number, periodEndMs:number, startMs:number, endMs:number}>} windows
+ * @returns {Array<{startMs:number, endMs:number, result:object}>}
+ */
+export function reduceDailyIntegralByPeriod(days = [], windows = [], period, params = {}) {
+    const byPeriod = groupDailyIntegralEntries(days, period);
+    let lastSampledDay = null;
+    for (const entry of days) {
+        const dayIndex = Number(entry?.day);
+        if (!Number.isFinite(dayIndex) || !((entry.sampleCount || 0) > 0)) continue;
+        if (lastSampledDay == null || dayIndex > lastSampledDay) lastSampledDay = dayIndex;
+    }
+    const tailPeriod = lastSampledDay == null ? null : utcPeriodStart(utcDayStart(lastSampledDay), period);
+    return windows.map(periodWindow => ({
+        startMs: periodWindow.periodStartMs,
+        endMs: periodWindow.periodEndMs,
+        result: reduceDailyIntegral(byPeriod.get(periodWindow.periodStartMs) || [], {
+            ...params,
+            rangeStart: periodWindow.startMs,
+            rangeEnd: periodWindow.endMs,
+            extendLastSample: params.extendLastSample === true && periodWindow.periodStartMs === tailPeriod,
+            // The window ends where the calendar says, never one step later:
+            // the ungrouped pass already widened the range it needed to widen.
+            explicitRangeEnd: true,
+        }),
+    }));
 }
 
 // Cut [a, b] at every UTC midnight it crosses. Only called when day exclusion
@@ -130,6 +277,20 @@ function resolveRange(at, n, params) {
 function scanGaps(ctx, useTimes, params) {
     if (params.detectGaps === false || !useTimes) {
         return { hasNominalStep: false, medianDt: null, gapEnds: null };
+    }
+    // A WINDOW of a longer series inherits the series' nominal step instead of
+    // trying to establish one from its own handful of rows. A single day of an
+    // hourly record has too few steps to pass the agreement gate, and a window
+    // that decided for itself would read its own missing rows differently from
+    // the ungrouped total — so the parts would stop adding up to the whole.
+    const injected = Number(params.nominalStep);
+    if (Number.isFinite(injected) && injected > 0) {
+        const gaps = detectGapIndices(ctx.values, injected, GAP_THRESHOLD_FACTOR);
+        return {
+            hasNominalStep: gaps.monotonic,
+            medianDt: injected,
+            gapEnds: gaps.count ? new Set(Array.from(gaps.ends)) : null,
+        };
     }
     const info = detectSamplingGaps(ctx.values);
     return {
@@ -383,6 +544,10 @@ function trailingPeriod(values, at, n, rangeEnd, medianDt, hasNominalStep) {
  *   excludedDays           extra UTC day indexes to remove (the panel's union,
  *                          for 'discard-day-all')
  *   detectGaps             false disables missing-row detection entirely
+ *   nominalStep            the series' sampling step in raw abscissa units,
+ *                          supplied when `values` is a WINDOW of a longer
+ *                          series (calendar grouping): too short a window
+ *                          cannot establish a step of its own
  *
  * The returned `value` carries the signal's unit times SECONDS on a calendar
  * axis and times the abscissa unit otherwise; `timeKind` says which, because
