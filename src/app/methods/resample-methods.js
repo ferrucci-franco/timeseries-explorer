@@ -865,5 +865,5 @@ function formatNumber(value) {
 
 function formatCount(value) {
     const n = Number(value);
-    return Number.isFinite(n) ? n.toLocaleString() : '?';
+    return Number.isFinite(n) ? i18n.formatNumber(n) : '?';
 }

@@ -673,7 +673,7 @@ export function installGriddedMethods(TargetClass) {
             // How big the field is, which the shape alone does not say at a
             // glance: 744 × 721 × 1440 is 772 million values.
             const size = i18n.t('griddedVariableValues')
-                .replace('{count}', variable.shape.reduce((total, length) => total * (length || 0), 1).toLocaleString());
+                .replace('{count}', i18n.formatNumber(variable.shape.reduce((total, length) => total * (length || 0), 1)));
             datasetNode._variables[variable.name] = {
                 name: `grid:@var/${encodeURIComponent(variable.key)}`,
                 displayName: variable.name,

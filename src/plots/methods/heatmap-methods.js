@@ -1093,7 +1093,7 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
             if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
             plot.heatmapContainer?.setAttribute('aria-busy', 'false');
             const cells = models.reduce((total, model) => total + gridCellCount(model.grid), 0);
-            const ready = `${text('heatmapReady')} · ${models.length} × ${cells.toLocaleString()} cells`;
+            const ready = `${text('heatmapReady')} · ${models.length} × ${i18n.formatNumber(cells)} cells`;
             this._setCalendarHeatmapStatus(plot, warnings.length ? `${ready} — ${warnings.join(' | ')}` : ready, warnings.length ? 'warning' : 'ready');
             this._syncCalendarHeatmapSummary(plot);
         });

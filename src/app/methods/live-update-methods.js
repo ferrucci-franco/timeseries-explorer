@@ -333,7 +333,7 @@ proto._liveUpdateErrorMessage = function(err) {
 
 proto._formatLiveUpdateInteger = function(value) {
     const n = Number(value);
-    return Number.isFinite(n) ? Math.round(n).toLocaleString() : String(value ?? '');
+    return Number.isFinite(n) ? i18n.formatNumber(Math.round(n)) : String(value ?? '');
 };
 
 proto._formatLiveUpdateMegabytes = function(value) {

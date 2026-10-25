@@ -84,7 +84,9 @@ vm.runInNewContext(methodText, {
     proto,
     console,
     largestClearInterval,
-    i18n: { t: key => `${key}: {samples} of {total}` },
+    // formatNumber too: the counts in these messages go through it now, so a
+    // stub without it would fail on the punctuation rather than on the message.
+    i18n: { t: key => `${key}: {samples} of {total}`, formatNumber: value => String(value) },
 });
 
 // Times 0, 1, 2, … 99 — one per index, so a time IS its index and the

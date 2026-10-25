@@ -25,6 +25,12 @@ import { installCompactMethods } from './methods/compact-methods.js';
 import { installCompactCursorMethods } from './methods/compact-cursor-methods.js';
 import { initialCapabilities, resolveCapabilities } from './capabilities.js';
 import { ADVANCED_SETTINGS_VERSION, migrateAdvancedSettings } from './advanced-settings-migration.js';
+import {
+    NUMBER_DECIMAL_CHOICES,
+    NUMBER_GROUP_CHOICES,
+    plotlySeparators,
+} from '../utils/number-format.js';
+import { setPlotNumberSeparators } from '../vendor/plotly.js';
 
 class OpenModelicaViewer {
     constructor() {
@@ -85,6 +91,9 @@ class OpenModelicaViewer {
         this.initSidebarResize();
         this.initTopBarToggle();
         i18n.setLanguage('en');
+        // After the language and the stored settings are both in place: the
+        // language supplies the default the overrides sit on.
+        this._applyNumberFormat();
         this._syncSpellcheckLanguage();
         this._setDropZoneStatus(false);
         // Before the first render, which it has to see to show one plot at a time.
@@ -142,6 +151,9 @@ class OpenModelicaViewer {
         i18n.setLanguage(lang);
         this.language = i18n.currentLang;
         this.plotManager.setLanguage(this.language);
+        // A language change moves the default both separators sit on, so the
+        // punctuation is resolved again before anything is redrawn below.
+        this._applyNumberFormat();
         document.querySelectorAll('.lang-btn').forEach(btn => {
             const active = btn.getAttribute('data-lang') === this.language;
             btn.classList.toggle('active', active);
@@ -298,7 +310,38 @@ class OpenModelicaViewer {
             // average is a copy of a column as long as the file).
             lazyResultsMb: 1024,
             panZoomRefreshMode: 'auto',
+            // How numbers are punctuated on screen. `auto` is the convention of
+            // the chosen language, which is what the app has always done; the
+            // other values override it (utils/number-format.js).
+            decimalSeparator: 'auto',
+            thousandsSeparator: 'auto',
         };
+    }
+
+    // Settings whose value is a word from a fixed list rather than a number.
+    // Declarative so the normalizer, the dialog and the tests read one table.
+    _advancedSettingChoices() {
+        return {
+            panZoomRefreshMode: ['auto', 'smooth', 'responsive'],
+            decimalSeparator: Object.keys(NUMBER_DECIMAL_CHOICES),
+            thousandsSeparator: Object.keys(NUMBER_GROUP_CHOICES),
+        };
+    }
+
+    /**
+     * Push the resolved punctuation everywhere that writes a number: the app's
+     * own formatter, and Plotly's for the text it writes itself.
+     *
+     * Called on every language change and every settings change, because both
+     * can move it — the language supplies the default the overrides sit on.
+     */
+    _applyNumberFormat() {
+        // i18n derives the format from its own language plus these settings, so
+        // there is one resolution and no way for the two to disagree.
+        const format = i18n.setNumberSettings(this.advancedSettings || {});
+        this.numberFormat = format;
+        setPlotNumberSeparators(plotlySeparators(format));
+        return format;
     }
 
     _loadAdvancedSettings() {
@@ -345,10 +388,11 @@ class OpenModelicaViewer {
     _normalizeAdvancedSettings(settings = {}) {
         const defaults = this._defaultAdvancedSettings();
         const ranges = this._advancedSettingRanges();
+        const choices = this._advancedSettingChoices();
         const next = {};
         for (const [key, fallback] of Object.entries(defaults)) {
-            if (key === 'panZoomRefreshMode') {
-                next[key] = ['auto', 'smooth', 'responsive'].includes(settings[key]) ? settings[key] : fallback;
+            if (choices[key]) {
+                next[key] = choices[key].includes(settings[key]) ? settings[key] : fallback;
                 continue;
             }
             const [min, max] = ranges[key] || [1, Number.MAX_SAFE_INTEGER];

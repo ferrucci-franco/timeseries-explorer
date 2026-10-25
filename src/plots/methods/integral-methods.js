@@ -176,12 +176,12 @@ function escapeHtml(value) {
 // Formatting adapters: the pure layer takes the locale and the translated word
 // for "samples" as data, so it never reaches for i18n itself.
 function formatNumber(value, digits = 4) {
-    return formatIntegralNumber(value, digits, i18n.currentLang || 'en');
+    return formatIntegralNumber(value, digits, i18n.numberFormat);
 }
 
 function formatDuration(seconds, timeKind) {
     return formatIntegralDuration(seconds, timeKind, {
-        locale: i18n.currentLang || 'en',
+        format: i18n.numberFormat,
         samples: text('integralSamples'),
     });
 }

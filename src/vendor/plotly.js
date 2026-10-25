@@ -48,7 +48,26 @@ let largerFonts = () => false;
 export function setLargerPlotFonts(isOn) {
     largerFonts = typeof isOn === 'function' ? isOn : () => false;
 }
-const layoutFor = layout => (largerFonts() ? compactPlotLayout(layout) : layout);
+// How Plotly punctuates the numbers it writes itself — tick labels, hovers.
+// `layout.separators` is decimal first, grouping second, and it overrides the
+// registered locale, so the axis agrees with the panel beside it even when
+// Settings has overridden a separator. Injected here, like the fonts above,
+// because the alternative is remembering it in seventeen layout builders.
+let plotSeparators = () => '';
+export function setPlotNumberSeparators(value) {
+    plotSeparators = typeof value === 'function' ? value : () => String(value || '');
+}
+
+const withSeparators = (layout) => {
+    const separators = plotSeparators();
+    if (!separators) return layout;
+    // A layout that already names its own separators has a reason to; and a
+    // non-object (undefined) layout is Plotly's own default, left alone.
+    if (!layout || typeof layout !== 'object' || layout.separators !== undefined) return layout;
+    return { ...layout, separators };
+};
+
+const layoutFor = layout => withSeparators(largerFonts() ? compactPlotLayout(layout) : layout);
 
 const nativeNewPlot = Plotly.newPlot.bind(Plotly);
 Plotly.newPlot = (div, data, layout, ...rest) => nativeNewPlot(div, data, layoutFor(layout), ...rest)
