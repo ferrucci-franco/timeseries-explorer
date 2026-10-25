@@ -558,4 +558,22 @@ const close = (actual, expected, epsilon = 1e-12, message = '') => {
         'which is what the eager kernel says too');
 }
 
+// Five periods do not fit the 286px options panel, so the Period control wraps
+// and "Multi-year" lands on a row of its own. It has to still read as one
+// segmented control there: the separators came from a border-right per button,
+// which draws nothing between two ROWS and leaves the last button of a wrapped
+// row with a border and dead space after it.
+{
+    const contentCss = readFileSync(new URL('../src/styles/content.css', import.meta.url), 'utf8');
+    const wrapper = contentCss.match(/\.hist-segmented\s*\{([^}]*)\}/)?.[1];
+    const button = contentCss.match(/\.hist-seg-btn\s*\{([^}]*)\}/)?.[1];
+    assert.ok(wrapper && button, 'the segmented control is styled in content.css');
+
+    assert.match(wrapper, /flex-wrap\s*:\s*wrap/, 'the control wraps rather than overflowing the panel');
+    assert.match(wrapper, /gap\s*:\s*1px/, 'the separators are the gaps, so a row boundary gets one too');
+    assert.match(wrapper, /background\s*:\s*var\(--border-color\)/, 'and the gaps show the border colour through');
+    assert.match(button, /flex\s*:\s*1 1 auto/, 'a wrapped row fills the width instead of ending in dead space');
+    assert.doesNotMatch(button, /border-right/, 'no per-button border: it cannot separate two rows');
+}
+
 console.log('temporal profile kernel tests passed');

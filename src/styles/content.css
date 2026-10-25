@@ -3578,26 +3578,31 @@ body.cursor-pair-dragging .cursor-overlay-line {
     color: var(--text-secondary);
 }
 .hist-option-row .fft-number-input { width: 96px; }
+/* Five choices do not fit the 286px options panel, so the control wraps. The
+   separators are the 1px gaps showing the wrapper's background: a border-right
+   on each button draws nothing between two ROWS, and leaves the last button of
+   a wrapped row with a border and empty space after it. The buttons grow so a
+   wrapped row fills the width instead of ending in that gap. */
 .hist-segmented {
     display: inline-flex;
-    gap: 0;
+    gap: 1px;
     margin: 2px 0 6px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     overflow: hidden;
     flex-wrap: wrap;
+    background: var(--border-color);
 }
 .hist-seg-btn {
+    flex: 1 1 auto;
     padding: 3px 9px;
     border: none;
-    border-right: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-primary);
     font-size: 0.72rem;
     font-weight: 600;
     cursor: pointer;
 }
-.hist-seg-btn:last-child { border-right: none; }
 .hist-seg-btn.active {
     background: color-mix(in srgb, var(--primary-color) 18%, var(--bg-primary));
     color: var(--primary-color);
