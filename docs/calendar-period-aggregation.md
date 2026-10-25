@@ -75,7 +75,23 @@ Tres cosas hacen falta para que la identidad se cumpla:
 
 Sin consulta nueva: `getDefiniteIntegralByDay` ya devuelve una parcial por día UTC, y **todo período de agrupación es un número entero de días UTC**, así que agrupar es una partición de esas parciales (`groupDailyIntegralEntries`) y `reduceDailyIntegral` se aplica por grupo con los mismos parámetros. La única corrección: solo el período que contiene el último día muestreado puede extender esa muestra a su paso siguiente; hacerlo en cada período inventaría un paso de área por período.
 
-### 3.3 Límites
+### 3.3 La unidad de un acumulado: `mm/h` → `mm`
+
+La Integral asume que la señal es una **tasa**: ∫tasa·dt da una cantidad acumulada, y por eso el total se rotula `<unidad>·h`. Para una potencia en MW eso da MW·h y es exactamente lo que se quiere.
+
+Un pluviómetro rompe el patrón por cómo se escriben los archivos: la columna dice `mm` y contiene los milímetros caídos **en esa hora**. Eso ya es una cantidad acumulada, no una tasa, y rotular su integral `mm·h` es dimensionalmente falso. La lectura robusta es declarar la columna como lo que es, **`mm/h`** — numéricamente idéntico a "mm en esa hora" cuando el paso es 1 h, pero correcto a cualquier paso: con baldes de 10 minutos, tratar la columna como `mm` daría 1/6 del acumulado real.
+
+Declarada así, el total se escribía `mm/h·h`: el valor correcto con una etiqueta ilegible. Ahora `integralResultUnit` **cancela** un denominador de tiempo que coincide con la unidad de integración: `mm/h` sobre horas da `mm`, `m3/s` sobre segundos da `m3`. La media sigue siendo la tasa (`mm/h`) y el diario pasa a `mm/d`.
+
+Sólo cancela una coincidencia **exacta**. `m3/s` integrado sobre **horas** sigue leyendo `m3/s·h`, porque ahí hace falta un factor 3600: eso es una conversión, no una cancelación, y una etiqueta que la ocultara afirmaría un número que nadie calculó. Un `/m2` tampoco es un denominador de tiempo, así que `W/m2` sigue dando `W/m2·h`.
+
+### 3.4 El prefijo automático sólo se toma si la unidad lo absorbe
+
+`Scale: Auto` elegía un exponente por el tamaño del mayor valor y, cuando la unidad no podía absorberlo, lo mandaba al título del eje como `×10³`. Para 2400 MW·h eso es una ganancia: la unidad se lleva la década y la barra dice `2.4 GW·h`. Para 1311 mm no: la barra decía `1.311` y la década quedaba en el título, a dos metros de distancia — y en una configuración regional que agrupa los miles con punto, `1.311` **es** el número que estaba representando.
+
+Ahora el exponente automático se toma sólo cuando `scaleUnitLabel` lo pliega dentro de la unidad. Si no lo pliega, no se escala: la barra muestra el total. Un prefijo elegido a mano en el dropdown se aplica igual, con su década declarada aparte — lo pidió el usuario.
+
+### 3.5 Límites
 
 - `Group by` necesita **eje calendario**; con eje índice o numérico los períodos quedan deshabilitados (no hay calendario que inventar).
 - Tope de **2000 períodos** (`INTEGRAL_MAX_GROUPS`). Por encima, el panel avisa con el motivo y no dibuja: veinte años por día son 7300 columnas de dos píxeles, y la respuesta honesta es decir que la agrupación es demasiado fina.
@@ -91,7 +107,7 @@ Sin consulta nueva: `getDefiniteIntegralByDay` ya devuelve una parcial por día 
 | Kernel profile | `src/utils/temporal-profile.js` | `multi-year`, `multiYearBinEdges`, ranura única por período |
 | SQL profile | `src/data/temporal-profile-sql.js` | geometría `multi-year`, bin por año, filtro estructural |
 | Kernel integral | `src/compute/kernels/definite-integral.js` | `calendarPeriodWindows`, `utcPeriodStart/End`, `groupDailyIntegralEntries`, `nominalStep` |
-| Presentación integral | `src/utils/integral-presentation.js` | `groupBy`, `series`/`categories`, etiquetas de período, exportación agrupada, compuerta de torta |
+| Presentación integral | `src/utils/integral-presentation.js` | `groupBy`, `series`/`categories`, etiquetas de período, exportación agrupada, compuerta de torta, cancelación `/h`, prefijo automático |
 | Modos (DOM/Plotly) | `temporal-profile-methods.js`, `integral-methods.js` | controles, ejes, resumen, estado |
 
 Tests:
