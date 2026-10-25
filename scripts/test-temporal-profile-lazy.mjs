@@ -176,22 +176,11 @@ try {
     });
     assert.deepEqual(normalizeResult(selectedLazy), normalizeResult(selectedEager), 'selection/time-shift parity');
 
-    // Multi-year bins are the years the DATA covers inside the band, not the
-    // years the band itself touches: a band opened a year before the first
-    // sample must not grow an empty leading bin on either path.
-    const yearBand = [Date.parse('2022-06-01T00:00:00Z'), Date.parse('2023-04-01T00:00:00Z')];
-    const bandLazy = await lazyProfile({ rows, config: { period: 'multi-year' }, selectionRange: yearBand });
-    const bandEager = buildTemporalProfile({
-        times: eagerRows.map(row => row.time),
-        values: eagerRows.map(row => row.value),
-        rangeStart: yearBand[0],
-        rangeEnd: yearBand[1],
-        period: 'multi-year',
-    });
-    assert.deepEqual(bandEager.binYears, [2023], 'the band adds no year the data never reaches');
-    assert.deepEqual(normalizeResult(bandLazy), normalizeResult(bandEager), 'multi-year selection parity');
 
-    // Several traces from one lazy file share a single aggregate query.
+    // Several traces from one lazy file share a single aggregate query. This
+    // block queries `profile_data` directly, so it reads whatever the LAST
+    // lazyProfile() call loaded — the `unsorted` rows it is compared against.
+    // A new case that loads other data belongs after it, not before.
     const multiBase = { tableName: 'profile_data', timeExpression: 'epoch_ms(ts)', whereSql: 'ts IS NOT NULL' };
     let [multiStats] = await runDuckDb(connection, buildTemporalProfileTimeStatsSql(multiBase));
     let multiOrdered = Number(multiStats.order_violations) > 0;
@@ -222,6 +211,21 @@ try {
         ...config,
     });
     assert.deepEqual(normalizeResult(multi.results[1]), normalizeResult(secondEager), 'multi-trace shared-query parity');
+
+    // Multi-year bins are the years the DATA covers inside the band, not the
+    // years the band itself touches: a band opened a year before the first
+    // sample must not grow an empty leading bin on either path.
+    const yearBand = [Date.parse('2022-06-01T00:00:00Z'), Date.parse('2023-04-01T00:00:00Z')];
+    const bandLazy = await lazyProfile({ rows, config: { period: 'multi-year' }, selectionRange: yearBand });
+    const bandEager = buildTemporalProfile({
+        times: eagerRows.map(row => row.time),
+        values: eagerRows.map(row => row.value),
+        rangeStart: yearBand[0],
+        rangeEnd: yearBand[1],
+        period: 'multi-year',
+    });
+    assert.deepEqual(bandEager.binYears, [2023], 'the band adds no year the data never reaches');
+    assert.deepEqual(normalizeResult(bandLazy), normalizeResult(bandEager), 'multi-year selection parity');
 
     console.log('Temporal profile lazy SQL/eager parity tests passed');
 } finally {
