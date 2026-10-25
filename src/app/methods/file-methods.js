@@ -1125,8 +1125,8 @@ proto._showNetcdfPartialLoadDetails = async function(fileId) {
     for (const item of partial) {
         const axes = (item.sampledAxes || [])
             .map(axis => i18n.t('netcdfPartialAxis')
-                .replace('{kept}', axis.kept.toLocaleString())
-                .replace('{size}', axis.size.toLocaleString())
+                .replace('{kept}', i18n.formatNumber(axis.kept))
+                .replace('{size}', i18n.formatNumber(axis.size))
                 .replace('{dimension}', axis.dimension))
             .join(' × ');
         const key = `${item.generatedSeriesCount}|${item.availableSeriesCount}|${axes}`;
@@ -1136,8 +1136,8 @@ proto._showNetcdfPartialLoadDetails = async function(fileId) {
 
     const blocks = [...groups.values()].map(({ item, axes, names }) => {
         const counts = i18n.t(names.length > 1 ? 'netcdfPartialCountsEach' : 'netcdfPartialCounts')
-            .replace('{loaded}', Number(item.generatedSeriesCount).toLocaleString())
-            .replace('{available}', Number(item.availableSeriesCount).toLocaleString());
+            .replace('{loaded}', i18n.formatNumber(Number(item.generatedSeriesCount)))
+            .replace('{available}', i18n.formatNumber(Number(item.availableSeriesCount)));
         // No indent under the names: .modal-message is white-space: pre-line,
         // which keeps the newlines and eats the leading spaces. The blank line
         // between groups is what separates them.

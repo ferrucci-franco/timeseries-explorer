@@ -4,6 +4,11 @@
  */
 
 import translations from './translations.js';
+import {
+    DEFAULT_NUMBER_FORMAT_SETTINGS,
+    formatNumber as formatWithSeparators,
+    resolveNumberFormat,
+} from '../utils/number-format.js';
 
 // `**bold**` inside a translated string, and nothing else. Everything is escaped
 // before the markers are honoured, so the only tags that can reach the DOM are
@@ -21,6 +26,30 @@ function renderRichText(text) {
 const i18n = {
     currentLang: 'en',
     translations,
+    // How numbers are punctuated: the language's own convention, with whatever
+    // Settings overrides (utils/number-format.js). The SETTINGS are what is
+    // stored and the format is derived, so changing the language re-resolves
+    // on its own — a format pushed in from outside would go stale the moment
+    // someone called setLanguage directly, which is exactly what the FFT
+    // locale tests do.
+    numberSettings: { ...DEFAULT_NUMBER_FORMAT_SETTINGS },
+
+    /**
+     * Derived on read from `currentLang` and `numberSettings`, memoised on the
+     * pair. Derived rather than stored because `currentLang` is also assigned
+     * directly — the FFT locale tests do exactly that, to get the formatting
+     * without the DOM repaint setLanguage() does — and a stored copy would go
+     * stale the moment anyone did.
+     */
+    get numberFormat() {
+        const settings = this.numberSettings;
+        const key = `${this.currentLang}\u0000${settings.decimalSeparator}\u0000${settings.thousandsSeparator}`;
+        if (this._numberFormatKey !== key) {
+            this._numberFormatKey = key;
+            this._numberFormatCache = resolveNumberFormat(this.currentLang, settings);
+        }
+        return this._numberFormatCache;
+    },
 
     setLanguage(lang) {
         if (!this.translations[lang]) {
@@ -32,6 +61,20 @@ const i18n = {
     },
 
     /**
+     * The user's separator choices. The language still supplies the default
+     * each one sits on, so this only has to store them.
+     */
+    setNumberSettings(settings) {
+        if (settings && typeof settings === 'object') {
+            this.numberSettings = {
+                decimalSeparator: settings.decimalSeparator ?? 'auto',
+                thousandsSeparator: settings.thousandsSeparator ?? 'auto',
+            };
+        }
+        return this.numberFormat;
+    },
+
+    /**
      * Get a translation key
      */
     t(key) {
@@ -39,24 +82,26 @@ const i18n = {
     },
 
     /**
-     * A count formatted for the language the USER picked, not the one the
+     * A number formatted for the language the USER picked, not the one the
      * browser happens to run in. Plain toLocaleString() follows the browser, so
      * an app switched to Spanish on an English browser prints "16,777,216"
      * inside a Spanish sentence — the separators say one thing and the words
      * another.
+     *
+     * Settings can override either separator; `numberFormat` already carries
+     * that decision, so every caller gets it without knowing it exists.
+     *
+     * @param {number} value
+     * @param {object} [options] `significantDigits`, or Intl's
+     *   `maximumFractionDigits` / `minimumFractionDigits`.
      */
-    formatNumber(value) {
+    formatNumber(value, options) {
         const n = Number(value);
         // Empty, never the literal "NaN" or "Infinity": this goes into visible
         // labels, and a broken count reads better as a gap than as a word the
         // user cannot act on.
         if (!Number.isFinite(n)) return '';
-        try {
-            return new Intl.NumberFormat(this.currentLang).format(n);
-        } catch (_) {
-            // An unknown language tag must not cost the caller its number.
-            return n.toLocaleString();
-        }
+        return formatWithSeparators(n, this.numberFormat, options);
     },
 
     /**

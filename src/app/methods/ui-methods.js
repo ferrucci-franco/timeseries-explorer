@@ -4,6 +4,7 @@ import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { initTopBarScroll, placeTopBarMenu } from '../../ui/top-bar-scroll.js';
 import { isTouchCapable } from '../../ui/touch-drag.js';
 import { copyTextToClipboard } from '../../utils/clipboard.js';
+import { NUMBER_DECIMAL_CHOICES, NUMBER_GROUP_CHOICES } from '../../utils/number-format.js';
 import {
     SLIDER_WHEEL_CHANGE_DELAY_MS,
     SLIDER_WHEEL_DWELL_MS,
@@ -1171,6 +1172,76 @@ proto.showDisplaySettings = function() {
         ? this.advancedSettings.panZoomRefreshMode
         : 'auto';
 
+    // ── Number format ──
+    // The language still supplies the default; these two only override it.
+    // A live sample sits under them, because the one thing a reader needs from
+    // this panel is to see what the choice does before taking it.
+    const numberSection = document.createElement('section');
+    numberSection.className = 'plot-settings-section number-format-settings';
+
+    const numberIntro = document.createElement('p');
+    numberIntro.className = 'plot-settings-section-intro';
+    numberIntro.textContent = i18n.t('numberFormatSettingsIntro');
+
+    const numberGrid = document.createElement('div');
+    numberGrid.className = 'plot-settings-form';
+
+    const decimalControl = makeSelect(
+        'decimal-separator',
+        'numberDecimalSeparator',
+        'numberDecimalSeparatorHelp',
+        null,
+        [['auto', 'numberSeparatorAuto'], ['dot', 'numberSeparatorDot'], ['comma', 'numberSeparatorComma']],
+    );
+    const thousandsControl = makeSelect(
+        'thousands-separator',
+        'numberThousandsSeparator',
+        'numberThousandsSeparatorHelp',
+        null,
+        [['auto', 'numberSeparatorAuto'], ['none', 'numberSeparatorNone'], ['dot', 'numberSeparatorDot'],
+            ['comma', 'numberSeparatorComma'], ['space', 'numberSeparatorSpace'],
+            ['apostrophe', 'numberSeparatorApostrophe']],
+    );
+
+    const numberPreview = document.createElement('p');
+    numberPreview.className = 'plot-settings-help plot-settings-number-preview';
+
+    const syncNumberControls = () => {
+        const settings = this.advancedSettings || {};
+        decimalControl.select.value = settings.decimalSeparator || 'auto';
+        thousandsControl.select.value = settings.thousandsSeparator || 'auto';
+        // The two can never be the same character, so the colliding option is
+        // taken off the menu rather than silently ignored after the fact.
+        const chosenDecimal = NUMBER_DECIMAL_CHOICES[decimalControl.select.value];
+        for (const option of thousandsControl.select.options) {
+            const character = NUMBER_GROUP_CHOICES[option.value];
+            option.disabled = !!character && character === chosenDecimal;
+        }
+        const sample = i18n.formatNumber(1234567.25);
+        numberPreview.textContent = `${i18n.t('numberFormatPreview')} ${sample}`;
+    };
+
+    const applyNumberSettings = () => {
+        this._saveAdvancedSettings({
+            ...(this.advancedSettings || {}),
+            decimalSeparator: decimalControl.select.value,
+            thousandsSeparator: thousandsControl.select.value,
+        });
+        this._applyNumberFormat();
+        syncNumberControls();
+        // Every number already on screen was punctuated under the old setting,
+        // and Plotly reads `separators` when a plot is drawn — so the panels
+        // have to be drawn again for the choice to mean anything.
+        this.plotManager.preserveViewsForNextRender();
+        this.layoutManager.render();
+    };
+    decimalControl.select.addEventListener('change', applyNumberSettings);
+    thousandsControl.select.addEventListener('change', applyNumberSettings);
+    syncNumberControls();
+
+    numberGrid.append(decimalControl.field, thousandsControl.field);
+    numberSection.append(numberGrid, numberPreview);
+
     const fileSection = document.createElement('section');
     fileSection.className = 'plot-settings-section file-loading-settings';
 
@@ -1314,6 +1385,10 @@ proto.showDisplaySettings = function() {
         for (const control of [...fileLimitControls, compactControl]) {
             control.input.value = String(this.advancedSettings[control.key]);
         }
+        this._applyNumberFormat();
+        syncNumberControls();
+        this.plotManager.preserveViewsForNextRender();
+        this.layoutManager.render();
     });
 
     form.append(timeControl.field, trajectoryControl.field, panZoomControl.field);
@@ -1367,6 +1442,13 @@ proto.showDisplaySettings = function() {
         '#f59e0b',
         'plot-settings-file-panel',
     );
+    const numberTab = makeTopicButton(
+        'plot-settings-number-tab',
+        i18n.t('numberFormatSettingsTitle'),
+        'formula',
+        '#0ea5e9',
+        'plot-settings-number-panel',
+    );
 
     const makePanelHeading = (titleText, introElement, icon, color) => {
         const panelHeader = document.createElement('div');
@@ -1406,8 +1488,19 @@ proto.showDisplaySettings = function() {
         fileSection,
     );
 
-    const tabs = [visualTab, fileTab];
-    const panels = [visualPanel, filePanel];
+    const numberPanel = document.createElement('section');
+    numberPanel.id = 'plot-settings-number-panel';
+    numberPanel.className = 'plot-settings-panel';
+    numberPanel.setAttribute('role', 'tabpanel');
+    numberPanel.setAttribute('aria-labelledby', numberTab.id);
+    numberPanel.tabIndex = 0;
+    numberPanel.append(
+        makePanelHeading(i18n.t('numberFormatSettingsTitle'), numberIntro, 'formula', '#0ea5e9'),
+        numberSection,
+    );
+
+    const tabs = [visualTab, fileTab, numberTab];
+    const panels = [visualPanel, filePanel, numberPanel];
     const selectSettingsTopic = (index, focus = false) => {
         tabs.forEach((tab, tabIndex) => {
             const selected = tabIndex === index;

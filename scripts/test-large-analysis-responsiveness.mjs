@@ -76,6 +76,8 @@ assert.match(fft, /selectedCount > 200000[\s\S]*selectFftRange\(times, values, r
             t: key => key === 'fftAutoRangeWarning'
                 ? 'estimated {seconds}; selected {samples}'
                 : 'estimated {seconds}; selected {samples}',
+            // The counts in these messages are punctuated through i18n now.
+            formatNumber: value => String(value),
         },
         setTimeout,
     });
@@ -222,6 +224,7 @@ for (const path of [
         ANALYSIS_AUTO_LIMIT_BUDGET_MS: 5000,
         i18n: {
             t: () => 'estimated {seconds}; selected {samples}',
+            formatNumber: value => String(value),
         },
     });
     const hugeLength = 20_000_000;
@@ -400,7 +403,7 @@ assert.match(
     vm.runInNewContext(dataMethods.slice(start, end), {
         proto: reentryProto,
         ANALYSIS_AUTO_LIMIT_BUDGET_MS: 5000,
-        i18n: { t: () => 'about {seconds} s; {samples} samples' },
+        i18n: { t: () => 'about {seconds} s; {samples} samples', formatNumber: value => String(value) },
     });
     const times = { length: 20_000_000 };
     const harness = {

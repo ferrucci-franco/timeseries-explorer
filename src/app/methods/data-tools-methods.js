@@ -3668,7 +3668,7 @@ proto._outlierDetectorDescription = function(config) {
 
 function formatCount(value) {
     const n = Number(value);
-    return Number.isFinite(n) ? n.toLocaleString() : '?';
+    return Number.isFinite(n) ? i18n.formatNumber(n) : '?';
 }
 
 // Numeric helpers shared with the kernels. The definitions moved to

@@ -2637,8 +2637,8 @@ proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode, options
     // error. What IS certain, and what the user actually needs, is how much of
     // the signal this result describes.
     const warningText = (samples, total) => i18n.t('analysisAutoRangeWarning')
-        .replace('{samples}', samples.toLocaleString())
-        .replace('{total}', total.toLocaleString());
+        .replace('{samples}', i18n.formatNumber(samples))
+        .replace('{total}', i18n.formatNumber(total));
     const needsLimit = estimatedMs > ANALYSIS_AUTO_LIMIT_BUDGET_MS
         || (state.autoRangeLimited === true && selectedCount > target);
     if (!needsLimit) {

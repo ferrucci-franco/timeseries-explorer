@@ -1436,8 +1436,8 @@ proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) 
     state.x2 = Number(times[cleanStart + target - 1]);
     const seconds = Math.max(5, Math.round(estimatedMs / 1000));
     state.autoRangeWarning = i18n.t(foundCleanBlock ? 'fftAutoRangeWarning' : 'analysisAutoRangeWarning')
-        .replace('{seconds}', seconds.toLocaleString())
-        .replace('{samples}', target.toLocaleString());
+        .replace('{seconds}', i18n.formatNumber(seconds))
+        .replace('{samples}', i18n.formatNumber(target));
     this._syncFftOptionsPanel(plot);
     return true;
 };
@@ -2163,8 +2163,8 @@ proto._selectLargestCleanFftRange = function(plot, state, span) {
     // time axis and neither green edge can be grabbed.
     state.autoRangeFocusPending = true;
     state.autoRangeWarning = i18n.t('fftMissingDataRangeWarning')
-        .replace('{samples}', samples.toLocaleString())
-        .replace('{total}', total.toLocaleString());
+        .replace('{samples}', i18n.formatNumber(samples))
+        .replace('{total}', i18n.formatNumber(total));
     this._syncFftOptionsPanel(plot);
     return true;
 };
@@ -3368,15 +3368,15 @@ proto._fftWarningText = function(trace, reason, extra = {}) {
     if (reason === 'nonUniform' || reason === 'nonMonotonic') return prefix + i18n.t('fftWarningNonUniform');
     if (reason === 'tooFewSamples') return prefix + i18n.t('fftWarningTooFew');
     if (reason === 'tooManyPoints' || reason === 'tooManyPointsReverted' || reason === 'tooManyPointsClamped') {
-        const live = this._fftLiveMaxNfft().toLocaleString();
-        const hard = this._fftHardMaxNfft().toLocaleString();
+        const live = i18n.formatNumber(this._fftLiveMaxNfft());
+        const hard = i18n.formatNumber(this._fftHardMaxNfft());
         const key = reason === 'tooManyPointsReverted' ? 'fftWarningTooManyReverted'
             : reason === 'tooManyPointsClamped' ? 'fftWarningTooManyClamped'
             : 'fftWarningTooMany';
         return prefix + i18n.t(key)
             .replace('{live}', live)
             .replace('{hard}', hard)
-            .replace('{samples}', Number(extra?.samples || 0).toLocaleString());
+            .replace('{samples}', i18n.formatNumber(Number(extra?.samples || 0)));
     }
     if (reason === 'missingVariable') return prefix + i18n.t('fftWarningMissing');
     if (reason === 'fetchFailed') return prefix + i18n.t('fftWarningFetch');

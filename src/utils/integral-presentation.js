@@ -6,6 +6,8 @@
 // four cannot disagree about a value, a unit or an order — which they would if
 // each formatted the models itself.
 
+import { defaultNumberFormat, punctuateNumber } from './number-format.js';
+
 export const INTEGRAL_LAYOUTS = new Set(['horizontal', 'vertical']);
 export const INTEGRAL_ORIENTATIONS = new Set(['vertical', 'horizontal']);
 export const INTEGRAL_UNITS = new Set(['hour', 'second']);
@@ -282,12 +284,19 @@ export function superscript(value) {
     return String(value).split('').map(char => digits[char] ?? char).join('');
 }
 
-export function formatIntegralNumber(value, digits = 4, locale = 'en') {
+/**
+ * `format` is a resolved number format (utils/number-format.js), not a locale:
+ * the punctuation is the user's setting layered on the language, and this
+ * module stays pure by taking the answer rather than looking it up.
+ */
+export function formatIntegralNumber(value, digits = 4, format = defaultNumberFormat()) {
     if (!Number.isFinite(value)) return '—';
     if (value === 0) return '0';
     const abs = Math.abs(value);
-    if (abs >= 1e6 || abs < 1e-4) return value.toExponential(Math.max(0, digits - 1));
-    return Number(value.toPrecision(digits)).toLocaleString(locale);
+    // An exponential keeps its shape and gets the decimal character only:
+    // there are no thousands to group in "2.4e+7".
+    if (abs >= 1e6 || abs < 1e-4) return punctuateNumber(value.toExponential(Math.max(0, digits - 1)), format);
+    return punctuateNumber(String(Number(value.toPrecision(digits))), format);
 }
 
 /**
@@ -314,13 +323,15 @@ export function axisDuration(base, timeKind, rawTime) {
 // seconds and reads naturally as hours or days; on a numeric axis it is
 // x-units, and calling those hours would invent a calendar.
 export function formatIntegralDuration(seconds, timeKind, labels = {}) {
+    const format = labels.format || defaultNumberFormat();
     if (!Number.isFinite(seconds) || seconds <= 0) return '0';
-    if (timeKind === 'index') return `${formatIntegralNumber(seconds, 4, labels.locale)} ${labels.samples || 'samples'}`;
-    if (timeKind !== 'datetime') return formatIntegralNumber(seconds, 4, labels.locale);
-    if (seconds >= 86400) return `${Number((seconds / 86400).toFixed(2))} d`;
-    if (seconds >= 3600) return `${Number((seconds / 3600).toFixed(2))} h`;
-    if (seconds >= 60) return `${Number((seconds / 60).toFixed(1))} min`;
-    return `${Number(seconds.toFixed(1))} s`;
+    if (timeKind === 'index') return `${formatIntegralNumber(seconds, 4, format)} ${labels.samples || 'samples'}`;
+    if (timeKind !== 'datetime') return formatIntegralNumber(seconds, 4, format);
+    const rounded = (value, digits) => punctuateNumber(String(Number(value.toFixed(digits))), format);
+    if (seconds >= 86400) return `${rounded(seconds / 86400, 2)} d`;
+    if (seconds >= 3600) return `${rounded(seconds / 3600, 2)} h`;
+    if (seconds >= 60) return `${rounded(seconds / 60, 1)} min`;
+    return `${rounded(seconds, 1)} s`;
 }
 
 // What the bars plot. All three come from the same pair of numbers — the total

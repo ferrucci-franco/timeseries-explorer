@@ -694,16 +694,16 @@ export function installPlotAudioMethods(TargetClass) {
     proto._audioBufferNoticeText = function(sampleRate, built) {
         const notes = [];
         if (built.clipped > 0) {
-            notes.push(i18n.t('audioClipped').replace('{count}', built.clipped.toLocaleString()));
+            notes.push(i18n.t('audioClipped').replace('{count}', i18n.formatNumber(built.clipped)));
         }
         if (built.nanCount > 0) {
-            notes.push(i18n.t('audioNaNs').replace('{count}', built.nanCount.toLocaleString()));
+            notes.push(i18n.t('audioNaNs').replace('{count}', i18n.formatNumber(built.nanCount)));
         }
         const contextRate = player.context?.sampleRate;
         if (contextRate && Math.abs(contextRate - sampleRate) > 1) {
             notes.push(i18n.t('audioResampled')
-                .replace('{from}', Math.round(sampleRate).toLocaleString())
-                .replace('{to}', Math.round(contextRate).toLocaleString()));
+                .replace('{from}', i18n.formatNumber(Math.round(sampleRate)))
+                .replace('{to}', i18n.formatNumber(Math.round(contextRate))));
         }
         return notes.join(' · ');
     };
@@ -1383,9 +1383,9 @@ export function installPlotAudioMethods(TargetClass) {
             case 'tooFewSamples': return i18n.t('audioReasonTooFewSamples');
             case 'timeAxis':    return i18n.t('audioReasonTimeAxis');
             case 'rateTooLow':  return i18n.t('audioReasonRateTooLow')
-                .replace('{rate}', Math.round(status.sampleRate || 0).toLocaleString());
+                .replace('{rate}', i18n.formatNumber(Math.round(status.sampleRate || 0)));
             case 'rateTooHigh': return i18n.t('audioReasonRateTooHigh')
-                .replace('{rate}', Math.round(status.sampleRate || 0).toLocaleString());
+                .replace('{rate}', i18n.formatNumber(Math.round(status.sampleRate || 0)));
             default:            return i18n.t('audioReasonUnavailable');
         }
     };
