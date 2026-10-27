@@ -4,7 +4,7 @@
 // DuckDB (src/data/duckdb-source.js) — and each one decided this question for
 // itself. They disagreed on the case that matters most to a measurement log: a
 // column the sample holds NO value for, because the logger wrote the channel's
-// header and never recorded it (REC_*.txt SCADA exports). The in-memory parser
+// header and never recorded it (REC_*.txt SCADA exports, #311). The in-memory parser
 // called it numeric; the DuckDB path called it text, which is how a `BATT_I` of
 // 30 000 empty cells arrived as a string series that cannot be plotted or used
 // in a formula.

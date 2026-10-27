@@ -117,7 +117,7 @@ export function csvIndexSet(indexes) {
  * _resolveUnknownCsvColumnTypes), for the same reason: the sample is the first
  * 100 data rows of the first megabyte, and a channel that starts recording
  * later — or never — would otherwise be typed from no evidence at all and
- * written to Parquet as the wrong thing for good.
+ * written to Parquet as the wrong thing for good (#311).
  *
  * One aggregate query, so one extra pass over the CSV, against a conversion that
  * already reads and sorts the whole file. Nothing is written if it fails: the
@@ -172,7 +172,7 @@ export function sampleRowsWithValidTime(sampleRows, profile) {
 }
 
 // Text only when the sample says so: a column the sample held no value for —
-// a channel the logger never recorded — is numbers, not a string column.
+// a channel the logger never recorded — is numbers, not a string column (#311).
 // resolveUnknownCsvColumnTypes settles those columns against the whole file
 // before anything is written; this is what stands if that scan cannot run.
 export function inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto') {

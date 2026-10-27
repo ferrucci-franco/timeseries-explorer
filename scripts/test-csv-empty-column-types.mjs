@@ -1,4 +1,4 @@
-// A column the sample holds no value for is numbers, not text.
+// A column the sample holds no value for is numbers, not text (#311).
 //
 // RECIF SCADA logs (REC_*.txt) write a header for every channel of the plant and
 // leave the ones that were not recording empty: 25 of the 167 columns of

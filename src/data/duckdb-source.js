@@ -3966,7 +3966,7 @@ export default class DuckDbSource {
      * (CsvParser.inspectSample), which says nothing about a channel the logger
      * started recording at row 225 — or never recorded at all. Those columns
      * used to be typed text and arrived as string series: unplottable, out of
-     * every formula and statistic.
+     * every formula and statistic (#311).
      *
      * So they are counted over every row instead, in ONE query: how many cells
      * hold anything, and how many of those are a number. Every column is read as
