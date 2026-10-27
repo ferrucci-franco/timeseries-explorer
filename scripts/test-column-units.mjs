@@ -59,7 +59,7 @@ assert.match(toolsBody, /description: value \? `\[\$\{value\}\]` : ''/,
 // Empty means "this column has no unit", not "use the detected one": the
 // reader cleared the box on purpose.
 assert.doesNotMatch(toolsBody, /description: value \|\|/, 'clearing the box clears the unit');
-assert.match(dialog, /row\.append\(useColumn, name, unit, raw\)/, 'it sits beside the rename box');
+assert.match(dialog, /row\.append\(useColumn, name, unit, type, raw\)/, 'it sits beside the rename box, ahead of how the column is read');
 
 // ── And it reaches the time column ──────────────────────────────────────────
 // Without this the inference above would be unfixable: the override changed

@@ -186,6 +186,36 @@ try {
         await closeDuckDbDatabase(sparseDb);
     }
 
+    // The same file, with "read this one as text" chosen in the parsing options:
+    // the choice outranks the scan, so the column is written as VARCHAR even
+    // though every value in it is a number.
+    const chosenParquet = join(dir, 'sparse-chosen.parquet');
+    const chosenProfile = {
+        ...inspectCsvForParquet(sparseCsv),
+        forcedTextColumns: [3],
+    };
+    await convertCsvToParquet({
+        inputPath: sparseCsv,
+        outputPath: chosenParquet,
+        csvProfile: chosenProfile,
+        overwrite: true,
+    });
+    assert.deepEqual(chosenProfile.scannedNumericColumns, [2], 'the chosen column is not scanned');
+    const chosenDb = new Database(':memory:');
+    const chosenConn = chosenDb.connect();
+    try {
+        const read = `read_parquet('${chosenParquet.replace(/\\/g, '/').replace(/'/g, "''")}')`;
+        const schema = await runDuckDb(chosenConn, `DESCRIBE SELECT * FROM ${read}`);
+        const typeOf = new Map(schema.map(row => [row.column_name, String(row.column_type)]));
+        assert.match(typeOf.get('Calo_Config'), /VARCHAR/, 'asked for text, written as text');
+        assert.match(typeOf.get('BATT_I'), /DOUBLE/, 'the columns left on auto are unaffected');
+        const rows = await runDuckDb(chosenConn, `SELECT MAX("Calo_Config") AS v FROM ${read}`);
+        assert.equal(String(rows[0].v), '9.000', 'and it keeps the text exactly as the file wrote it');
+    } finally {
+        await closeDuckDbConnection(chosenConn);
+        await closeDuckDbDatabase(chosenDb);
+    }
+
     // The compression name is spliced into the COPY statement, so it is the one
     // option that could carry SQL rather than choose a codec.
     assert.equal(parquetCompression(undefined), 'zstd', 'the default is unchanged');

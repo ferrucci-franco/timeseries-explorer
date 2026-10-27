@@ -4,7 +4,7 @@ import { csvRowMatchesFilter, normalizeCsvRowFilter, stripUnitBrackets } from '.
 // The dialog reads a column the visible rows hold no value for as numbers, the
 // same as every other path (#311): the preview shows a handful of rows, and an
 // empty one is no evidence of text.
-import { inferNumericColumnIndexes } from '../parsers/csv-column-types.js';
+import { columnSampleVerdict, inferNumericColumnIndexes } from '../parsers/csv-column-types.js';
 import { customDatetimePatternInfo, dateSeparatorForStrategy, detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import {
     normalizeCsvGrouping,
@@ -1786,7 +1786,34 @@ export default class CsvParsingPreviewDialog {
             Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator }))
         );
         const validTimeRows = validTimeSampleRows.length;
-        const numericColumnIndexes = inferNumericColumnIndexes(validTimeSampleRows, expectedColumns, delimiter, decimalSeparator);
+        // What the reader chose by hand, as positions the readers understand.
+        // The time axis is never one of them: the dialog does not offer the
+        // choice there, and a stale choice from a settings file must not follow
+        // a column that has since become the time axis.
+        const forcedNumericColumns = [];
+        const forcedTextColumns = [];
+        // Columns the visible rows hold no value for. Nothing downstream reads
+        // this — the header badge says so, because "the preview could not tell"
+        // is a different thing from "text", and that difference is the whole
+        // reason an empty channel used to arrive as a string series.
+        const previewEmptyColumns = [];
+        for (let index = 0; index < expectedColumns; index++) {
+            if (timeIndexes.has(index)) continue;
+            if (columnSampleVerdict(validTimeSampleRows, index, delimiter, decimalSeparator) === 'unknown') {
+                previewEmptyColumns.push(index);
+            }
+            const chosen = this.state.columnOverrides?.[index]?.type;
+            if (chosen === 'number') forcedNumericColumns.push(index);
+            else if (chosen === 'text') forcedTextColumns.push(index);
+        }
+        const forcedText = new Set(forcedTextColumns);
+        const numericColumnIndexes = [
+            ...new Set([
+                ...inferNumericColumnIndexes(validTimeSampleRows, expectedColumns, delimiter, decimalSeparator)
+                    .filter(index => !forcedText.has(index)),
+                ...forcedNumericColumns,
+            ]),
+        ].sort((a, b) => a - b);
         if (sampleRows.length && validTimeRows === 0) messages.push('No visible data row produces a valid time value.');
 
         this.resultProfile = {
@@ -1806,6 +1833,9 @@ export default class CsvParsingPreviewDialog {
             timeSource,
             sampleRows: sampleRows.slice(0, 100),
             numericColumnIndexes,
+            forcedNumericColumns,
+            forcedTextColumns,
+            previewEmptyColumns,
             unitsMode,
             unitRowIndex,
             inlineUnitFormat: this.state.inlineUnitFormat,
@@ -2370,6 +2400,51 @@ export default class CsvParsingPreviewDialog {
         }
     }
 
+    /**
+     * What this column will become, said in the grid's own header.
+     *
+     * The header used to show the column letter and nothing else, so the one
+     * thing a reader most wants to know before loading — which columns come out
+     * as text — was invisible until the variable tree. `123` / `abc` need no
+     * translation; the tooltip says it in words, and names the reader's own
+     * choice where there is one.
+     */
+    _columnTypeBadge(index) {
+        const badge = document.createElement('span');
+        badge.className = 'csv-preview-head-type';
+        const timeIndexes = new Set(this.resultProfile?.timeSource?.sourceIndexes || []);
+        if (timeIndexes.has(index)) {
+            badge.classList.add('is-time');
+            badge.textContent = i18n.t('csvPreviewColumnTypeTimeShort');
+            badge.title = i18n.t('csvPreviewColumnTypeTimeTitle');
+            return badge;
+        }
+        if ((this.resultProfile?.ignoredColumns || []).includes(index)) {
+            badge.classList.add('is-skipped');
+            badge.textContent = '–';
+            badge.title = i18n.t('csvPreviewColumnTypeSkipped');
+            return badge;
+        }
+        const chosen = this.resultProfile?.columnOverrides?.[index]?.type;
+        const numeric = (this.resultProfile?.numericColumnIndexes || []).includes(index);
+        if (!chosen && (this.resultProfile?.previewEmptyColumns || []).includes(index)) {
+            badge.classList.add('is-unknown');
+            badge.textContent = '?';
+            badge.title = i18n.t('csvPreviewColumnTypeUnknownHint');
+            return badge;
+        }
+        badge.classList.toggle('is-text', !numeric);
+        badge.textContent = numeric ? '123' : 'abc';
+        const what = i18n.t(numeric ? 'csvPreviewColumnTypeNumberHint' : 'csvPreviewColumnTypeTextHint');
+        if (chosen === 'number' || chosen === 'text') {
+            badge.classList.add('is-chosen');
+            badge.title = `${what} — ${i18n.t('csvPreviewColumnTypeChosenHint')}`;
+        } else {
+            badge.title = what;
+        }
+        return badge;
+    }
+
     _renderColumnControls() {
         const wrap = document.createElement('div');
         wrap.className = 'csv-preview-column-list';
@@ -2442,12 +2517,39 @@ export default class CsvParsingPreviewDialog {
                 if (event.key === 'Enter') unit.blur();
             });
 
+            // How to read the column. Three states, not a checkbox: "auto" has
+            // to stay distinguishable from a number chosen by hand (a settings
+            // file reused on another table must not carry frozen decisions for
+            // every column), and text is a real choice too — codes with leading
+            // zeros are not quantities.
+            const type = this._select([
+                { value: 'auto', label: i18n.t('csvPreviewColumnTypeAuto') },
+                { value: 'number', label: i18n.t('csvPreviewColumnTypeNumber') },
+                { value: 'text', label: i18n.t('csvPreviewColumnTypeText') },
+            ], isProtected ? 'auto' : (this.state.columnOverrides?.[index]?.type || 'auto'));
+            type.className = 'csv-preview-column-type';
+            type.disabled = isProtected;
+            type.title = isProtected ? i18n.t('csvPreviewColumnTypeTimeTitle') : i18n.t('csvPreviewColumnTypeTitle');
+            type.setAttribute('aria-label', i18n.t('csvPreviewColumnTypeTitle'));
+            type.addEventListener('change', () => {
+                const value = type.value === 'number' || type.value === 'text' ? type.value : null;
+                this.state.columnOverrides = { ...(this.state.columnOverrides || {}) };
+                const next = { ...(this.state.columnOverrides[index] || {}) };
+                if (value) next.type = value;
+                else delete next.type;
+                // An override that holds nothing is no override: left behind, it
+                // would make the dialog think columns were touched.
+                if (Object.keys(next).length) this.state.columnOverrides[index] = next;
+                else delete this.state.columnOverrides[index];
+                this._rebuildAndRender();
+            });
+
             const raw = document.createElement('div');
             raw.className = 'csv-preview-column-raw';
             raw.textContent = `${columnLabel(index)} - ${rawHeaders[index] || ''}`;
             raw.title = rawHeaders[index] || '';
 
-            row.append(useColumn, name, unit, raw);
+            row.append(useColumn, name, unit, type, raw);
             wrap.appendChild(row);
         });
         return wrap;
@@ -2558,7 +2660,10 @@ export default class CsvParsingPreviewDialog {
         headRow.appendChild(parsedHead);
         for (let c = 0; c < maxColumns; c++) {
             const th = document.createElement('th');
-            th.textContent = columnLabel(c);
+            const letter = document.createElement('span');
+            letter.className = 'csv-preview-head-letter';
+            letter.textContent = columnLabel(c);
+            th.append(letter, this._columnTypeBadge(c));
             headRow.appendChild(th);
         }
         thead.appendChild(headRow);

@@ -72,3 +72,32 @@ export function inferNumericColumnIndexes(rows, columnCount, delimiter, decimalS
     }
     return numericIndexes;
 }
+
+// Column positions as a set, from a profile's list of them. Every list of
+// columns a profile carries is positions, so they all arrive here.
+export function columnIndexSet(indexes) {
+    return new Set((Array.isArray(indexes) ? indexes : [])
+        .map(index => Number(index))
+        .filter(index => Number.isInteger(index) && index >= 0));
+}
+
+/**
+ * The types the reader chose by hand in the parsing options, as a Map of column
+ * position to 'numeric' or 'text'. A position the Map does not hold is one the
+ * reader left on auto, and the file decides it.
+ *
+ * A chosen type outranks everything the file can say about itself — the sample,
+ * and the scan of every row — because the file cannot know what the numbers in
+ * it are for. A column of codes with leading zeros reads as text on request,
+ * and a channel whose values the reader knows are numbers reads as numbers even
+ * where nothing in the file says so. Only the time axis is above it, and the
+ * dialog does not offer the choice there.
+ */
+export function forcedColumnTypes(profile) {
+    const forced = new Map();
+    for (const index of columnIndexSet(profile?.forcedTextColumns)) forced.set(index, 'text');
+    // Numeric last: a profile that somehow lists a column as both is read the
+    // way that keeps the column usable.
+    for (const index of columnIndexSet(profile?.forcedNumericColumns)) forced.set(index, 'numeric');
+    return forced;
+}
