@@ -1,6 +1,10 @@
 import i18n from '../i18n/index.js';
 import Modal from './modal.js';
 import { csvRowMatchesFilter, normalizeCsvRowFilter, stripUnitBrackets } from '../parsers/csv-parser.js';
+// The dialog reads a column the visible rows hold no value for as numbers, the
+// same as every other path (#311): the preview shows a handful of rows, and an
+// empty one is no evidence of text.
+import { inferNumericColumnIndexes } from '../parsers/csv-column-types.js';
 import { customDatetimePatternInfo, dateSeparatorForStrategy, detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import {
     normalizeCsvGrouping,
@@ -98,22 +102,6 @@ function unitTextFromDescription(description) {
 
 function isEmptyPreviewRow(row) {
     return !(row || []).some(cell => String(cell ?? '').trim() !== '');
-}
-
-function inferNumericColumnIndexes(rows, columnCount, delimiter, decimalSeparator = 'auto') {
-    const numericIndexes = [];
-    for (let index = 0; index < columnCount; index++) {
-        let nonEmpty = 0;
-        let numeric = 0;
-        for (const row of rows || []) {
-            const raw = String(row?.[index] ?? '').trim();
-            if (!raw) continue;
-            nonEmpty++;
-            if (Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator))) numeric++;
-        }
-        if (nonEmpty > 0 && numeric / nonEmpty > 0.5) numericIndexes.push(index);
-    }
-    return numericIndexes;
 }
 
 function rowHasInvalidNumericCell(row, numericIndexes, delimiter, decimalSeparator = 'auto') {

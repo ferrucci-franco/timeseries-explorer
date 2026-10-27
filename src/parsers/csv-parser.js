@@ -13,11 +13,10 @@
  */
 import MatParser from './mat-parser.js';
 import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
+import { columnSampleCounts, isMissingNumberCell, isMostlyNumericColumn } from './csv-column-types.js';
 import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
 import { buildCsvTree, resolveCsvGrouping } from './csv-tree-grouping.js';
 import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
-
-const NUMERIC_COLUMN_MIN_RATIO = 0.5;
 
 // "[m/s]" -> "m/s": a units row that writes its units in brackets would
 // otherwise become "[[m/s]]" in the description.
@@ -26,18 +25,10 @@ export function stripUnitBrackets(unit) {
     return match ? (match[1] ?? match[2] ?? match[3]).trim() : unit;
 }
 
-// "NaN" (any case, optionally signed, as C/Python/LabVIEW print it) is a missing number, not text: a logger
-// that writes NaN for an absent sensor must not turn its first data row into a header, nor a column of
-// mostly-missing values into a string column.
-const MISSING_NUMBER_CELL = /^[+-]?nan$/i;
-export function isMissingNumberCell(cell) {
-    return MISSING_NUMBER_CELL.test(String(cell ?? '').trim());
-}
-
-function isMostlyNumericColumn(column) {
-    if (!column || column.nonEmptyCount <= 0) return true;
-    return (column.finiteCount / column.nonEmptyCount) > NUMERIC_COLUMN_MIN_RATIO;
-}
+// Both of these now live in csv-column-types.js, so the DuckDB path reads the
+// same rules: "NaN" is a missing number, and an empty column is not text.
+// Re-exported because the CSV parser is where callers look for them.
+export { isMissingNumberCell };
 
 export function normalizeCsvRowFilter(filter) {
     if (!filter || filter.enabled !== true) return null;
@@ -649,15 +640,8 @@ export default class CsvParser {
             );
         const numericIndexes = new Set();
         for (let columnIndex = 0; columnIndex < expectedColumns; columnIndex++) {
-            let nonEmptyCount = 0;
-            let finiteCount = 0;
-            for (const row of rows) {
-                const rawValue = String(row?.[columnIndex] ?? '').trim();
-                if (!rawValue || isMissingNumberCell(rawValue)) continue;
-                nonEmptyCount++;
-                if (Number.isFinite(parseCsvNumber(rawValue, delimiter, decimalSeparator))) finiteCount++;
-            }
-            if (isMostlyNumericColumn({ nonEmptyCount, finiteCount })) numericIndexes.add(columnIndex);
+            const counts = columnSampleCounts(rows, columnIndex, delimiter, decimalSeparator);
+            if (isMostlyNumericColumn(counts)) numericIndexes.add(columnIndex);
         }
         return numericIndexes;
     }
