@@ -82,6 +82,28 @@ export function columnIndexSet(indexes) {
 }
 
 /**
+ * The profile without what the FILE said about its own columns — the verdict a
+ * scan of every row produced, and what the preview could not type.
+ *
+ * Those are facts about a particular set of bytes, not about what the reader
+ * wants, so they must not outlive the read that produced them. A profile is
+ * handed back for a second read in three places, and in all three the bytes or
+ * the layout may have moved under it: a Reload (the file changed — that is what
+ * Reload is for), a project reopened later against a file that has since grown,
+ * and the parsing dialog, where changing the delimiter or the header row
+ * renumbers the columns the verdict was about. The scan is one query; running it
+ * again is cheaper than reading a column wrong.
+ *
+ * What the reader chose by hand (forcedNumericColumns / forcedTextColumns)
+ * survives all of it: that is a decision about meaning, not about bytes.
+ */
+export function csvProfileWithoutScan(profile) {
+    if (!profile || typeof profile !== 'object') return profile;
+    const { scannedNumericColumns, scannedTextColumns, previewEmptyColumns, ...rest } = profile;
+    return rest;
+}
+
+/**
  * The types the reader chose by hand in the parsing options, as a Map of column
  * position to 'numeric' or 'text'. A position the Map does not hold is one the
  * reader left on auto, and the file decides it.

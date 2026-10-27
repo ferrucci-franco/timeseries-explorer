@@ -3,6 +3,7 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import SessionFileRemapDialog from '../../ui/session-file-remap-dialog.js';
 import { APP_VERSION, RESULT_FILE_EXTENSIONS } from '../constants.js';
+import { csvProfileWithoutScan } from '../../parsers/csv-column-types.js';
 
 const SESSION_FORMAT = 'openmodelica-viewer-session';
 const SESSION_VERSION = 1;
@@ -238,8 +239,10 @@ proto._createSessionSnapshot = function(options = {}) {
             ? (griddedFiles?.length ? griddedFiles[0].archivePath : `data/${this._uniqueArchiveName(displayName, usedArchiveNames)}`)
             : null;
         const data = this.plotManager.files.get(fileId)?.data;
+        // The reader's own choices, not what a scan of this morning's bytes
+        // found: the file may have grown by the time the project is reopened.
         const csvProfile = data?.metadata?.csvProfile?.profileSource === 'user'
-            ? this._cloneSerializable(data.metadata.csvProfile)
+            ? this._cloneSerializable(csvProfileWithoutScan(data.metadata.csvProfile))
             : null;
         const derived = [...(this.derivedByFile.get(fileId) || new Map()).values()]
             .map(item => item.timeAxisIndex
