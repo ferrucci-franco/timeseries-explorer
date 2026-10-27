@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import CsvParsingPreviewDialog from '../../ui/csv-parsing-preview-dialog.js';
+import { csvProfileWithoutScan } from '../../parsers/csv-column-types.js';
 import {
     PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES,
     PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
@@ -1221,9 +1222,8 @@ proto.reloadActiveFile = async function() {
         const buffer = streamable ? null : await this._readLatestBuffer(entry);
         const contentHash = streamable ? this._fileFingerprint(latestFile || entry.file) : await this._hashBuffer(buffer);
 
-        const currentProfile = this.plotManager.files.get(id)?.data?.metadata?.csvProfile || null;
         const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file, {
-            csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
+            csvProfile: this._storedCsvProfileForReparse(id),
             excelSheetName: entry.excel?.sheetName || null,
             matSelection: entry.matlab || null,
         });
@@ -1375,9 +1375,8 @@ proto.reloadActiveFileAsNewVersion = async function() {
             return;
         }
 
-        const reloadProfile = currentProfile?.profileSource === 'user'
-            ? (hasCsvRowFilter ? csvProfileWithoutRowFilter(currentProfile) : currentProfile)
-            : null;
+        const storedProfile = this._storedCsvProfileForReparse(sourceId);
+        const reloadProfile = hasCsvRowFilter ? csvProfileWithoutRowFilter(storedProfile) : storedProfile;
         const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, latestFile || source.file, {
             csvProfile: reloadProfile,
             excelSheetName: source.excel?.sheetName || null,
@@ -4651,6 +4650,21 @@ proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
         return i18n.t('fileTypeMicroCapTooltip');
     }
     return fallback;
+};
+
+/**
+ * The stored parsing profile, ready to re-read the file with.
+ *
+ * One place, because there is one rule and it is easy to forget: a profile the
+ * reader confirmed is worth keeping (its header row, its time axis, the types
+ * it was told to use), but what a scan of the previous bytes found is not — and
+ * a re-read happens exactly when those bytes may have changed. Every reload
+ * asks for the profile here; nothing else may take it from the file's metadata
+ * and hand it to a parse.
+ */
+proto._storedCsvProfileForReparse = function(fileId) {
+    const stored = this.plotManager.files.get(fileId)?.data?.metadata?.csvProfile || null;
+    return stored?.profileSource === 'user' ? csvProfileWithoutScan(stored) : null;
 };
 
 proto._defaultFileTransform = function() {

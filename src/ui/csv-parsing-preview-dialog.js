@@ -4,7 +4,7 @@ import { csvRowMatchesFilter, normalizeCsvRowFilter, stripUnitBrackets } from '.
 // The dialog reads a column the visible rows hold no value for as numbers, the
 // same as every other path (#311): the preview shows a handful of rows, and an
 // empty one is no evidence of text.
-import { columnSampleVerdict, inferNumericColumnIndexes } from '../parsers/csv-column-types.js';
+import { columnSampleVerdict, csvProfileWithoutScan, inferNumericColumnIndexes } from '../parsers/csv-column-types.js';
 import { customDatetimePatternInfo, dateSeparatorForStrategy, detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import {
     normalizeCsvGrouping,
@@ -1817,7 +1817,10 @@ export default class CsvParsingPreviewDialog {
         if (sampleRows.length && validTimeRows === 0) messages.push('No visible data row produces a valid time value.');
 
         this.resultProfile = {
-            ...(this.autoProfile || this.preview?.profile || {}),
+            // Without the scan's verdict: changing the delimiter or the header
+            // row here renumbers the columns it was about, and the next load
+            // asks the file again anyway (csvProfileWithoutScan).
+            ...csvProfileWithoutScan(this.autoProfile || this.preview?.profile || {}),
             delimiter,
             encoding: this.state.encoding === 'auto'
                 ? (this.preview?.encoding || this.autoProfile?.encoding || 'utf-8')
