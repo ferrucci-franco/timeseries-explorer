@@ -13,7 +13,7 @@
  */
 import MatParser from './mat-parser.js';
 import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
-import { columnSampleCounts, isMissingNumberCell, isMostlyNumericColumn } from './csv-column-types.js';
+import { columnSampleCounts, forcedColumnTypes, isMissingNumberCell, isMostlyNumericColumn } from './csv-column-types.js';
 import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
 import { buildCsvTree, resolveCsvGrouping } from './csv-tree-grouping.js';
 import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
@@ -504,11 +504,15 @@ export default class CsvParser {
         result.variables[timeVariable.name] = timeVariable;
         const usedVariableNames = new Set([timeVariable.name]);
         const numericColumnIndexes = [];
+        // A type chosen in the parsing options wins over the column's own
+        // values, exactly as it does on the DuckDB path (csv-column-types.js).
+        const forced = forcedColumnTypes(profile);
 
         for (let c = 0; c < variableHeaders.length; c++) {
             const header = variableHeaders[c].header;
             const column = variableColumns[c];
-            const isStringColumn = !isMostlyNumericColumn(column);
+            const chosen = forced.get(variableHeaders[c].index) || null;
+            const isStringColumn = chosen ? chosen === 'text' : !isMostlyNumericColumn(column);
             if (!isStringColumn) numericColumnIndexes.push(variableHeaders[c].index);
             const values = isStringColumn ? column.stringValues : column.numericValues;
             let name = header.name;
@@ -620,15 +624,25 @@ export default class CsvParser {
     }
 
     _numericColumnIndexSet(profile = {}, options = {}) {
+        // A type chosen in the parsing options applies to the rows a live update
+        // appends too: the file has not changed its mind about them.
+        const withForced = (indexes) => {
+            for (const [index, type] of forcedColumnTypes(profile)) {
+                if (type === 'numeric') indexes.add(index);
+                else indexes.delete(index);
+            }
+            return indexes;
+        };
+
         if (Array.isArray(profile?.numericColumnIndexes)) {
-            return new Set(profile.numericColumnIndexes
+            return withForced(new Set(profile.numericColumnIndexes
                 .map(index => Number(index))
-                .filter(index => Number.isInteger(index) && index >= 0));
+                .filter(index => Number.isInteger(index) && index >= 0)));
         }
 
         const sampleRows = Array.isArray(profile?.sampleRows) ? profile.sampleRows : [];
         const expectedColumns = Math.max(0, Number(options.expectedColumns) || profile?.rawHeaders?.length || 0);
-        if (!sampleRows.length || !expectedColumns) return new Set();
+        if (!sampleRows.length || !expectedColumns) return withForced(new Set());
 
         const delimiter = options.delimiter || profile?.delimiter || ',';
         const decimalSeparator = options.decimalSeparator || profile?.decimalSeparator || 'auto';
@@ -643,7 +657,7 @@ export default class CsvParser {
             const counts = columnSampleCounts(rows, columnIndex, delimiter, decimalSeparator);
             if (isMostlyNumericColumn(counts)) numericIndexes.add(columnIndex);
         }
-        return numericIndexes;
+        return withForced(numericIndexes);
     }
 
     _serializeTimeSource(timeSource) {

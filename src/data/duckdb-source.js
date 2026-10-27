@@ -24,7 +24,7 @@ import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
-import { columnSampleVerdict, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
+import { columnIndexSet, columnSampleVerdict, forcedColumnTypes, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
 import { buildCsvTree, resolveCsvGrouping } from '../parsers/csv-tree-grouping.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import {
@@ -3885,11 +3885,14 @@ export default class DuckDbSource {
         const numericIndexes = Array.isArray(csvProfile?.numericColumnIndexes)
             ? new Set(csvProfile.numericColumnIndexes.map(index => Number(index)).filter(index => Number.isInteger(index) && index >= 0))
             : null;
+        // Above everything the file says about itself: the type the reader chose
+        // in the parsing options.
+        const forced = forcedColumnTypes(csvProfile);
         // What a scan of the whole file decided for the columns the sample could
         // not type (_resolveUnknownCsvColumnTypes). It outranks the sample,
         // whoever took it: it read every row.
-        const scannedNumeric = this._csvIndexSet(csvProfile?.scannedNumericColumns);
-        const scannedText = this._csvIndexSet(csvProfile?.scannedTextColumns);
+        const scannedNumeric = columnIndexSet(csvProfile?.scannedNumericColumns);
+        const scannedText = columnIndexSet(csvProfile?.scannedTextColumns);
         let validTimeRows = null;
         const sampleRowsOnce = () => {
             if (validTimeRows === null) {
@@ -3906,9 +3909,12 @@ export default class DuckDbSource {
             const forceVarchar = timeIndexes.has(index)
                 && timeSource.kind === 'datetime'
                 && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
+            const chosen = forced.get(index) || null;
             const scanned = scannedNumeric.has(index) || scannedText.has(index);
             const inferred = forceVarchar
                 ? { type: 'VARCHAR', readType: 'VARCHAR' }
+                : chosen
+                    ? { type: chosen === 'text' ? 'VARCHAR' : 'DOUBLE', readType: 'VARCHAR' }
                 : scannedNumeric.has(index)
                     ? { type: 'DOUBLE', readType: 'VARCHAR' }
                 : scannedText.has(index)
@@ -3927,16 +3933,16 @@ export default class DuckDbSource {
                 ...inferred,
             };
             if (withVerdict) {
-                spec.sampleVerdict = forceVarchar ? 'time' : scanned ? 'scanned' : verdictOf(index);
+                // 'chosen' and 'scanned' both mean "settled, nothing left to
+                // ask the file about" — the scan skips them.
+                spec.sampleVerdict = forceVarchar
+                    ? 'time'
+                    : chosen
+                        ? 'chosen'
+                        : scanned ? 'scanned' : verdictOf(index);
             }
             return spec;
         });
-    }
-
-    _csvIndexSet(indexes) {
-        return new Set((Array.isArray(indexes) ? indexes : [])
-            .map(index => Number(index))
-            .filter(index => Number.isInteger(index) && index >= 0));
     }
 
     _sampleRowsWithValidTime(sampleRows, csvProfile) {
@@ -4008,8 +4014,8 @@ export default class DuckDbSource {
             return;
         }
 
-        const numericColumns = this._csvIndexSet(csvProfile.scannedNumericColumns);
-        const textColumns = this._csvIndexSet(csvProfile.scannedTextColumns);
+        const numericColumns = columnIndexSet(csvProfile.scannedNumericColumns);
+        const textColumns = columnIndexSet(csvProfile.scannedTextColumns);
         unknown.forEach(({ index }, slot) => {
             const filled = Number(result.getChild(`filled_${slot}`)?.get(0) ?? 0);
             const numeric = Number(result.getChild(`numeric_${slot}`)?.get(0) ?? 0);

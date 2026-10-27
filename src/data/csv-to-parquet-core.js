@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
 import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
-import { columnSampleVerdict, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
+import { columnIndexSet, columnSampleVerdict, forcedColumnTypes, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
 
 const require = createRequire(import.meta.url);
 const duckDbModulePath = (() => {
@@ -67,10 +67,13 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
     const numericIndexes = Array.isArray(profile?.numericColumnIndexes)
         ? new Set(profile.numericColumnIndexes.map(index => Number(index)).filter(index => Number.isInteger(index) && index >= 0))
         : null;
+    // Above everything the file says about itself: the type the reader chose in
+    // the parsing options.
+    const forced = forcedColumnTypes(profile);
     // What the scan of the whole CSV decided for the columns the sample could
     // not type (resolveUnknownCsvColumnTypes). It read every row, so it wins.
-    const scannedNumeric = csvIndexSet(profile?.scannedNumericColumns);
-    const scannedText = csvIndexSet(profile?.scannedTextColumns);
+    const scannedNumeric = columnIndexSet(profile?.scannedNumericColumns);
+    const scannedText = columnIndexSet(profile?.scannedTextColumns);
     const validTimeRows = sampleRowsWithValidTime(sampleRows, profile);
     return rawHeaders.map((raw, index) => {
         const header = headers[index] || {};
@@ -78,9 +81,12 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
         const forceVarchar = timeIndexes.has(index)
             && timeSource.kind === 'datetime'
             && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
+        const chosen = forced.get(index) || null;
         const scanned = scannedNumeric.has(index) || scannedText.has(index);
         const inferred = forceVarchar
             ? { type: 'VARCHAR', readType: 'VARCHAR' }
+            : chosen
+                ? { type: chosen === 'text' ? 'VARCHAR' : 'DOUBLE', readType: 'VARCHAR' }
             : scannedNumeric.has(index)
                 ? { type: 'DOUBLE', readType: 'VARCHAR' }
             : scannedText.has(index)
@@ -94,20 +100,17 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
             ...inferred,
         };
         if (withVerdict) {
+            // 'chosen' and 'scanned' are both settled: the scan skips them.
             spec.sampleVerdict = forceVarchar
                 ? 'time'
-                : scanned
-                    ? 'scanned'
-                    : columnSampleVerdict(validTimeRows, index, profile?.delimiter, profile?.decimalSeparator);
+                : chosen
+                    ? 'chosen'
+                    : scanned
+                        ? 'scanned'
+                        : columnSampleVerdict(validTimeRows, index, profile?.delimiter, profile?.decimalSeparator);
         }
         return spec;
     });
-}
-
-export function csvIndexSet(indexes) {
-    return new Set((Array.isArray(indexes) ? indexes : [])
-        .map(index => Number(index))
-        .filter(index => Number.isInteger(index) && index >= 0));
 }
 
 /**
@@ -149,8 +152,8 @@ export async function resolveUnknownCsvColumnTypes(conn, readExpr, profile) {
     const row = rows?.[0];
     if (!row) return;
 
-    const numericColumns = csvIndexSet(profile.scannedNumericColumns);
-    const textColumns = csvIndexSet(profile.scannedTextColumns);
+    const numericColumns = columnIndexSet(profile.scannedNumericColumns);
+    const textColumns = columnIndexSet(profile.scannedTextColumns);
     unknown.forEach(({ index }, slot) => {
         const filled = Number(row[`filled_${slot}`] ?? 0);
         const numeric = Number(row[`numeric_${slot}`] ?? 0);

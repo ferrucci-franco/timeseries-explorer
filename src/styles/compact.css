@@ -2292,9 +2292,17 @@ html.compact .overlay-escape-hint {
     display: none !important;
 }
 
-/* The CSV dialog's column list: room for a switch ahead of the name. */
+/* The CSV dialog's column list: room for a switch ahead of the name. On a phone
+   the row keeps three columns and "how to read it" takes a line of its own,
+   rather than squeezing four controls into the width of a thumb. */
 html.compact .csv-preview-column-control {
     grid-template-columns: 46px minmax(0, 1fr) 5.5rem;
+}
+
+html.compact .csv-preview-column-control .csv-preview-column-type {
+    grid-column: 2 / -1;
+    min-height: 36px;
+    font-size: 15px;
 }
 
 /* The time axis as a page of its own (Data → file → Time axis and scale):

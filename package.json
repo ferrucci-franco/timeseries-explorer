@@ -41,6 +41,7 @@
     "test:csv": "node scripts/test-csv-fixtures.mjs",
     "test:csv-nan-cells": "node scripts/test-csv-nan-cells.mjs",
     "test:csv-empty-column-types": "node scripts/test-csv-empty-column-types.mjs",
+    "test:csv-column-type-choice": "node scripts/test-csv-column-type-choice.mjs",
     "test:excel": "node scripts/test-excel-parser.mjs",
     "test:csv-folders-settings": "node scripts/test-csv-folders-and-settings.mjs",
     "test:matlab": "node scripts/test-matlab-parser.mjs",
