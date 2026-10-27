@@ -130,6 +130,62 @@ try {
         await closeDuckDbDatabase(dottedDb);
     }
 
+    // Columns the sample holds no value for: a channel the logger never
+    // recorded, and two that start at row 750. They used to be typed from no
+    // evidence at all and written as text, which is how a column of numbers
+    // became a string series in the app. The conversion asks the whole file
+    // instead (resolveUnknownCsvColumnTypes), so each one is written as what it
+    // holds — and the column that really is text keeps its words.
+    const sparseCsv = join(dir, 'sparse.csv');
+    const sparseParquet = join(dir, 'sparse.parquet');
+    const sparseRows = ['time;ambient;BATT_I;Calo_Config;LOAD_MODE'];
+    for (let i = 0; i < 800; i++) {
+        const late = i >= 750;
+        sparseRows.push(`${(i * 0.5).toFixed(1)};${(20 + i / 100).toFixed(3)};;${late ? '9.000' : ''};${late ? 'manual' : ''}`);
+    }
+    sparseRows.push('');
+    writeFileSync(sparseCsv, sparseRows.join('\n'));
+
+    const sparseProfile = inspectCsvForParquet(sparseCsv);
+    assert.equal(sparseProfile.sampleRows.length, 100, 'the sample ends long before those columns begin');
+    await convertCsvToParquet({
+        inputPath: sparseCsv,
+        outputPath: sparseParquet,
+        csvProfile: sparseProfile,
+        overwrite: true,
+    });
+    // The scan's verdict is left on the profile for whoever reads it next.
+    assert.deepEqual(sparseProfile.scannedNumericColumns, [2, 3]);
+    assert.deepEqual(sparseProfile.scannedTextColumns, [4]);
+
+    const sparseDb = new Database(':memory:');
+    const sparseConn = sparseDb.connect();
+    try {
+        const read = `read_parquet('${sparseParquet.replace(/\\/g, '/').replace(/'/g, "''")}')`;
+        const schema = await runDuckDb(sparseConn, `DESCRIBE SELECT * FROM ${read}`);
+        const typeOf = new Map(schema.map(row => [row.column_name, String(row.column_type)]));
+        assert.match(typeOf.get('BATT_I'), /DOUBLE/, 'a column that is empty everywhere is still a number');
+        assert.match(typeOf.get('Calo_Config'), /DOUBLE/, 'and so is one that starts after the sample');
+        assert.match(typeOf.get('LOAD_MODE'), /VARCHAR/, 'but words are words, whenever they start');
+
+        const rows = await runDuckDb(sparseConn, `
+            SELECT COUNT(*) AS n,
+                   COUNT("BATT_I") AS batt,
+                   SUM("Calo_Config") AS calo,
+                   COUNT("LOAD_MODE") AS modes,
+                   MAX("LOAD_MODE") AS mode
+            FROM ${read}
+        `);
+        assert.equal(Number(rows[0].n), 800);
+        assert.equal(Number(rows[0].batt), 0, 'nothing was invented for the empty one');
+        assert.equal(Number(rows[0].calo), 450, '50 rows of 9.000 survived the cast');
+        assert.equal(Number(rows[0].modes), 50);
+        assert.equal(String(rows[0].mode), 'manual');
+    } finally {
+        await closeDuckDbConnection(sparseConn);
+        await closeDuckDbDatabase(sparseDb);
+    }
+
     // The compression name is spliced into the COPY statement, so it is the one
     // option that could carry SQL rather than choose a codec.
     assert.equal(parquetCompression(undefined), 'zstd', 'the default is unchanged');

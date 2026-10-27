@@ -5,7 +5,8 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
-import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { columnSampleVerdict, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
 
 const require = createRequire(import.meta.url);
 const duckDbModulePath = (() => {
@@ -55,7 +56,9 @@ export function csvReadExpr(sqlInput, profile) {
     return `read_csv('${sqlInput}', ${options.join(', ')})`;
 }
 
-export function csvColumnSpecs(profile) {
+// `withVerdict` adds what the sample says about each column ('numeric', 'text',
+// 'unknown' or 'time'), which only resolveUnknownCsvColumnTypes needs.
+export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
     const rawHeaders = profile?.rawHeaders || [];
     const headers = profile?.headers || [];
     const sampleRows = profile?.sampleRows || [];
@@ -64,23 +67,98 @@ export function csvColumnSpecs(profile) {
     const numericIndexes = Array.isArray(profile?.numericColumnIndexes)
         ? new Set(profile.numericColumnIndexes.map(index => Number(index)).filter(index => Number.isInteger(index) && index >= 0))
         : null;
+    // What the scan of the whole CSV decided for the columns the sample could
+    // not type (resolveUnknownCsvColumnTypes). It read every row, so it wins.
+    const scannedNumeric = csvIndexSet(profile?.scannedNumericColumns);
+    const scannedText = csvIndexSet(profile?.scannedTextColumns);
+    const validTimeRows = sampleRowsWithValidTime(sampleRows, profile);
     return rawHeaders.map((raw, index) => {
         const header = headers[index] || {};
         const name = header.name || String(raw || `column_${index + 1}`);
         const forceVarchar = timeIndexes.has(index)
             && timeSource.kind === 'datetime'
             && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
+        const scanned = scannedNumeric.has(index) || scannedText.has(index);
         const inferred = forceVarchar
             ? { type: 'VARCHAR', readType: 'VARCHAR' }
+            : scannedNumeric.has(index)
+                ? { type: 'DOUBLE', readType: 'VARCHAR' }
+            : scannedText.has(index)
+                ? { type: 'VARCHAR', readType: 'VARCHAR' }
             : numericIndexes
                 ? (numericIndexes.has(index) ? { type: 'DOUBLE', readType: 'VARCHAR' } : { type: 'VARCHAR', readType: 'VARCHAR' })
-            : inferDuckDbCsvType(sampleRowsWithValidTime(sampleRows, profile), index, profile.delimiter, profile.decimalSeparator);
-        return {
+            : inferDuckDbCsvType(validTimeRows, index, profile.delimiter, profile.decimalSeparator);
+        const spec = {
             name,
             description: String(header.description || ''),
             ...inferred,
         };
+        if (withVerdict) {
+            spec.sampleVerdict = forceVarchar
+                ? 'time'
+                : scanned
+                    ? 'scanned'
+                    : columnSampleVerdict(validTimeRows, index, profile?.delimiter, profile?.decimalSeparator);
+        }
+        return spec;
     });
+}
+
+export function csvIndexSet(indexes) {
+    return new Set((Array.isArray(indexes) ? indexes : [])
+        .map(index => Number(index))
+        .filter(index => Number.isInteger(index) && index >= 0));
+}
+
+/**
+ * Ask the CSV about the columns its sample could not type, before writing them.
+ *
+ * Same question the app's DuckDB path asks (duckdb-source.js
+ * _resolveUnknownCsvColumnTypes), for the same reason: the sample is the first
+ * 100 data rows of the first megabyte, and a channel that starts recording
+ * later — or never — would otherwise be typed from no evidence at all and
+ * written to Parquet as the wrong thing for good.
+ *
+ * One aggregate query, so one extra pass over the CSV, against a conversion that
+ * already reads and sorts the whole file. Nothing is written if it fails: the
+ * sample's answer is good enough to convert with.
+ */
+export async function resolveUnknownCsvColumnTypes(conn, readExpr, profile) {
+    if (!profile) return;
+    const specs = csvColumnSpecs(profile, { withVerdict: true });
+    const unknown = specs
+        .map((spec, index) => ({ spec, index }))
+        .filter(({ spec }) => spec.sampleVerdict === 'unknown');
+    if (!unknown.length) return;
+
+    const selections = unknown.map(({ spec }, slot) => {
+        const ident = quoteIdent(spec.name);
+        return `COUNT(NULLIF(trim(CAST(${ident} AS VARCHAR)), '')) AS filled_${slot}`
+            + `, COUNT(${numericCastSql(ident, profile)}) AS numeric_${slot}`;
+    });
+    const filterWhere = rowFilterSql(profile);
+    const sql = `SELECT ${selections.join(', ')} FROM ${readExpr}${filterWhere ? ` WHERE ${filterWhere}` : ''}`;
+
+    let rows = null;
+    try {
+        rows = await runDuckDb(conn, sql);
+    } catch (err) {
+        console.warn(`[csv-to-parquet] could not scan for untyped columns; keeping the sample's types: ${err?.message || err}`);
+        return;
+    }
+    const row = rows?.[0];
+    if (!row) return;
+
+    const numericColumns = csvIndexSet(profile.scannedNumericColumns);
+    const textColumns = csvIndexSet(profile.scannedTextColumns);
+    unknown.forEach(({ index }, slot) => {
+        const filled = Number(row[`filled_${slot}`] ?? 0);
+        const numeric = Number(row[`numeric_${slot}`] ?? 0);
+        if (isMostlyNumericColumn({ nonEmptyCount: filled, finiteCount: numeric })) numericColumns.add(index);
+        else textColumns.add(index);
+    });
+    profile.scannedNumericColumns = [...numericColumns].sort((a, b) => a - b);
+    profile.scannedTextColumns = [...textColumns].sort((a, b) => a - b);
 }
 
 export function sampleRowsWithValidTime(sampleRows, profile) {
@@ -93,19 +171,14 @@ export function sampleRowsWithValidTime(sampleRows, profile) {
     );
 }
 
+// Text only when the sample says so: a column the sample held no value for —
+// a channel the logger never recorded — is numbers, not a string column.
+// resolveUnknownCsvColumnTypes settles those columns against the whole file
+// before anything is written; this is what stands if that scan cannot run.
 export function inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto') {
-    let nonEmpty = 0;
-    let numeric = 0;
-    for (const row of sampleRows || []) {
-        const raw = String(row?.[index] ?? '').trim();
-        if (!raw) continue;
-        nonEmpty++;
-        if (Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator))) numeric++;
-    }
-    if (nonEmpty > 0 && (numeric / nonEmpty) > 0.5) {
-        return { type: 'DOUBLE', readType: 'VARCHAR' };
-    }
-    return { type: 'VARCHAR', readType: 'VARCHAR' };
+    return columnSampleVerdict(sampleRows, index, delimiter, decimalSeparator) === 'text'
+        ? { type: 'VARCHAR', readType: 'VARCHAR' }
+        : { type: 'DOUBLE', readType: 'VARCHAR' };
 }
 
 export function duckDbColumnsStruct(specs) {
@@ -412,6 +485,8 @@ export async function convertCsvToParquet(options = {}) {
 
         const compress = compression === 'none' ? '' : `, COMPRESSION ${compression.toUpperCase()}`;
         const readExpr = csvReadExpr(sqlPath(inputPath), profile);
+        // Before the projection, which is where a column's type becomes a cast.
+        await resolveUnknownCsvColumnTypes(conn, readExpr, profile);
         const projection = projectionSql(profile, timeInfo);
         const filterWhere = rowFilterSql(profile);
         await runDuckDb(conn, `
