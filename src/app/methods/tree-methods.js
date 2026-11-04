@@ -667,21 +667,34 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         const formulaEntry = options.derivedActions
             ? this.derivedByFile?.get(leafFileId)?.get(variable.name)
             : null;
-        const editFormula = formulaEntry?.formula
-            ? (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this._editDerivedVariable(variable.name);
-            }
-            : null;
-        if (editFormula) {
+        const editFormula = !!formulaEntry?.formula;
+        // A Data Tools output shares this section with the formulas, so it says
+        // where it came from; its recipe is edited in the Data Tools panel.
+        const toolOutput = options.derivedActions && !editFormula
+            && !!this.dataToolVariablesByFile?.get(leafFileId)?.get(variable.name);
+        // Every derived row gets the same pencil: a formula opens the formula
+        // form, a Data Tools output opens its recipe in the Data Tools panel
+        // (which scrolls itself into view). Giving only the formulas one made
+        // the tool outputs look uneditable, and left the user hunting for the
+        // matching row in the Transformations table further down the sidebar.
+        const onEdit = editFormula
+            ? () => this._editDerivedVariable(variable.name)
+            : toolOutput
+                ? () => this._enterDataToolEditing?.(leafFileId, variable.name)
+                : null;
+        if (onEdit) {
+            const titleKey = editFormula ? 'derivedEdit' : 'dataToolEditTitle';
             const edit = document.createElement('button');
             edit.type = 'button';
             edit.className = 'tree-derived-edit';
             edit.textContent = '✎';
-            edit.title = i18n.t('derivedEdit');
-            edit.setAttribute('aria-label', i18n.t('derivedEdit'));
-            edit.addEventListener('click', editFormula);
+            edit.title = i18n.t(titleKey);
+            edit.setAttribute('aria-label', i18n.t(titleKey));
+            edit.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onEdit();
+            });
             edit.addEventListener('dragstart', (e) => e.preventDefault());
             itemDiv.appendChild(edit);
         }
@@ -702,10 +715,6 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             itemDiv.appendChild(remove);
         }
 
-        // A Data Tools output shares this section with the formulas, so it says
-        // where it came from; its recipe is edited in the Data Tools panel.
-        const toolOutput = options.derivedActions && !formulaEntry?.formula
-            && !!this.dataToolVariablesByFile?.get(leafFileId)?.get(variable.name);
         if (editFormula) {
             // The formula is what a derived variable IS, so it is always on show
             // under the name rather than tucked into a tooltip — and it is read
