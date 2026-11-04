@@ -1588,6 +1588,11 @@ proto._enterDataToolEditing = function(fileId, name) {
     const normalized = this._normalizeDataToolDefinition(definition);
 
     this._clearDataToolPreview();
+    // An armed "delete this row?" belongs to the click before this one. Left
+    // armed, the table keeps offering a ✓ that deletes a variable the user has
+    // since moved on from — and the pencil can come from the tree, where the
+    // armed row is not even on screen to be disarmed.
+    this._dataToolPendingDelete = '';
     this._dataToolEditing = { fileId, name };
     this._dataToolRenameUnlocked = false;
     this._setOutlierMessage('', '');
