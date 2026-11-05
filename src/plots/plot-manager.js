@@ -4204,42 +4204,149 @@ class PlotManager {
         return this._padRange(extent.min, extent.max);
     }
 
+    /**
+     * The vertical extent of a STACKED time panel, over the X window `xRange`
+     * (the whole record when it is null).
+     *
+     * A stacked panel is drawn with Plotly `stackgroup` + `stackgaps:
+     * 'interpolate'` (see `_timeseriesStackAttrs`), so the layer a trace
+     * contributes at an instant is its value INTERPOLATED onto the union of
+     * the group's time grids — not its sample at the same array position.
+     * Pairing by position is the same thing only while every trace shares one
+     * sampling grid: true for several variables of one file, false as soon as
+     * two files are stacked, and the extent then described a stack top that
+     * was never drawn (Fit-Y landing well below the data).
+     *
+     * So the sum is read where it can turn: every time either trace samples,
+     * inside the window, plus the window's own edges — the stack is drawn
+     * across the whole window, and a trace whose nearest samples fall outside
+     * it still covers it. A sum of piecewise-linear layers takes its extremes
+     * at one of those times. Outside its own support a trace contributes 0,
+     * which is what `_applyTimeseriesStackZeroPadding` gives the drawn traces
+     * (no sideways extrapolation of a first or last value).
+     *
+     * The traces are swept together, each with its own cursor, so this is one
+     * pass over the samples with no merged time array built: it runs on panels
+     * with millions of points, on every Fit-Y.
+     */
     _finiteStackedYExtentInXRange(series, xRange = null, options = {}) {
         const items = (series || []).filter(item => item?.x?.length && item?.y?.length);
         if (!items.length) return null;
         const hasRange = Array.isArray(xRange);
         const a = hasRange ? this._coerceAxisValue(xRange[0]) : null;
         const b = hasRange ? this._coerceAxisValue(xRange[1]) : null;
-        const minX = hasRange && Number.isFinite(a) && Number.isFinite(b) ? Math.min(a, b) : -Infinity;
-        const maxX = hasRange && Number.isFinite(a) && Number.isFinite(b) ? Math.max(a, b) : Infinity;
+        const windowed = hasRange && Number.isFinite(a) && Number.isFinite(b);
+        const minX = windowed ? Math.min(a, b) : -Infinity;
+        const maxX = windowed ? Math.max(a, b) : Infinity;
         const positiveOnly = !!options.positive;
+
+        // One cursor per trace: `px`/`py` is its last finite sample at or
+        // before the sweep time, `nx`/`ny` the first finite one after it.
+        const tracks = items.map(item => ({
+            x: item.x,
+            y: item.y,
+            n: Math.min(item.x.length, item.y.length),
+            i: 0,
+            px: NaN, py: NaN, hasPrev: false,
+            nx: NaN, ny: NaN, hasNext: false,
+        }));
+        const trackCount = tracks.length;
+        // A time array is numbers (the common case) or ISO strings on a
+        // calendar axis; the fast path keeps the per-sample cost to a compare.
+        const axisValue = (value) => (
+            typeof value === 'number' && value - value === 0 ? value : this._coerceAxisValue(value)
+        );
+        const pullNext = (track) => {
+            while (track.i < track.n) {
+                const xv = axisValue(track.x[track.i]);
+                const yv = Number(track.y[track.i]);
+                track.i++;
+                // A non-finite sample is a gap, and `stackgaps: 'interpolate'`
+                // draws straight across it rather than dropping to zero.
+                if (Number.isFinite(xv) && Number.isFinite(yv)) {
+                    track.nx = xv;
+                    track.ny = yv;
+                    track.hasNext = true;
+                    return;
+                }
+            }
+            track.hasNext = false;
+            track.nx = NaN;
+            track.ny = NaN;
+        };
+        for (let k = 0; k < trackCount; k++) pullNext(tracks[k]);
+
         let min = 0;
         let max = 0;
         let found = false;
         // On a log axis a stack starts at its lowest positive layer, not at 0.
         let minPositive = Infinity;
-        const count = Math.max(...items.map(item => Math.min(item.x.length, item.y.length)));
-        for (let i = 0; i < count; i++) {
+        /**
+         * One step of the sweep: advance every cursor to `t`, fold the layers
+         * the stack draws there into the extent, and report the earliest time
+         * any trace samples after it (Infinity once they are all spent).
+         */
+        const sweepTo = (t) => {
             let positive = 0;
             let negative = 0;
             let any = false;
-            for (const item of items) {
-                const n = Math.min(item.x.length, item.y.length);
-                if (i >= n) continue;
-                const xv = this._coerceAxisValue(item.x[i]);
-                if (!Number.isFinite(xv) || xv < minX || xv > maxX) continue;
-                const yv = Number(item.y[i]);
+            let next = Infinity;
+            for (let k = 0; k < trackCount; k++) {
+                const track = tracks[k];
+                while (track.hasNext && track.nx <= t) {
+                    track.px = track.nx;
+                    track.py = track.ny;
+                    track.hasPrev = true;
+                    pullNext(track);
+                }
+                if (track.hasNext && track.nx < next) next = track.nx;
+                if (!track.hasPrev) continue;           // before this trace's support
+                let yv;
+                if (track.px === t) {
+                    yv = track.py;
+                } else if (!track.hasNext) {
+                    continue;                           // after it: zero-padded away
+                } else {
+                    // The cursors straddle `t` (px < t < nx), so the layer the
+                    // stack draws here is the segment between them, read at `t`.
+                    const span = track.nx - track.px;
+                    yv = track.py + (track.ny - track.py) * ((t - track.px) / span);
+                }
                 if (!Number.isFinite(yv)) continue;
                 if (yv >= 0) positive += yv;
                 else negative += yv;
                 if (yv > 0 && yv < minPositive) minPositive = yv;
                 any = true;
             }
-            if (!any) continue;
-            found = true;
-            if (negative < min) min = negative;
-            if (positive > max) max = positive;
+            if (any) {
+                found = true;
+                if (negative < min) min = negative;
+                if (positive > max) max = positive;
+            }
+            return next;
+        };
+
+        // The first time to read: the window's left edge, or — with no window —
+        // the earliest sample any trace holds.
+        let t = Number.isFinite(minX) ? minX : Infinity;
+        if (!Number.isFinite(t)) {
+            for (let k = 0; k < trackCount; k++) {
+                const track = tracks[k];
+                if (track.hasNext && track.nx < t) t = track.nx;
+            }
+            if (!Number.isFinite(t)) return null;       // no finite sample anywhere
         }
+        for (;;) {
+            const next = sweepTo(t);
+            if (!Number.isFinite(next) || next > maxX) {
+                // Out of samples, or past the window: its right edge closes the
+                // sweep, since the stack is drawn up to it either way.
+                if (Number.isFinite(maxX) && t < maxX) sweepTo(maxX);
+                break;
+            }
+            t = next;
+        }
+
         if (positiveOnly) {
             return found && max > 0 && Number.isFinite(minPositive) ? { min: minPositive, max } : null;
         }
