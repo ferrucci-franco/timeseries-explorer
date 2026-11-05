@@ -5,6 +5,7 @@ import italianLocale from 'plotly.js-locales/it.js';
 import { installTouchPlotGestures } from '../ui/plot-touch-gestures.js';
 import { install3DSceneGestures } from '../ui/plot-3d-gestures.js';
 import { compactPlotLayout, compactPlotRelayout } from '../utils/compact-plot-layout.js';
+import { keepOverlayLegendsFromPushing } from '../utils/overlay-legend-margins.js';
 
 const Plotly = globalThis.Plotly;
 
@@ -70,12 +71,21 @@ const withSeparators = (layout) => {
 const layoutFor = layout => withSeparators(largerFonts() ? compactPlotLayout(layout) : layout);
 
 const nativeNewPlot = Plotly.newPlot.bind(Plotly);
+const nativeRelayout = Plotly.relayout.bind(Plotly);
+// An overlay legend must not squeeze the plot (utils/overlay-legend-margins.js).
+// The first draw of a plot with a wide one has already pushed the margins out
+// before the guard is in place; touching a margin setting has Plotly work them
+// out again, without the legend's push.
+const unsqueeze = (drawn, div) => (keepOverlayLegendsFromPushing(drawn || div)
+    ? nativeRelayout(drawn || div, { 'margin.autoexpand': true }).then(() => drawn, () => drawn)
+    : drawn);
 Plotly.newPlot = (div, data, layout, ...rest) => nativeNewPlot(div, data, layoutFor(layout), ...rest)
+    .then(drawn => unsqueeze(drawn, div))
     .then(drawn => withTouchGestures(drawn, div));
 const nativeReact = Plotly.react.bind(Plotly);
 Plotly.react = (div, data, layout, ...rest) => nativeReact(div, data, layoutFor(layout), ...rest)
+    .then(drawn => unsqueeze(drawn, div))
     .then(drawn => withTouchGestures(drawn, div));
-const nativeRelayout = Plotly.relayout.bind(Plotly);
 Plotly.relayout = (div, update, ...rest) => nativeRelayout(div,
     largerFonts() && update && typeof update === 'object' ? compactPlotRelayout(update) : update, ...rest);
 

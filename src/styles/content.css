@@ -2559,6 +2559,50 @@ body.cursor-box-dragging {
     touch-action: none;
 }
 
+/* The overlay legend's show/hide button (ui/legend-toggle.js). It stays at
+   the legend's corner; the legend, while shown, is moved aside to clear it. */
+.js-plotly-plot.legend-collapsed .infolayer .legend {
+    display: none;
+}
+
+.legend-toggle-btn {
+    position: absolute;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
+    color: var(--text-primary);
+    opacity: 0.6;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+
+.legend-toggle-btn:hover,
+.legend-toggle-btn:focus-visible {
+    opacity: 1;
+}
+
+.legend-toggle-btn.is-open {
+    color: var(--primary-color);
+}
+
+.legend-toggle-btn svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+}
+
 /* A hover label put there by a tap, while the plot is being moved (#110).
  *
  * A finger never leaves the plot, so nothing ever fires the mouseout that
