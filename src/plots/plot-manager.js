@@ -1,6 +1,7 @@
 import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
 import Plotly, { onPlotDrawn } from '../vendor/plotly.js';
+import { installLegendToggle, resetLegendToggles, syncAllLegendToggles } from '../ui/legend-toggle.js';
 import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
 import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
@@ -141,6 +142,8 @@ class PlotManager {
         // one finger orbits and two zoom, so without it a touch screen had
         // no way to move the view (ui/plot-3d-gestures.js).
         onPlotDrawn(div => this._installTouchScenePan(div));
+        // The show/hide button on every overlay legend (ui/legend-toggle.js).
+        onPlotDrawn(div => installLegendToggle(div));
     }
 
     _installTouchScenePan(div) {
@@ -687,7 +690,7 @@ class PlotManager {
     }
 
     setTheme(theme)            { this.theme = theme;          this._relayoutAll(); }
-    setLanguage(language)      { this.language = normalizeAppLanguage(language); }
+    setLanguage(language)      { this.language = normalizeAppLanguage(language); syncAllLegendToggles(); }
     preserveViewsForNextRender() {
         for (const [, plot] of this.plots) {
             const view = this._capturePlotView(plot, { manualRangesOnly: true });
@@ -697,11 +700,15 @@ class PlotManager {
     setSyncAxes(v)             { this.syncAxes = v; }
     setLegendPosition(pos) {
         this.legendPosition = ['overlay', 'above', 'right', 'hidden'].includes(pos) ? pos : 'overlay';
+        // A legend setting chosen in the sidebar shows each legend again as
+        // it starts, whatever its button was left at.
+        resetLegendToggles();
         this._relayoutLegendAll();
     }
     setLegendOverlayCorner(corner) {
         if (!['tl', 'tr', 'bl', 'br'].includes(corner)) return;
         this.legendOverlayCorner = corner;
+        resetLegendToggles();
         if (this.legendPosition === 'overlay') this._relayoutLegendAll();
     }
     setTimeseriesDownsamplingLimit(limit) {
@@ -770,6 +777,7 @@ class PlotManager {
         const next = !!enabled;
         if (this.legendUnits === next) return;
         this.legendUnits = next;
+        resetLegendToggles();
         this._rebuildAllPanels();
     }
 

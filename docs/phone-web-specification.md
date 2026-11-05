@@ -244,6 +244,14 @@ Autoscale and the cursor toggle may also appear as a small floating button clust
 on the plot. That cluster must avoid axes, legend and data, and must stay at most two
 buttons.
 
+An overlay legend starts hidden on the phone, behind a floating button of the same
+size at its corner (top left by default, opposite the fit buttons); a tap opens it
+below the button and a second tap closes it. An overlay legend never pushes the plot's
+margins, however long its names: it lies on the plot instead of shrinking it. On a
+desktop the same button minimizes and restores the legend, which starts shown unless
+it is wider than 40 % of the plot; choosing any legend setting shows every legend again
+(`src/ui/legend-toggle.js`).
+
 ### 5.3 Analyze
 
 Analyze holds whatever produces new numbers.

@@ -1444,6 +1444,37 @@ html.compact .compact-fit-btn:active {
     background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-primary));
 }
 
+/* The legend's button, the size of the fit buttons beside it: on the phone
+   the legend starts hidden and opens below it (ui/legend-toggle.js). */
+html.compact .legend-toggle-btn {
+    width: 38px;
+    height: 38px;
+    border-color: color-mix(in srgb, var(--border-color) 60%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bg-primary) 45%, transparent);
+    opacity: 0.55;
+}
+
+html.compact.compact-landscape .legend-toggle-btn {
+    width: 32px;
+    height: 32px;
+}
+
+html.compact .legend-toggle-btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+html.compact .legend-toggle-btn.is-open {
+    opacity: 0.9;
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+}
+
+html.compact .legend-toggle-btn:active {
+    opacity: 1;
+    background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-primary));
+}
+
 /* FFT, the histogram, the temporal profile and the integral (the last two are
    .hist-container as well): the status stays on the plot; their buttons and
    options live in the Analyze sheet. */
