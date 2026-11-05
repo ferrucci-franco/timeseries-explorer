@@ -3333,6 +3333,7 @@ html.compact .compact-derived-formula {
 
 /* The values the formula gives, drawn small: is this what was meant? */
 .compact-derived-preview {
+    margin-top: 4px;
     padding: 8px 12px 10px;
     border: 1px solid var(--border-color);
     border-radius: 14px;
@@ -3355,24 +3356,66 @@ html.compact .compact-derived-formula {
     color: var(--text-secondary);
 }
 
+/* The chart: tall enough to read the shape of the result, its scale at the
+   left edge over a faint frame. */
+.compact-derived-chart {
+    position: relative;
+    margin-top: 4px;
+    border-left: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
 .compact-derived-spark {
     display: block;
     width: 100%;
-    height: 56px;
+    height: 150px;
     overflow: visible;
 }
 
 .compact-derived-spark-band {
-    fill: color-mix(in srgb, var(--derived-color) 22%, transparent);
+    fill: color-mix(in srgb, var(--derived-color) 14%, transparent);
     stroke: none;
 }
 
 .compact-derived-spark-line {
     fill: none;
     stroke: var(--derived-color);
-    stroke-width: 1.6;
+    stroke-width: 1.2;
     vector-effect: non-scaling-stroke;
     stroke-linejoin: round;
+}
+
+.compact-derived-chart-y {
+    position: absolute;
+    left: 4px;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.3;
+    pointer-events: none;
+}
+
+.compact-derived-chart-y.is-top {
+    transform: translateY(-15%);
+}
+
+.compact-derived-chart-y.is-bottom {
+    transform: translateY(-85%);
+}
+
+.compact-derived-chart-y.is-zero {
+    transform: translateY(-50%);
+}
+
+.compact-derived-status .compact-derived-see-preview {
+    min-height: 0;
+    margin: -10px -8px -10px auto;
+    padding: 10px 8px;
+    font-size: 0.86rem;
+    white-space: nowrap;
 }
 
 .compact-derived-spark-zero {
