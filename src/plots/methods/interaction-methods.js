@@ -1947,6 +1947,37 @@ proto._timeWindowsOverlap = function(a, b) {
     return first[0] <= second[1] && second[0] <= first[1];
 };
 
+/**
+ * The smallest window covering both, written the way `plot`'s own range is.
+ *
+ * When the record dropped into a panel does not reach what the linked panels
+ * show, no single window holds both — and with the time axes linked there is
+ * only one window. Moving everyone to the newcomer empties the panels that
+ * were already there; leaving them where they are breaks the alignment the
+ * link exists for. Widening to cover both keeps every curve on screen and
+ * every panel on one axis: the two records simply sit in their own stretches
+ * of a longer span, which is the truth about them.
+ */
+proto._mergedTimeWindow = function(plot, a, b) {
+    const bounds = [];
+    for (const range of [a, b]) {
+        if (!Array.isArray(range) || range.length < 2) return null;
+        const lo = this._coerceAxisValue(range[0]);
+        const hi = this._coerceAxisValue(range[1]);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+        bounds.push(lo, hi);
+    }
+    const merged = [Math.min(...bounds), Math.max(...bounds)];
+    // The same test _buildTimeLayout writes the panel's range by: a calendar
+    // axis takes instants, every other kind the raw numbers.
+    const fileId = plot?.traces?.[0]?.fileId || this.activeFileId;
+    const timeVar = this._getTimeVar(fileId);
+    return this._timeDisplayModeForVar(fileId, timeVar) === 'calendar'
+        || this._isGeneratedCalendarTime(fileId, timeVar)
+        ? this._plotlyTimeArray(fileId, merged, timeVar)
+        : merged;
+};
+
 proto._syncXAxisUpdate = function(sourcePanelId, update) {
     const targets = [];
     const sourcePlot = this.plots.get(sourcePanelId);

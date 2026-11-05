@@ -1852,13 +1852,15 @@ class PlotManager {
             : null;
         // Unless the record does not reach that window at all. Adopting it then
         // opens the panel on an empty chart, which says less than the curve
-        // does: a trace whose whole span is outside what the others show has
-        // nothing to align to, so it is fitted to itself — what the layout
-        // already holds — and the reader sees the signal they dropped.
+        // does. The window widens to cover both instead, and — since the link
+        // means ONE window — the panels already on screen move with it: fitting
+        // this panel alone would leave them where they were, which is the
+        // misalignment the adoption above exists to stop.
         const ownRange = layout.xaxis?.range;
-        const linkedWindow = shared && (!ownRange || this._timeWindowsOverlap(ownRange, shared))
-            ? shared
-            : null;
+        const widen = !!shared && !!ownRange && !this._timeWindowsOverlap(ownRange, shared);
+        const linkedWindow = widen
+            ? this._mergedTimeWindow(plot, ownRange, shared)
+            : (shared || null);
         if (linkedWindow && layout.xaxis) {
             layout.xaxis.range = linkedWindow;
             layout.xaxis.autorange = false;
@@ -1870,6 +1872,14 @@ class PlotManager {
             // out for a span — the panel's own, here — so the adopted window
             // needs its own ticks. A real date axis has Plotly's, for any range.
             if (linkedWindow) this._refreshElapsedDateTimeAxisTicks(plot, linkedWindow);
+            // A widened window is a new window for the whole link, carried the
+            // way a pan carries one.
+            if (widen && linkedWindow) {
+                this._syncXAxisUpdate(panelId, {
+                    'xaxis.range': linkedWindow,
+                    'xaxis.autorange': false,
+                });
+            }
             if (plot._eagerInitialDetailReady) {
                 delete plot._eagerInitialDetailReady;
                 plot._eagerInitialDetailToken = null;

@@ -30,7 +30,8 @@ const slice = (name) => {
     assert.ok(end > start, `${name} ends`);
     return interaction.slice(start, end);
 };
-new Function('proto', [slice('_linkedTimeWindow'), slice('_timeWindowsOverlap')].join('\n'))(context.proto);
+new Function('proto', [slice('_linkedTimeWindow'), slice('_timeWindowsOverlap'), slice('_mergedTimeWindow')]
+    .join('\n'))(context.proto);
 
 class Harness {
     constructor(plots, { syncAxes = true } = {}) {
@@ -54,9 +55,16 @@ class Harness {
         const numeric = Number(value);
         return Number.isFinite(numeric) ? numeric : Date.parse(String(value).replace(' ', 'T') + 'Z');
     }
+    _timeDisplayModeForVar(fileId) { return this._timeDisplayMode(fileId); }
+    _isGeneratedCalendarTime() { return false; }
+    _getTimeVar() { return {}; }
+    _plotlyTimeArray(_fileId, values) {
+        return Array.from(values, v => new Date(v).toISOString().replace('T', ' ').slice(0, 19));
+    }
 }
 Harness.prototype._linkedTimeWindow = context.proto._linkedTimeWindow;
 Harness.prototype._timeWindowsOverlap = context.proto._timeWindowsOverlap;
+Harness.prototype._mergedTimeWindow = context.proto._mergedTimeWindow;
 
 // A panel already on screen, showing `range`.
 const live = (fileId, range, extra = {}) => ({
@@ -188,6 +196,30 @@ const WINDOW = ['2026-06-02 13:45:00', '2026-06-02 15:40:00'];
         assert.equal(h._timeWindowsOverlap(bad, WINDOW), false, `rejects ${JSON.stringify(bad)}`);
         assert.equal(h._timeWindowsOverlap(WINDOW, bad), false);
     }
+
+    // No single window holds both, and the link allows only one, so it widens
+    // to cover the two records — written the way the panel's own range is.
+    const plot = newborn('energy');
+    assert.deepEqual(
+        h._mergedTimeWindow(plot, own, WINDOW),
+        ['2026-06-02 13:45:00', '2026-06-02 17:00:00'],
+        'the union runs from the earliest start to the latest end',
+    );
+    // Order of the two, and order within either, does not matter.
+    assert.deepEqual(h._mergedTimeWindow(plot, WINDOW, own), ['2026-06-02 13:45:00', '2026-06-02 17:00:00']);
+    assert.deepEqual(
+        h._mergedTimeWindow(plot, [own[1], own[0]], [WINDOW[1], WINDOW[0]]),
+        ['2026-06-02 13:45:00', '2026-06-02 17:00:00'],
+    );
+    // A numeric axis keeps numbers: only a calendar one is written as instants.
+    const numeric = newborn('elapsed');
+    h.displayModes.set('elapsed', 'elapsedSeconds');
+    assert.deepEqual(h._mergedTimeWindow(numeric, [0, 10], [900, 1000]), [0, 1000]);
+    // A range that cannot be read is no basis for a window.
+    for (const bad of [null, undefined, [], ['nope', 'nope']]) {
+        assert.equal(h._mergedTimeWindow(plot, bad, WINDOW), null);
+        assert.equal(h._mergedTimeWindow(plot, WINDOW, bad), null);
+    }
 }
 
 // ── The wiring ──────────────────────────────────────────────────────────────
@@ -226,11 +258,27 @@ const WINDOW = ['2026-06-02 13:45:00', '2026-06-02 15:40:00'];
     assert.match(createChart, /layout\.xaxis\.autorange = false;/,
         'an explicit range needs autorange off, or Plotly refits it');
     assert.match(createChart, /this\._timeWindowsOverlap\(ownRange, shared\)/,
-        'the shared window is only taken when the record reaches it');
+        'the shared window is only taken as it stands when the record reaches it');
+    assert.match(createChart, /widen[\s\S]*this\._mergedTimeWindow\(plot, ownRange, shared\)/,
+        'and is widened to cover both when it does not');
     assert.ok(
         createChart.indexOf('this._timeWindowsOverlap') < createChart.indexOf('layout.xaxis.range = linkedWindow;'),
-        'and the test comes first, so a record outside it keeps the fit the layout already holds',
+        'the choice is made before the window is written into the layout',
     );
+    // The point of widening: the panels already on screen come along. Fitting
+    // this one alone is the misalignment the whole change exists to stop.
+    assert.match(
+        createChart,
+        /if \(widen && linkedWindow\) \{\s*this\._syncXAxisUpdate\(panelId, \{\s*'xaxis\.range': linkedWindow,\s*'xaxis\.autorange': false,/,
+        'a widened window is carried to the linked panels, the way a pan carries one',
+    );
+    assert.ok(
+        createChart.indexOf('Plotly.newPlot') < createChart.indexOf('_syncXAxisUpdate'),
+        'and only once this panel is drawn, so the link has something to sync against',
+    );
+    // Adopting a window unchanged must NOT move the other panels: they are
+    // already on it, and a relayout each would be work for nothing.
+    assert.doesNotMatch(createChart, /if \(linkedWindow\) \{?\s*this\._syncXAxisUpdate/);
 }
 
 console.log('Linked-panel time window tests passed.');
