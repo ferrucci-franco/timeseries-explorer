@@ -686,7 +686,8 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             const titleKey = editFormula ? 'derivedEdit' : 'dataToolEditTitle';
             const edit = document.createElement('button');
             edit.type = 'button';
-            edit.className = 'tree-derived-edit';
+            // Which editor it opens: the phone layout has the formula one.
+            edit.className = `tree-derived-edit ${editFormula ? 'is-formula' : 'is-tool'}`;
             edit.textContent = '✎';
             edit.title = i18n.t(titleKey);
             edit.setAttribute('aria-label', i18n.t(titleKey));

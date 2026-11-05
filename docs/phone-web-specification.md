@@ -39,6 +39,10 @@ Built:
 - 2D and 3D state animations: x₁, x₂ (x₃) by tapping in Data, a tap on one
   assigned takes it off; play, time slider, time and speed on the plot, what it
   draws as switches in the Plot sheet;
+- derived variables (§5.7): **New variable** beside Open file in Data, and a
+  row in Analyze; a page of its own with a formula field driven by its own keys,
+  Variables / Functions / 123 tabs, live checking and a preview of the values,
+  Σ Combine several, Create with "Plot n"; the tree's ✎ edits and × deletes;
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
@@ -51,16 +55,18 @@ Built:
 
 The code is in `src/app/methods/compact-methods.js`,
 `src/app/methods/compact-analyses.js` (what each analysis is on a phone, §11),
-`src/app/methods/compact-cursor-methods.js`, `src/ui/compact-layout.js`,
-`src/utils/cursor-handles.js` and `src/styles/compact.css`. The tests are
-`npm run test:compact-layout`, `npm run test:cursor-handles` and
-`npm run e2e:compact-layout`.
+`src/app/methods/compact-cursor-methods.js`,
+`src/app/methods/compact-derived-methods.js` (derived variables, §5.7),
+`src/ui/compact-layout.js`, `src/utils/cursor-handles.js` and
+`src/styles/compact.css`. The tests are `npm run test:compact-layout`,
+`npm run test:compact-derived`, `npm run test:cursor-handles`,
+`npm run e2e:compact-layout` and `npm run e2e:compact-derived`.
 
 Not built yet:
 
 - tap readouts beyond Plotly's own;
 - export through Web Share;
-- derived variables and data tools on the phone;
+- data tools on the phone (a Data Tools output's ✎ is hidden there until then);
 - the web manifest and the service worker (§8);
 - deferring Plotly;
 - the phone file-size defaults (§9).
@@ -249,7 +255,7 @@ Analyze holds whatever produces new numbers.
   - in portrait, FFT's time and spectrum panes stack vertically.
 - **Data tools**: outliers, derivative, integrate, moving average, interpolate,
   detrend, filter, resample, xcorr and collapse.
-- **Derived variables.**
+- **Derived variables** (§5.7), also reached from Data.
 - Phase-2D fit.
 
 ### 5.4 More
@@ -344,6 +350,58 @@ In compact mode it behaves the same from all four.
   - The focused input stays visible above the on-screen keyboard.
   - Row numbers use `inputmode="numeric"`.
   - Choices use native `<select>`.
+
+### 5.7 Derived variables
+
+On the desktop a formula is written in a one-line box in the side panel, or in
+the large editor driven with the mouse. Neither fits a phone: the box is in a
+320 px column the Data sheet hides, the editor is a grid of small chips laid
+out for a pointer, and a phone keyboard keeps every bracket and operator on
+its second page. The phone has a page of its own, built like a calculator:
+
+- **Reached from** **New variable** beside Open file in Data, the Derived
+  variables row in Analyze (with how many the file has), and the ✎ of a formula
+  row in the tree, which opens the same page on that variable (**Update**, and
+  **Delete this variable** at its foot). The tree's × deletes, after asking.
+  The page is pushed inside the sheet it was opened from, at full height:
+  Back returns to that sheet.
+- **Name**, then the **formula**. The formula field opens with
+  `inputmode="none"`: it shows its cursor, and no system keyboard covers the
+  page. A row of keys under it writes `+ − × ÷ ^ ( )`; the keys never take
+  the focus, so the cursor stays where it was. **⌫** takes back what one tap
+  wrote — a whole name, an operator with its spaces, an empty `name()` — and
+  repeats when held. **⌨** hands the field to the system keyboard (and back);
+  while typing, a strip of suggestions follows the name under the cursor.
+- **Variables / Functions / 123** tabs below:
+  - *Variables*: every variable of the file, with its description or formula,
+    and a filter. A tap writes the name at the cursor; one tapped right after
+    another is joined with `+`, so five taps write a sum. The ones the formula
+    reads are marked. While editing, the variable itself and whatever is
+    built on it are left out.
+  - *Functions*: by group, each with its signature and what it does (there is
+    no hover to say it), then the constants and the formula help. A function
+    wraps the selection, or opens with the cursor inside; after an operand it
+    multiplies.
+  - *123*: digits, `.` `,`, π, e, a space, the cursor arrows, ⌫ and ✓.
+- **Σ Combine several…** is a page: tick the variables (numbered in order),
+  choose sum, mean, min or max, see the call, **Insert**.
+- **Checked as it is written**: compiled and run against the file. An error is
+  said under the field; a valid formula is drawn as a small preview (the values
+  per column, low to high, with a zero line), with its count, min, max and how
+  many are not numbers.
+- **Footer**, always in reach: ✕ (discard), **Plot n** (put it on the plot on
+  screen at once; on by default and remembered; only where a tap in Data adds a
+  signal), and **Create** — enabled once there is a name and a valid formula,
+  and saying what is missing otherwise.
+- After Create the page closes, the sheet returns to its height, a toast says
+  what was created and where, and the new row is brought into view in the tree
+  and lit for a moment. After an Update the plot on screen fits its Y to the
+  new values.
+- **Leaving without Create** (hiding the sheet, Back) keeps a draft for the
+  next New variable; ✕ discards it. A refresh of the sheet underneath (a plot
+  redrawn, the language changed) never throws the page away.
+- One code path: the page fills the side panel's fields and presses its
+  Create, so creating, editing, renaming and every check are the desktop's.
 
 ## 6. Touch
 
