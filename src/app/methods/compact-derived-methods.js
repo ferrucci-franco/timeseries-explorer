@@ -1414,6 +1414,8 @@ export function installCompactDerivedMethods(ViewerClass) {
             this._openCompactDerivedEditor();
         });
         list.appendChild(row);
+        // The data tools make new signals too (compact-tools-methods.js).
+        if (this._compactToolsAnalyzeRow) list.appendChild(this._compactToolsAnalyzeRow());
         wrap.appendChild(list);
         return wrap;
     };

@@ -72,6 +72,13 @@ Start in:
 - `src/app/methods/derived-methods.js`
 - `src/app/methods/compact-derived-methods.js` (the phone layout's editor)
 
+### Data tools
+
+Start in:
+
+- `src/app/methods/data-tools-methods.js` (and the tool modules beside it)
+- `src/app/methods/compact-tools-methods.js` (the phone layout's pages)
+
 ### Variable tree, selection, sidebar tree rendering
 
 Start in:
