@@ -1896,6 +1896,88 @@ proto._refreshAllPhaseVisuals = function() {
     }
 };
 
+/**
+ * The time window the panels linked to `plot` are showing right now, or null
+ * when there is none to adopt.
+ *
+ * A panel laid out from its own traces alone opens fitted to them. That is the
+ * right answer for the first panel and the wrong one for the second: dropping
+ * a trace whose record is shorter (or starts later) than what the other panels
+ * show left the two charts on different windows, side by side, with the time
+ * axes linked and nothing having asked for a zoom. The link only ever moved a
+ * window that already existed — it had no say in the one a panel is born with.
+ *
+ * Eligibility is _syncXAxisUpdate's, so a panel adopts exactly the window the
+ * next pan or zoom would have handed it anyway: both panels are time plots,
+ * neither is on an axis of its own (a correlation's lag), and their clocks
+ * display the same way. Linked panels are kept in step, so the first eligible
+ * one speaks for all of them.
+ */
+proto._linkedTimeWindow = function(panelId, plot) {
+    if (!this.syncAxes || plot?.mode !== 'timeseries') return null;
+    if (this._plotAxisIsIndependent(plot)) return null;
+    const fileId = this._linkTimeFileId(plot);
+    for (const [id, candidate] of this.plots) {
+        if (id === panelId || !candidate.div || candidate.mode !== 'timeseries') continue;
+        if (this._plotAxisIsIndependent(candidate)) continue;
+        if (this._timeDisplayMode(this._linkTimeFileId(candidate)) !== this._timeDisplayMode(fileId)) continue;
+        const range = candidate.div._fullLayout?.xaxis?.range || candidate.div.layout?.xaxis?.range;
+        if (!Array.isArray(range) || range.length < 2) continue;
+        return [range[0], range[1]];
+    }
+    return null;
+};
+
+/**
+ * Whether two time windows meet at all. Either may arrive as date strings, so
+ * both go through the axis coercion the rest of the link uses. Touching at a
+ * single instant counts: that point is drawn.
+ */
+proto._timeWindowsOverlap = function(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    const bounds = (range) => {
+        const lo = this._coerceAxisValue(range[0]);
+        const hi = this._coerceAxisValue(range[1]);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+        return lo <= hi ? [lo, hi] : [hi, lo];
+    };
+    const first = bounds(a);
+    const second = bounds(b);
+    if (!first || !second) return false;
+    return first[0] <= second[1] && second[0] <= first[1];
+};
+
+/**
+ * The smallest window covering both, written the way `plot`'s own range is.
+ *
+ * When the record dropped into a panel does not reach what the linked panels
+ * show, no single window holds both — and with the time axes linked there is
+ * only one window. Moving everyone to the newcomer empties the panels that
+ * were already there; leaving them where they are breaks the alignment the
+ * link exists for. Widening to cover both keeps every curve on screen and
+ * every panel on one axis: the two records simply sit in their own stretches
+ * of a longer span, which is the truth about them.
+ */
+proto._mergedTimeWindow = function(plot, a, b) {
+    const bounds = [];
+    for (const range of [a, b]) {
+        if (!Array.isArray(range) || range.length < 2) return null;
+        const lo = this._coerceAxisValue(range[0]);
+        const hi = this._coerceAxisValue(range[1]);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+        bounds.push(lo, hi);
+    }
+    const merged = [Math.min(...bounds), Math.max(...bounds)];
+    // The same test _buildTimeLayout writes the panel's range by: a calendar
+    // axis takes instants, every other kind the raw numbers.
+    const fileId = plot?.traces?.[0]?.fileId || this.activeFileId;
+    const timeVar = this._getTimeVar(fileId);
+    return this._timeDisplayModeForVar(fileId, timeVar) === 'calendar'
+        || this._isGeneratedCalendarTime(fileId, timeVar)
+        ? this._plotlyTimeArray(fileId, merged, timeVar)
+        : merged;
+};
+
 proto._syncXAxisUpdate = function(sourcePanelId, update) {
     const targets = [];
     const sourcePlot = this.plots.get(sourcePanelId);
