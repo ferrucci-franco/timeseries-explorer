@@ -3040,7 +3040,7 @@ html.compact .compact-data-actions .compact-derived-new {
 }
 
 /* The tree's derived rows: their ✎ and × at a finger's size. A Data Tools
-   output's ✎ opens the Data Tools panel, which the phone does not have yet. */
+   output's ✎ opens its tool's page (compact-tools-methods.js). */
 html.compact .tree-derived-edit,
 html.compact .tree-derived-remove {
     width: 40px;
@@ -3049,10 +3049,6 @@ html.compact .tree-derived-remove {
     margin: 0 0 0 4px;
     border-radius: 10px;
     font-size: 1.05rem;
-}
-
-html.compact .tree-derived-edit.is-tool {
-    display: none;
 }
 
 html.compact .tree-derived-formula,
@@ -3975,4 +3971,1124 @@ html.compact:not(.compact-sheet-full):not(.compact-landscape) .compact-derived-f
     .compact-derived-fn-grid {
         grid-template-columns: minmax(0, 1fr);
     }
+}
+
+/* ── Data tools (compact-tools-methods) ───────────────────────────────── */
+/* The hub: the tools as tiles in four families, each its own colour, and
+   under them the file's transformations as cards. */
+.compact-page-tools,
+.compact-page-tool {
+    --tool-clean: #d9822b;
+    --tool-calculus: var(--primary-color);
+    --tool-smooth: #2e9d6a;
+    --tool-time: #8a5cd6;
+    --tool-other: var(--text-secondary);
+}
+
+.compact-tool-glyph {
+    --tool-accent: var(--tool-other);
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--tool-accent) 15%, transparent);
+    color: var(--tool-accent);
+}
+
+.compact-tool-glyph.group-clean { --tool-accent: var(--tool-clean); }
+.compact-tool-glyph.group-calculus { --tool-accent: var(--tool-calculus); }
+.compact-tool-glyph.group-smooth { --tool-accent: var(--tool-smooth); }
+.compact-tool-glyph.group-time { --tool-accent: var(--tool-time); }
+
+.compact-tool-glyph svg {
+    width: 24px;
+    height: 24px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.compact-tool-glyph.is-small {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+}
+
+.compact-tool-glyph.is-small svg {
+    width: 20px;
+    height: 20px;
+}
+
+.compact-tools-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin-bottom: 12px;
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+}
+
+.compact-tools-file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-tools-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.compact-tool-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    min-height: 112px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.08s ease, background-color 0.12s ease;
+}
+
+.compact-tool-tile:active:not(:disabled) {
+    transform: scale(0.97);
+    background: var(--hover-bg);
+}
+
+.compact-tool-tile:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.compact-tool-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.compact-tool-name {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.compact-tool-desc {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+/* A draft or an edit left behind: offered before anything else. */
+.compact-tools-resume {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px 12px;
+    align-items: center;
+    margin-bottom: 14px;
+    padding: 12px;
+    border: 1px solid color-mix(in srgb, var(--primary-color) 45%, var(--border-color));
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-primary));
+}
+
+.compact-tools-resume-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.compact-tools-resume-title {
+    font-weight: 600;
+    font-size: 15px;
+}
+
+.compact-tools-resume-flow {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.compact-tools-resume-note {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.compact-tools-resume-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 8px;
+}
+
+.compact-tools-resume-actions .compact-secondary-btn {
+    flex: 0 1 auto;
+}
+
+.compact-tools-resume-actions .compact-primary-btn {
+    flex: 1 1 auto;
+}
+
+/* The panel's verdict, where the user is. */
+.compact-tools-message,
+.compact-tool-message {
+    font-size: 14px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.compact-tools-message {
+    margin-bottom: 10px;
+}
+
+.compact-tools-message[hidden],
+.compact-tool-message[hidden] {
+    display: none;
+}
+
+.compact-tools-message.is-ok,
+.compact-tools-message.is-warn,
+.compact-tool-message.is-ok,
+.compact-tool-message.is-warn,
+.compact-tool-message.is-busy,
+.compact-tool-message.is-error {
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+}
+
+.compact-tools-message.is-ok,
+.compact-tool-message.is-ok {
+    border-color: color-mix(in srgb, var(--success-color) 55%, var(--border-color));
+    background: color-mix(in srgb, var(--success-color) 14%, var(--bg-primary));
+}
+
+.compact-tools-message.is-warn,
+.compact-tool-message.is-warn {
+    border-color: color-mix(in srgb, var(--warning-color) 55%, var(--border-color));
+    background: color-mix(in srgb, var(--warning-color) 14%, var(--bg-primary));
+}
+
+.compact-tool-message.is-error {
+    border-color: color-mix(in srgb, var(--danger-color) 55%, var(--border-color));
+    background: color-mix(in srgb, var(--danger-color) 10%, var(--bg-primary));
+    color: var(--text-primary);
+}
+
+.compact-tool-message.is-busy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.compact-tool-message.is-busy::before {
+    content: '';
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--primary-color);
+    animation: data-tool-busy-spin 0.8s linear infinite;
+}
+
+/* What was made: a card per transformation. The card is the edit. */
+.compact-tools-made {
+    margin-top: 20px;
+}
+
+.compact-tools-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.compact-tool-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    min-width: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    overflow: hidden;
+}
+
+.compact-tool-card.is-editing {
+    border-color: var(--primary-color);
+}
+
+.compact-tool-card.compact-flash {
+    animation: compact-flash 1.6s ease-out;
+}
+
+.compact-tool-card-main {
+    flex: 1 1 200px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    min-height: 56px;
+    padding: 8px 4px 8px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.compact-tool-card-main:active {
+    background: var(--hover-bg);
+}
+
+.compact-tool-card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.compact-tool-card-source {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-tool-card-how {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-tool-card-arrow {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: var(--text-secondary);
+}
+
+.compact-tool-card-arrow svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.compact-tool-card-result {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.compact-tool-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.compact-tool-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    padding-right: 4px;
+}
+
+.compact-tool-card-plot {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 36px;
+    padding: 0 10px 0 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.compact-tool-card-plot.is-active {
+    border-color: color-mix(in srgb, var(--success-color) 60%, transparent);
+    background: color-mix(in srgb, var(--success-color) 16%, var(--bg-primary));
+}
+
+.compact-tool-card-plot.is-active .compact-btn-icon {
+    color: var(--success-color);
+}
+
+.compact-tool-card-delete {
+    color: var(--text-secondary);
+}
+
+/* "Delete?" takes the card's foot, asked where the thing is. */
+.compact-tool-card-confirm {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    border-top: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--danger-color) 7%, var(--bg-primary));
+}
+
+.compact-tool-card-question {
+    flex: 1 1 100%;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.compact-tool-card-confirm .compact-secondary-btn {
+    flex: 1 1 0;
+}
+
+.compact-tool-card-confirm .compact-danger-btn {
+    border-color: color-mix(in srgb, var(--danger-color) 55%, var(--border-color));
+}
+
+.compact-tools-empty {
+    margin-top: 0;
+}
+
+/* Analyze: the row, and a dot on Analyze while a draft or an edit waits. */
+.compact-tools-analyze-row .compact-menu-subtitle.is-waiting {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.compact-nav-btn .compact-btn-icon {
+    position: relative;
+}
+
+.compact-nav-btn.has-tool-draft .compact-btn-icon::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 10px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
+/* ── A tool's page ── */
+.compact-page-tool {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-bottom: 0;
+}
+
+.compact-page-tool .compact-section + .compact-section {
+    margin-top: 0;
+}
+
+/* The side panel's own hiding rules stop at its edge; lent here, `hidden`
+   and `.collapsed` still have to win over every display set on them. */
+.compact-page-tool [hidden] {
+    display: none !important;
+}
+
+.compact-tool-intro {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.compact-tool-intro-text {
+    flex: 1 1 auto;
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+
+.compact-tool-help-btn {
+    color: var(--primary-color);
+}
+
+.compact-tool-help-btn .compact-btn-icon svg {
+    width: 22px;
+    height: 22px;
+}
+
+/* The signal: a row that opens the list. */
+.compact-tool-signal {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 56px;
+    padding: 8px 8px 8px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.compact-tool-signal:active:not(:disabled) {
+    background: var(--hover-bg);
+}
+
+.compact-tool-signal:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.compact-tool-signal.is-empty {
+    border-style: dashed;
+    border-color: var(--primary-color);
+}
+
+.compact-tool-signal.is-empty .compact-tool-signal-name {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.compact-tool-signal-text {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.compact-tool-signal-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.compact-tool-signal-detail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.compact-tool-signal-chevron {
+    color: var(--text-secondary);
+}
+
+/* What the plot above shows of the result. */
+.compact-tool-preview {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    font-size: 14px;
+    line-height: 1.35;
+}
+
+.compact-tool-preview-text {
+    flex: 1 1 160px;
+    min-width: 0;
+    color: var(--text-secondary);
+}
+
+.compact-tool-preview-swatch {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 0;
+    border-top: 3px solid var(--text-secondary);
+    border-radius: 2px;
+}
+
+.compact-tool-preview.is-dashed .compact-tool-preview-swatch {
+    border-top-style: dotted;
+    border-color: var(--primary-color);
+}
+
+.compact-tool-preview.is-live .compact-tool-preview-swatch {
+    border-color: var(--success-color);
+}
+
+.compact-tool-preview.is-dashed .compact-tool-preview-text,
+.compact-tool-preview.is-live .compact-tool-preview-text {
+    color: var(--text-primary);
+}
+
+.compact-tool-preview.is-file .compact-tool-preview-swatch,
+.compact-tool-preview.is-muted .compact-tool-preview-swatch {
+    width: 8px;
+    height: 8px;
+    border: none;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    opacity: 0.6;
+}
+
+.compact-tool-preview .compact-link-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 36px;
+    padding: 0 4px;
+    font-size: 14px;
+}
+
+/* The settings: the panel's controls at a finger's size. */
+.compact-tool-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.compact-tool-settings .data-tool-controls,
+.compact-tool-settings .outlier-method-controls,
+.compact-tool-settings .resample-grid-controls,
+.compact-tool-settings #outlier-method-wrap,
+.compact-tool-settings [id$="-wrap"] {
+    gap: 8px;
+}
+
+.compact-tool-settings .collapsed,
+.compact-page-tool .data-tool-output-wrap.collapsed {
+    display: none !important;
+}
+
+.compact-tool-settings .options-subgroup-label,
+.compact-tool-result .options-subgroup-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.compact-tool-settings .data-tool-sublabel,
+.compact-tool-settings .filter-coefficient-label {
+    margin-bottom: 0;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.compact-tool-settings .data-tool-group-row {
+    margin-top: 6px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.compact-tool-settings .data-tool-group-row.first {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+
+.compact-tool-settings .data-tool-label-row {
+    min-height: 32px;
+}
+
+.compact-tool-settings .data-tool-slider-value {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.compact-tool-settings .data-tool-select,
+.compact-tool-settings input.derived-input,
+.compact-tool-result input.derived-input {
+    min-height: 46px;
+    padding: 0 12px;
+    border-radius: 10px;
+    font-size: 16px;
+}
+
+.compact-tool-settings .data-tool-select {
+    padding-right: 32px;
+}
+
+/* A "?" is a page: a round target a thumb finds, drawn like the page's own
+   help button rather than the side panel's yellow chip. */
+.compact-tool-settings .data-tool-help-toggle,
+.theme-dark .compact-tool-settings .data-tool-help-toggle {
+    width: 36px;
+    height: 36px;
+    border: 2px solid color-mix(in srgb, var(--primary-color) 70%, transparent);
+    border-radius: 18px;
+    background: transparent;
+    color: var(--primary-color);
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.compact-tool-settings .data-tool-help-toggle:active {
+    background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+}
+
+.compact-tool-settings .data-tool-help-popover {
+    display: none !important;
+}
+
+/* Sliders with a track and a thumb that can be found. */
+.compact-tool-settings input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 36px;
+    margin: 0;
+    background: transparent;
+    touch-action: pan-y;
+}
+
+.compact-tool-settings input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
+}
+
+.compact-tool-settings input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
+}
+
+.compact-tool-settings input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 28px;
+    height: 28px;
+    margin-top: -11px;
+    border: 3px solid var(--bg-primary);
+    border-radius: 50%;
+    background: var(--primary-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.compact-tool-settings input[type="range"]::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border: 3px solid var(--bg-primary);
+    border-radius: 50%;
+    background: var(--primary-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.compact-tool-settings input[type="range"]:disabled {
+    opacity: 0.45;
+}
+
+/* A slider and its number, the number with − and +. */
+.compact-tool-settings .data-tool-slider-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.compact-tool-settings .data-tool-slider-row > input[type="range"] {
+    flex: 1 1 140px;
+    min-width: 120px;
+}
+
+.compact-tool-settings .data-tool-number-input {
+    flex: 0 1 84px;
+    width: 84px;
+    min-width: 64px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+/* A number with its unit: −, the number, +, the unit, on one line. The field
+   gives way, never the line: a field's own width would push + under it. */
+.compact-tool-settings .data-tool-slider-row.unit-row {
+    flex-wrap: nowrap;
+}
+
+.compact-tool-settings .data-tool-slider-row.unit-row .data-tool-number-input,
+.compact-tool-settings .data-tool-step-row .data-tool-number-input {
+    flex: 1 1 0;
+    width: 0;
+    min-width: 56px;
+    text-align: left;
+    border-radius: 10px;
+}
+
+.compact-tool-settings .data-tool-slider-row.unit-row .data-tool-unit-suffix {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.compact-tool-settings .data-tool-unit-suffix {
+    font-size: 15px;
+}
+
+/* No spinner of the browser's own beside a finger's − and +. */
+.compact-tool-settings .compact-tool-has-steppers input[type="number"]::-webkit-inner-spin-button,
+.compact-tool-settings .compact-tool-has-steppers input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.compact-tool-settings .compact-tool-has-steppers input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.compact-tool-step {
+    flex: 0 0 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 46px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.compact-tool-step:active {
+    background: var(--hover-bg);
+}
+
+.compact-tool-step .compact-btn-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* The filter's anchors: a row each, label, −, number, +. */
+.compact-tool-settings .filter-anchor-row.compact-tool-has-steppers {
+    display: grid;
+    grid-template-columns: 2.2rem 44px minmax(0, 1fr) 44px;
+    gap: 6px;
+    align-items: center;
+}
+
+.compact-tool-settings .filter-anchor-row .data-tool-number-input {
+    width: auto;
+}
+
+.compact-tool-settings .filter-anchor-name {
+    font-size: 15px;
+}
+
+/* Two bounds, side by side while they fit. */
+.compact-tool-settings .data-tool-input-grid {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+}
+
+.compact-tool-settings .data-tool-input-grid label {
+    font-size: 14px;
+    gap: 4px;
+}
+
+/* A choice of two (NaN or interpolate) as a segmented control. */
+.compact-tool-settings .data-tool-radio-group {
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.compact-tool-settings .data-tool-radio-group .radio-label {
+    position: relative;
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    margin: 0;
+    padding: 0 8px;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    font-size: 14px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.compact-tool-settings .data-tool-radio-group .radio-label:last-child {
+    border-right: none;
+}
+
+.compact-tool-settings .data-tool-radio-group input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.compact-tool-settings .data-tool-radio-group .radio-label:has(input:checked) {
+    background: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+}
+
+.compact-tool-settings .data-tool-radio-group .radio-label:has(input:disabled) {
+    opacity: 0.5;
+}
+
+/* Ticks as rows a finger can hit. */
+.compact-page-tool .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    font-size: 15px;
+}
+
+.compact-page-tool .checkbox-label input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    accent-color: var(--primary-color);
+}
+
+/* Lists of coefficients: the finger scrolls them; the panel's tiny arrows
+   would only be missed. */
+.compact-tool-settings .data-tool-coefficients {
+    font-size: 16px !important;
+}
+
+.compact-tool-settings .data-tool-scroll {
+    display: none;
+}
+
+.compact-tool-settings .data-tool-input-overflow::before {
+    left: 1px;
+}
+
+.compact-tool-settings .data-tool-input-overflow::after {
+    right: 1px;
+}
+
+.compact-tool-settings .data-tool-count,
+.compact-tool-settings .data-tool-resample-info,
+.compact-tool-settings .filter-equation,
+.compact-tool-settings .filter-anchor-hint,
+.compact-tool-settings .data-tool-name-hint {
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.compact-tool-settings .data-tool-resample-info {
+    padding: 8px 10px;
+    border-radius: 10px;
+}
+
+/* The equation keeps its hanging indent: a second line reads under the first. */
+.compact-tool-settings .filter-equation {
+    padding: 8px 10px 8px calc(10px + 0.85rem);
+    border-radius: 10px;
+}
+
+.compact-tool-settings .data-tool-detected-tag {
+    font-size: 13px;
+    padding: 3px 9px;
+}
+
+.compact-tool-settings .data-tool-reset-btn,
+.compact-tool-result .data-tool-rename-btn {
+    width: 44px;
+    height: 46px;
+    border-radius: 10px;
+    font-size: 18px;
+}
+
+/* The result's name. */
+.compact-tool-result .data-tool-output-wrap {
+    gap: 6px;
+}
+
+.compact-tool-result #data-tool-output-label {
+    display: none;
+}
+
+.compact-tool-result .data-tool-name-hint {
+    margin-top: 0;
+    font-size: 14px;
+}
+
+/* Delete, while editing. */
+.compact-tool-delete-confirm {
+    border: 1px solid color-mix(in srgb, var(--danger-color) 40%, var(--border-color));
+    border-radius: 12px;
+}
+
+/* Footer: why Create is off, under the buttons that say so by being off. */
+.compact-tool-reason {
+    font-size: 13.5px;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.compact-tool-reason[hidden] {
+    display: none;
+}
+
+.compact-tool-submit.is-busy {
+    opacity: 0.75;
+}
+
+/* The signal list. */
+.compact-page-tool-signal {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.compact-tool-signal-option {
+    width: 100%;
+    min-height: 56px;
+}
+
+.compact-tool-signal-option[hidden] {
+    display: none;
+}
+
+.compact-tool-signal-option.is-selected {
+    background: color-mix(in srgb, var(--primary-color) 9%, var(--bg-primary));
+}
+
+.compact-tool-signal-option.is-selected .compact-derived-var-name {
+    font-weight: 600;
+}
+
+.compact-tool-signal-mark {
+    color: var(--primary-color) !important;
+}
+
+.compact-derived-var-tag.tag-plot {
+    background: color-mix(in srgb, var(--success-color) 16%, transparent);
+    color: var(--success-color);
+}
+
+/* A help popover of the panel, as a page. */
+.compact-tool-help {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.compact-tool-help .derived-help-row {
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.compact-tool-help .derived-help-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0;
+    border: none;
+}
+
+.compact-tool-help .derived-help-row + .derived-help-row {
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+}
+
+.compact-tool-help .derived-help-label {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.compact-tool-help .filter-help-equation {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+
+.compact-tool-help-more {
+    align-self: flex-start;
+    padding: 0;
+    text-align: left;
+}
+
+/* Narrow phones: the tiles keep two columns, a little tighter. */
+@media (max-width: 359px) {
+    .compact-tool-tile {
+        padding: 10px;
+        min-height: 104px;
+    }
+
+    .compact-tool-desc {
+        font-size: 12.5px;
+    }
+
+    .compact-tool-settings .filter-anchor-row.compact-tool-has-steppers {
+        grid-template-columns: 1.8rem 44px minmax(0, 1fr) 44px;
+    }
+
+    /* The slider takes its own line; −, the number and + the next. */
+    .compact-tool-settings .data-tool-slider-row > input[type="range"] {
+        flex-basis: 100%;
+    }
+
+    .compact-tool-settings .data-tool-slider-row.compact-tool-has-steppers .data-tool-number-input {
+        flex: 1 1 auto;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .compact-tool-tile {
+        transition: none;
+    }
+}
+
+/* The panel's "invalid" note is a dark red written for a light sidebar. */
+.theme-dark .compact-tool-settings .data-tool-resample-info.invalid,
+.theme-dark .compact-tool-settings .data-tool-name-hint,
+.theme-dark .compact-tool-result .data-tool-name-hint {
+    color: #ff8a80;
 }

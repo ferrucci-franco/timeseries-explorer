@@ -24,6 +24,7 @@ import { installTabMethods } from './methods/tab-methods.js';
 import { installCompactMethods } from './methods/compact-methods.js';
 import { installCompactCursorMethods } from './methods/compact-cursor-methods.js';
 import { installCompactDerivedMethods } from './methods/compact-derived-methods.js';
+import { installCompactToolsMethods } from './methods/compact-tools-methods.js';
 import { initialCapabilities, resolveCapabilities } from './capabilities.js';
 import { ADVANCED_SETTINGS_VERSION, migrateAdvancedSettings } from './advanced-settings-migration.js';
 import {
@@ -446,5 +447,6 @@ installTabMethods(OpenModelicaViewer);
 installCompactMethods(OpenModelicaViewer);
 installCompactCursorMethods(OpenModelicaViewer);
 installCompactDerivedMethods(OpenModelicaViewer);
+installCompactToolsMethods(OpenModelicaViewer);
 
 export default OpenModelicaViewer;

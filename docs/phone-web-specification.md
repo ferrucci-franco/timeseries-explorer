@@ -43,6 +43,12 @@ Built:
   row in Analyze; a page of its own with a formula field driven by its own keys,
   Variables / Functions / 123 tabs, live checking and a preview of the values,
   Σ Combine several, Create with "Plot n"; the tree's ✎ edits and × deletes;
+- data tools (§5.8): a hub in Analyze with the ten tools as tiles in four
+  families and the file's transformations as cards; a page per tool, at half
+  height so the dotted preview is watched on the plot above it, with the signal
+  chosen from a list, the side panel's controls at a finger's size (− and +
+  that repeat, a segmented choice, every "?" a help page), and Create, Update
+  and Delete; the tree's ✎ on a tool's output opens its page;
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
@@ -57,16 +63,17 @@ The code is in `src/app/methods/compact-methods.js`,
 `src/app/methods/compact-analyses.js` (what each analysis is on a phone, §11),
 `src/app/methods/compact-cursor-methods.js`,
 `src/app/methods/compact-derived-methods.js` (derived variables, §5.7),
+`src/app/methods/compact-tools-methods.js` (data tools, §5.8),
 `src/ui/compact-layout.js`, `src/utils/cursor-handles.js` and
 `src/styles/compact.css`. The tests are `npm run test:compact-layout`,
-`npm run test:compact-derived`, `npm run test:cursor-handles`,
-`npm run e2e:compact-layout` and `npm run e2e:compact-derived`.
+`npm run test:compact-derived`, `npm run test:compact-tools`,
+`npm run test:cursor-handles`, `npm run e2e:compact-layout`,
+`npm run e2e:compact-derived` and `npm run e2e:compact-tools`.
 
 Not built yet:
 
 - tap readouts beyond Plotly's own;
 - export through Web Share;
-- data tools on the phone (a Data Tools output's ✎ is hidden there until then);
 - the web manifest and the service worker (§8);
 - deferring Plotly;
 - the phone file-size defaults (§9).
@@ -261,8 +268,8 @@ Analyze holds whatever produces new numbers.
   - the workspace's plot fills the plot area;
   - its options panel (`aside.fft-options`) becomes the content of the Analyze sheet;
   - in portrait, FFT's time and spectrum panes stack vertically.
-- **Data tools**: outliers, derivative, integrate, moving average, interpolate,
-  detrend, filter, resample, xcorr and collapse.
+- **Data tools** (§5.8): outliers, derivative, integrate, moving average,
+  interpolate, detrend, filter, resample, xcorr and collapse.
 - **Derived variables** (§5.7), also reached from Data.
 - Phase-2D fit.
 
@@ -416,6 +423,80 @@ its second page. The phone has a page of its own, built like a calculator:
   redrawn, the language changed) never throws the page away.
 - One code path: the page fills the side panel's fields and presses its
   Create, so creating, editing, renaming and every check are the desktop's.
+
+### 5.8 Data tools
+
+On the desktop the tools are a column of the side panel: a dropdown of tools,
+a dropdown of signals, a form that unfolds under them, three buttons and a
+two-line table of what was made. On a phone that column is hidden in the Data
+sheet, every dropdown and "?" is a small target, the help is a popover placed
+for a mouse, and the dotted preview the panel draws is on a plot a full sheet
+covers. The phone has pages of its own:
+
+- **The hub**, reached from Analyze (**Data tools**, under New signals, saying
+  how many transformations the file has, or which tool is waiting):
+  - the tools as **tiles in four families**, each with its drawing, tinted by
+    family, and one line of what it does (there is no hover to say it):
+    *Clean* (remove outliers, fill NaN, collapse repeated timestamps),
+    *Calculus* (derivative, integral), *Smooth and filter* (moving average,
+    detrend, digital filter), *Resample and compare* (resample,
+    cross-correlation). A tool a memory-saving file cannot run is a dimmed
+    tile that says so;
+  - the file's **transformations as cards**, in chain order: the result on
+    the first line, where it came from and how on the second. The card is the
+    edit; ✓/+ *Plot n* puts the result on the plot on screen or takes it off;
+    🗑 asks on the card itself, with how many are built on it, and deletes the
+    chain;
+  - the panel's verdict (what was created, how many outliers, a caveat) above
+    the cards, gone by itself as on the desktop;
+  - a draft or an edit left waiting, first, with **Continue** and **Discard**.
+- **A tool's page**, pushed over the hub:
+  - it opens at **half height** when half the screen leaves room (≥ 700 px
+    tall): the plot stays live above it, and that is where the result is seen.
+    A shorter phone gets the whole height; its strip then offers **See the
+    plot**, which halves the sheet;
+  - **the signal** is a row that opens a list (searchable past eight entries,
+    the ones on the plot on screen first, each with its points and unit). It
+    starts on the first signal of the plot on screen the tool takes, so the
+    preview is there from the first tap. Resample and Collapse start on *all
+    variables*, as on the desktop;
+  - **a strip** says what the plot shows: the result dotted, following the
+    settings; the edited curve itself, live; that the settings are not complete
+    yet; or, when the source is not on the plot, **Show it**, which puts it
+    there and starts the preview. A tool whose result is a new dataset says
+    where it will go instead;
+  - **the settings are the side panel's own controls**, lent to the page and
+    returned when it closes, at a finger's size: 46 px fields and native
+    selects (the system picker), sliders with a 28 px thumb, numbers with − and
+    + (44 px, repeating when held; only on a field with a step of its own, not
+    on a typed cut-off or Δt), the keypad that suits the field (digits for a
+    count, the decimal pad for a positive value, the full keyboard where a
+    minus sign may be needed — iOS keypads have none), *Replace with NaN /
+    Interpolate* as a segmented control, and every **?** a help page with Back
+    (a "more" link inside one is a page too). The **?** beside the description
+    lists every help topic of the tool;
+  - **the name** of the result (or of the new dataset), with the panel's
+    rename lock while editing, and the live-chain switch when others are built
+    on it;
+  - the **footer**, always in reach: ✕ (Clear, or Cancel for an edit — the
+    live values are put back), **Plot n** (whether the result goes on the plot
+    on screen; remembered; *Plot it* for a new dataset), and **Create** /
+    **Update**, disabled with the reason written under it while the panel would
+    refuse it;
+  - while editing, **Delete** at the foot, asked in place.
+- **Leaving.** Back from a page keeps a new draft (the hub offers it) and
+  abandons an edit. Hiding the sheet keeps either, preview included, so the
+  plot can be looked at full size; Analyze then wears a dot, and its row goes
+  straight back to the page. A refresh of the sheet underneath, a language
+  change, never throws the page away.
+- **The tree's ✎** on a tool's output opens its page, editing.
+- On a phone the preview is drawn on the plot on screen only: one plot is seen
+  at a time, and a curve on another would be drawn for nobody.
+- **One code path.** The page sets the panel's tool and signal through their
+  own controls and presses its Create; computing, previewing, editing,
+  renaming, chaining and every check are the desktop's. A tool added to the
+  desktop's picker fails `npm run test:compact-tools` until
+  `COMPACT_TOOL_GROUPS` places it (§11).
 
 ## 6. Touch
 
@@ -635,6 +716,15 @@ selectors: the analysis's top-bar groups, its options panel and its edge rail, h
 in `src/styles/compact.css` so only its status stays on the plot (an analysis built
 on the FFT shell, as correlation and the fit are, is covered by its selectors
 already).
+
+A new **data tool** needs one line: its family in `COMPACT_TOOL_GROUPS`
+(`src/app/methods/compact-tools-methods.js`), plus its drawing and its
+one-line description (`compactToolDesc_<tool>`) in the four languages. Its
+settings are its block of the side panel (`.data-tool-controls[data-tool-kind]`),
+lent to the phone's page as they are: number fields with a step get − and +, a
+"?" with `aria-controls` becomes a help page, with no work. `npm run
+test:compact-tools` fails when the desktop's picker offers a tool that table
+does not place.
 
 ## 12. Delivery
 
