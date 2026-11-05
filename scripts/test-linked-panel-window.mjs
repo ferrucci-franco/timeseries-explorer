@@ -19,15 +19,18 @@ import { readFileSync } from 'node:fs';
 const manager = readFileSync(new URL('../src/plots/plot-manager.js', import.meta.url), 'utf8');
 const interaction = readFileSync(new URL('../src/plots/methods/interaction-methods.js', import.meta.url), 'utf8');
 
-// ── The chooser, run ────────────────────────────────────────────────────────
-const start = interaction.indexOf('proto._linkedTimeWindow = function');
-assert.ok(start >= 0, '_linkedTimeWindow is there');
-const end = interaction.indexOf('\nproto.', start + 10);
-assert.ok(end > start, 'its end is there');
-// Evaluated in THIS realm, not a vm context: the arrays it returns are then
+// ── The two helpers, run ────────────────────────────────────────────────────
+// Evaluated in THIS realm, not a vm context: the arrays they return are then
 // ordinary arrays, which deepEqual can compare against the ones here.
 const context = { proto: {} };
-new Function('proto', interaction.slice(start, end))(context.proto);
+const slice = (name) => {
+    const start = interaction.indexOf(`proto.${name} = function`);
+    assert.ok(start >= 0, `${name} is there`);
+    const end = interaction.indexOf('\nproto.', start + 10);
+    assert.ok(end > start, `${name} ends`);
+    return interaction.slice(start, end);
+};
+new Function('proto', [slice('_linkedTimeWindow'), slice('_timeWindowsOverlap')].join('\n'))(context.proto);
 
 class Harness {
     constructor(plots, { syncAxes = true } = {}) {
@@ -45,8 +48,15 @@ class Harness {
             ?? plot?.traces?.[0]?.fileId ?? null;
     }
     _timeDisplayMode(fileId) { return this.displayModes.get(fileId) || 'calendar'; }
+    // The real one (interaction-methods.js) parses the floating ISO the app
+    // writes; Date.parse reads the forms used here.
+    _coerceAxisValue(value) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric : Date.parse(String(value).replace(' ', 'T') + 'Z');
+    }
 }
 Harness.prototype._linkedTimeWindow = context.proto._linkedTimeWindow;
+Harness.prototype._timeWindowsOverlap = context.proto._timeWindowsOverlap;
 
 // A panel already on screen, showing `range`.
 const live = (fileId, range, extra = {}) => ({
@@ -151,6 +161,35 @@ const WINDOW = ['2026-06-02 13:45:00', '2026-06-02 15:40:00'];
     assert.deepEqual(h._linkedTimeWindow('bottom', born), WINDOW);
 }
 
+// ── A record that does not reach the shared window ──────────────────────────
+// Adopting it would open the panel on an empty chart. The trace is fitted to
+// itself instead — the zoom fit the panel would have had before all this.
+{
+    const h = new Harness([]);
+    const own = ['2026-06-02 16:00:00', '2026-06-02 17:00:00'];
+    assert.equal(h._timeWindowsOverlap(own, WINDOW), false, 'a record wholly after the window');
+    assert.equal(h._timeWindowsOverlap(['2026-06-01 09:00:00', '2026-06-01 10:00:00'], WINDOW), false,
+        'and wholly before it');
+    // Any contact at all is enough: the curve is drawn in the window, even when
+    // it only reaches the edge, and even when it dwarfs or nests inside it.
+    assert.equal(h._timeWindowsOverlap(['2026-06-02 15:40:00', '2026-06-02 17:00:00'], WINDOW), true,
+        'touching at one instant');
+    assert.equal(h._timeWindowsOverlap(['2026-06-02 14:00:00', '2026-06-02 14:30:00'], WINDOW), true,
+        'a record inside the window');
+    assert.equal(h._timeWindowsOverlap(['2026-06-01 00:00:00', '2026-06-03 00:00:00'], WINDOW), true,
+        'a record that spans past both ends');
+    // Order within a range is not promised; a reversed one still overlaps.
+    assert.equal(h._timeWindowsOverlap([WINDOW[1], WINDOW[0]], WINDOW), true);
+    // Numeric axes (elapsed seconds, index) go through the same test.
+    assert.equal(h._timeWindowsOverlap([0, 10], [20, 30]), false);
+    assert.equal(h._timeWindowsOverlap([0, 25], [20, 30]), true);
+    // Nothing to compare against is not an overlap.
+    for (const bad of [null, undefined, [], [NaN, 1], ['not a time', 'either']]) {
+        assert.equal(h._timeWindowsOverlap(bad, WINDOW), false, `rejects ${JSON.stringify(bad)}`);
+        assert.equal(h._timeWindowsOverlap(WINDOW, bad), false);
+    }
+}
+
 // ── The wiring ──────────────────────────────────────────────────────────────
 // The chooser is only consulted for a panel getting its first curve, and only
 // when no view is being restored. Read from the source: running it would mean
@@ -186,6 +225,12 @@ const WINDOW = ['2026-06-02 13:45:00', '2026-06-02 15:40:00'];
     );
     assert.match(createChart, /layout\.xaxis\.autorange = false;/,
         'an explicit range needs autorange off, or Plotly refits it');
+    assert.match(createChart, /this\._timeWindowsOverlap\(ownRange, shared\)/,
+        'the shared window is only taken when the record reaches it');
+    assert.ok(
+        createChart.indexOf('this._timeWindowsOverlap') < createChart.indexOf('layout.xaxis.range = linkedWindow;'),
+        'and the test comes first, so a record outside it keeps the fit the layout already holds',
+    );
 }
 
 console.log('Linked-panel time window tests passed.');

@@ -1847,8 +1847,17 @@ class PlotManager {
         // is a window the panel already had, and still wins.
         const adoptLinkedWindow = plot._adoptLinkedTimeWindow;
         delete plot._adoptLinkedTimeWindow;
-        const linkedWindow = adoptLinkedWindow && !restoreView
+        const shared = adoptLinkedWindow && !restoreView
             ? this._linkedTimeWindow(panelId, plot)
+            : null;
+        // Unless the record does not reach that window at all. Adopting it then
+        // opens the panel on an empty chart, which says less than the curve
+        // does: a trace whose whole span is outside what the others show has
+        // nothing to align to, so it is fitted to itself — what the layout
+        // already holds — and the reader sees the signal they dropped.
+        const ownRange = layout.xaxis?.range;
+        const linkedWindow = shared && (!ownRange || this._timeWindowsOverlap(ownRange, shared))
+            ? shared
             : null;
         if (linkedWindow && layout.xaxis) {
             layout.xaxis.range = linkedWindow;

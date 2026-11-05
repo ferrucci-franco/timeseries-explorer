@@ -1928,6 +1928,25 @@ proto._linkedTimeWindow = function(panelId, plot) {
     return null;
 };
 
+/**
+ * Whether two time windows meet at all. Either may arrive as date strings, so
+ * both go through the axis coercion the rest of the link uses. Touching at a
+ * single instant counts: that point is drawn.
+ */
+proto._timeWindowsOverlap = function(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    const bounds = (range) => {
+        const lo = this._coerceAxisValue(range[0]);
+        const hi = this._coerceAxisValue(range[1]);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+        return lo <= hi ? [lo, hi] : [hi, lo];
+    };
+    const first = bounds(a);
+    const second = bounds(b);
+    if (!first || !second) return false;
+    return first[0] <= second[1] && second[0] <= first[1];
+};
+
 proto._syncXAxisUpdate = function(sourcePanelId, update) {
     const targets = [];
     const sourcePlot = this.plots.get(sourcePanelId);
