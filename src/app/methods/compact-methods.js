@@ -433,6 +433,9 @@ export function installCompactMethods(ViewerClass) {
     proto._compactIsTextField = function(node) {
         if (!node || node.nodeType !== 1) return false;
         if (node.isContentEditable) return true;
+        // A field set to show no keyboard (the formula field of a derived
+        // variable, driven by its own keys) has the focus for its cursor only.
+        if (node.inputMode === 'none' || node.getAttribute?.('inputmode') === 'none') return false;
         if (node.tagName === 'TEXTAREA') return true;
         if (node.tagName !== 'INPUT') return false;
         return !['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'color', 'file', 'image', 'hidden'].includes(node.type);
@@ -847,7 +850,7 @@ export function installCompactMethods(ViewerClass) {
         document.documentElement.classList.add('compact-sheet-open');
         this._applyCompactSheetSize();
         this._compactNavButtons.forEach((btn, key) => btn.setAttribute('aria-pressed', String(key === id)));
-        this._renderCompactSheetContent();
+        this._renderCompactSheetContent({ force: true });
         this._compactSyncCursorChip();
         requestAnimationFrame(() => this._compactSheet.classList.add('is-shown'));
         this._scheduleCompactResize();
@@ -963,6 +966,12 @@ export function installCompactMethods(ViewerClass) {
             try { history.back(); } catch (_) { this._compact.ignorePop = false; }
         }
         this._showCompactTopPage();
+        // A refresh held back while a page with work in it was open (see
+        // _renderCompactSheetContent) is done once the last of them is gone.
+        if (this._compact.rerenderPending && !this._compact.pages.some(item => item.persist)) {
+            this._compact.rerenderPending = false;
+            this._renderCompactSheetContent();
+        }
     };
 
     proto._releaseCompactPages = function({ unwind = true } = {}) {
@@ -1005,9 +1014,22 @@ export function installCompactMethods(ViewerClass) {
         };
     };
 
-    proto._renderCompactSheetContent = function() {
+    proto._renderCompactSheetContent = function({ force = false } = {}) {
         const id = this._compact.sheet;
         if (!id) return;
+        // A page that holds the user's work — a formula being written — is not
+        // thrown away by a refresh of the sheet under it (a plot redrawn, the
+        // language switched). The refresh waits until that page is closed;
+        // the page itself is relabelled if the language changed. Opening
+        // another sheet is the user's own choice, and goes ahead.
+        if (!force && this._compact.pages.some(page => page.persist)) {
+            this._compact.rerenderPending = true;
+            for (const page of this._compact.pages) {
+                if (page.persist && page.lang && page.lang !== i18n.currentLang) page.rebuild?.();
+            }
+            return;
+        }
+        this._compact.rerenderPending = false;
         const keepScroll = this._compact.pages.length === 1 && this._compact.pages[0].id === id
             ? this._compactSheetBody.scrollTop
             : 0;
@@ -1194,10 +1216,12 @@ export function installCompactMethods(ViewerClass) {
         target.setAttribute('aria-live', 'polite');
         node.appendChild(target);
         this._compactDataTarget = target;
-        const actions = el('div', 'compact-action-row');
+        const actions = el('div', 'compact-action-row compact-data-actions');
         actions.appendChild(button('compact-primary-btn', i18n.t('compactOpenFile'), () => {
             document.getElementById('load-new-file')?.click();
         }));
+        // A new signal from a formula of the others (compact-derived-methods).
+        if (this._compactDerivedData?.()) actions.appendChild(this._compactDerivedNewButton());
         node.appendChild(actions);
         // In a 2D plot a tap is an X, then a Y: the banner says which comes next.
         const banner = el('div', 'compact-phase-banner');
@@ -2035,6 +2059,8 @@ export function installCompactMethods(ViewerClass) {
         if (!plot || !pm._hasContent(plot)) {
             node.appendChild(el('p', 'compact-note', i18n.t('compactAnalysisNeedsSignals')));
         }
+        // New signals made from the file's own: derived variables.
+        if (this._compactDerivedAnalyzeSection) node.appendChild(this._compactDerivedAnalyzeSection());
         node.appendChild(el('p', 'compact-note compact-note-muted', i18n.t('compactMoreAnalysesSoon')));
 
         return {

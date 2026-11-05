@@ -70,6 +70,7 @@ Start in:
 Start in:
 
 - `src/app/methods/derived-methods.js`
+- `src/app/methods/compact-derived-methods.js` (the phone layout's editor)
 
 ### Variable tree, selection, sidebar tree rendering
 

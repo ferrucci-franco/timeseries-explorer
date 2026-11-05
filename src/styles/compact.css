@@ -1180,6 +1180,13 @@ html.compact .compact-page-data .compact-action-row {
     margin-bottom: 4px;
 }
 
+/* "Variables" and its six buttons: on the narrowest phones the buttons go
+   under the title instead of past the sheet's edge. */
+html.compact .compact-sheet #sidebar .section-header {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+}
+
 html.compact .variable-filter {
     min-height: 40px;
     font-size: 16px; /* below 16px, iOS zooms the page on focus */
@@ -2980,4 +2987,918 @@ html.compact .compact-cursor-chip.is-open .compact-cursor-chip-tap {
 .compact-cursor-targets .compact-segment {
     padding: 0 4px;
     font-size: 0.86rem;
+}
+
+/* ── Derived variables on a phone (compact-derived-methods.js) ─────────── */
+
+/* The Data sheet's first row: Open file and New variable, side by side —
+   or one above the other where the two labels do not fit in one row. */
+html.compact .compact-data-actions .compact-primary-btn,
+html.compact .compact-data-actions .compact-derived-new {
+    flex: 1 1 auto;
+    white-space: nowrap;
+}
+
+.compact-derived-new .compact-btn-icon,
+.compact-derived-analyze-row .compact-menu-icon {
+    color: var(--derived-color);
+}
+
+.compact-derived-analyze-row .compact-menu-icon {
+    background: color-mix(in srgb, var(--derived-color) 16%, transparent);
+}
+
+/* The tree's derived rows: their ✎ and × at a finger's size. A Data Tools
+   output's ✎ opens the Data Tools panel, which the phone does not have yet. */
+html.compact .tree-derived-edit,
+html.compact .tree-derived-remove {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    margin: 0 0 0 4px;
+    border-radius: 10px;
+    font-size: 1.05rem;
+}
+
+html.compact .tree-derived-edit.is-tool {
+    display: none;
+}
+
+html.compact .tree-derived-formula,
+html.compact .tree-derived-origin {
+    font-size: 0.82rem;
+}
+
+/* A derived row has up to three buttons; its point count gives way to the
+   name (the formula under it says what it is). */
+html.compact .tree-item-derived .tree-info {
+    display: none;
+}
+
+html.compact .tree-item-derived .tree-label {
+    flex: 1 1 auto;
+    max-width: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A row just created, lit for a moment where the tree brought it. */
+@keyframes compact-flash {
+    0%, 30% { background: color-mix(in srgb, var(--derived-color) 32%, transparent); }
+    100% { background: transparent; }
+}
+
+html.compact .tree-item.compact-flash {
+    animation: compact-flash 1.6s ease-out;
+}
+
+/* The page. It scrolls inside the sheet; its footer stays at the foot. */
+.compact-page-derived {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-bottom: 0;
+}
+
+.compact-derived-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.compact-derived-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+html.compact .compact-derived-name,
+html.compact .compact-derived-filter {
+    width: 100%;
+    min-height: 44px;
+    box-sizing: border-box;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 16px; /* below 16px, iOS zooms the page on focus */
+}
+
+html.compact .compact-derived-name:focus,
+html.compact .compact-derived-filter:focus,
+html.compact .compact-derived-formula:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 22%, transparent);
+}
+
+html.compact .compact-derived-name[aria-invalid="true"] {
+    border-color: var(--danger-color);
+}
+
+.compact-derived-name-hint {
+    min-height: 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.compact-derived-name-hint:empty {
+    display: none;
+}
+
+.compact-derived-name-hint.is-error {
+    color: var(--danger-color);
+}
+
+/* The formula, its keys, its suggestions and its verdict: one card. */
+.compact-derived-formula-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 10px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: var(--bg-secondary);
+}
+
+.compact-derived-formula-head {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin: -4px -6px -6px 2px;
+}
+
+.compact-derived-formula-head .compact-derived-label {
+    flex: 1 1 auto;
+}
+
+.compact-derived-head-btn {
+    width: 40px;
+    height: 40px;
+    color: var(--text-secondary);
+}
+
+.compact-derived-head-btn svg {
+    width: 21px;
+    height: 21px;
+}
+
+.compact-derived-keyboard.is-active {
+    background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+    color: var(--primary-color);
+}
+
+html.compact .compact-derived-formula {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 64px;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 17px;
+    line-height: 23px;
+    resize: none;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    caret-color: var(--primary-color);
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+/* The keys: one row, the operators a phone keyboard keeps on its second
+   page, ⌫ at the end where a keyboard has it. */
+.compact-derived-keys {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 5px;
+}
+
+.compact-derived-key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 9px;
+    background: var(--bg-primary);
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 18%, transparent);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 1.15rem;
+    font-weight: 500;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.compact-derived-key:active {
+    background: var(--bg-tertiary);
+    transform: translateY(1px);
+    box-shadow: none;
+}
+
+/* Sizes on the label: the sheet sets every button's own text to 16 px. */
+.compact-derived-key .compact-btn-label {
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
+.compact-derived-key.is-operator {
+    color: var(--primary-color);
+}
+
+.compact-derived-key.is-operator .compact-btn-label {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.compact-derived-key.is-backspace,
+.compact-derived-key.is-cursor {
+    background: var(--bg-tertiary);
+}
+
+.compact-derived-key .compact-btn-icon svg {
+    width: 22px;
+    height: 22px;
+}
+
+/* What the name being typed may be: a strip of chips that scrolls sideways,
+   like a phone keyboard's suggestions. */
+.compact-derived-suggestions {
+    display: flex;
+    gap: 6px;
+    margin: 0 -10px;
+    padding: 0 10px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+}
+
+.compact-derived-suggestions::-webkit-scrollbar {
+    display: none;
+}
+
+.compact-derived-suggestions[hidden] {
+    display: none;
+}
+
+.compact-derived-suggestion {
+    flex: 0 0 auto;
+    max-width: 75%;
+    min-height: 38px;
+    padding: 0 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 19px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.compact-derived-suggestion.kind-fn {
+    color: var(--primary-color);
+}
+
+.compact-derived-suggestion.kind-const,
+.compact-derived-suggestion.kind-time {
+    color: var(--derived-color);
+}
+
+.compact-derived-status {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 0.86rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.compact-derived-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.compact-derived-status-icon svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.compact-derived-status.is-ok {
+    color: var(--success-color);
+}
+
+.compact-derived-status.is-ok .compact-derived-status-icon {
+    background: var(--success-color);
+}
+
+.compact-derived-status.is-error {
+    color: var(--danger-color);
+}
+
+.compact-derived-status.is-error .compact-derived-status-icon {
+    background: var(--danger-color);
+}
+
+.compact-derived-status-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* The values the formula gives, drawn small: is this what was meant? */
+.compact-derived-preview {
+    padding: 8px 12px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+}
+
+.compact-derived-preview[hidden] {
+    display: none;
+}
+
+.compact-derived-preview-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.compact-derived-preview-count {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.compact-derived-spark {
+    display: block;
+    width: 100%;
+    height: 56px;
+    overflow: visible;
+}
+
+.compact-derived-spark-band {
+    fill: color-mix(in srgb, var(--derived-color) 22%, transparent);
+    stroke: none;
+}
+
+.compact-derived-spark-line {
+    fill: none;
+    stroke: var(--derived-color);
+    stroke-width: 1.6;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+}
+
+.compact-derived-spark-zero {
+    stroke: var(--border-color);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.compact-derived-preview-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    margin-top: 6px;
+}
+
+.compact-derived-stat {
+    display: inline-flex;
+    gap: 6px;
+    font-size: 0.86rem;
+}
+
+.compact-derived-stat-label {
+    color: var(--text-secondary);
+}
+
+.compact-derived-stat-value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.compact-derived-preview-none {
+    margin: 4px 0 0;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+}
+
+/* What goes in: Variables, Functions, 123. The tabs stay at the top of the
+   sheet while their panel scrolls under them. */
+.compact-derived-tabs-bar {
+    position: sticky;
+    top: -10px;
+    z-index: 2;
+    margin: -4px -12px -4px;
+    padding: 4px 12px 8px;
+    background: var(--bg-primary);
+}
+
+.compact-derived-panel[hidden] {
+    display: none;
+}
+
+/* The filter and Σ Combine share a row where both fit; otherwise Combine
+   takes a row of its own rather than squeezing the filter to a word. */
+.compact-derived-var-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.compact-derived-search {
+    position: relative;
+    flex: 1 1 200px;
+    min-width: 0;
+    display: flex;
+}
+
+.compact-derived-search-icon {
+    position: absolute;
+    left: 11px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary);
+    pointer-events: none;
+}
+
+.compact-derived-search-icon svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+html.compact .compact-derived-search .compact-derived-filter {
+    padding-left: 36px;
+}
+
+.compact-derived-combine {
+    flex: 1 0 auto;
+    white-space: nowrap;
+}
+
+.compact-derived-var-hint {
+    margin: 8px 2px;
+}
+
+.compact-derived-var,
+.compact-derived-pick {
+    width: 100%;
+    min-height: 52px;
+}
+
+.compact-derived-var[hidden],
+.compact-derived-pick[hidden] {
+    display: none;
+}
+
+.compact-derived-var-text {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.compact-derived-var-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-derived-var-detail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.compact-derived-var-tag {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+}
+
+.compact-derived-var-tag.tag-derived {
+    background: color-mix(in srgb, var(--derived-color) 18%, transparent);
+    color: var(--derived-color);
+}
+
+.compact-derived-var-tag.tag-time {
+    background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+    color: var(--primary-color);
+}
+
+.compact-derived-var-add {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 15px;
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    color: var(--primary-color);
+}
+
+.compact-derived-var-add svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+}
+
+/* Already in the formula: said with the row's own mark. */
+.compact-derived-var.is-used .compact-derived-var-name {
+    font-weight: 600;
+}
+
+.compact-derived-var.is-used .compact-derived-var-add {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+.compact-derived-var-empty[hidden] {
+    display: none;
+}
+
+/* Functions: two columns of tiles, each saying what it does. */
+.compact-derived-functions .compact-section {
+    margin-top: 0;
+}
+
+.compact-derived-functions .compact-section + .compact-section {
+    margin-top: 14px;
+}
+
+.compact-derived-fn-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.compact-derived-fn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+    min-height: 56px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.compact-derived-fn:active {
+    background: var(--hover-bg);
+}
+
+.compact-derived-fn-sig {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.compact-derived-fn.is-constant .compact-derived-fn-sig {
+    color: var(--derived-color);
+}
+
+.compact-derived-fn-text {
+    font-size: 0.78rem;
+    line-height: 1.3;
+    color: var(--text-secondary);
+}
+
+.compact-derived-help-link {
+    margin-top: 16px;
+}
+
+.compact-derived-help-link .compact-list-btn .compact-btn-label {
+    flex: 1 1 auto;
+}
+
+.compact-derived-chevron {
+    display: inline-flex;
+    color: var(--text-secondary);
+}
+
+.compact-derived-chevron svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* 123: a calculator's pad. */
+.compact-derived-numpad {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px;
+    border-radius: 14px;
+    background: var(--bg-secondary);
+}
+
+.compact-derived-numpad .compact-derived-key {
+    min-height: 50px;
+}
+
+.compact-derived-numpad .compact-derived-key .compact-btn-label {
+    font-size: 1.35rem;
+}
+
+.compact-derived-key.is-digit {
+    font-variant-numeric: tabular-nums;
+}
+
+.compact-derived-key.is-constant {
+    color: var(--derived-color);
+    font-style: italic;
+}
+
+.compact-derived-numpad [data-key="0"] {
+    grid-column: span 2;
+}
+
+.compact-derived-key.is-enter {
+    background: var(--primary-color);
+    color: #fff;
+    box-shadow: none;
+}
+
+.compact-derived-delete-list {
+    margin-top: 4px;
+}
+
+.compact-derived-delete {
+    width: 100%;
+}
+
+/* The footer: Create (or Update) and Cancel, at the foot of the sheet
+   whatever is scrolled above them. */
+.compact-derived-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 4px -12px 0;
+    padding: 10px 12px calc(10px + var(--sab, 0px));
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-primary);
+}
+
+html.compact:not(.compact-sheet-full):not(.compact-landscape) .compact-derived-footer {
+    padding-bottom: 10px;
+}
+
+.compact-derived-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.compact-derived-actions .compact-derived-cancel {
+    flex: 0 0 48px;
+    padding: 0;
+}
+
+.compact-derived-actions .compact-primary-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* "Plot 1": whether Create also puts it on the plot. A toggle, lit when on. */
+.compact-derived-plot-chip {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 14px 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 22px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.92rem;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.compact-derived-plot-chip[hidden] {
+    display: none;
+}
+
+.compact-derived-plot-chip .compact-btn-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.compact-derived-plot-chip.is-active {
+    border-color: color-mix(in srgb, var(--success-color) 60%, transparent);
+    background: color-mix(in srgb, var(--success-color) 16%, var(--bg-primary));
+}
+
+.compact-derived-plot-chip.is-active .compact-btn-icon {
+    color: var(--success-color);
+}
+
+.compact-primary-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.compact-derived-message {
+    font-size: 0.86rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.compact-derived-message[hidden] {
+    display: none;
+}
+
+.compact-derived-message.is-error {
+    color: var(--danger-color);
+}
+
+/* Σ Combine several: tick, in order. */
+.compact-derived-combine-lead {
+    margin: 0 0 12px;
+}
+
+.compact-derived-combine-fns .compact-segment {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.compact-derived-combine-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 4px;
+    margin-bottom: 8px;
+}
+
+.compact-derived-combine-count {
+    flex: 1 1 auto;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+}
+
+.compact-page-derived-combine .compact-derived-search {
+    margin-bottom: 8px;
+}
+
+.compact-derived-pick-box {
+    display: inline-flex;
+    flex: 0 0 26px;
+    width: 26px;
+    height: 26px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border: 2px solid var(--text-secondary);
+    border-radius: 7px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #fff;
+}
+
+.compact-derived-pick.is-selected .compact-derived-pick-box {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+}
+
+.compact-derived-pick.is-selected {
+    background: color-mix(in srgb, var(--primary-color) 10%, var(--bg-primary));
+}
+
+.compact-page-derived-combine {
+    padding-bottom: 0;
+}
+
+.compact-derived-combine-preview {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-derived-combine-preview.is-ready {
+    color: var(--text-primary);
+}
+
+/* The formula help, as a page: the desktop's rows, one under another. */
+.compact-derived-help .derived-help-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.92rem;
+    line-height: 1.45;
+}
+
+.compact-derived-help .derived-help-row:last-child {
+    border-bottom: none;
+}
+
+.compact-derived-help .derived-help-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.compact-derived-help code {
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.compact-derived-help .derived-help-examples {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.compact-derived-help .derived-help-example {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+}
+
+/* Narrow phones: the operator row and the tabs give up a little width. */
+@media (max-width: 359px) {
+    .compact-derived-keys {
+        gap: 3px;
+    }
+
+    .compact-derived-key.is-operator .compact-btn-label {
+        font-size: 1.3rem;
+    }
+
+    .compact-derived-fn-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
