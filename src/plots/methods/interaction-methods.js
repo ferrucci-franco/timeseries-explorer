@@ -1896,6 +1896,38 @@ proto._refreshAllPhaseVisuals = function() {
     }
 };
 
+/**
+ * The time window the panels linked to `plot` are showing right now, or null
+ * when there is none to adopt.
+ *
+ * A panel laid out from its own traces alone opens fitted to them. That is the
+ * right answer for the first panel and the wrong one for the second: dropping
+ * a trace whose record is shorter (or starts later) than what the other panels
+ * show left the two charts on different windows, side by side, with the time
+ * axes linked and nothing having asked for a zoom. The link only ever moved a
+ * window that already existed — it had no say in the one a panel is born with.
+ *
+ * Eligibility is _syncXAxisUpdate's, so a panel adopts exactly the window the
+ * next pan or zoom would have handed it anyway: both panels are time plots,
+ * neither is on an axis of its own (a correlation's lag), and their clocks
+ * display the same way. Linked panels are kept in step, so the first eligible
+ * one speaks for all of them.
+ */
+proto._linkedTimeWindow = function(panelId, plot) {
+    if (!this.syncAxes || plot?.mode !== 'timeseries') return null;
+    if (this._plotAxisIsIndependent(plot)) return null;
+    const fileId = this._linkTimeFileId(plot);
+    for (const [id, candidate] of this.plots) {
+        if (id === panelId || !candidate.div || candidate.mode !== 'timeseries') continue;
+        if (this._plotAxisIsIndependent(candidate)) continue;
+        if (this._timeDisplayMode(this._linkTimeFileId(candidate)) !== this._timeDisplayMode(fileId)) continue;
+        const range = candidate.div._fullLayout?.xaxis?.range || candidate.div.layout?.xaxis?.range;
+        if (!Array.isArray(range) || range.length < 2) continue;
+        return [range[0], range[1]];
+    }
+    return null;
+};
+
 proto._syncXAxisUpdate = function(sourcePanelId, update) {
     const targets = [];
     const sourcePlot = this.plots.get(sourcePanelId);

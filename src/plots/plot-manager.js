@@ -1570,6 +1570,11 @@ class PlotManager {
         });
 
         if (!plot.div) {
+            // This panel is getting its first curve. Dropped beside panels that
+            // already show one, it must not open on a window of its own: see
+            // _linkedTimeWindow. Adding to a chart that EXISTS already keeps the
+            // window (only Y expands), which is the behaviour this extends.
+            plot._adoptLinkedTimeWindow = true;
             this._createChart(panelId, panelEl);
         } else {
             const t = plot.traces[plot.traces.length - 1];
@@ -1836,9 +1841,26 @@ class PlotManager {
         if (initialLazyMissingSearch) this._setMissingDensityNotice?.(plot, 'loading');
 
         const { traces, layout } = this._buildPlotData(plot);
+        // A first curve dropped onto an empty panel, with linked panels already
+        // showing a window: open on theirs rather than on this trace's own
+        // extent. A view being restored — a session, a rebuild, a mode change —
+        // is a window the panel already had, and still wins.
+        const adoptLinkedWindow = plot._adoptLinkedTimeWindow;
+        delete plot._adoptLinkedTimeWindow;
+        const linkedWindow = adoptLinkedWindow && !restoreView
+            ? this._linkedTimeWindow(panelId, plot)
+            : null;
+        if (linkedWindow && layout.xaxis) {
+            layout.xaxis.range = linkedWindow;
+            layout.xaxis.autorange = false;
+        }
         const config = this._getPlotlyConfig();
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
+            // The duration and generated-calendar axes carry tick values worked
+            // out for a span — the panel's own, here — so the adopted window
+            // needs its own ticks. A real date axis has Plotly's, for any range.
+            if (linkedWindow) this._refreshElapsedDateTimeAxisTicks(plot, linkedWindow);
             if (plot._eagerInitialDetailReady) {
                 delete plot._eagerInitialDetailReady;
                 plot._eagerInitialDetailToken = null;

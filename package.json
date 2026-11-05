@@ -83,6 +83,7 @@
     "test:derived-trig-constants": "node scripts/test-derived-trig-constants.mjs",
     "test:derived-rename-edit": "node scripts/test-derived-rename-edit.mjs",
     "test:derived-tree-edit-button": "node scripts/test-derived-tree-edit-button.mjs",
+    "test:linked-panel-window": "node scripts/test-linked-panel-window.mjs",
     "test:document-listener-cleanup": "node scripts/test-document-listener-cleanup.mjs",
     "test:xcorr": "node scripts/test-xcorr.mjs",
     "test:data-tools-sampling": "node scripts/test-data-tools-sampling.mjs",
