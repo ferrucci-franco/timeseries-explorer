@@ -57,6 +57,10 @@ const shot = async (page, name) => {
 async function openPhone(viewport, { dark = false } = {}) {
     const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: shots ? 2 : 1 });
     const page = await context.newPage();
+    if (process.env.CPU_THROTTLE) {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CPU_THROTTLE) });
+    }
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(baseUrl);
@@ -69,6 +73,19 @@ async function openPhone(viewport, { dark = false } = {}) {
 }
 
 const formula = page => page.locator('.compact-derived-formula').inputValue();
+// The editor open and its sheet settled at full height (it slides there).
+const editorReady = async (page) => {
+    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await page.waitForTimeout(350);
+};
+// The formula reads `expected` — said with what it does read, if not.
+const formulaIs = async (page, expected, what) => {
+    try {
+        await page.waitForFunction(text => document.querySelector('.compact-derived-formula')?.value === text, expected, { timeout: 5000 });
+    } catch (_) {
+        assert.equal(await formula(page), expected, what);
+    }
+};
 const tapKey = (page, key) => page.locator(`.compact-derived-keys [data-key="${key}"]`).tap();
 const tapVar = (page, name) => page.locator(`.compact-derived-var[data-name="${name}"]`).tap();
 
@@ -83,7 +100,7 @@ try {
     assert.equal(await page.locator('.compact-sheet .derived-section').isVisible(), false, 'the desktop form is not shown');
     await shot(page, '01-data');
     await newBtn.tap();
-    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await editorReady(page);
     assert.equal(await page.locator('.compact-sheet-title').innerText(), 'New variable', 'the page says what it is');
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact-sheet-full')), true,
         'and takes the whole height: a formula wants the room');
@@ -179,7 +196,7 @@ try {
 
     // ── Σ Combine several ──
     await newBtn.tap();
-    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await editorReady(page);
     assert.equal(await formula(page), '', 'a new variable starts empty after a create');
     await page.locator('.compact-derived-name').fill('total');
     await page.locator('.compact-derived-combine').tap();
@@ -193,7 +210,7 @@ try {
     await shot(page, '07-combine');
     assert.deepEqual(await sidewaysProblems(page), [], 'the combine page fits the width');
     await page.locator('.compact-derived-combine-insert').tap();
-    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await editorReady(page);
     assert.equal(await formula(page), 'mean(temp, voltage)', 'Insert writes it and goes back to the formula');
 
     // ── A draft survives hiding the sheet ──
@@ -201,7 +218,7 @@ try {
     await page.waitForSelector('#compact-sheet', { state: 'hidden' });
     await page.locator('.compact-nav-btn[data-sheet="data"]').tap();
     await page.locator('.compact-page-data .compact-derived-new').tap();
-    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await editorReady(page);
     assert.equal(await page.locator('.compact-derived-name').inputValue(), 'total', 'the name is still there');
     assert.equal(await formula(page), 'mean(temp, voltage)', 'and the formula');
     // Cancel means it: no draft.
@@ -220,7 +237,7 @@ try {
     const box = await edit.boundingBox();
     assert.ok(box.width >= 40 && box.height >= 40, `the ✎ is a finger's size (${box.width}×${box.height})`);
     await edit.tap();
-    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await editorReady(page);
     assert.equal(await page.locator('.compact-sheet-title').innerText(), 'Edit variable', 'the editor opens on the variable');
     assert.equal(await page.locator('.compact-derived-submit').innerText(), 'Update');
     assert.equal(await page.locator('.compact-derived-var[data-name="power"]').count(), 0, 'it cannot read itself');
@@ -253,13 +270,19 @@ try {
     assert.match(await page.locator('.compact-derived-analyze-row').innerText(), /1 in this file/, 'Analyze counts the formulas');
     await shot(page, '09-analyze');
     await page.locator('.compact-derived-analyze-row').tap();
-    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await editorReady(page);
     await page.locator('.compact-derived-name').fill('half');
+    await formulaIs(page, '', 'from Analyze, a new variable starts empty');
     await tapVar(page, 'voltage');
+    await formulaIs(page, 'voltage', 'a variable tapped in, from Analyze');
     await tapKey(page, '/');
+    await formulaIs(page, 'voltage / ', 'an operator');
     await page.locator('.compact-derived-tab[data-tab="numbers"]').tap();
     await page.locator('.compact-derived-numpad [data-key="2"]').tap();
-    await page.waitForSelector('.compact-derived-status.is-ok');
+    await formulaIs(page, 'voltage / 2', 'a digit from the pad');
+    await page.waitForSelector('.compact-derived-status.is-ok', { timeout: 5000 }).catch(async (err) => {
+        throw new Error(`${err.message}\nformula: ${JSON.stringify(await formula(page))} status: ${await page.locator('.compact-derived-status').innerText()}`);
+    });
     // The Analyze sheet redraws itself when the plot changes; the editor
     // over it must not be thrown away by that.
     await page.evaluate(() => window.app._renderCompactSheetContent());
@@ -286,7 +309,7 @@ try {
     await shot(page, '10-help');
     assert.deepEqual(await sidewaysProblems(page), [], 'the help fits the width');
     await page.locator('.compact-sheet-back').tap();
-    await page.waitForSelector('.compact-page-derived:not([hidden])');
+    await editorReady(page);
 
     assert.deepEqual(errors, [], 'no page errors');
     await context.close();
@@ -298,7 +321,7 @@ try {
         const p = phone.page;
         await p.locator('.compact-nav-btn[data-sheet="data"]').tap();
         await p.locator('.compact-page-data .compact-derived-new').tap();
-        await p.waitForSelector('.compact-page-derived:not([hidden])');
+        await editorReady(p);
         await p.locator('.compact-derived-name').fill('ratio');
         await p.locator('.compact-derived-var[data-name="voltage"]').tap();
         await p.locator('.compact-derived-keys [data-key="/"]').tap();
@@ -335,7 +358,7 @@ try {
             assert.ok(fits, `${lang}: "${await btn.innerText()}" is not cut`);
         }
         await p.locator('.compact-page-data .compact-derived-new').tap();
-        await p.waitForSelector('.compact-page-derived:not([hidden])');
+        await editorReady(p);
         assert.deepEqual(await sidewaysProblems(p), [], `${lang}: the editor fits 320 px`);
         await p.locator('.compact-derived-combine').tap();
         assert.deepEqual(await sidewaysProblems(p), [], `${lang}: the combine page fits 320 px`);
