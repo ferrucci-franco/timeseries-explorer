@@ -54,8 +54,27 @@ const shot = async (page, name) => {
     await page.screenshot({ path: `${shots}/derived-${name}.png` });
 };
 
-async function openPhone(viewport, { dark = false } = {}) {
+// iOS Safari puts a field's cursor at its start when the page focuses it by
+// code, and reports that position (a focus event, a selectionchange) before
+// the page can set its own. Chromium keeps the old selection, so the editor
+// once wrote every key at the start of the formula on an iPhone while every
+// test here passed. `ios: true` makes Chromium behave that way.
+const IOS_FOCUS_QUIRK = () => {
+    const focus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function (...args) {
+        if (document.activeElement !== this && (this instanceof HTMLTextAreaElement || this instanceof HTMLInputElement)) {
+            try { this.setSelectionRange(0, 0); } catch (_) { /* not a text field */ }
+        }
+        return focus.apply(this, args);
+    };
+    // Nor does it announce a cursor the page set by code with a select event,
+    // which in Chromium quietly repaired what the focus had reported.
+    document.addEventListener('select', event => event.stopImmediatePropagation(), true);
+};
+
+async function openPhone(viewport, { dark = false, ios = true } = {}) {
     const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: shots ? 2 : 1 });
+    if (ios) await context.addInitScript(IOS_FOCUS_QUIRK);
     const page = await context.newPage();
     if (process.env.CPU_THROTTLE) {
         const cdp = await context.newCDPSession(page);
@@ -247,7 +266,7 @@ try {
         input.value = 'voltage * 2';
         input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    await page.waitForFunction(() => /: 1$/.test(document.querySelector('.compact-derived-status.is-ok')?.textContent || ''));
+    await page.waitForFunction(() => /: 1$/.test(document.querySelector('.compact-derived-status.is-ok .compact-derived-status-text')?.textContent || ''));
     await shot(page, '08-edit');
     await page.locator('.compact-derived-submit').tap();
     await page.waitForFunction(() => {
@@ -280,6 +299,64 @@ try {
     await page.locator('.compact-derived-tab[data-tab="numbers"]').tap();
     await page.locator('.compact-derived-numpad [data-key="2"]').tap();
     await formulaIs(page, 'voltage / 2', 'a digit from the pad');
+    // A tap in the field puts the cursor there, and the keys write there —
+    // not at the start, which is where iOS had put it on focus.
+    await page.locator('.compact-derived-formula').evaluate((input) => {
+        input.focus();
+        input.setSelectionRange(7, 7);
+        input.dispatchEvent(new Event('pointerup', { bubbles: true }));
+    });
+    await page.waitForTimeout(50);
+    await tapKey(page, '+');
+    await page.locator('.compact-derived-numpad [data-key="1"]').tap();
+    await formulaIs(page, 'voltage + 1 / 2', 'written where the cursor was put, in the middle');
+    await page.locator('.compact-derived-numpad [data-key="left"]').tap();
+    await page.locator('.compact-derived-numpad [data-key="left"]').tap();
+    await page.locator('.compact-derived-numpad [data-key="left"]').tap();
+    await page.locator('.compact-derived-numpad [data-key="left"]').tap();
+    await page.locator('.compact-derived-numpad [data-key="0"]').tap();
+    await formulaIs(page, 'voltage0 + 1 / 2', '← walks the cursor back, and the pad writes there');
+    await page.locator('.compact-derived-numpad [data-key="right"]').tap();
+    await page.locator('.compact-derived-numpad [data-key="right"]').tap();
+    await page.locator('.compact-derived-numpad [data-key="right"]').tap();
+    await page.locator('.compact-derived-numpad [data-key="right"]').tap();
+    await page.locator('.compact-derived-numpad .is-backspace').tap();
+    await page.locator('.compact-derived-numpad .is-backspace').tap();
+    await formulaIs(page, 'voltage0 / 2', '⌫ there takes the 1, then the + with its spaces');
+    await page.locator('.compact-derived-formula').evaluate((input) => {
+        input.focus();
+        input.setSelectionRange(8, 8);
+        input.dispatchEvent(new Event('pointerup', { bubbles: true }));
+    });
+    await page.locator('.compact-derived-numpad .is-backspace').tap();
+    await formulaIs(page, ' / 2', 'there, ⌫ takes the name back whole');
+    await page.locator('.compact-derived-tab[data-tab="variables"]').tap();
+    await tapVar(page, 'voltage');
+    await formulaIs(page, 'voltage / 2', 'and a tap puts one back, at the start where the cursor is');
+    await page.locator('.compact-derived-tab[data-tab="numbers"]').tap();
+
+    // The preview: at the foot of the page, after the tabs, at a size that
+    // can be read; the status line brings it up in one tap.
+    await page.waitForSelector('.compact-derived-status.is-ok .compact-derived-see-preview');
+    const order = await page.evaluate(() => {
+        const page = document.querySelector('.compact-page-derived');
+        const preview = page.querySelector('.compact-derived-preview');
+        const panels = page.querySelector('.compact-derived-panels');
+        return !!(panels.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    assert.equal(order, true, 'the preview comes after the tabs');
+    const chartBox = await page.locator('.compact-derived-spark').boundingBox();
+    assert.ok(chartBox.height >= 140, `the preview is tall enough to read (${chartBox.height} px)`);
+    assert.equal(await page.locator('.compact-derived-chart-y').count(), 3, 'with its scale: top, bottom and zero');
+    await page.locator('.compact-derived-see-preview').tap();
+    await page.waitForTimeout(600);
+    const inView = await page.evaluate(() => {
+        const preview = document.querySelector('.compact-derived-preview').getBoundingClientRect();
+        const body = document.querySelector('.compact-sheet-body').getBoundingClientRect();
+        return preview.top >= body.top - 1 && preview.top < body.bottom;
+    });
+    assert.equal(inView, true, '"Preview ↓" brings it into view');
+    await shot(page, '09b-preview');
     await page.waitForSelector('.compact-derived-status.is-ok', { timeout: 5000 }).catch(async (err) => {
         throw new Error(`${err.message}\nformula: ${JSON.stringify(await formula(page))} status: ${await page.locator('.compact-derived-status').innerText()}`);
     });

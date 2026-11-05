@@ -141,9 +141,10 @@ export function previewEnvelope(values, columns = 120) {
     return { n, finite, nan: n - finite, min: finite ? min : NaN, max: finite ? max : NaN, lo, hi };
 }
 
-// The envelope as SVG path data in a `w`×`h` box: a filled band where the
-// column spans a range, its midline as the curve. Columns without a number
-// break the line, as a gap does on the plot.
+// The envelope as SVG path data in a `w`×`h` box: a faint band where the
+// column spans a range, and the curve drawn through each column's high and
+// low in turn — what a plot of many samples looks like at that width.
+// Columns without a number break the line, as a gap does on the plot.
 export function envelopePaths(env, w = 300, h = 56, pad = 3) {
     const { lo, hi, min, max } = env;
     const columns = lo.length;
@@ -159,7 +160,12 @@ export function envelopePaths(env, w = 300, h = 56, pad = 3) {
         const top = run.map(c => `${x(c).toFixed(1)},${y(hi[c]).toFixed(1)}`);
         const bottom = run.slice().reverse().map(c => `${x(c).toFixed(1)},${y(lo[c]).toFixed(1)}`);
         band += `M${top.join('L')}L${bottom.join('L')}Z`;
-        line += `M${run.map(c => `${x(c).toFixed(1)},${y((lo[c] + hi[c]) / 2).toFixed(1)}`).join('L')}`;
+        line += `M${run.map((c, i) => {
+            const first = i % 2 ? lo[c] : hi[c];
+            const second = i % 2 ? hi[c] : lo[c];
+            const px = x(c).toFixed(1);
+            return lo[c] === hi[c] ? `${px},${y(lo[c]).toFixed(1)}` : `${px},${y(first).toFixed(1)}L${px},${y(second).toFixed(1)}`;
+        }).join('L')}`;
         run = [];
     };
     for (let c = 0; c < columns; c++) {
@@ -239,6 +245,9 @@ export function installCompactDerivedMethods(ViewerClass) {
             sheet: this._compact.sheet,
         };
         state.caret = [state.formula.length, state.formula.length];
+        // Most browsers fire selectionchange at the document only.
+        state.onSelectionChange = () => state.rememberCaret?.();
+        document.addEventListener('selectionchange', state.onSelectionChange);
         this._compactDerived = state;
         // The side panel's form is what creates; it learns of the edit here.
         this._derivedEditing = state.editing;
@@ -275,6 +284,7 @@ export function installCompactDerivedMethods(ViewerClass) {
     proto._closeCompactDerivedEditor = function(state) {
         if (this._compactDerived !== state) return;
         clearTimeout(state.validateTimer);
+        document.removeEventListener('selectionchange', state.onSelectionChange);
         // Left without creating: kept as a draft, for the next "New variable".
         // An edit is not a draft: its variable is still what it was.
         if (!state.done && !state.editing && (state.name.trim() || state.formula.trim())) {
@@ -351,14 +361,21 @@ export function installCompactDerivedMethods(ViewerClass) {
         formulaInput.autocomplete = 'off';
         formulaInput.setAttribute('autocapitalize', 'off');
         formulaInput.setAttribute('autocorrect', 'off');
+        // Where the cursor is, for the keys to write there. Read only from
+        // what the user does in the field (typing, a tap that places the
+        // cursor) and from selectionchange, which reports the selection as it
+        // stands. Never from focus or blur: iOS moves the cursor to the start
+        // when the page focuses the field, reports that, and then announces
+        // nothing when the page puts the cursor back — every key wrote at the
+        // start of the formula. Chromium repaired it with a select event, so
+        // no test saw it (e2e:compact-derived now emulates iOS).
         const remember = () => {
+            if (document.activeElement !== formulaInput) return;
             state.caret = [formulaInput.selectionStart, formulaInput.selectionEnd];
-        };
-        for (const type of ['keyup', 'pointerup', 'select', 'focus']) formulaInput.addEventListener(type, () => {
-            remember();
             this._compactDerivedSyncSuggestions();
-        });
-        formulaInput.addEventListener('blur', remember);
+        };
+        state.rememberCaret = remember;
+        for (const type of ['keyup', 'pointerup', 'selectionchange']) formulaInput.addEventListener(type, remember);
         formulaInput.addEventListener('input', () => {
             remember();
             state.formula = formulaInput.value;
@@ -397,12 +414,6 @@ export function installCompactDerivedMethods(ViewerClass) {
         formulaBox.append(formulaHead, formulaInput, keys, suggestions, status);
         node.appendChild(formulaBox);
 
-        // ── Preview ──
-        const preview = el('div', 'compact-derived-preview');
-        preview.hidden = true;
-        state.preview = preview;
-        node.appendChild(preview);
-
         // ── Tabs: what goes into the formula ──
         const tabsBar = el('div', 'compact-derived-tabs-bar');
         const tabs = el('div', 'compact-segmented compact-derived-tabs');
@@ -430,6 +441,12 @@ export function installCompactDerivedMethods(ViewerClass) {
             state.panels.set(id, panel);
         }
         node.append(tabsBar, panels);
+
+        // ── Preview: at the foot, at a size that can be read ──
+        const preview = el('div', 'compact-derived-preview');
+        preview.hidden = true;
+        state.preview = preview;
+        node.appendChild(preview);
 
         // ── Edit: the way out for the variable itself ──
         if (state.editing) {
@@ -710,7 +727,9 @@ export function installCompactDerivedMethods(ViewerClass) {
         if (!input?.isConnected) return;
         const [start, end] = state.caret || [input.value.length, input.value.length];
         try { input.focus({ preventScroll: true }); } catch (_) { input.focus(); }
+        // Put back where it was: on iOS the focus just moved it to the start.
         input.setSelectionRange(start, end);
+        state.caret = [start, end];
     };
 
     // After a key: the field gets its cursor back, unless the system keyboard
@@ -729,10 +748,11 @@ export function installCompactDerivedMethods(ViewerClass) {
         const [start, end] = state.caret || [input.value.length, input.value.length];
         const before = input.value.slice(0, start);
         const after = input.value.slice(end);
-        // Spaces are never doubled where an operator brings its own.
+        // No doubled space before an operator that brings its own. After it
+        // the space stays: the cursor sits there, where the next operand goes
+        // (`x| / 2` → `x + | / 2` → `x + 1 / 2`).
         let insert = text;
         if (/\s$/.test(before) && /^\s/.test(insert)) insert = insert.replace(/^\s+/, '');
-        if (/^\s/.test(after) && /\s$/.test(insert)) insert = insert.replace(/\s+$/, '');
         input.value = before + insert + after;
         const caret = before.length + insert.length - caretFromEnd;
         state.caret = [caret, caret];
@@ -954,6 +974,15 @@ export function installCompactDerivedMethods(ViewerClass) {
         }
         state.status.appendChild(el('span', 'compact-derived-status-text', text));
         state.status.className = `compact-derived-status${tone ? ` is-${tone}` : ''}`;
+        // The preview is at the foot of the page: one tap brings it up.
+        if (state.valid && state.result?.values?.length) {
+            const go = keepFocus(button('compact-link-btn compact-derived-see-preview', `${i18n.t('compactDerivedPreview')} ↓`, () => {
+                let reduceMotion = false;
+                try { reduceMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches; } catch (_) { /* none */ }
+                state.preview?.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+            }));
+            state.status.appendChild(go);
+        }
         state.varRows?.forEach((row, name) => row.classList.toggle('is-used', used.has(name)));
         this._compactDerivedRenderPreview();
         this._compactDerivedSyncFooter();
@@ -967,7 +996,7 @@ export function installCompactDerivedMethods(ViewerClass) {
         box.replaceChildren();
         box.hidden = !state.valid || !values?.length;
         if (box.hidden) return;
-        const env = previewEnvelope(values);
+        const env = previewEnvelope(values, 300);
         const head = el('div', 'compact-derived-preview-head');
         head.appendChild(el('span', 'compact-derived-label', i18n.t('compactDerivedPreview')));
         const fmt = (v) => formatNumber(v, this.numberFormat, { significantDigits: 4 });
@@ -979,8 +1008,9 @@ export function installCompactDerivedMethods(ViewerClass) {
             return;
         }
         const W = 300;
-        const H = 56;
+        const H = 150;
         const { band, line } = envelopePaths(env, W, H);
+        const chart = el('div', 'compact-derived-chart');
         const ns = 'http://www.w3.org/2000/svg';
         const svg = document.createElementNS(ns, 'svg');
         svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -992,7 +1022,7 @@ export function installCompactDerivedMethods(ViewerClass) {
         // the first thing to check.
         if (env.min < 0 && env.max > 0) {
             const zero = document.createElementNS(ns, 'line');
-            const y0 = 3 + (H - 6) * (1 - (0 - env.min) / (env.max - env.min));
+            const y0 = 3 + (H - 6) * (env.max / (env.max - env.min));
             zero.setAttribute('x1', '0');
             zero.setAttribute('x2', String(W));
             zero.setAttribute('y1', y0.toFixed(1));
@@ -1007,7 +1037,23 @@ export function installCompactDerivedMethods(ViewerClass) {
         path.setAttribute('d', line);
         path.setAttribute('class', 'compact-derived-spark-line');
         svg.append(area, path);
-        box.appendChild(svg);
+        chart.appendChild(svg);
+        // The scale, at the left edge: the top and the bottom of the curve,
+        // and zero where it is in view.
+        const yLabel = (value, fraction, extra = '') => {
+            const label = el('span', `compact-derived-chart-y${extra}`, fmt(value));
+            label.style.top = `${(fraction * 100).toFixed(2)}%`;
+            chart.appendChild(label);
+        };
+        const pad = 3 / H;
+        yLabel(env.max, pad, ' is-top');
+        yLabel(env.min, 1 - pad, ' is-bottom');
+        if (env.min < 0 && env.max > 0) {
+            const zeroAt = pad + (1 - 2 * pad) * (env.max / (env.max - env.min));
+            // Not on top of the other two.
+            if (zeroAt > 0.18 && zeroAt < 0.82) yLabel(0, zeroAt, ' is-zero');
+        }
+        box.appendChild(chart);
         const stats = el('div', 'compact-derived-preview-stats');
         const stat = (label, value) => {
             const item = el('span', 'compact-derived-stat');

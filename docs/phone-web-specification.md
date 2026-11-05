@@ -386,9 +386,15 @@ its second page. The phone has a page of its own, built like a calculator:
 - **Σ Combine several…** is a page: tick the variables (numbered in order),
   choose sum, mean, min or max, see the call, **Insert**.
 - **Checked as it is written**: compiled and run against the file. An error is
-  said under the field; a valid formula is drawn as a small preview (the values
-  per column, low to high, with a zero line), with its count, min, max and how
-  many are not numbers.
+  said under the field. A valid formula gets **Preview ↓** in that line, which
+  brings up the preview at the foot of the page: a 150 px chart of the values
+  (each column's low and high, as a plot of many samples draws them, with the
+  top, the bottom and zero marked at its left edge), with their count, min,
+  max and how many are not numbers.
+- **The cursor** is read from what the user does in the field and from
+  `selectionchange`, never from focus or blur: iOS moves the cursor to the
+  start when a page focuses a field and does not announce it when the page
+  puts it back. `e2e:compact-derived` emulates that.
 - **Footer**, always in reach: ✕ (discard), **Plot n** (put it on the plot on
   screen at once; on by default and remembered; only where a tap in Data adds a
   signal), and **Create** — enabled once there is a name and a valid formula,
