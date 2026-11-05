@@ -858,18 +858,44 @@ export default class CsvParser {
             const header = rows[headerIndex] || [];
             const width = header.length;
             if (width < 2) continue;
+            // A row with nothing written in it names nothing, so it is not a
+            // header candidate. It used to be one — _looksLikeHeaderRow calls
+            // an empty row a header — and it beat the real header on score,
+            // because the blank spacer sits right above the data and so pays
+            // no skipped-rows penalty while the title row two rows up pays for
+            // both the units row and the spacer. Logger exports that write
+            //     title / names / units / (blank) / data
+            // therefore arrived as column_1..column_N with the names and the
+            // units both thrown away.
+            if (!header.some(cell => String(cell ?? '').trim() !== '')) continue;
 
             let dataStartIndex = -1;
             let dataCount = 0;
             let skippedAfterHeader = 0;
-            const lookaheadEnd = Math.min(rows.length, headerIndex + 30);
+            // Two separate budgets, and the difference decides which row wins.
+            // Looking for the data: at most 30 rows below the header, so a
+            // header is never matched to a table far below it. Counting the
+            // data once found: 30 rows from where it starts. That second
+            // window used to be headerIndex + 30 as well, which made dataCount
+            // — worth 20 points a row — a measure of how close the candidate
+            // sat to the data rather than of how much data it explains. Every
+            // preamble row above the real header cost it one data row, so on a
+            // logger export the first data row itself outscored the title row
+            // three rows up and the file arrived unnamed. Anchored at
+            // the data, candidates that explain the same table now count the
+            // same rows, and the header bonus and the skip penalty decide.
+            const headerLookaheadEnd = Math.min(rows.length, headerIndex + 30);
 
             if (this._isDataLikeRow(header, delimiter)) {
                 dataStartIndex = headerIndex;
                 dataCount = 1;
             }
 
-            for (let i = headerIndex + 1; i < lookaheadEnd; i++) {
+            for (let i = headerIndex + 1; i < rows.length; i++) {
+                const end = dataStartIndex < 0
+                    ? headerLookaheadEnd
+                    : Math.min(rows.length, dataStartIndex + 30);
+                if (i >= end) break;
                 const row = rows[i] || [];
                 if (row.length !== width) {
                     if (dataCount === 0) skippedAfterHeader++;
