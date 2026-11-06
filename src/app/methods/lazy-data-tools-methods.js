@@ -242,7 +242,10 @@ proto._lazyStepStats = async function(data, timeSql, timeWindows = [], { signal 
 
 // The integral's gap threshold: 1.5 × the nominal step, when there is one.
 proto._lazySamplingGapThreshold = async function(data, timeSql, timeWindows = []) {
-    const steps = await this._lazyStepStats(data, timeSql, timeWindows);
+    // The file's own axis is measured once per file (_lazyAxisSteps), whichever
+    // tool asks first.
+    const ownAxis = !timeWindows.length && this._lazyToolTimeAxis(data).timeSql === timeSql;
+    const steps = ownAxis ? await this._lazyAxisSteps(data) : await this._lazyStepStats(data, timeSql, timeWindows);
     return steps.hasNominalStep
         ? { gapThreshold: steps.medianDt * GAP_THRESHOLD_FACTOR, hasNominalStep: true }
         : { gapThreshold: null, hasNominalStep: false };

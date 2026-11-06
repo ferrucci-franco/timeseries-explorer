@@ -1248,9 +1248,15 @@ export default class DuckDbSource {
         const projection = this._projectionSql(columnNames, timeInfo, null);
         const totalRows = Number(dataset.rows) || 0;
         const points = Math.max(2, Math.round(Number(overviewPoints) || 10000));
+        // The table was written in time order: every stride-th row by its
+        // position, numbered in a streaming window, and only those sorted.
+        // _overviewSql numbers the rows ORDER BY time, which sorts the whole
+        // table — on 20 M rows that ran the engine out of its 3 GiB.
+        const stride = Math.max(1, Math.ceil(totalRows / points));
         const dataSql = totalRows <= points
             ? `SELECT ${projection} FROM ${table} ORDER BY "__omv_time" ASC NULLS LAST`
-            : this._overviewSql(table, projection, '__omv_time', totalRows, points);
+            : `SELECT ${projection} FROM (SELECT *, ROW_NUMBER() OVER () - 1 AS __omv_rn FROM ${table})
+               WHERE __omv_rn % ${stride} = 0 OR __omv_rn = ${totalRows - 1} ORDER BY __omv_rn`;
         const result = await this._withConnectionLock(() => this._conn.query(dataSql));
         const projectedNames = result.schema.fields.map(f => f.name);
         const projectedTypes = result.schema.fields.map((f, i) => (i === 0 ? 'DOUBLE' : String(f.type || '').toUpperCase()));

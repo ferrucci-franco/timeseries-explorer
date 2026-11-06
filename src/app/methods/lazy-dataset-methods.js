@@ -81,6 +81,10 @@ proto._lazyRealAxisSteps = async function(data, { signal } = {}) {
     if (!timeSql) {
         const rows = await this._lazyRowCount(data, { signal });
         steps = { timed: false, generated: true, rows, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis', count: 0, totalMissing: 0, usableAxis: true, repeats: 0, nonFinite: 0 };
+    } else if (this._lazyToolTimeAxis(data).timeSql === timeSql) {
+        // The pass the filter, the integral and the fill read (_lazyAxisSteps):
+        // made once per file whichever tool asks first — 35 s on 20 M rows.
+        steps = { ...await this._lazyAxisSteps(data, { signal }), timed: true, generated: false };
     } else {
         steps = { timed: true, generated: false, ...await this._lazyStepStats(data, timeSql, [], { signal }) };
     }

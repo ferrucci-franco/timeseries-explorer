@@ -122,73 +122,85 @@ export function runCollapseRepeats({ time, columns = [], params = {} } = {}) {
  */
 export function createCollapser(params = {}, { columns = 1 } = {}) {
     const aggregate = normalizeCollapseAggregate(params.aggregate);
-    let open = null;   // { stamp, length, first[], last[], sum[], count[], max[], min[] }
+    // The open run, in place: one run at a time, so its accumulators are
+    // allocated once and reset, never per row.
+    let open = false;
+    let stamp = NaN;
+    let length = 0;
+    const first = new Float64Array(columns);
+    const last = new Float64Array(columns);
+    const sum = new Float64Array(columns);
+    const count = new Float64Array(columns);
+    const max = new Float64Array(columns);
+    const min = new Float64Array(columns);
     let rows = 0;
     let groups = 0;
     let done = false;
 
     // The run's accumulators read the row the way aggregateRun does, in order.
-    const take = (run, values, i) => {
+    const take = (values, i) => {
         for (let c = 0; c < columns; c++) {
             const value = Number(values[c][i]);
-            run.last[c] = value;
+            last[c] = value;
             if (!Number.isFinite(value)) continue;
-            run.sum[c] += value;
-            run.count[c]++;
-            if (value > run.max[c]) run.max[c] = value;
-            if (value < run.min[c]) run.min[c] = value;
+            sum[c] += value;
+            count[c]++;
+            if (value > max[c]) max[c] = value;
+            if (value < min[c]) min[c] = value;
         }
     };
-    const start = (stamp, values, i) => {
-        const run = {
-            stamp,
-            length: 1,
-            first: Array.from({ length: columns }, (_, c) => Number(values[c][i])),
-            last: new Array(columns).fill(NaN),
-            sum: new Float64Array(columns),
-            count: new Int32Array(columns),
-            max: new Float64Array(columns).fill(-Infinity),
-            min: new Float64Array(columns).fill(Infinity),
-        };
-        take(run, values, i);
-        return run;
+    const start = (t, values, i) => {
+        open = true;
+        stamp = t;
+        length = 1;
+        for (let c = 0; c < columns; c++) {
+            first[c] = Number(values[c][i]);
+            sum[c] = 0;
+            count[c] = 0;
+            max[c] = -Infinity;
+            min[c] = Infinity;
+        }
+        take(values, i);
     };
-    const close = (run, c) => {
+    const close = (c) => {
         // A run of one row is that row, whatever it holds; a longer one is
         // aggregated over its finite values, NaN when there is none.
-        if (run.length === 1) return run.first[c];
-        if (aggregate === 'first') return run.first[c];
-        if (aggregate === 'last') return run.last[c];
-        if (!run.count[c]) return NaN;
-        if (aggregate === 'max') return run.max[c];
-        if (aggregate === 'min') return run.min[c];
-        return run.sum[c] / run.count[c];
+        if (length === 1) return first[c];
+        if (aggregate === 'first') return first[c];
+        if (aggregate === 'last') return last[c];
+        if (!count[c]) return NaN;
+        if (aggregate === 'max') return max[c];
+        if (aggregate === 'min') return min[c];
+        return sum[c] / count[c];
     };
 
     function feed(time, values, final) {
         const n = time?.length || 0;
-        const t = [];
-        const outs = Array.from({ length: columns }, () => []);
-        const emit = (run) => {
-            t.push(run.stamp);
-            for (let c = 0; c < columns; c++) outs[c].push(close(run, c));
+        // At most one output per row read, and one for the run left open.
+        const t = new Float64Array(n + 1);
+        const outs = Array.from({ length: columns }, () => new Float64Array(n + 1));
+        let k = 0;
+        const emit = () => {
+            t[k] = stamp;
+            for (let c = 0; c < columns; c++) outs[c][k] = close(c);
+            k++;
             groups++;
         };
         for (let i = 0; i < n; i++) {
-            const stamp = Number(time[i]);
+            const value = Number(time[i]);
             rows++;
             // A finite stamp joins the open run when it is the same instant; a
             // non-finite one never joins anything (timestampRuns).
-            if (open && Number.isFinite(open.stamp) && stamp === open.stamp) {
-                open.length++;
-                take(open, values, i);
+            if (open && Number.isFinite(stamp) && value === stamp) {
+                length++;
+                take(values, i);
                 continue;
             }
-            if (open) emit(open);
-            open = start(stamp, values, i);
+            if (open) emit();
+            start(value, values, i);
         }
-        if (final && open) { emit(open); open = null; }
-        return { t: Float64Array.from(t), columns: outs.map(column => Float64Array.from(column)) };
+        if (final && open) { emit(); open = false; }
+        return { t: t.slice(0, k), columns: outs.map(column => column.slice(0, k)) };
     }
 
     return {
