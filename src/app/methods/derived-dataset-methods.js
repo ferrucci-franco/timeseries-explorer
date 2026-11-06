@@ -80,12 +80,13 @@ proto._derivedDatasetsUnder = function(sourceFileId) {
  * Compute a dataset from its recipe against the CURRENT data of its source.
  * @returns {Promise<{ data: object, summary: object }|null>} null when the source is gone.
  */
-proto._computeDerivedDataset = async function(recipe) {
+proto._computeDerivedDataset = async function(recipe, name = '') {
     const sourceData = recipe?.sourceFileId ? this.plotManager.files.get(recipe.sourceFileId)?.data : null;
     if (!sourceData) return null;
-    if (recipe.tool === 'resample') return this._computeResampleDataset(recipe.sourceFileId, sourceData, recipe);
+    // `name` is the dataset's, for the overlay a lazy source's job shows.
+    if (recipe.tool === 'resample') return this._computeResampleDataset(recipe.sourceFileId, sourceData, recipe, name);
     if (recipe.tool === 'xcorr') return this._computeXcorrDataset(recipe.sourceFileId, sourceData, recipe);
-    if (recipe.tool === 'collapse') return this._computeCollapseDataset(recipe.sourceFileId, sourceData, recipe);
+    if (recipe.tool === 'collapse') return this._computeCollapseDataset(recipe.sourceFileId, sourceData, recipe, name);
     throw new Error(`Unknown derived-dataset tool: ${recipe.tool}`);
 };
 
@@ -106,7 +107,7 @@ proto._recomputeDerivedDataset = async function(fileId, options = {}) {
     if (!recipe) return false;
     let result;
     try {
-        result = await this._computeDerivedDataset(recipe);
+        result = await this._computeDerivedDataset(recipe, entry.name);
     } catch (err) {
         if (err?.cancelled) return false;
         const name = this._fileDisplayName(entry);
@@ -139,7 +140,7 @@ proto._recomputeDerivedDataset = async function(fileId, options = {}) {
 proto._adoptDerivedDatasetData = function(fileId, data) {
     const entry = this.files.get(fileId);
     if (!entry) return;
-    entry.syntheticBytes = () => this._resampleCsvBytes(data);
+    entry.syntheticBytes = () => this._derivedDatasetBytes(data);
     // Whatever was written out before this rewrite is now a copy of data that
     // no longer exists here, so the row stops claiming it.
     entry.savedCopyName = '';
@@ -288,7 +289,7 @@ proto._restoreDerivedDatasets = async function(records, sourceFileId, fileMap) {
         };
         let fileId = null;
         try {
-            const result = await this._computeDerivedDataset(recipe);
+            const result = await this._computeDerivedDataset(recipe, record.name);
             if (!result) continue;
             fileId = this._registerDerivedDataset(recipe, record.name, result.data, { deferUi: true }).fileId;
         } catch (err) {
@@ -352,7 +353,7 @@ proto._registerDerivedDataset = function(recipe, name, data, options = {}) {
         matlab: null,
         resampledFrom: recipe.sourceFileId,
         derivedDataset: { ...recipe, params: this._cloneSerializable(recipe.params || {}) },
-        syntheticBytes: () => this._resampleCsvBytes(data),
+        syntheticBytes: () => this._derivedDatasetBytes(data),
     });
     // The source stays the active file: that is where the new dataset shows up
     // (under "Derived datasets"), and where the user was working.
@@ -369,6 +370,12 @@ proto._registerDerivedDataset = function(recipe, name, data, options = {}) {
         this._updateActionButtons?.();
     }
     return { fileId, replaced: false };
+};
+
+// The CSV a dataset writes out: from its arrays, or — a lazy dataset — from
+// its table, read whole (a promise; saveInMemoryFile awaits it).
+proto._derivedDatasetBytes = function(data) {
+    return data?._duckdb ? this._lazyDatasetCsvBytes(data) : this._resampleCsvBytes(data);
 };
 
 proto._findDerivedDatasetByName = function(sourceFileId, name) {

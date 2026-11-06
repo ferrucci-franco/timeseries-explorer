@@ -12,6 +12,7 @@ import { installFormulaEditorMethods } from './methods/formula-editor-methods.js
 import { installTimeAxisInspectorMethods } from './methods/time-axis-inspector-methods.js';
 import { installDataToolsMethods } from './methods/data-tools-methods.js';
 import { installLazyDataToolsMethods } from './methods/lazy-data-tools-methods.js';
+import { installLazyDatasetMethods } from './methods/lazy-dataset-methods.js';
 import { installResampleMethods } from './methods/resample-methods.js';
 import { installDerivedDatasetMethods } from './methods/derived-dataset-methods.js';
 import { installXcorrMethods } from './methods/xcorr-methods.js';
@@ -435,6 +436,7 @@ installFormulaEditorMethods(OpenModelicaViewer);
 installTimeAxisInspectorMethods(OpenModelicaViewer);
 installDataToolsMethods(OpenModelicaViewer);
 installLazyDataToolsMethods(OpenModelicaViewer);
+installLazyDatasetMethods(OpenModelicaViewer);
 installResampleMethods(OpenModelicaViewer);
 installDerivedDatasetMethods(OpenModelicaViewer);
 installXcorrMethods(OpenModelicaViewer);

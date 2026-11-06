@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a, 4b-1, 4b-2 y 4b-3 implementadas (secciones "Implementado (fase 4b-1)", "Implementado (fase 4b-2)" e "Implementado (fase 4b-3)"); Parquet sin red resuelto (§8); la 4b-4 diseñada (sección "Diseño (fase 4b)"); la base de DuckDB sigue en memoria, con OPFS medido y dejado para la 4b-4 (§10, "Decidido en la 4b-1"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b (4b-1 a 4b-4) implementadas (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"): toda herramienta de datos corre en lazy. De la 4b quedan sin hacer los sumideros de desborde a Parquet y la actualización en vivo por continuación (dicho en "Implementado (fase 4b-4)"); Parquet sin red resuelto (§8); la base de DuckDB sigue en memoria, con OPFS medido (§10, "Decidido en la 4b-1"); el resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -70,7 +70,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 
 | Función | En lazy | Cadena |
 |---|---|---|
-| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b**, ~~integral~~ en la 4a, ~~media móvil y detrend por media móvil~~ en la **4b-1**, ~~filtro~~ en la **4b-2**, ~~picos, relleno, reemplazo por interpolación e integral con *interpolar*~~ en la **4b-3**; quedan remuestreo, colapsar y correlación cruzada (**4b-4**) | `dataToolLazyDisabled` |
+| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | ~~deshabilitadas~~ **todas resueltas**: derivada y detrend en la **3b**, integral en la **4a**, media móvil y detrend por media móvil en la **4b-1**, filtro en la **4b-2**, picos, relleno, reemplazo por interpolación e integral con *interpolar* en la **4b-3**, remuestreo, colapsar y correlación cruzada en la **4b-4** | — |
 | Outliers por picos | ~~deshabilitados~~ **resueltos en la 4b-3** (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | — |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
@@ -224,9 +224,9 @@ puede correr sobre trozos. Tres familias:
 | Filtro IIR hacia adelante (`applyFilter`) | estado | forma incremental con estado, **hecho (4b-2)** | El paso del eje es la pasada de la 4a, sobre el archivo entero; el avance `D` retiene las últimas `D` salidas de cada tramo. Bit a bit. |
 | Filtro IIR de fase cero | dos pasadas, la segunda **al revés** | tramos cortos en memoria; los largos, ida a una tabla de trabajo y vuelta leyéndola por rangos de `rn` en orden inverso, que corrige el sumidero en su lugar, **hecho (4b-2)** | Leer un CSV al revés en SQL es `ORDER BY t DESC` = sort completo. Un trozo del sumidero al revés cuesta 11 ms (medido). |
 | Rellenar faltantes (`fillMissingValues`) | vecinos a ambos lados del hueco | mirada hacia adelante hasta la próxima muestra finita con tope, en el hilo principal, **hecho (4b-3)** | Los 7 métodos son locales (`data-tool-sampling.md` §2). Un hueco más largo que el tope se omite, como uno más largo que `maxGap`. |
-| Remuestreo (`runResample`) | bucket (estado en el borde) | forma incremental con cursor; la salida es un **dataset lazy** cuya tabla es el sumidero, **4b-4** | Precedente: *Resample* ya produce **un archivo nuevo**. El tope de 20 M puntos no aplica: la grilla no se materializa. |
-| Colapsar timestamps repetidos (`runCollapseRepeats`) | racha (estado) | forma incremental; dataset lazy, **4b-4** | — |
-| Correlación cruzada (`runCrossCorrelation`) | global (FFT de ambas) | la selección en memoria hasta un presupuesto, como la FFT, **4b-4** | La ruta directa O(N·L) no se paga a 20 M × 5 M. |
+| Remuestreo (`runResample`) | bucket (estado en el borde) | forma incremental con cursor; la salida es un **dataset lazy** cuya tabla es el sumidero, **hecho (4b-4)** | Precedente: *Resample* ya produce **un archivo nuevo**. El tope de 20 M puntos no aplica: la grilla no se materializa. |
+| Colapsar timestamps repetidos (`runCollapseRepeats`) | racha (estado) | forma incremental; dataset lazy, **hecho (4b-4)** | — |
+| Correlación cruzada (`runCrossCorrelation`) | global (FFT de ambas) | las dos columnas en memoria hasta un presupuesto (8 M filas), como la FFT, **hecho (4b-4)** | La ruta directa O(N·L) no se paga a 20 M × 5 M. |
 | FFT | global por definición | tope actual (`_fftHardMaxNfft`), correcto | Para series enormes la respuesta es otra (Welch por trozos), no "más memoria". |
 | Exportar CSV/Parquet exacto | puntual | stream → *sink* | Blueprint §2.5. Cierra el defecto de exportar el resumen. |
 | Guardar proyecto | — | guardar la **definición**, no los bytes (sección 6) | — |
@@ -285,7 +285,7 @@ En orden de valor visible por esfuerzo:
 | 2 | **Exportación exacta** para lazy sobre el stream (CSV; Parquet vía `COPY` directo) | 1 día | bajo; cierra el defecto §1.6 del blueprint, visible al usuario desde el primer día |
 | 3 | Herramientas puntuales y de ventana como **columnas virtuales SQL**: derivada, IQR, detrend (tras su pasada de agregados) | 1–2 días + paridad eager/lazy por herramienta | medio: semántica de no finitos y Δt = 0 |
 | 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
-| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital), **4b-3 hecha** (picos, relleno, reemplazo por interpolación, integral con *interpolar*) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
+| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital), **4b-3 hecha** (picos, relleno, reemplazo por interpolación, integral con *interpolar*), **4b-4 hecha** (remuestreo y colapsar como datasets lazy, correlación cruzada con presupuesto; sin los sumideros de desborde ni la continuación en vivo) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
 | 5 | Proyecto por definición para archivos lazy | 2–3 días | medio: formato de sesión, compatibilidad hacia atrás |
 | 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
 
@@ -565,7 +565,7 @@ de multiplicar por 0,001. El e2e crea una integral desde el panel.
 
 ### Diseño (fase 4b): las herramientas que no se escriben en SQL
 
-**Estado: diseño; la 4b-1, la 4b-2 y la 4b-3 están implementadas (secciones "Implementado (fase 4b-1)", "Implementado (fase 4b-2)" e "Implementado (fase 4b-3)", con lo que cambió respecto de este diseño); queda la 4b-4.** Lo que queda después de la 4a son las
+**Estado: diseño; las cuatro sub-fases están implementadas (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)", con lo que cambió respecto de este diseño); de este diseño quedan sin hacer los sumideros de desborde y la actualización en vivo por continuación.** Lo que queda después de la 4a son las
 herramientas cuya salida no es una expresión sobre la fila y sus vecinas
 inmediatas: media móvil (y el detrend por media móvil), filtro digital (hacia
 adelante y de fase cero), picos, rellenar faltantes, las políticas *interpolar*
@@ -848,7 +848,7 @@ Node, y 5 M filas en Chromium con el bundle `eh` de la app:
 | **4b-1** | El ejecutor, el sumidero en tabla con presupuesto y lectura por `_fromSql`, la forma incremental de la **media móvil** (y el detrend por media móvil), overlay con progreso y cancelación, sesión (re-ejecución), tests de borde de trozo, e2e. **Decidir base en OPFS o en memoria** midiendo las pasadas de la 3b y el escaneo de CSV bajo `memory_limit` (§10) | 2–3 días |
 | **4b-2** | **Filtro IIR** hacia adelante (estado, huecos con el umbral de la 4a, avance) y de **fase cero** (sumidero de trabajo, vuelta al revés) | 1–2 días |
 | **4b-3** | La familia sin estado en el pool de workers: **picos**, **rellenar faltantes**, reemplazo de outliers por interpolación, política *interpolar* de la integral; el tope de mirada hacia adelante — **hecha** | 2 días |
-| **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto; los sumideros de desborde (Parquet en OPFS en web si la base quedó en memoria, Parquet nativo en escritorio) con sus mediciones; actualización en vivo por continuación | 2–3 días |
+| **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto — **hecho**; los sumideros de desborde (Parquet en OPFS en web si la base quedó en memoria, Parquet nativo en escritorio) con sus mediciones y la actualización en vivo por continuación — **no hechos**, ver "Implementado (fase 4b-4)" | 2–3 días |
 
 Cada sub-fase es un PR con paridad bit a bit contra el kernel en memoria (el
 mismo patrón que `scripts/test-lazy-data-tools.mjs`), y la 4b-1 deja la
@@ -1307,6 +1307,156 @@ ir y volver por trozo —; va solo el detector de picos, que es el que cuesta
 los `half` que lee el filtro. Y la integral con *interpolar* no es "un kernel
 con estado más": es el mismo `createCumulativeIntegral` que conduce
 `computeIntegral` en memoria para las tres políticas.
+
+### Implementado (fase 4b-4): remuestreo y colapsar como datasets lazy, correlación cruzada con presupuesto
+
+Las tres herramientas de archivo. Con ellas, **toda herramienta de datos**
+está disponible en un archivo lazy, y da lo que da en memoria.
+
+**Remuestreo y colapsar timestamps repetidos** producen otro eje, y la app ya
+había decidido que eso es **otro archivo** (`data-tool-sampling.md` §5). En
+lazy, ese archivo es **un archivo lazy más**: el kernel recorre la fuente por
+trozos y escribe sus filas `(t, col, col, …)` a una **tabla de dataset**
+(`DuckDbSource.createDatasetTable`, `openDatasetWriter`,
+`src/data/chunk-executor.js` `runDatasetJob`), y al terminar la tabla se
+**adopta** como archivo lazy propio (`adoptDatasetTable`: el `{ metadata,
+variables, tree, _duckdb }` que arma el cargador para un archivo, con el
+resumen muestreado de la tabla, el conteo de filas exacto y la tabla como
+relación de toda consulta). Desde ahí es un archivo lazy como cualquier otro:
+zoom exacto, exportación, todas las herramientas de datos (la derivada de un
+remuestreo es SQL sobre su tabla; un remuestreo del remuestreo es otra
+tabla), y en el árbol, la lista de archivos y la tabla de transformaciones es
+un *derived dataset* con su receta (`entry.derivedDataset`), editable,
+recalculado al recargar la fuente y guardado en sesión como receta. Mientras
+el trabajo corre, la tabla es un sumidero del archivo fuente — cancelado o
+fallido se borra con los demás; cerrar la fuente a mitad de camino lo borra
+—; adoptada, pasa a ser el "sumidero" propio del dataset, y `release`
+(cerrar el dataset, reemplazarlo por una edición) la borra. **Cuenta contra el
+presupuesto de resultados** (`lazyResultsMb`): para un remuestreo el tamaño
+se conoce antes de leer nada — la grilla tiene `count` puntos — y el trabajo
+se rechaza antes de empezar si no entra; para un colapsar se estima `filas −
+repetidos`, y el escritor se detiene al llegar.
+
+**Los kernels, en forma incremental**, bit a bit con las funciones de array
+(`scripts/test-dataset-chunks.mjs`: 1296 cortes del remuestreo, 150 del
+colapsar):
+
+- `createResampler(layout, params, { columns })` en `regrid.js`: `push(x,
+  columnas)` recibe los tiempos y las columnas de un trozo y devuelve `{ t,
+  columns }`, los puntos de la grilla que ya puede colocar. La grilla no se
+  materializa: `resampleGridLayout` decide `first`, `last`, `step`, `count`
+  y si la define el *span* (modos *count* y *complete*) o el *step*, y
+  `resampleGridValue(layout, i)` coloca el punto `i` con la misma aritmética
+  que `buildResampleGrid` (que ahora la llama). Cada pedazo de grilla se
+  remuestrea con el propio `resampleValues` sobre las filas guardadas y
+  leídas: un método puntual necesita las **dos muestras siguientes** al punto
+  (el par que lo encierra y la vecina que lee la pendiente cúbica), y guarda
+  hacia atrás las dos anteriores al par; un *bin* necesita una muestra pasado
+  su borde derecho, y guarda desde la primera a partir de su borde izquierdo.
+  Dos parámetros nuevos de `resampleValues`, para quien le pasa **un pedazo**
+  de grilla: `gridStep` (el ancho de los bins es el paso de la grilla entera,
+  no el de dos puntos del pedazo) y `closeLastBin` (solo el último bin de la
+  grilla entera cierra su borde derecho). Los conteos (`emptyCounts`,
+  `bridgedCounts`, `gapLeftCounts`) se suman por columna.
+- `createCollapser({ aggregate }, { columns })` en `collapse-repeats.js`: una
+  racha puede cruzar dos trozos y se lleva abierta hasta que llega otro
+  sello (o el final); las sumas se hacen en el orden de las filas, como
+  `aggregateRun`; una racha de una fila es esa fila, con lo que tenga.
+
+**El eje, medido sobre el archivo entero.** `_lazyStepStats` (4a/4b-2)
+devuelve ahora también las **filas** servidas, los **sellos repetidos** (pasos
+iguales a cero) y los tiempos **no finitos**, en la misma pasada.
+`_lazyRealAxisSteps` (`lazy-dataset-methods.js`) la corre sobre la columna de
+tiempo real del archivo sea cual sea el modo en que el panel lee el eje —un
+eje leído por índice se remuestrea igual sobre sus tiempos reales, como en
+memoria—, y un eje generado cuenta las filas. De ahí salen el *span* (los
+extremos `MIN`/`MAX` que el cargador ya guarda; para un eje generado, `0` y
+`filas − 1`), el paso nominal (la mediana exacta: `medianStep` es la misma
+definición), los huecos, los repetidos y el largo. El panel lee todo eso:
+el resumen del remuestreo (`_resamplePlan`) y del colapsar
+(`_collapsePlan`), el Δt detectado, la nota de huecos, el largo y el Δt de la
+correlación; mientras la medición no está, dice que está midiendo
+(`dataToolLazyMeasuringAxis`) y se vuelve a sincronizar cuando llega. Lo que
+`resampleSourceAxis` rechaza sobre un array —un tiempo no finito, un paso
+atrás— se rechaza con los mismos códigos sobre la pasada.
+
+**La correlación cruzada** no es una herramienta por trozos y no se disfraza
+de una: es una FFT de las dos series enteras. Sobre un archivo lazy lee **las
+dos columnas enteras a memoria** (`_computeLazyXcorrInputs`, detrás del
+overlay con Cancelar), hasta `LAZY_XCORR_MAX_ROWS` = 8 M filas (128 MB para
+las dos), y corre el mismo kernel; un archivo con más filas se rechaza con la
+razón (`dataToolXcorrLazyTooLarge`: remuestrear a un Δt más grueso primero).
+El eje de retardos sale del paso medido sobre el archivo entero
+(`_lazyXcorrAxis`), no del resumen. El dataset resultante es chico (2·L + 1
+retardos) y sigue siendo un archivo en memoria, como antes.
+
+**En la app**: el selector ofrece las tres herramientas en archivos lazy;
+`_computeResampleDataset`, `_computeCollapseDataset` y `_computeXcorrDataset`
+despachan a la rama lazy, así que editar, recargar la fuente y restaurar una
+sesión pasan por el mismo camino (el nombre del dataset viaja hasta el overlay
+del trabajo). El botón *guardar a disco* de un dataset lazy escribe el CSV
+leyendo su tabla (`_lazyDatasetCsvBytes`, con tope de 60 M celdas como el
+de los datasets en memoria; `saveInMemoryFile` espera la promesa). Un
+proyecto con archivos lazy sigue rechazándose (fase 5): el dataset es uno de
+ellos.
+
+Lo que cambió respecto del diseño:
+
+- El modo *completar timestamps faltantes* del remuestreo **no se ofrece** en
+  lazy: su promesa ("todo paso es múltiplo entero de un Δt") se juzga con
+  `detectRegularSampling` sobre el array en memoria, y el resumen es una
+  muestra. El panel lo dice (`dataToolResampleCompleteLazy`). Una pasada SQL
+  que lo juzgue sobre el archivo es trabajo futuro, chico.
+- El tope de 20 M puntos de la grilla no aplica en lazy (`planResampleGrid`
+  acepta `maxPoints`); lo que acota es el presupuesto de resultados.
+- El CSV de un dataset lazy se construye en memoria con tope, no por el
+  stream de exportación de la fase 2 como proponía el diseño: ese stream es
+  del panel de exportación y arrastra su diálogo; el tope es el mismo que
+  tiene un dataset en memoria.
+
+**Lo que queda de la 4b-4 original, sin hacer**:
+
+- **Los sumideros de desborde a Parquet** (OPFS en web, nativo en escritorio).
+  La base sigue en memoria con presupuesto, como se decidió en la 4b-1 (§10):
+  con el ajuste por defecto entran ~65 M filas de resultados, y el presupuesto
+  rechaza o detiene lo que no entra con un mensaje que dice qué ajuste
+  cambiar. OPFS y Parquet no se pueden verificar en este entorno (la
+  extensión Parquet no se puede bajar, §8), y lo que los motivaba —no perder
+  un resultado grande— lo cubre el presupuesto a costa de rechazarlo. Vuelve
+  cuando un usuario lo pida con un caso.
+- **La actualización en vivo por continuación.** Hoy un archivo que crece
+  vuelve a correr el trabajo entero: la firma del sumidero incluye las filas
+  agregadas (4b-1). Seguir desde el estado final del kernel es una
+  optimización, no una diferencia de resultado, y los archivos en vivo son
+  chicos por naturaleza.
+- Reutilizar en escritorio un Parquet temporal si la huella de la fuente
+  coincide: depende del punto anterior.
+
+Pruebas:
+
+- `scripts/test-dataset-chunks.mjs`: el remuestreador contra `runResample`
+  en trozos de 1, 2, 7, 64, 1000 filas y al azar: todos los métodos × modos de
+  grilla × políticas de huecos, eje con jitter, caídas y sellos repetidos,
+  huecos y ±∞ en los valores, dos columnas, la grilla, los valores y los
+  conteos (1296 corridas); un pedazo de bins con `gridStep` y `closeLastBin`
+  es el pedazo de la llamada entera; el colapsador contra
+  `runCollapseRepeats` con los cinco agregados, rachas que cruzan trozos, NaN
+  y ±∞ en una racha, un sello no finito (150 corridas).
+- `scripts/test-lazy-datasets.mjs` (DuckDB-WASM en Node): la medición del
+  eje (filas, extremos, paso, repetidos, huecos, la sincronización del panel);
+  33 remuestreos creados por `_computeResampleDataset` contra el dataset en
+  memoria — grilla, columnas, conteos, metadata, etiquetas —, un eje
+  calendario y un eje generado; el colapsar con los cinco agregados y el
+  resumen del panel; la correlación cruzada contra el kernel en memoria (eje
+  de retardos incluido) y el rechazo por presupuesto; el dataset como archivo
+  lazy (zoom, una derivada sobre él, un remuestreo del remuestreo, el CSV con
+  todas sus filas, registrado con su receta, liberado con su tabla); cancelar y
+  el presupuesto sin dejar tabla.
+- `scripts/e2e-lazy-data-tools.mjs` (Chromium): el selector ofrece todas las
+  herramientas; un remuestreo (media, Δt 0,1 s: 42 000 filas), un colapsar
+  (430 sellos repetidos) y una correlación cruzada creados desde el panel sobre
+  el archivo lazy; los dos primeros son datasets lazy leídos de su tabla, el
+  tercero en memoria.
 
 ## 8. Riesgos y decisiones abiertas
 

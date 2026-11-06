@@ -198,7 +198,7 @@ export function medianStep(x) {
  *
  * @returns {{ step: number, count: number }}
  */
-export function planResampleGrid({ span, sourceStep, params = {} }) {
+export function planResampleGrid({ span, sourceStep, params = {}, maxPoints = RESAMPLE_MAX_POINTS }) {
     const settings = normalizeResampleParams(params);
     if (!(span > 0)) throw new DataToolError('dataToolResampleTooShort');
 
@@ -222,23 +222,20 @@ export function planResampleGrid({ span, sourceStep, params = {} }) {
     // source sample, or every method would have to extrapolate for it.
     const count = Math.floor(span / step + 1e-9) + 1;
     if (count < 2) throw new DataToolError('dataToolResampleStepTooLarge');
-    if (count > RESAMPLE_MAX_POINTS) throw new DataToolError('dataToolResampleTooManyPoints');
+    // A lazy file's grid is never held in memory (it is written to a table a
+    // chunk at a time), so its caller lifts the limit: `maxPoints` Infinity.
+    if (count > maxPoints) throw new DataToolError('dataToolResampleTooManyPoints');
     return { step, count };
 }
 
 /**
- * The target grid, in the SAME units as `x`.
- * @returns {{ grid: Float64Array, step: number, sourceStep: number }}
+ * Where the grid points go, without laying them out: enough to compute any one
+ * of them (resampleGridValue). Shared by buildResampleGrid and by the chunked
+ * resampler, so the two place every point on the same double.
+ * @returns {{ first, last, step, count, spanDefined, sourceStep }}
  */
-export function buildResampleGrid(x, params = {}) {
-    const n = x?.length || 0;
-    if (n < 2) throw new DataToolError('dataToolResampleTooShort');
-    const first = x[0];
-    const last = x[n - 1];
-    const sourceStep = medianStep(x);
-    const { step, count } = planResampleGrid({ span: last - first, sourceStep, params });
-
-    const grid = new Float64Array(count);
+export function resampleGridLayout(first, last, params = {}, sourceStep = NaN, { maxPoints = RESAMPLE_MAX_POINTS } = {}) {
+    const { step, count } = planResampleGrid({ span: last - first, sourceStep, params, maxPoints });
     // Which quantity is authoritative decides how the points are laid out, and it
     // is not a detail. `complete` and `count` are defined by the SPAN — the result
     // must start and end exactly where the file does — so the points are placed by
@@ -254,17 +251,33 @@ export function buildResampleGrid(x, params = {}) {
     // 0.25, so 0.25 it is, and only the final point is pulled back if accumulated
     // rounding pushed it past the source range.
     const gridMode = normalizeResampleParams(params).gridMode;
-    const spanDefined = gridMode === 'complete' || gridMode === 'count';
-    if (spanDefined && count > 1) {
-        const total = count - 1;
-        for (let i = 0; i < count; i++) grid[i] = first + ((last - first) * i) / total;
-        grid[0] = first;
-        grid[count - 1] = last;
-    } else {
-        for (let i = 0; i < count; i++) grid[i] = first + i * step;
-        if (grid[count - 1] > last) grid[count - 1] = last;
+    const spanDefined = (gridMode === 'complete' || gridMode === 'count') && count > 1;
+    return { first, last, step, count, spanDefined, sourceStep };
+}
+
+/** The i-th grid point of a layout. */
+export function resampleGridValue(layout, i) {
+    const { first, last, step, count, spanDefined } = layout;
+    if (spanDefined) {
+        if (i === 0) return first;
+        if (i === count - 1) return last;
+        return first + ((last - first) * i) / (count - 1);
     }
-    return { grid, step, sourceStep };
+    const value = first + i * step;
+    return i === count - 1 && value > last ? last : value;
+}
+
+/**
+ * The target grid, in the SAME units as `x`.
+ * @returns {{ grid: Float64Array, step: number, sourceStep: number }}
+ */
+export function buildResampleGrid(x, params = {}) {
+    const n = x?.length || 0;
+    if (n < 2) throw new DataToolError('dataToolResampleTooShort');
+    const layout = resampleGridLayout(x[0], x[n - 1], params, medianStep(x));
+    const grid = new Float64Array(layout.count);
+    for (let i = 0; i < layout.count; i++) grid[i] = resampleGridValue(layout, i);
+    return { grid, step: layout.step, sourceStep: layout.sourceStep };
 }
 
 /**
@@ -273,7 +286,10 @@ export function buildResampleGrid(x, params = {}) {
  * @param {object} params also accepts `sourceStep`, the file's nominal Δt. Given
  *   it, the point methods report how many target samples landed inside a source
  *   interval far WIDER than that step — samples produced by reaching across a
- *   stretch the file has no rows for.
+ *   stretch the file has no rows for. `gridStep` and `closeLastBin` are for a
+ *   caller handing a PIECE of the grid (the chunked resampler): the bins' width
+ *   is the whole grid's step, and only the whole grid's last bin closes on its
+ *   right edge.
  * @returns {{ values, emptyCount, gapLeftCount, bridgedCount }} Three different
  *   ways a target sample can relate to a hole, kept apart because the panel says
  *   something different about each: `emptyCount` came out NaN because the source
@@ -286,7 +302,7 @@ export function resampleValues(sourceValues, x, grid, params = {}) {
     const values = asFloat64(sourceValues);
     const sourceStep = Number(params.sourceStep);
     return RESAMPLE_BIN_METHODS.has(settings.method)
-        ? resampleByBin(values, x, grid, settings)
+        ? resampleByBin(values, x, grid, settings, { gridStep: Number(params.gridStep), closeLastBin: params.closeLastBin !== false })
         : resampleByPoint(values, x, grid, settings, sourceStep);
 }
 
@@ -368,11 +384,11 @@ function resampleByPoint(values, x, grid, settings, sourceStep = NaN) {
 // Bins are centred on their grid point: [t − step/2, t + step/2). Centring
 // rather than trailing keeps the reduced series in phase with the original, so
 // a feature does not shift by half a step on every resample.
-function resampleByBin(values, x, grid, settings) {
+function resampleByBin(values, x, grid, settings, { gridStep = NaN, closeLastBin = true } = {}) {
     const n = values.length;
     const m = grid.length;
     const out = new Float64Array(m).fill(NaN);
-    const step = m > 1 ? grid[1] - grid[0] : 0;
+    const step = Number.isFinite(gridStep) ? gridStep : (m > 1 ? grid[1] - grid[0] : 0);
     const half = step > 0 ? step / 2 : 0;
     let emptyCount = 0;
     let cursor = 0;
@@ -385,7 +401,7 @@ function resampleByBin(values, x, grid, settings) {
         const hi = grid[g] + half;
         // The last bin closes on its right edge; every other one is half-open, so
         // a sample never lands in two bins and the final sample is never dropped.
-        const closed = g === m - 1;
+        const closed = closeLastBin && g === m - 1;
         while (cursor < n && x[cursor] < lo) cursor++;
         if (wantsBucket) bucket.length = 0;
         let count = 0;
@@ -467,4 +483,144 @@ function hermite(xL, yL, mL, xR, yR, mR, x) {
         + (t3 - 2 * t2 + t) * h * mL
         + (-2 * t3 + 3 * t2) * yR
         + (t3 - t2) * h * mR;
+}
+
+// ── A chunk at a time ──────────────────────────────────────────────────────
+
+/**
+ * The resampler fed the source a chunk at a time, giving the grid a piece at a
+ * time: what the chunked executor runs over a file too large to hold
+ * (src/data/chunk-executor.js, runDatasetJob). The grid is never laid out
+ * whole — each piece is placed by resampleGridValue — and each piece is
+ * resampled by resampleValues over the source rows kept and read so far, so
+ * the doubles are those buildResampleGrid and resampleValues give over the
+ * arrays in memory.
+ *
+ *   const resampler = createResampler(layout, { ...params, sourceStep }, { columns: 2 });
+ *   for (const chunk of chunks) emit(resampler.push(chunk.x, [a, b]));
+ *   emit(resampler.flush());
+ *
+ * `push(x, columns)` takes the source times of a chunk, ascending, and one
+ * array per column; it returns `{ t, columns }`: the grid points that can now
+ * be placed — a point method needs the two source samples after the point
+ * (the bracketing pair and the neighbour a cubic slope reads); a bin needs a
+ * source sample past its right edge — and their values. `flush()` gives the
+ * rest, with the end of the series known: the last bin closes on its edge, the
+ * last grid point may sit on the last sample. `report()` has the counts
+ * resampleValues gives, summed per column.
+ *
+ * Memory held: the source rows a later grid point still reads (two before the
+ * bracketing pair) and the chunk being read.
+ */
+export function createResampler(layout, params = {}, { columns = 1 } = {}) {
+    const settings = normalizeResampleParams(params);
+    const sourceStep = Number(params.sourceStep);
+    const bin = RESAMPLE_BIN_METHODS.has(settings.method);
+    const count = layout.count;
+    const gridStep = count > 1 ? resampleGridValue(layout, 1) - resampleGridValue(layout, 0) : 0;
+    const half = bin && gridStep > 0 ? gridStep / 2 : 0;
+    const grid = i => resampleGridValue(layout, i);
+
+    let xs = new Float64Array(0);
+    let ys = Array.from({ length: columns }, () => new Float64Array(0));
+    let next = 0;          // first grid point not placed yet
+    let done = false;
+    const emptyCounts = new Array(columns).fill(0);
+    const bridgedCounts = new Array(columns).fill(0);
+    const gapLeftCounts = new Array(columns).fill(0);
+
+    const append = (x, cols) => {
+        if (!x?.length) return;
+        const grown = new Float64Array(xs.length + x.length);
+        grown.set(xs, 0);
+        grown.set(x, xs.length);
+        xs = grown;
+        ys = ys.map((held, c) => {
+            const column = asFloat64(cols[c]);
+            const out = new Float64Array(held.length + column.length);
+            out.set(held, 0);
+            out.set(column, held.length);
+            return out;
+        });
+    };
+
+    // The last source index at or before t, as resampleByPoint finds it.
+    const lastAtOrBefore = (t) => {
+        let lo = 0;
+        let hi = xs.length - 1;
+        if (hi < 0 || xs[0] > t) return 0;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (xs[mid] <= t) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
+    };
+    const firstAtOrAfter = (t) => {
+        let lo = 0;
+        let hi = xs.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (xs[mid] < t) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+
+    function run(final) {
+        const n = xs.length;
+        // How far the grid can go with the rows in view.
+        let end = next;
+        if (final) {
+            end = count;
+        } else if (bin) {
+            if (n) while (end < count && grid(end) + half <= xs[n - 1]) end++;
+        } else if (n >= 2) {
+            while (end < count && grid(end) < xs[n - 2]) end++;
+        }
+        if (end <= next) return { t: new Float64Array(0), columns: ys.map(() => new Float64Array(0)) };
+
+        const piece = new Float64Array(end - next);
+        for (let i = next; i < end; i++) piece[i - next] = grid(i);
+        const outputs = ys.map((column, c) => {
+            const result = resampleValues(column, xs, piece, {
+                ...settings, sourceStep, gridStep, closeLastBin: end === count,
+            });
+            emptyCounts[c] += result.emptyCount;
+            bridgedCounts[c] += result.bridgedCount;
+            gapLeftCounts[c] += result.gapLeftCount;
+            return result.values;
+        });
+        next = end;
+
+        // Keep what the next grid point reads: for a point method the two rows
+        // before its bracketing pair (a cubic slope looks one past it), for a bin
+        // the first row at or after its left edge.
+        if (next < count && !final) {
+            const t = grid(next);
+            const keep = bin ? firstAtOrAfter(t - half) : Math.max(0, lastAtOrBefore(t) - 1);
+            if (keep > 0) {
+                xs = xs.slice(keep);
+                ys = ys.map(column => column.slice(keep));
+            }
+        }
+        return { t: piece, columns: outputs };
+    }
+
+    return {
+        push(x, cols) {
+            if (done) throw new Error('resampler: push after flush');
+            append(x, cols);
+            return run(false);
+        },
+        flush() {
+            if (done) throw new Error('resampler: flush twice');
+            done = true;
+            const out = run(true);
+            xs = new Float64Array(0);
+            ys = ys.map(() => new Float64Array(0));
+            return out;
+        },
+        report: () => ({ emptyCounts: [...emptyCounts], bridgedCounts: [...bridgedCounts], gapLeftCounts: [...gapLeftCounts], step: layout.step, sourceStep, count }),
+    };
 }

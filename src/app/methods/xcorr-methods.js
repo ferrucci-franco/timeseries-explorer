@@ -64,6 +64,8 @@ proto._toggleXcorrHelpPopover = function(show) {
  * @returns {{ ok: boolean, code: string, kind: string, unit: string, dt: number, length: number }}
  */
 proto._xcorrAxis = function(data) {
+    // A lazy file's axis is measured over the whole file (lazy-dataset-methods.js).
+    if (data && this._isDataToolLazyData?.(data) && this._lazyXcorrAxis) return this._lazyXcorrAxis(data);
     const time = this._resampleTimeContext?.(data) || { values: null, kind: 'index', variable: null };
     const length = Number(data?.metadata?.numTimesteps) || Number(time.values?.length) || 0;
     const blank = { ok: false, code: '', kind: time.kind, unit: '', dt: NaN, length };
@@ -247,8 +249,11 @@ proto._computeXcorrDataset = async function(sourceFileId, sourceData, recipe) {
     const y = recipe.params?.second;
     const xVar = sourceData?.variables?.[x];
     const yVar = sourceData?.variables?.[y];
-    if (!xVar?.data || !yVar?.data) throw new kernelShared.DataToolError('dataToolChooseVariable');
-    const axis = this._xcorrAxis(sourceData);
+    const lazy = this._isDataToolLazyData?.(sourceData);
+    if (!xVar || !yVar || (!lazy && (!xVar.data || !yVar.data))) throw new kernelShared.DataToolError('dataToolChooseVariable');
+    // On a lazy file the two columns are read whole, up to a budget: the
+    // cross-correlation is a transform of both series, not a chunked tool.
+    const axis = lazy ? await this._lazyXcorrAxisAsync(sourceData) : this._xcorrAxis(sourceData);
     if (!axis.ok) throw new kernelShared.DataToolError(axis.code);
     const lags = lagSamples(Number(recipe.params?.maxLag), axis);
     const params = normalizeXcorrParams({
@@ -256,7 +261,8 @@ proto._computeXcorrDataset = async function(sourceFileId, sourceData, recipe) {
         normalization: recipe.params?.normalization,
         removeMean: recipe.params?.removeMean,
     }, axis.length);
-    const result = await this._runXcorrOffThread(xVar.data, yVar.data, params);
+    const inputs = lazy ? await this._computeLazyXcorrInputs(sourceData, x, y, axis.length) : { x: xVar.data, y: yVar.data };
+    const result = await this._runXcorrOffThread(inputs.x, inputs.y, params);
     const data = this._buildXcorrData(sourceData, recipe, axis, result);
     return { data, result, axis };
 };
@@ -354,10 +360,6 @@ proto.commitXcorrTool = async function(options = {}) {
     const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
     if (!data || !outputName) {
         this._setOutlierMessage(() => i18n.t('outlierLoadFileFirst'), 'error');
-        return null;
-    }
-    if (this._isDataToolLazyData(data)) {
-        this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
         return null;
     }
     const plan = this._xcorrPlan(data);

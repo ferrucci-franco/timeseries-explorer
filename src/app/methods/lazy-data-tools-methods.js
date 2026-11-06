@@ -207,12 +207,18 @@ proto._lazyStepStats = async function(data, timeSql, timeWindows = [], { signal 
         `COUNT(*) FILTER (WHERE ${d} < 0 AND isfinite(${d}))::BIGINT AS neg`,
         `COUNT(*) FILTER (WHERE ${d} > 0 AND isfinite(${d}))::BIGINT AS pos`,
         `COUNT(*) FILTER (WHERE NOT COALESCE(isfinite(${t}), FALSE))::BIGINT AS bad`,
+        // Rows at the same instant as the row before: what collapsing them would remove.
+        `COUNT(*) FILTER (WHERE ${d} = 0)::BIGINT AS zero`,
     ].join(', '), { signal });
     // What the fill of missing samples asks of the axis before it interpolates
     // in time rather than on row numbers (interpolationCoordinates in
     // src/compute/kernels/interpolate.js): every time finite, none going back.
     const usableAxis = counts.bad === 0 && counts.neg === 0;
-    const none = (reason, medianDt = NaN) => ({ medianDt, hasNominalStep: false, reason, count: 0, totalMissing: 0, usableAxis });
+    // The rows the queries serve, the repeated stamps and the non-finite times
+    // ride along: the resampler, the collapse and the cross-correlation read
+    // them from the same pass.
+    const extra = { usableAxis, rows: counts.n, repeats: counts.zero, nonFinite: counts.bad };
+    const none = (reason, medianDt = NaN) => ({ medianDt, hasNominalStep: false, reason, count: 0, totalMissing: 0, ...extra });
     if (counts.n < 3) return none('tooFewSamples');
     if (counts.neg > 0) return none('nonMonotonic');
     if (counts.pos < 2) return none('tooFewSamples');
@@ -231,7 +237,7 @@ proto._lazyStepStats = async function(data, timeSql, timeWindows = [], { signal 
         `COALESCE(SUM(GREATEST(1, round(${d} / ${doubleLiteral(median)}) - 1)) FILTER (WHERE ${d} > ${doubleLiteral(threshold)}), 0) AS missing`,
     ].join(', '), { signal });
     if (counts.pos >= GAP_STEP_MIN_SAMPLES && agree / counts.pos < GAP_STEP_MIN_AGREEMENT) return none('irregularStep', median);
-    return { medianDt: median, hasNominalStep: true, reason: null, count: gaps, totalMissing: missing, usableAxis };
+    return { medianDt: median, hasNominalStep: true, reason: null, count: gaps, totalMissing: missing, ...extra };
 };
 
 // The integral's gap threshold: 1.5 × the nominal step, when there is one.

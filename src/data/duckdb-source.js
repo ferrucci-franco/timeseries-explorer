@@ -1115,6 +1115,181 @@ export default class DuckDbSource {
         return new arrow.Table(columns);
     }
 
+    // ─── Dataset tables: a derived dataset of a lazy file ────────────────────
+    //
+    // A resample or a collapse of a lazy file has an axis of its own and a row
+    // count of its own: not a column alongside the file (a sink) but another
+    // file. The job writes `(t, col, col, …)` rows to a table, appended in
+    // order, and when it is done the table is adopted as a lazy dataset of its
+    // own (adoptDatasetTable), read by every lazy query like a file. While the
+    // job runs the table is a sink of the source file — cancelled or failed, it
+    // goes with the others; closing the source mid-run drops it — and it counts
+    // against the sinks' budget. Adopted, it belongs to the dataset, and goes
+    // when the dataset is closed (release).
+
+    /**
+     * @param {object} legacyData the source file
+     * @param {{ timeColumn: string, columns: string[] }} shape column names,
+     *   the time first; all DOUBLE
+     * @returns {Promise<{ table, timeColumn, columns, rows, bytes, dataset: true }>}
+     */
+    async createDatasetTable(legacyData, { timeColumn, columns }) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('createDatasetTable: data is not DuckDB-backed (eager mode)');
+        if (!columns?.length) throw new Error('createDatasetTable: no columns');
+        await this.init();
+        const id = ++this._nextSinkId;
+        const table = `${meta.baseTableName || meta.tableName}_dataset_${id}`;
+        const names = [timeColumn, ...columns];
+        if (new Set(names).size !== names.length) throw new Error('createDatasetTable: duplicate column names');
+        const definition = names.map(name => `${this._quoteIdent(name)} DOUBLE`).join(', ');
+        await this._withConnectionLock(() => this._conn.query(`CREATE TABLE ${table} (${definition})`));
+        const dataset = { table, timeColumn, columns: columns.slice(), rows: 0, bytes: 0, dataset: true };
+        (meta.sinks ||= new Map()).set(table, dataset);
+        this._liveSinks.set(table, dataset);
+        return dataset;
+    }
+
+    /**
+     * Rows for a dataset table: `append(t, columns)` takes the times of the rows
+     * (ascending) and one array per column, in the table's order. Inserted
+     * `chunkRows` at a time on a connection of the writer's own, held to the
+     * sinks' budget (the time counts as a column). `finish()` compacts the
+     * table; `abort()` drops it.
+     */
+    openDatasetWriter(legacyData, dataset, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS } = {}) {
+        const nColumns = dataset.columns.length;
+        const bufferRows = Math.max(1, Math.round(Number(chunkRows) || STREAM_DEFAULT_CHUNK_ROWS));
+        let conn = null;
+        let time = new Float64Array(bufferRows);
+        let values = Array.from({ length: nColumns }, () => new Float64Array(bufferRows));
+        let buffered = 0;
+        let closed = false;
+        const insert = async () => {
+            if (!buffered) return;
+            const budget = this.sinkBudget();
+            if (budget.used + this.sinkBytesFor(buffered, nColumns) > budget.limit) throw sinkBudgetError(budget);
+            conn ||= await this._openStreamConnection();
+            const columns = { [dataset.timeColumn]: this._doubleVector(time, buffered) };
+            dataset.columns.forEach((name, c) => { columns[name] = this._doubleVector(values[c], buffered); });
+            await conn.insertArrowTable(new arrow.Table(columns), { name: dataset.table, create: false });
+            dataset.rows += buffered;
+            dataset.bytes = this.sinkBytesFor(dataset.rows, nColumns);
+            buffered = 0;
+            time = new Float64Array(bufferRows);
+            values = Array.from({ length: nColumns }, () => new Float64Array(bufferRows));
+        };
+        return {
+            dataset,
+            append: async (t, columns) => {
+                if (closed) throw new Error('dataset writer: append after close');
+                if (!t?.length) return;
+                if (columns.length !== nColumns) throw new Error(`dataset writer: ${columns.length} columns for a table of ${nColumns}`);
+                let i = 0;
+                while (i < t.length) {
+                    const take = Math.min(t.length - i, bufferRows - buffered);
+                    time.set(t.subarray(i, i + take), buffered);
+                    for (let c = 0; c < nColumns; c++) values[c].set(columns[c].subarray(i, i + take), buffered);
+                    buffered += take;
+                    i += take;
+                    if (buffered === bufferRows) await insert();
+                }
+            },
+            finish: async () => {
+                if (closed) return dataset;
+                closed = true;
+                try {
+                    await insert();
+                    try { await conn?.query('CHECKPOINT'); } catch (_) { /* best effort */ }
+                } finally {
+                    await this._closeStreamConnection(conn);
+                    conn = null;
+                }
+                return dataset;
+            },
+            abort: async () => {
+                closed = true;
+                await this._closeStreamConnection(conn);
+                conn = null;
+                await this.dropSink(legacyData, dataset.table);
+            },
+        };
+    }
+
+    /**
+     * A dataset table as a lazy file of its own: the `{ metadata, variables,
+     * tree, _duckdb }` the lazy loader builds for a file, with an overview
+     * sampled from the table, the row count known, and the table as the
+     * relation every query reads. The table stops being a sink of the source
+     * (it is no longer dropped with the source's sinks) and becomes the
+     * dataset's: `release(dataset)` drops it.
+     *
+     * @param {object} legacyData the source file the table was a sink of
+     * @param {object} dataset from createDatasetTable, written and finished
+     * @param {{ timeName?: string, timeKind?: 'numeric'|'datetime', overviewPoints?: number }} options
+     *   `timeName` names the axis variable (the column's name by default);
+     *   a datetime axis holds epoch milliseconds, as the lazy loader's does.
+     */
+    async adoptDatasetTable(legacyData, dataset, { timeName = null, timeKind = 'numeric', overviewPoints = 10000 } = {}) {
+        const sourceMeta = legacyData?._duckdb;
+        if (!sourceMeta?.sinks?.has(dataset.table)) throw new Error('adoptDatasetTable: not a dataset table of this file');
+        sourceMeta.sinks.delete(dataset.table);
+        const table = dataset.table;
+        const columnNames = [dataset.timeColumn, ...dataset.columns];
+        const columnTypes = columnNames.map(() => 'DOUBLE');
+        const kind = timeKind === 'datetime' ? 'datetime' : 'numeric';
+        const timeInfo = {
+            name: timeName || dataset.timeColumn,
+            description: kind === 'datetime' ? '[datetime]' : '',
+            timeKind: kind,
+            sourceNames: [dataset.timeColumn],
+            sql: this._quoteIdent(dataset.timeColumn),
+        };
+        const projection = this._projectionSql(columnNames, timeInfo, null);
+        const totalRows = Number(dataset.rows) || 0;
+        const points = Math.max(2, Math.round(Number(overviewPoints) || 10000));
+        const dataSql = totalRows <= points
+            ? `SELECT ${projection} FROM ${table} ORDER BY "__omv_time" ASC NULLS LAST`
+            : this._overviewSql(table, projection, '__omv_time', totalRows, points);
+        const result = await this._withConnectionLock(() => this._conn.query(dataSql));
+        const projectedNames = result.schema.fields.map(f => f.name);
+        const projectedTypes = result.schema.fields.map((f, i) => (i === 0 ? 'DOUBLE' : String(f.type || '').toUpperCase()));
+        const legacy = this._buildLegacyFromArrow(result, projectedNames, projectedTypes, 0, totalRows, timeInfo, { format: 'dataset' });
+        // The overview keeps the first and the last row, so its ends are the
+        // table's; the count is the table's, not the overview's.
+        legacy.metadata.numTimesteps = totalRows;
+        legacy.metadata.format = 'dataset';
+        legacy.metadata.csv = false;
+        legacy._duckdb = {
+            source: this,
+            handle: null,
+            tableName: table,
+            baseTableName: table,
+            combinedViewName: null,
+            appendTableName: null,
+            readExpr: table,
+            readWhere: '',
+            timeColumn: dataset.timeColumn,
+            timeExprSql: timeInfo.sql,
+            generatedTime: false,
+            projectionSql: projection,
+            rawColumnNames: columnNames.slice(),
+            rawColumnTypes: columnTypes,
+            csvProfile: null,
+            totalRows,
+            overviewPoints: Math.min(points, Math.max(2, totalRows)),
+            viewMode: false,
+            appendRows: 0,
+            appendBytes: 0,
+            deltaHandles: [],
+            // Its own table is its first "sink": dropped when it is released,
+            // and still counted against the budget while it lives.
+            sinks: new Map([[table, dataset]]),
+            dataset: true,
+        };
+        return legacy;
+    }
+
     // ─── Work tables: a job's second pass ────────────────────────────────────
     //
     // A zero-phase filter runs forward over a stretch as long as the file, then

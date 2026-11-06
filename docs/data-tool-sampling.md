@@ -471,9 +471,12 @@ away.
   Both were considered and deferred: the elliptic prototype needs Jacobi
   elliptic functions, and a live |H(f)| plot in the sidebar is a feature of its
   own.
-- **Nothing for lazy DuckDB files.** Both tools need the values, and a lazy file
-  holds column references. Same restriction the derivative and integral already
-  carry.
+- ~~**Nothing for lazy DuckDB files.**~~ Done: on a file in memory-saving mode a
+  resample and a collapse are lazy datasets of their own, written to a table a
+  chunk at a time, and the cross-correlation reads the two columns whole up to
+  a budget (`docs/any-size-files.md`, "Implementado (fase 4b-4)"). What a lazy
+  file still does not offer is the `complete` grid mode, whose regularity test
+  runs over an array in memory.
 
 ## 8. Tests
 

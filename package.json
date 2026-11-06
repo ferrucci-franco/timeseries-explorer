@@ -127,6 +127,8 @@
     "test:lazy-filter": "node scripts/test-lazy-filter.mjs",
     "test:window-chunks": "node scripts/test-window-chunks.mjs",
     "test:lazy-window-tools": "node scripts/test-lazy-window-tools.mjs",
+    "test:dataset-chunks": "node scripts/test-dataset-chunks.mjs",
+    "test:lazy-datasets": "node scripts/test-lazy-datasets.mjs",
     "test:dropped-traces-batch": "node scripts/test-dropped-traces-batch.mjs",
     "test:loading-cancel-button": "node scripts/test-loading-cancel-button.mjs",
     "test:loading-cancel-interrupts": "node scripts/test-loading-cancel-interrupts.mjs",

@@ -163,6 +163,54 @@ export async function runChunkedJob({
     }
 }
 
+/**
+ * A job whose output is not a column alongside the file but a table of its
+ * own — a resample (another grid), a collapse (one row per instant): the
+ * kernel gives `{ t, columns }` rows, however many, and they are appended to
+ * a dataset table (DuckDbSource.createDatasetTable / openDatasetWriter) in
+ * order. The time of every source row is read (`x`); the kernel decides which
+ * rows it can give (src/compute/kernels/regrid.js createResampler,
+ * collapse-repeats.js createCollapser).
+ *
+ * @param {object} job
+ * @param {object} job.data a lazy file
+ * @param {string[]} job.sourceNames the variables the kernel reads
+ * @param {{ push(chunk), flush() }} job.kernel fed the stream's chunks in
+ *   order; returns (or resolves to) `{ t, columns }` of output rows
+ * @param {object} job.writer from DuckDbSource.openDatasetWriter
+ * @param {number} [job.chunkRows]
+ * @param {AbortSignal} [job.signal] cancels: the stream stops and the table is dropped
+ * @param {(progress: { rows: number, totalRows: number|null, pass: 1 }) => void} [job.onProgress]
+ * @returns {Promise<{ rows: number, written: number }>} rows read, rows written
+ */
+export async function runDatasetJob({ data, sourceNames, kernel, writer, chunkRows, signal = null, onProgress = null }) {
+    const source = data?._duckdb?.source;
+    if (!source?.streamJobColumns) throw new Error('runDatasetJob: the file is not lazy');
+    const totalRows = Number.isFinite(Number(data._duckdb.totalRows)) ? Number(data._duckdb.totalRows) : null;
+    let rowsRead = 0;
+    let written = 0;
+    const emit = async (out) => {
+        if (!out?.t?.length) return;
+        await writer.append(out.t, out.columns);
+        written += out.t.length;
+    };
+    try {
+        for await (const chunk of source.streamJobColumns(data, sourceNames, { chunkRows, signal, withTime: true })) {
+            rowsRead += chunk.rows.length;
+            await emit(await kernel.push(chunk));
+            onProgress?.({ rows: rowsRead, totalRows, pass: 1 });
+            if (signal?.aborted) throw abortError();
+        }
+        await emit(await kernel.flush());
+        if (signal?.aborted) throw abortError();
+        await writer.finish();
+        return { rows: rowsRead, written };
+    } catch (err) {
+        await writer.abort();
+        throw err;
+    }
+}
+
 function abortError() {
     const err = new Error('Job cancelled');
     err.name = 'AbortError';

@@ -4323,7 +4323,8 @@ proto.saveInMemoryFile = async function(fileId) {
     const filename = base.toLowerCase().endsWith(extension) ? base : `${base}${extension}`;
 
     try {
-        const bytes = entry.syntheticBytes();
+        // A lazy dataset reads its table: a promise.
+        const bytes = await entry.syntheticBytes();
         const blob = new Blob([bytes], { type: 'text/csv' });
         const picker = globalThis.showSaveFilePicker;
         if (typeof picker === 'function') {

@@ -123,7 +123,7 @@ proto._readProjectEntryBytes = async function(entry, member = null) {
         // A resampled dataset was computed, never read: it has no bytes until it
         // is asked for them. Serializing lazily keeps a multi-million-sample grid
         // out of memory until a project save actually needs it.
-        if (!bytes && typeof entry?.syntheticBytes === 'function') bytes = toBytes(entry.syntheticBytes());
+        if (!bytes && typeof entry?.syntheticBytes === 'function') bytes = toBytes(await entry.syntheticBytes());
         if (!bytes) bytes = toBytes(await this._readLatestBuffer(entry));
         if (bytes) return bytes;
     } catch (err) {
