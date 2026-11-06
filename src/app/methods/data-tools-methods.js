@@ -2636,6 +2636,12 @@ proto._detectOutlierIndexes = function(values, method, params = {}) {
     }
 };
 
+// Hard bounds over an array: the overview of a lazy file (whose exact count
+// is SQL, _countLazyBoundsOutliers), or a definition restored without a file.
+proto._detectBoundsOutliers = function(values, params = {}) {
+    return this._detectOutlierIndexes(values, 'bounds', params);
+};
+
 proto._replaceOutliersWithNaN = function(values, outlierIndexes) {
     return replaceOutliersWithNaN(values, outlierIndexes);
 };

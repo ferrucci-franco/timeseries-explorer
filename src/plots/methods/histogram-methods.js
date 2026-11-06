@@ -27,9 +27,10 @@ const finiteOrNull = (value) => {
 };
 const hasFinite = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 
-// Phase 1 is eager-only. Lazy DuckDB-backed exact histograms are Phase 2; until
-// then a lazy variable is refused rather than silently histogramming its ~10k
-// overview reservoir (which would misrepresent modes, tails and percentages).
+// A lazy (DuckDB-backed) trace is histogrammed over every row of its file
+// (histogram-lazy-methods.js), never over its ~10k-row overview, which would
+// misrepresent modes, tails and percentages. One whose values exist only on
+// the overview (no SQL of their own) is refused with a warning.
 function isLazyTrace(app, trace) {
     return !!app.files.get(trace.fileId)?.data?._duckdb;
 }
@@ -527,10 +528,26 @@ proto._histogramSamplesForTrace = function(trace, range) {
     return values.slice(start, end);
 };
 
-proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
+proto._recomputeHistogram = async function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.histogramDiv || plot.mode !== 'histogram') return;
     const token = (plot._histToken || 0) + 1;
     plot._histToken = token;
+    // A recompute supersedes the one still reading a lazy file.
+    plot._histAbort?.abort();
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    plot._histAbort = controller;
+    try {
+        await this._recomputeHistogramNow(panelId, plot, token, controller?.signal || null);
+    } catch (err) {
+        if (err?.name === 'AbortError' || plot._histToken !== token) return;
+        console.warn('Histogram: could not compute', err);
+        this._setHistogramStatus(plot, '', 'warning', [`${i18n.t('histogramLazyFailed')}: ${err?.message || err}`]);
+    } finally {
+        if (plot._histAbort === controller) plot._histAbort = null;
+    }
+};
+
+proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
     const state = this._ensureHistogramState(plot);
     const range = state.rangeFull ? null : this._activeHistogramRange(plot);
     const allTraces = plot.traces || [];
@@ -543,18 +560,23 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
         return;
     }
 
-    // Phase 1: refuse lazy traces rather than histogramming their overview.
-    // Hidden (legendonly) traces are KEPT so their legend entry stays greyed
-    // instead of vanishing when the user toggles it.
-    const eager = [];
+    // A lazy trace is read over every row of its file; one with no exact
+    // source (its values exist only on the overview) is refused rather than
+    // histogrammed from the overview. Hidden (legendonly) traces are KEPT so
+    // their legend entry stays greyed instead of vanishing when toggled.
+    const usable = [];
+    const lazy = [];
     for (const trace of allTraces) {
         if (isLazyTrace(this, trace)) {
-            if (this._isVisible(trace)) warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${i18n.t('histogramLazyUnsupported')}`);
-        } else {
-            eager.push(trace);
+            if (!this._lazyHistogramTraceHasSource(trace)) {
+                if (this._isVisible(trace)) warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${i18n.t('histogramLazyUnsupported')}`);
+                continue;
+            }
+            lazy.push(trace);
         }
+        usable.push(trace);
     }
-    if (!eager.length) {
+    if (!usable.length) {
         this._setHistogramStatus(plot, '', 'warning', warnings);
         state.warnings = warnings;
         Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
@@ -564,16 +586,33 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
     // Pass 1: per-trace samples + finite stats for every eager trace. This is
     // the part whose cost scales with the range, so it is what the auto-limit
     // reconsider measures.
-    const perTrace = [];
-    const measured = this._measureAnalysisKernel(panelId, plot, () => {
-        for (const trace of eager) {
-            const samples = this._histogramSamplesForTrace(trace, range);
-            const stat = histogramFiniteStats(samples);
-            perTrace.push({ trace, samples, stat, visible: this._isVisible(trace) });
+    const byTrace = new Map();
+    const eager = usable.filter(trace => !lazy.includes(trace));
+    if (eager.length) {
+        const measured = this._measureAnalysisKernel(panelId, plot, () => {
+            for (const trace of eager) {
+                const samples = this._histogramSamplesForTrace(trace, range);
+                byTrace.set(trace, { samples, stat: histogramFiniteStats(samples) });
+            }
+        }, warnings);
+        // The measurement widened the range and rescheduled; this pass is stale.
+        if (measured.superseded) return;
+    }
+    // The same for the lazy traces, over every row of their files.
+    const progress = (rows) => {
+        if (plot._histToken !== token) return;
+        this._setHistogramStatus(plot, i18n.t('histogramLazyReading').replace('{rows}', i18n.formatNumber(rows)), 'loading');
+    };
+    let lazyStats = null;
+    if (lazy.length) {
+        lazyStats = await this._lazyHistogramStats(lazy, range, { needQuartiles: state.binMode === 'auto', signal, onRows: progress });
+        if (plot._histToken !== token) return;
+        for (const trace of lazy) {
+            const { stat, finite } = lazyStats.get(trace);
+            byTrace.set(trace, { samples: null, finite, stat });
         }
-    }, warnings);
-    // The measurement widened the range and rescheduled; this pass is stale.
-    if (measured.superseded) return;
+    }
+    const perTrace = usable.map(trace => ({ trace, ...byTrace.get(trace), visible: this._isVisible(trace), lazy: lazy.includes(trace) }));
 
     // Edges come from VISIBLE traces with finite data, so hiding a trace never
     // shifts the others' bins. If everything is hidden, fall back to all finite
@@ -622,14 +661,22 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
 
     // Pre-pass: count every finite trace and accumulate the combined binned
     // total (needed before normalization so a Stacked view can normalize
-    // against the combined population and the stack tops stay coherent).
+    // against the combined population and the stack tops stay coherent). A
+    // lazy trace is counted from the values its stats pass kept, or by one
+    // more pass over its file past the quartile limit.
+    const lazyToCount = perTrace.filter(p => p.lazy && p.stat.nFinite > 0);
+    const lazyCounts = lazyToCount.length
+        ? await this._lazyHistogramCounts(lazyToCount.map(p => ({ trace: p.trace, finite: p.finite })), range, spec, { signal, onRows: progress })
+        : null;
+    if (plot._histToken !== token) return;
     let totalBinned = 0;
     for (const p of perTrace) {
-        p.counted = p.stat.nFinite > 0 ? countHistogramBins(p.samples, spec) : null;
+        if (p.stat.nFinite <= 0) p.counted = null;
+        else p.counted = p.lazy ? lazyCounts.get(p.trace) : countHistogramBins(p.samples, spec);
         if (p.counted && p.visible) totalBinned += p.counted.nBinned;
     }
 
-    // Pass 2: normalization → bars. Every eager trace stays in the data (hidden
+    // Pass 2: normalization → bars. Every trace stays in the data (hidden
     // ones as legendonly) so its legend entry persists. Stacked normalizes each
     // bar against the combined total so the stacked columns sum coherently.
     const stacked = state.barMode === 'stacked';
@@ -717,6 +764,12 @@ proto._histogramDomain = function(plot) {
     for (const trace of plot?.traces || []) {
         const values = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (values?.length) arrays.push(values);
+        // A lazy file's overview is a sample of its rows: its ends are the
+        // file's, read from the metadata.
+        if (isLazyTrace(this, trace)) {
+            const extent = this._lazyHistogramTimeExtent?.(trace.fileId);
+            if (extent?.length) arrays.push(extent);
+        }
     }
     const extent = this._finiteSortedExtent(arrays);
     return extent ? { min: extent.min, max: extent.max } : null;

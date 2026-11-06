@@ -494,4 +494,21 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
     assert.equal(h._isLazySinkToolConfig({ tool: 'removeOutliers', method: 'bounds', replacement: 'interpolate' }), true, 'so do interpolated hard bounds');
     assert.equal(h._isLazySinkToolConfig({ tool: 'removeOutliers', method: 'bounds', replacement: 'nan' }), false, 'hard bounds replacing with NaN keep their own path');
 }
+
+// ── Hard bounds on a lazy file: created, counted over the file ──────────────
+{
+    // The overview was masked through a helper a refactor had dropped, and
+    // creating hard bounds on a lazy file threw.
+    const upper = 2;
+    const result = await h._applyLazyDataToolCreateMode({
+        fileId: 'f', data: lazy, sourceName: 'a', sourceVariable: lazy.variables.a, outputName: 'hardBounds',
+        targetMode: 'create', tool: 'removeOutliers', lazy: true,
+    }, { tool: 'removeOutliers', method: 'bounds', params: { lower: null, upper }, replacement: 'nan' }, { silent: true });
+    const expected = Array.from(eager.variables.a.data).filter(v => Number.isFinite(v) && v > upper).length;
+    assert.ok(expected > 0, 'the fixture has values past the bound');
+    assert.equal(result.count, expected, 'hard bounds on a lazy file count every value past the bound in the file');
+    const overview = lazy.variables.hardBounds.data;
+    assert.ok(Array.from(overview).every(v => !(v > upper)), 'and the overview drawn meanwhile has them masked');
+    console.log('lazy data tools: hard bounds on a lazy file are created and counted over the whole file');
+}
 console.log('lazy data tools: derivative, integral, IQR and detrend run over every row of a lazy file');

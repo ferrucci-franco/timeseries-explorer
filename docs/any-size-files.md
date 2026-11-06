@@ -72,6 +72,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 |---|---|---|
 | Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | ~~deshabilitadas~~ **todas resueltas**: derivada y detrend en la **3b**, integral en la **4a**, media móvil y detrend por media móvil en la **4b-1**, filtro en la **4b-2**, picos, relleno, reemplazo por interpolación e integral con *interpolar* en la **4b-3**, remuestreo, colapsar y correlación cruzada en la **4b-4** | — |
 | Outliers por picos | ~~deshabilitados~~ **resueltos en la 4b-3** (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | — |
+| Histograma | ~~rechazado en lazy~~ **exacto sobre todas las filas** (sección "Implementado: histograma exacto"); solo se rechaza una señal que existe únicamente en el resumen | `histogramLazyUnsupported` |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
@@ -1457,6 +1458,74 @@ Pruebas:
   (430 sellos repetidos) y una correlación cruzada creados desde el panel sobre
   el archivo lazy; los dos primeros son datasets lazy leídos de su tabla, el
   tercero en memoria.
+
+### Implementado: histograma exacto
+
+El histograma de un archivo lazy cuenta **todas las filas del archivo**, no
+las ~10 000 del resumen, y sus barras son las del histograma en memoria: las
+mismas estadísticas, los mismos bordes, los mismos conteos.
+
+El histograma en memoria lee los valores transformados de cada traza
+(`_getTransformedVariableData`: recorte, desplazamiento de tiempo, ganancia,
+offset, signo), los corta a la selección por el tiempo transformado
+(`_histogramSamplesForTrace`) y corre el kernel de `src/utils/histogram.js`:
+estadísticas finitas con cuartiles (exactos hasta
+`HISTOGRAM_EXACT_QUANTILE_MAX_N` = 2 M valores finitos, una muestra por paso
+fijo por encima), bordes compartidos y conteos. En lazy pasa lo mismo sobre el
+archivo leído en orden, por trozos (`src/plots/methods/histogram-lazy-methods.js`):
+cada trozo se transforma con la función que ya usan la FFT y el plano de
+fase lazy para las filas leídas del archivo (`_transformFetchedPhaseTrajectory`),
+se corta a la selección con la misma comparación (`lo ≤ t ≤ hi`), y va a la
+misma aritmética. Los conteos son sumas de enteros y los cuartiles salen de la
+misma muestra ordenada igual, así que no hay redondeo que difiera.
+
+Pasadas sobre el archivo, cada una un stream por archivo con todas las
+variables que leen sus trazas:
+
+1. **Estadísticas**: filas en la selección, finitas, mínimo y máximo; y los
+   valores finitos mismos mientras no pasen del límite de cuartiles. Si no
+   pasan, no se lee nada más: los cuartiles y los conteos salen de ellos.
+2. Solo con número de bins **automático** y más de 2 M valores finitos: la
+   muestra por paso fijo que toma el kernel en memoria, para los cuartiles.
+3. Solo por encima del límite: los **conteos**, contra los bordes compartidos.
+
+Un archivo cuyo eje mostrado es un número de fila (eje generado) se lee
+entero, para que cada fila tenga su índice; cualquier otro se lee sobre el
+rango de origen al que la selección corresponde
+(`_sourceRangeForDisplayRange`), ensanchado un pelo para que el corte exacto
+se haga sobre el tiempo transformado, como en memoria. El dominio de la
+selección llega a los extremos del archivo (de la metadata), no a los del
+resumen. Una traza de un archivo en memoria y otra de uno lazy conviven en el
+mismo panel con bordes compartidos. Una señal que existe solo en el resumen
+(sin SQL propio) se rechaza con aviso; una fórmula o la salida de una
+herramienta de datos sobre el archivo se histograma exacta. El recálculo es
+asíncrono: el estado del panel dice cuántas filas va leyendo, y un recálculo
+nuevo cancela el anterior.
+
+**Un error encontrado en el camino**, por el bench de 20 M filas: crear
+*límites duros* sobre un archivo lazy fallaba con `this._detectBoundsOutliers
+is not a function`. El método se había perdido en una refactorización
+(`586e8af`, 17 de octubre) y sus cuatro llamadores quedaron. Restaurado y
+cubierto por `test:lazy-data-tools`.
+
+Pruebas:
+
+- `scripts/test-lazy-histogram.mjs` (DuckDB-WASM en Node): contra el camino
+  en memoria tomado de `histogram-methods.js` tal cual: 80 histogramas — cinco
+  modos de bins (automático, por cantidad, por ancho, con rango de valores
+  manual), cuatro rangos (todo, una selección entre muestras, una con bordes
+  sobre muestras, una más allá de los extremos), con y sin todas las
+  transformaciones —; con el límite de cuartiles bajado, la muestra por paso
+  fijo y la pasada de conteo, también con desborde por ambos lados, y el
+  límite exactamente en `n` y en `n − 1`; dos archivos en un panel; una
+  fórmula sobre el archivo; una señal solo del resumen rechazada; un eje
+  generado; cancelar; el dominio de la selección. Cuatro errores inyectados a
+  propósito (un borde del corte, el límite de cuartiles, el paso de la
+  muestra, el desborde) los detecta cada uno.
+- `scripts/e2e-lazy-histogram.mjs` (Chromium): un CSV de 12 MB abierto en
+  lazy, un panel pasado a Histograma: las barras suman los 419 650 valores
+  finitos del archivo y el resumen cuenta los huecos, con el archivo entero y
+  con una selección; sin avisos ni errores de página.
 
 ## 8. Riesgos y decisiones abiertas
 
