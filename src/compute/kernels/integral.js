@@ -5,7 +5,7 @@ import {
     normalizeTimeContext,
     timeDelta,
 } from './shared.js';
-import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
+import { detectSamplingGaps, GAP_THRESHOLD_FACTOR } from '../../utils/sampling-gaps.js';
 
 // Linearly bridge runs of non-finite values so the integral can cross them.
 // Interpolation is in TIME, not index, so an irregular axis is handled right.
@@ -66,142 +66,195 @@ export function bridgeNonFinite(values, ctx) {
 // FFT pane's missing-data bands follow. (The time-series Gaps tool is
 // different on purpose: the user sees and sets its step, and it marks
 // dropouts whatever the agreement — docs/marks-menu-nan-gaps-design.md.)
+//
+// One call of the chunked form below over the whole series (windowed.js): a
+// file too large to hold is fed to the same code a chunk at a time by the
+// chunked executor and gets the same doubles. The nominal step is measured
+// here over the whole axis; the lazy path measures it over the whole file.
 export function computeIntegral(sourceValues, time, params = {}) {
     const values = asFloat64(sourceValues);
     const n = values.length;
-    const out = new Float64Array(n);
-    const empty = {
-        values: out,
-        negativeDtCount: 0,
-        gapCount: 0,
-        nanSegmentCount: 0,
-        uncoveredTime: 0,
-        hasNominalStep: false,
-    };
-    if (!n) return empty;
-
     const ctx = normalizeTimeContext(time);
     const method = CUMULATIVE_INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
-    const policy = INTEGRAL_GAP_POLICIES.has(params.gapPolicy) ? params.gapPolicy : 'zero';
-    if (method === 'sum') return cumulativeSum(values, ctx, policy, params.initial);
-    const rectangular = method === 'rectangular';
-
+    let hasNominalStep = false;
+    let gapThreshold = null;
     // An index axis carries no timestamps, so every step is 1 by construction
     // and a missing row is undetectable — not absent, undetectable. Skipping the
     // scan there states that honestly instead of reporting zero gaps found.
-    let hasNominalStep = false;
-    let gapEndIndexes = null;
-    if (params.detectGaps !== false && ctx.values && ctx.kind !== 'index') {
+    if (n && method !== 'sum' && params.detectGaps !== false && ctx.values && ctx.kind !== 'index') {
         const info = detectSamplingGaps(ctx.values);
         hasNominalStep = info.hasNominalStep;
-        if (info.gaps.length) gapEndIndexes = new Set(info.gaps.map(g => g.index + 1));
+        if (info.hasNominalStep) gapThreshold = info.medianDt * GAP_THRESHOLD_FACTOR;
     }
+    const integral = createCumulativeIntegral(params, { kind: ctx.kind, gapThreshold, hasNominalStep });
+    if (!n) return { values: new Float64Array(0), ...integral.report() };
+    const { values: out } = integral.compute({
+        values, times: ctx.values, start: 0, coreStart: 0, coreEnd: n,
+        fileStart: true, eof: true, truncatedStart: false, truncatedEnd: false,
+    });
+    return { values: out, ...integral.report() };
+}
 
-    const work = policy === 'interpolate' ? bridgeNonFinite(values, ctx) : values;
-
+/**
+ * The cumulative integral as the compute of a lookahead kernel (windowed.js):
+ * the accumulator is its state, carried from one call to the next, and the
+ * only look ahead it makes is under the 'interpolate' policy, where a run of
+ * non-finite samples is bridged linearly in time towards the finite sample
+ * that ends it (bridgeNonFinite) — so it waits for that sample. A run the cap
+ * cut is left unbridged, like one at the start or the end of the series: it
+ * adds nothing.
+ *
+ *   createCumulativeIntegral(params, { kind, gapThreshold, hasNominalStep })
+ *
+ * `kind` is the time axis's ('numeric' | 'datetime' | 'index');
+ * `gapThreshold` the step above which an interval is a missing row, in the
+ * axis's own units (medianDt × GAP_THRESHOLD_FACTOR), or null when the axis
+ * has no nominal step; `hasNominalStep` is what the report says about it. The
+ * times of the view are read when `kind` is not 'index' and they are given;
+ * otherwise every step is one row.
+ */
+export function createCumulativeIntegral(params = {}, { kind = 'numeric', gapThreshold = null, hasNominalStep = false } = {}) {
+    const method = CUMULATIVE_INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
+    const policy = INTEGRAL_GAP_POLICIES.has(params.gapPolicy) ? params.gapPolicy : 'zero';
     // The constant of integration. Zero keeps the historical result, so leaving
     // it alone changes nothing; a level, an energy or a position needs the value
     // the accumulation starts from.
     const initial = Number.isFinite(Number(params.initial)) ? Number(params.initial) : 0;
+    const sum = method === 'sum';
+    const rectangular = method === 'rectangular';
+    const bridge = policy === 'interpolate';
+    const threshold = Number.isFinite(gapThreshold) ? gapThreshold : null;
+
     let acc = initial;
-    out[0] = initial;
+    let rows = 0;            // rows done
+    // The previous row: its source value, its bridged value, its time.
+    let prevSource = NaN;
+    let prevWork = NaN;
+    let prevTime = NaN;
+    // The last finite sample, for the bridge: its value and its coordinate.
+    let lastFinite = NaN;
+    let lastFiniteAt = NaN;
     let negativeDtCount = 0;
     let gapCount = 0;
     let nanSegmentCount = 0;
     let uncoveredTime = 0;
 
-    for (let i = 1; i < n; i++) {
-        const dt = timeDelta(ctx, i - 1, i);
-        if (Number.isFinite(dt)) {
-            if (dt < 0) negativeDtCount++;
-            // Holes are counted against the SOURCE, before any policy touches
-            // them: how much of the span the file has no data for is a property
-            // of the file, not of what was decided about it. Reading `work`
-            // here instead would report zero under 'interpolate', where the
-            // bridge has already filled the hole in.
-            const s0 = values[i - 1];
-            const s1 = values[i];
-            // Kept per-method: the rectangular rule only ever read y0, and that
-            // asymmetry is part of the behaviour the differential test pins.
-            const sourceUsable = rectangular
-                ? Number.isFinite(s0)
-                : (Number.isFinite(s0) && Number.isFinite(s1));
-            const missingRow = gapEndIndexes !== null && gapEndIndexes.has(i);
-            if (missingRow) gapCount++;
-            if (!sourceUsable) nanSegmentCount++;
-            if (missingRow || !sourceUsable) uncoveredTime += dt;
+    function compute(view) {
+        const { values, times, start, coreStart, coreEnd, eof, truncatedEnd } = view;
+        const n = values.length;
+        const timed = kind !== 'index' && !!times;
+        // The coordinate of a row: its time, or its position in the series.
+        const at = timed ? (i => times[i]) : (i => start + i);
+        const out = new Float64Array(coreEnd - coreStart);
+        let settledEnd = coreEnd;
+        // The bridged values of the hole being crossed, by index in the view.
+        let bridgedFrom = -1;
+        let bridged = null;
 
-            const y0 = work[i - 1];
-            const y1 = work[i];
-            const usable = rectangular
-                ? Number.isFinite(y0)
-                : (Number.isFinite(y0) && Number.isFinite(y1));
-            // Under 'interpolate' a missing row is not a hole to skip: letting
-            // the quadrature run straight across it IS the linear bridge the
-            // policy promises, and it is what makes an absent row agree with an
-            // empty cell (which bridgeNonFinite already filled above).
-            if (!usable || (missingRow && policy !== 'interpolate')) {
-                // 'zero' adds nothing. 'interpolate' only lands here when the
-                // run could not be bridged (a leading or trailing NaN, with no
-                // finite sample on one side to interpolate towards), and adding
-                // nothing is the only option left. Once acc is NaN every later
-                // `acc +=` keeps it NaN, which is the propagation.
-                if (policy === 'propagate') acc = NaN;
-            } else if (rectangular) {
-                acc += y0 * dt;
-            } else {
-                acc += 0.5 * (y0 + y1) * dt;
+        for (let i = coreStart; i < coreEnd; i++) {
+            const source = values[i];
+            let work = source;
+            if (bridge && !Number.isFinite(source)) {
+                if (i >= bridgedFrom + (bridged?.length || 0)) {
+                    // A new run: find the finite sample that ends it.
+                    let end = i;
+                    while (end < n && !Number.isFinite(values[end])) end++;
+                    if (end >= n && !eof && !truncatedEnd) { settledEnd = i; break; }
+                    bridgedFrom = i;
+                    bridged = new Float64Array(end - i).fill(NaN);
+                    // A run that begins where the view begins, after a row
+                    // that was not finite either, is the rest of a run the cap
+                    // cut: it stays unbridged, whole.
+                    const continued = i === coreStart && rows > 0 && !Number.isFinite(prevSource);
+                    if (end < n && !continued && Number.isFinite(lastFinite)) {
+                        const y0 = lastFinite;
+                        const y1 = values[end];
+                        const t0 = lastFiniteAt;
+                        const t1 = at(end);
+                        if (Number.isFinite(t0) && Number.isFinite(t1)) {
+                            const span = t1 - t0;
+                            for (let k = i; k < end; k++) {
+                                const tk = at(k);
+                                const frac = span && Number.isFinite(tk) ? (tk - t0) / span : 0;
+                                bridged[k - i] = y0 + frac * (y1 - y0);
+                            }
+                        }
+                    }
+                }
+                work = bridged[i - bridgedFrom];
             }
+
+            if (sum) {
+                if (!Number.isFinite(source)) {
+                    nanSegmentCount++;
+                    uncoveredTime++;
+                }
+                if (Number.isFinite(work)) acc += work;
+                else if (policy === 'propagate') acc = NaN;
+                out[i - coreStart] = acc;
+            } else if (rows === 0) {
+                acc = initial;
+                out[i - coreStart] = initial;
+            } else {
+                const t = timed ? times[i] : NaN;
+                let dt;
+                if (!timed) dt = 1;
+                else if (!Number.isFinite(prevTime) || !Number.isFinite(t)) dt = NaN;
+                else dt = kind === 'datetime' ? (t - prevTime) / 1000 : t - prevTime;
+                if (Number.isFinite(dt)) {
+                    if (dt < 0) negativeDtCount++;
+                    // Holes are counted against the SOURCE, before any policy
+                    // touches them: how much of the span the file has no data
+                    // for is a property of the file, not of what was decided
+                    // about it.
+                    const sourceUsable = rectangular
+                        ? Number.isFinite(prevSource)
+                        : (Number.isFinite(prevSource) && Number.isFinite(source));
+                    const missingRow = threshold !== null && timed && (t - prevTime) > threshold;
+                    if (missingRow) gapCount++;
+                    if (!sourceUsable) nanSegmentCount++;
+                    if (missingRow || !sourceUsable) uncoveredTime += dt;
+
+                    const usable = rectangular
+                        ? Number.isFinite(prevWork)
+                        : (Number.isFinite(prevWork) && Number.isFinite(work));
+                    // Under 'interpolate' a missing row is not a hole to skip:
+                    // letting the quadrature run straight across it IS the
+                    // linear bridge the policy promises.
+                    if (!usable || (missingRow && policy !== 'interpolate')) {
+                        // 'zero' adds nothing. 'interpolate' only lands here
+                        // when the run could not be bridged. Once acc is NaN
+                        // every later `acc +=` keeps it NaN: the propagation.
+                        if (policy === 'propagate') acc = NaN;
+                    } else if (rectangular) {
+                        acc += prevWork * dt;
+                    } else {
+                        acc += 0.5 * (prevWork + work) * dt;
+                    }
+                }
+                out[i - coreStart] = acc;
+            }
+
+            if (Number.isFinite(source)) { lastFinite = source; lastFiniteAt = at(i); }
+            prevSource = source;
+            prevWork = work;
+            prevTime = timed ? times[i] : NaN;
+            rows++;
         }
-        out[i] = acc;
+        return { values: out.subarray(0, settledEnd - coreStart).slice(), settled: settledEnd - coreStart, keepFrom: settledEnd };
     }
+
     // `timeKind` travels with `uncoveredTime` because it is what gives that
     // number a unit: seconds on a datetime axis, x-units on a numeric one, and
-    // a plain sample count on an index axis. Formatting it as a duration
-    // without checking would invent hours out of row numbers.
-    return {
-        values: out,
+    // a plain sample count on an index axis — which the running sum reports
+    // whatever the axis, since it counts missing samples.
+    const report = () => ({
         negativeDtCount,
         gapCount,
         nanSegmentCount,
         uncoveredTime,
-        hasNominalStep,
-        timeKind: ctx.kind,
-    };
-}
-
-// Plain running sum: out[i] = initial + Σ_{k≤i} y[k], NumPy's cumsum offset by
-// the initial condition. Time is never read, so duplicate or irregular
-// timestamps change nothing, and a skipped row is simply a sample that is not
-// there — only non-finite samples are holes, and the gap policy decides them.
-// It inverts the derivative's 'difference' method: summing Δy from the first
-// sample's value gives the signal back.
-function cumulativeSum(values, ctx, policy, initialParam) {
-    const n = values.length;
-    const out = new Float64Array(n);
-    const work = policy === 'interpolate' ? bridgeNonFinite(values, ctx) : values;
-    let acc = Number.isFinite(Number(initialParam)) ? Number(initialParam) : 0;
-    let nanSegmentCount = 0;
-    let uncoveredTime = 0;
-    for (let i = 0; i < n; i++) {
-        if (!Number.isFinite(values[i])) {
-            nanSegmentCount++;
-            uncoveredTime++;
-        }
-        const y = work[i];
-        if (Number.isFinite(y)) acc += y;
-        else if (policy === 'propagate') acc = NaN;
-        out[i] = acc;
-    }
-    // uncoveredTime counts missing SAMPLES here, whatever the axis, so it is
-    // reported with the index kind: formatting it as a duration would be false.
-    return {
-        values: out,
-        negativeDtCount: 0,
-        gapCount: 0,
-        nanSegmentCount,
-        uncoveredTime,
-        hasNominalStep: false,
-        timeKind: 'index',
-    };
+        hasNominalStep: sum ? false : hasNominalStep,
+        timeKind: sum ? 'index' : kind,
+    });
+    return { compute, report };
 }

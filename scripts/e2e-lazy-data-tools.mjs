@@ -2,16 +2,19 @@
 // (lazy) mode, in a real browser with the DuckDB-WASM the app ships.
 //
 // A 12 MB CSV (above the 10 MB full-load limit set here) opens lazily. Through
-// the panel's own controls: the tool picker offers derivative, detrend,
-// integral, moving average, filter and outliers and nothing else; the outlier
-// method is hard bounds; the integral leaves out interpolating across holes;
-// every detrend method is offered. A derivative, an integral, a linear
-// detrend, a moving average, a moving-average detrend, a designed filter and
-// a zero-phase one are created with "Create and plot", and each is drawn from
-// the file (a zoom returns full resolution), with no page error. The moving
-// average runs as a job behind an overlay that counts the rows; cancelled, it
-// leaves no variable and no sink. The filter designer reads the sample rate of
-// the whole file (100 Hz), measured once, not of the overview in memory.
+// the panel's own controls: the tool picker offers every tool over one
+// variable (derivative, detrend, integral, moving average, fill, filter and
+// outliers) and none of the file tools; every outlier method and both
+// replacements; every integral policy; every detrend method. A derivative, an
+// integral bridging holes, a linear detrend, a moving average, a
+// moving-average detrend, a designed filter, a zero-phase one, a spike
+// removal replaced by interpolation and a fill of missing samples are created
+// with "Create and plot", and each is drawn from the file (a zoom returns full
+// resolution), with no page error. The moving average runs as a job behind an
+// overlay that counts the rows; cancelled, it leaves no variable and no sink.
+// The filter designer reads the sample rate of the whole file (100 Hz),
+// measured once, not of the overview in memory. The spike detector's chunks
+// run in the compute worker pool.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:lazy-data-tools`.
 // Not part of test:release, which stays offline and browser-free.
@@ -23,7 +26,9 @@ function makeCsv() {
     const lines = ['time,a,b'];
     for (let i = 0; i < 420000; i++) {
         const a = i % 5003 === 7 ? 90 : Math.sin(i / 500) + (i % 7) / 100;
-        lines.push(`${(i * 0.01).toFixed(2)},${a.toFixed(6)},${(i / 1000 + Math.cos(i / 90)).toFixed(6)}`);
+        // Holes for the fill: singles and a run of 30.
+        const hole = i % 1201 === 600 || (i > 200000 && i < 200030);
+        lines.push(`${(i * 0.01).toFixed(2)},${hole ? '' : a.toFixed(6)},${(i / 1000 + Math.cos(i / 90)).toFixed(6)}`);
     }
     return { name: 'lazy-tools.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
 }
@@ -72,26 +77,52 @@ try {
 
     const picker = await page.evaluate(() => Object.fromEntries(
         [...document.querySelectorAll('#data-tool-select option')].filter(o => o.value).map(o => [o.value, !o.disabled])));
-    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'filter', 'integrate', 'movingAverage', 'removeOutliers'],
-        'a lazy file offers the tools written as SQL, the moving average and the filter');
+    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'filter', 'integrate', 'interpolate', 'movingAverage', 'removeOutliers'],
+        'a lazy file offers every tool over one variable');
+    assert.deepEqual(Object.keys(picker).filter(k => !picker[k]).sort(), ['collapse', 'resample', 'xcorr'], 'and none of the file tools yet');
 
     await createAndPlot(page, 'derivative', 'a', 'da', () => pick(page, 'derivative-method', 'centered'));
 
-    // Outliers: hard bounds only (the spike detector needs the chunked
-    // executor; IQR is computed for sessions that carry it, but the menu does
-    // not offer it for any file).
-    await pick(page, 'data-tool-select', 'removeOutliers');
-    const outlierMethods = await page.evaluate(() => Object.fromEntries(
-        [...document.querySelectorAll('#outlier-method option')].map(o => [o.value, !o.disabled])));
-    assert.deepEqual(Object.keys(outlierMethods).filter(k => outlierMethods[k]), ['bounds'], 'outliers: hard bounds');
+    // Outliers: every method the menu has, and both replacements. The spike
+    // detector runs in the chunked executor, its chunks in the worker pool.
+    await createAndPlot(page, 'removeOutliers', 'a', 'sa', async () => {
+        const outlierMethods = await page.evaluate(() => Object.fromEntries(
+            [...document.querySelectorAll('#outlier-method option')].map(o => [o.value, !o.disabled])));
+        assert.deepEqual(Object.keys(outlierMethods).filter(k => outlierMethods[k]).sort(), ['bounds', 'spike'], 'outliers: every method');
+        await pick(page, 'outlier-method', 'spike');
+        const replacements = await page.evaluate(() => [...document.querySelectorAll('input[name="outlier-replacement"]')].map(i => [i.value, !i.disabled]));
+        assert.deepEqual(replacements, [['nan', true], ['interpolate', true]], 'both replacements are offered');
+        await page.locator('input[name="outlier-replacement"][value="interpolate"]').check();
+    });
+    const spikes = await page.evaluate(() => {
+        const data = [...window.app.plotManager.files.values()][0].data;
+        return { count: data.variables.sa.dataTool.outlierCount, replacement: data.variables.sa.dataTool.replacement };
+    });
+    assert.ok(spikes.count >= 80, `the spike detector found the spikes of the file (${spikes.count})`);
+    assert.equal(spikes.replacement, 'interpolate', 'replaced by interpolation');
 
     await createAndPlot(page, 'integrate', 'a', 'ia', async () => {
         const policies = await page.evaluate(() => Object.fromEntries(
             [...document.querySelectorAll('#integral-gap-policy option')].map(o => [o.value, !o.disabled])));
-        assert.equal(policies.interpolate, false, 'interpolating across holes is not offered on a lazy file');
-        assert.equal(policies.zero && policies.propagate, true, 'the other two policies are');
+        assert.equal(policies.interpolate && policies.zero && policies.propagate, true, 'every policy is offered on a lazy file');
         await pick(page, 'integral-method', 'trapezoidal');
+        await pick(page, 'integral-gap-policy', 'interpolate');
     });
+    const integral = await page.evaluate(() => [...window.app.plotManager.files.values()][0].data.variables.ia.dataTool);
+    assert.equal(integral.gapPolicy, 'interpolate', 'the integral bridges holes');
+    assert.ok(integral.nanSegmentCount > 300, `and counted the holes of the file (${integral.nanSegmentCount})`);
+
+    // The fill: a job too, with its counts.
+    await createAndPlot(page, 'interpolate', 'a', 'na', async () => {
+        await pick(page, 'interpolate-method', 'pchip');
+        await page.locator('#interpolate-max-gap').fill('0');
+        await page.locator('#interpolate-max-gap').dispatchEvent('input');
+        const status = await page.evaluate(() => document.getElementById('interpolate-status')?.textContent || '');
+        assert.ok(status.length > 0 && !/\d/.test(status), `the live count is not read off the overview (${status})`);
+    });
+    const fill = await page.evaluate(() => [...window.app.plotManager.files.values()][0].data.variables.na.dataTool);
+    assert.ok(fill.filledCount > 300 && fill.filledRuns > 300, `the fill counted what it filled (${fill.filledCount} in ${fill.filledRuns} runs)`);
+    assert.equal(fill.skippedCount, 0, 'nothing left: no gap limit');
 
     await createAndPlot(page, 'detrend', 'b', 'lb', async () => {
         const methods = await page.evaluate(() => Object.fromEntries(
@@ -196,20 +227,20 @@ try {
         const data = [...window.app.plotManager.files.values()][0].data;
         const source = data._duckdb.source;
         const out = {};
-        for (const name of ['da', 'ia', 'lb', 'ma', 'hb', 'fd', 'fz']) {
+        for (const name of ['da', 'ia', 'lb', 'ma', 'hb', 'fd', 'fz', 'sa', 'na']) {
             const raw = await source.getRawColumnsRange(data, [name], 1000, 1010, 1e6);
             out[name] = { rows: raw.x.length, finite: [...raw.yByVar.get(name)].filter(Number.isFinite).length };
         }
         const traced = [...window.app.plotManager.plots.values()].flatMap(p => p.traces.map(t => t.varName));
         return { out, traced, message: document.getElementById('outlier-message')?.textContent || '' };
     });
-    for (const name of ['da', 'ia', 'lb', 'ma', 'hb', 'fd', 'fz']) {
+    for (const name of ['da', 'ia', 'lb', 'ma', 'hb', 'fd', 'fz', 'sa', 'na']) {
         assert.equal(zoom.out[name].rows, 1001, `${name}: a 10 s zoom returns all 1001 rows`);
         assert.ok(zoom.out[name].finite > 990, `${name}: with values`);
         assert.ok(zoom.traced.includes(name), `${name} is plotted`);
     }
     assert.deepEqual(errors, [], 'no page error');
-    console.log('e2e lazy data tools: derivative, integral, detrend, moving averages and filters created from the panel on a lazy file');
+    console.log('e2e lazy data tools: derivative, integral, detrend, moving averages, filters, spikes and fill created from the panel on a lazy file');
 } finally {
     await browser.close();
     await server.close();

@@ -4,6 +4,7 @@ import { emphasize, emphasizeList, emphasizedToPlain, setEmphasizedText } from '
 import WorkerPool, { canUseWorkers, spawnWorker } from '../../core/worker-pool.js';
 import {
     applyFilter,
+    boundValue,
     computeDerivative,
     computeDetrend,
     computeIntegral,
@@ -63,8 +64,9 @@ export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
 export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 // What a lazy file offers (see _isDataToolAvailableForData).
-const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'detrend', 'filter']);
-const LAZY_OUTLIER_METHODS = new Set(['bounds', 'iqr']);
+// Every tool over one variable; the file tools (resampling, cross-correlation,
+// collapsing repeated timestamps) wait for a later sub-phase.
+const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'interpolate', 'detrend', 'filter']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 const INTEGRAL_METHODS = kernelShared.CUMULATIVE_INTEGRAL_METHODS;
@@ -392,9 +394,7 @@ proto._syncDataTools = function() {
     document.querySelectorAll('.data-tool-controls').forEach(el => {
         el.classList.toggle('collapsed', el.dataset.toolKind !== tool);
     });
-    this._syncOutlierMethodOptions(lazy && tool === 'removeOutliers');
     this._syncDetrendMethodOptions(lazy && tool === 'detrend');
-    this._syncIntegralPolicyOptions(lazy && tool === 'integrate');
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
@@ -475,7 +475,7 @@ proto._syncDataTools = function() {
     sourceSelect.disabled = !hasTool || !allowed || !entries.length;
     outputInput.disabled = !hasSource || (!!editing && !this._dataToolRenameUnlocked);
     methodSelect.disabled = !hasSource || tool !== 'removeOutliers';
-    this._dataToolParameterInputs().forEach(input => { input.disabled = !hasSource || (lazy && input.id !== 'outlier-lower-bound' && input.id !== 'outlier-upper-bound'); });
+    this._dataToolParameterInputs().forEach(input => { input.disabled = !hasSource; });
     document.getElementById('derivative-method')?.toggleAttribute('disabled', !hasSource || tool !== 'derivative');
     document.getElementById('integral-method')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('integral-gap-policy')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
@@ -513,8 +513,7 @@ proto._syncDataTools = function() {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'collapse');
     }
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
-        input.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
-        if (lazy && input.value === 'nan') input.checked = true;
+        input.disabled = !hasSource || tool !== 'removeOutliers';
     });
 
     // The output field names a variable for every tool but one; for resampling it
@@ -533,9 +532,6 @@ proto._syncDataTools = function() {
 
     if (hasTool && lazy && !allowed) {
         this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
-    } else if (hasTool && lazy && tool === 'removeOutliers') {
-        const messageEl = document.getElementById('outlier-message');
-        if (!messageEl?.textContent) this._setOutlierMessage(() => i18n.t('dataToolLazyBoundsOnly'), '');
     }
 };
 
@@ -656,24 +652,6 @@ proto._syncDataToolPickerOptions = function(lazy) {
     if (toolSelect.value && toolSelect.options[toolSelect.selectedIndex]?.disabled) {
         toolSelect.value = '';
     }
-};
-
-proto._syncOutlierMethodOptions = function(lazy) {
-    const methodSelect = document.getElementById('outlier-method');
-    if (!methodSelect) return;
-    for (const option of methodSelect.options) {
-        option.disabled = !!lazy && !LAZY_OUTLIER_METHODS.has(option.value);
-    }
-    if (lazy && !LAZY_OUTLIER_METHODS.has(methodSelect.value)) methodSelect.value = 'bounds';
-};
-
-// 'interpolate' bridges a hole towards the next finite sample, which the lazy
-// integral (SQL over the file, read once in order) cannot see.
-proto._syncIntegralPolicyOptions = function(lazy) {
-    const policySelect = document.getElementById('integral-gap-policy');
-    if (!policySelect) return;
-    for (const option of policySelect.options) option.disabled = !!lazy && option.value === 'interpolate';
-    if (lazy && policySelect.value === 'interpolate') policySelect.value = 'zero';
 };
 
 proto._syncDetrendMethodOptions = function(lazy) {
@@ -828,6 +806,10 @@ proto._interpolateStatus = function() {
         return { text: '', tone: 'idle', filled: 0 };
     }
 
+    // A lazy file's array is its overview, a sample of the rows: what the fill
+    // would do is counted when it runs over the whole file, not here.
+    if (this._isDataToolLazyData(data)) return { text: i18n.t('dataToolInterpolateLazyStatus'), tone: 'idle', filled: 0 };
+
     const runs = this._interpolateRuns(variable);
     const summary = summariseMissing(runs, params);
 
@@ -975,11 +957,14 @@ proto._getDataToolSourceEntries = function(data, tool = this._getSelectedDataToo
             if (!variable || variable.kind === 'abscissa' || variable.kind === 'parameter') return false;
             if (variable.plottable === false) return false;
             if (variable.dataType === 'string' || variable.dataType === 'boolean') return false;
-            // Hard bounds and IQR read a column of the file; the derivative and
-            // detrend read anything with SQL of its own — a column, a formula,
-            // another tool's output.
+            // Hard bounds replacing with NaN read a column of the file (a CASE
+            // over it, _duckdbDataTool); every other tool reads anything with
+            // SQL of its own — a column, a formula, another tool's output.
             if (lazy) {
-                return tool === 'removeOutliers'
+                const columnBounds = tool === 'removeOutliers'
+                    && this._getOutlierDetectorMethod() === 'bounds'
+                    && this._getOutlierReplacementMethod() === 'nan';
+                return columnBounds
                     ? !!variable._duckdbCol
                     : !!data?._duckdb?.source?.hasSqlValue?.(variable);
             }
@@ -1360,9 +1345,11 @@ proto._renameDataToolVariable = function(fileId, data, oldName, newName, options
 };
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {
-    // The derivative, IQR and detrend are SQL over the file, the moving
-    // average and the filter jobs writing to a sink
-    // (lazy-data-tools-methods.js); hard bounds keep the path below.
+    // The derivative, IQR and detrend are SQL over the file; the moving
+    // average, the filter, the spike detector, the fill, the interpolating
+    // integral and any outlier run that interpolates are jobs writing to a sink
+    // (lazy-data-tools-methods.js); hard bounds replacing with NaN keep the
+    // path below.
     if (this._isLazySqlToolConfig(config)) return this._applyLazySqlToolCreateMode(context, config, options);
     if (this._isLazySinkToolConfig(config)) return this._applyLazySinkToolCreateMode(context, config, options);
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
@@ -2691,7 +2678,6 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     if (tool === 'integrate') {
         const method = document.getElementById('integral-method')?.value || 'trapezoidal';
         const gapPolicy = document.getElementById('integral-gap-policy')?.value || 'zero';
-        if (lazy && gapPolicy === 'interpolate') throw new Error(i18n.t('dataToolLazyIntegralInterpolate'));
         const initial = Number(document.getElementById('integral-initial')?.value);
         return {
             tool,
@@ -2737,9 +2723,8 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     if (tool === 'collapse') return this._getCollapseConfig();
 
     const method = this._getOutlierDetectorMethod();
-    if (lazy && !LAZY_OUTLIER_METHODS.has(method)) throw new Error(i18n.t('dataToolLazyBoundsOnly'));
     const params = this._getOutlierParams(method);
-    const replacement = lazy ? 'nan' : this._getOutlierReplacementMethod();
+    const replacement = this._getOutlierReplacementMethod();
     return { tool: 'removeOutliers', method, params, replacement };
 };
 
@@ -2766,11 +2751,11 @@ proto._isFileDataTool = function(tool = this._getSelectedDataTool()) {
 
 proto._isDataToolAvailableForData = function(tool, data) {
     if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool) || FILE_DATA_TOOLS.has(tool);
-    // A lazy file's variables are DuckDB expressions, not arrays: only the tools
+    // A lazy file's variables are DuckDB expressions, not arrays: the tools
     // written as SQL over the file (hard bounds, IQR, derivative, integral,
-    // detrend) and those the chunked executor runs (moving average, filter)
-    // work on one. The rest wait for the later sub-phases
-    // (docs/any-size-files.md).
+    // detrend) and those the chunked executor runs (moving average, filter,
+    // spikes, fill, the interpolating policies) work on one. The file tools
+    // wait for a later sub-phase (docs/any-size-files.md).
     return LAZY_DATA_TOOLS.has(tool);
 };
 
@@ -3274,8 +3259,9 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
 
 proto._normalizeOutlierParams = function(method, params = {}) {
     if (method === 'bounds') {
-        const lower = Number.isFinite(Number(params.lower)) ? Number(params.lower) : null;
-        const upper = Number.isFinite(Number(params.upper)) ? Number(params.upper) : null;
+        // An empty bound stays open (boundValue: Number(null) would be 0).
+        const lower = Number.isFinite(boundValue(params.lower)) ? boundValue(params.lower) : null;
+        const upper = Number.isFinite(boundValue(params.upper)) ? boundValue(params.upper) : null;
         return { lower, upper };
     }
     if (method === 'iqr') {

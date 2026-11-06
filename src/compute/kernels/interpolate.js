@@ -242,6 +242,10 @@ function hermite(xL, yL, mL, xR, yR, mR, x) {
  *   edgeFilledCount: number, edgeSkippedCount: number,
  *   missingCount: number, usedTimeAxis: boolean,
  * }}
+ *
+ * One call of the chunked form below over the whole series (windowed.js): a
+ * file too large to hold is fed to the same code a chunk at a time by the
+ * chunked executor and gets the same doubles.
  */
 export function fillMissingValues(sourceValues, time, params = {}) {
     const settings = normalizeInterpolateParams(params);
@@ -249,98 +253,161 @@ export function fillMissingValues(sourceValues, time, params = {}) {
 
     const values = asFloat64(sourceValues);
     const n = values.length;
-    const out = copyFloat64(values);
+    const timeAxis = n ? interpolationCoordinates(values, time) : null;
+    const filler = createMissingFiller(settings, { useTimeAxis: !!timeAxis });
+    if (!n) return { values: copyFloat64(values), ...filler.report() };
+    const { values: out } = filler.compute({
+        values, times: timeAxis, start: 0, coreStart: 0, coreEnd: n,
+        fileStart: true, eof: true, truncatedStart: false, truncatedEnd: false,
+    });
+    return { values: out, ...filler.report() };
+}
+
+/**
+ * fillMissingValues as the compute of a lookahead kernel (windowed.js), with
+ * the counts the panel reports kept across calls.
+ *
+ *   const filler = createMissingFiller(settings, { useTimeAxis });
+ *   const kernel = createLookaheadKernel(view => filler.compute(view));
+ *
+ * A run of missing samples is settled whole, once the finite sample that ends
+ * it is in view, with the samples the method reads past it (three each side
+ * for pchip and akima, the smoothing window for `smooth`); until then the
+ * compute waits. A run the cap cut — one longer than the cap — is left as it
+ * is and counted as skipped, like one longer than the gap limit. `useTimeAxis`
+ * is the whole series' verdict (interpolationCoordinates): finite and never
+ * decreasing, so a bridge is drawn in time; otherwise on row numbers.
+ */
+export function createMissingFiller(params = {}, { useTimeAxis = false } = {}) {
+    const settings = normalizeInterpolateParams(params);
     const report = {
-        values: out,
         filledCount: 0, filledRuns: 0,
         skippedCount: 0, skippedRuns: 0, longestSkipped: 0,
         edgeFilledCount: 0, edgeSkippedCount: 0,
-        missingCount: 0, usedTimeAxis: false,
+        missingCount: 0, usedTimeAxis: !!useTimeAxis,
     };
-    if (!n) return report;
+    // The valid samples the method reads on each side of a hole, and the rows.
+    const sides = settings.method === 'pchip' || settings.method === 'akima' ? 3 : 1;
+    const halfWindow = settings.method === 'smooth' ? Math.max(1, Math.floor(settings.window / 2)) : 0;
 
-    const timeAxis = interpolationCoordinates(values, time);
-    report.usedTimeAxis = !!timeAxis;
-    const xAt = timeAxis ? (i => timeAxis[i]) : (i => i);
-
-    // The valid sample at or before `from` / at or after `from`. Walking over an
-    // already-visited run costs at most that run's length, and the runs are
-    // disjoint, so the whole scan stays linear.
-    const validBefore = (from) => {
-        for (let i = from; i >= 0; i--) if (Number.isFinite(values[i])) return i;
-        return -1;
-    };
-    const validAfter = (from) => {
-        for (let i = from; i < n; i++) if (Number.isFinite(values[i])) return i;
-        return -1;
-    };
-    const neighboursLeft = (index, count) => {
-        const found = [];
-        let cursor = index;
-        while (found.length < count && cursor >= 0) {
-            const valid = validBefore(cursor);
-            if (valid < 0) break;
-            found.push(valid);
-            cursor = valid - 1;
-        }
-        return found.reverse();
-    };
-    const neighboursRight = (index, count) => {
-        const found = [];
-        let cursor = index;
-        while (found.length < count && cursor < n) {
-            const valid = validAfter(cursor);
-            if (valid < 0) break;
-            found.push(valid);
-            cursor = valid + 1;
-        }
-        return found;
+    const skip = (length, isEdge, { longest = true } = {}) => {
+        report.skippedRuns++;
+        report.skippedCount += length;
+        if (longest) report.longestSkipped = Math.max(report.longestSkipped, length);
+        if (isEdge) report.edgeSkippedCount += length;
     };
 
-    // The same enumeration summariseMissing counts from, so the live label in the
-    // panel and the result it predicts can never disagree.
-    for (const run of missingRuns(values)) {
-        const i = run.start;
-        const end = run.start + run.length;
-        const runLength = run.length;
-        report.missingCount += runLength;
+    function compute(view) {
+        const { values, times, coreStart, coreEnd, fileStart, eof, truncatedStart, truncatedEnd } = view;
+        const n = values.length;
+        const xAt = useTimeAxis && times ? (i => times[i]) : (i => i);
+        const validBefore = (from) => {
+            for (let i = from; i >= 0; i--) if (Number.isFinite(values[i])) return i;
+            return -1;
+        };
+        const validAfter = (from) => {
+            for (let i = from; i < n; i++) if (Number.isFinite(values[i])) return i;
+            return -1;
+        };
+        const neighboursLeft = (index, count) => {
+            const found = [];
+            let cursor = index;
+            while (found.length < count && cursor >= 0) {
+                const valid = validBefore(cursor);
+                if (valid < 0) break;
+                found.push(valid);
+                cursor = valid - 1;
+            }
+            return found.reverse();
+        };
+        const neighboursRight = (index, count) => {
+            const found = [];
+            let cursor = index;
+            while (found.length < count && cursor < n) {
+                const valid = validAfter(cursor);
+                if (valid < 0) break;
+                found.push(valid);
+                cursor = valid + 1;
+            }
+            return found;
+        };
 
-        const left = i - 1;
-        const right = end;
-        const isEdge = run.edge;
-        const withinLimit = runLength <= settings.maxGap;
-
-        if (!withinLimit) {
-            report.skippedRuns++;
-            report.skippedCount += runLength;
-            report.longestSkipped = Math.max(report.longestSkipped, runLength);
-            if (isEdge) report.edgeSkippedCount += runLength;
-        } else if (isEdge) {
-            if (settings.edges === 'hold') {
-                const anchor = left < 0 ? right : left;
-                if (anchor >= 0 && anchor < n && Number.isFinite(values[anchor])) {
-                    out.fill(values[anchor], i, end);
-                    report.filledRuns++;
-                    report.filledCount += runLength;
-                    report.edgeFilledCount += runLength;
+        const out = copyFloat64(values);
+        let settledEnd = coreEnd;
+        // The same enumeration summariseMissing counts from, so the live label
+        // in the panel and the result it predicts can never disagree.
+        for (const run of missingRuns(values)) {
+            const start = run.start;
+            const end = run.start + run.length;
+            if (end <= coreStart || start >= coreEnd) continue;
+            const inCore = Math.min(end, coreEnd) - Math.max(start, coreStart);
+            // A run cut at the front of the view by the cap: the rest of a run
+            // already counted as skipped.
+            if (start === 0 && !fileStart) {
+                if (!truncatedStart) throw new Error('fill: a hole at the front of the view with its start not kept');
+                report.skippedCount += inCore;
+                report.missingCount += inCore;
+                continue;
+            }
+            if (end === n && !eof) {
+                // Its end is not in view: wait — unless the cap says to stop
+                // waiting, and the run is skipped as it is.
+                if (!truncatedEnd) { settledEnd = Math.max(coreStart, start); break; }
+                report.missingCount += inCore;
+                skip(inCore, false);
+                continue;
+            }
+            const isEdge = (start === 0 && fileStart) || (end === n && eof);
+            const withinLimit = run.length <= settings.maxGap;
+            const left = start - 1;
+            const right = end;
+            if (withinLimit && !isEdge) {
+                // The samples the method reads past the hole must be in view,
+                // or be all there are.
+                const needRight = sides > 1 ? neighboursRight(right, sides).length < sides : false;
+                const needRows = halfWindow ? end - 1 + halfWindow >= n : false;
+                if ((needRight || needRows) && !eof && !truncatedEnd) { settledEnd = Math.max(coreStart, start); break; }
+            }
+            report.missingCount += run.length;
+            if (!withinLimit) {
+                skip(run.length, isEdge);
+            } else if (isEdge) {
+                if (settings.edges === 'hold') {
+                    const anchor = left < 0 ? right : left;
+                    if (anchor >= 0 && anchor < n && Number.isFinite(values[anchor])) {
+                        out.fill(values[anchor], start, end);
+                        report.filledRuns++;
+                        report.filledCount += run.length;
+                        report.edgeFilledCount += run.length;
+                    } else {
+                        skip(run.length, true, { longest: false });
+                    }
                 } else {
-                    report.skippedRuns++;
-                    report.skippedCount += runLength;
-                    report.edgeSkippedCount += runLength;
+                    skip(run.length, true);
                 }
             } else {
-                report.skippedRuns++;
-                report.skippedCount += runLength;
-                report.edgeSkippedCount += runLength;
-                report.longestSkipped = Math.max(report.longestSkipped, runLength);
+                fillRun(out, values, xAt, start, end, left, right, settings, { neighboursLeft, neighboursRight, n });
+                report.filledRuns++;
+                report.filledCount += run.length;
             }
-        } else {
-            fillRun(out, values, xAt, i, end, left, right, settings, { neighboursLeft, neighboursRight, n });
-            report.filledRuns++;
-            report.filledCount += runLength;
         }
+
+        // Keep what a hole after the settled rows reads before it: the valid
+        // samples the method takes on its left, and the smoothing window.
+        let keepFrom = settledEnd;
+        for (let found = 0, i = settledEnd - 1; i >= 0 && found < sides; i--) {
+            if (Number.isFinite(values[i])) { found++; keepFrom = i; }
+            else if (i === 0) keepFrom = 0;
+        }
+        keepFrom = Math.max(0, Math.min(keepFrom, settledEnd - halfWindow));
+        return {
+            values: out.subarray(coreStart, settledEnd).slice(),
+            settled: settledEnd - coreStart,
+            keepFrom,
+        };
     }
-    return report;
+
+    return { compute, report: () => ({ ...report }) };
 }
 
 function fillRun(out, values, xAt, start, end, left, right, settings, helpers) {

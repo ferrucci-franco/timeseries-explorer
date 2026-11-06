@@ -13,7 +13,7 @@ import { computeDetrend } from './detrend.js';
 import { applyFilter, inspectFilter, inspectSos } from './iir.js';
 import { designFilter } from './filter-design.js';
 import { computeCrossCorrelation, runCrossCorrelation } from './xcorr.js';
-import { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN } from './outliers.js';
+import { boundValue, detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN } from './outliers.js';
 import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } from './regrid.js';
 
 export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
@@ -30,7 +30,7 @@ export {
     utcDayIndex,
     utcDayStart,
 } from './definite-integral.js';
-export { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN };
+export { boundValue, detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN };
 export { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep };
 
 /**

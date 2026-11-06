@@ -9,6 +9,7 @@
 // migration has not happened yet; both exist today.
 
 import { runDataToolPipeline, runResample, runCrossCorrelation } from '../compute/kernels/index.js';
+import { detectSpikeWindow } from '../compute/kernels/outliers.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
 
 const HANDLERS = {
@@ -28,6 +29,13 @@ const HANDLERS = {
             result,
             transfer: collectBuffers([result.grid, ...result.columns]),
         };
+    },
+    // The spike detector over one core of a lazy file and its surroundings
+    // (src/compute/kernels/windowed.js): the chunked executor runs the cores
+    // here, several at a time.
+    'dataTool:spikeWindow': ({ values, coreStart, coreEnd, params }) => {
+        const result = detectSpikeWindow({ values, coreStart, coreEnd }, params || {});
+        return { result, transfer: collectBuffers([result.values, result.aux]) };
     },
     'dataTool:xcorr': (payload) => {
         const result = runCrossCorrelation(payload || {});

@@ -200,7 +200,7 @@ console.log('lazy sink tools: moving average and moving-average detrend match th
 // ── Through the executor, cut anywhere ──────────────────────────────────────
 for (const chunkRows of [1, 777, 5000]) {
     const sink = await duck.createSink(lazy);
-    const kernel = h._lazySinkKernel({ tool: 'movingAverage', sourceName: 'a', params: { window: 333 } });
+    const kernel = h._lazySinkKernel(lazy, { tool: 'movingAverage', sourceName: 'a', params: { window: 333 } });
     const progress = [];
     const { rows } = await runChunkedJob({
         data: lazy, sourceNames: ['a'], kernel, sink, chunkRows, onProgress: p => progress.push(p.rows),
@@ -306,7 +306,7 @@ console.log('lazy sink tools: the sink lines up with the file through filtered r
     const halfway = new AbortController();
     await assert.rejects(runChunkedJob({
         data: lazy, sourceNames: ['a'], sink, chunkRows: 4096, signal: halfway.signal,
-        kernel: h._lazySinkKernel({ tool: 'movingAverage', sourceName: 'a', params: { window: 9 } }),
+        kernel: h._lazySinkKernel(lazy, { tool: 'movingAverage', sourceName: 'a', params: { window: 9 } }),
         onProgress: ({ rows }) => { if (rows > 8000) halfway.abort(); },
     }), err => err.name === 'AbortError', 'a job cancelled half-way stops');
     assert.deepEqual(await sinkTables(), before, 'and drops what it wrote');
