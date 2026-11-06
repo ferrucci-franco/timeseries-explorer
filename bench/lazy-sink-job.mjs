@@ -19,7 +19,20 @@
 //     file alone to read them against;
 //   · the digital filter of 4b-2: the step of the time axis, a forward filter,
 //     and a zero-phase one over a file with no hole — one stretch as long as
-//     the file, done in two passes.
+//     the file, done in two passes;
+//   · the tools without state of 4b-3: the spike detector (its chunks in the
+//     compute worker pool), replaced by NaN and by interpolation, the fill of
+//     missing samples and the integral bridging holes, over `ah`: `a` with
+//     its crests cut out by hard bounds (SQL over the file), runs of holes of
+//     a few dozen rows;
+//   · the file tools of 4b-4: a resample (bin mean, 10× down; linear, 2×
+//     down) and a collapse of repeated timestamps, each a lazy dataset
+//     written to a table; the cross-correlation's refusal past its budget.
+//
+// The CSV is `t,a` as for 4b-1 and 4b-2, with a spike in `a` every 5003 rows
+// and a repeated timestamp every 997 rows (for the collapse). A third column
+// would take a 20 M-row file past 500 MB, where the app offers to convert it to
+// Parquet first — which needs the network here.
 //
 // docs/any-size-files.md §10 says what had to be measured before choosing
 // where the database lives; the numbers are recorded there. One thread, this
@@ -51,7 +64,11 @@ const csvPath = path.join(dir, 'sink-bench.csv');
     out.write('t,a\n');
     let block = '';
     for (let i = 0; i < ROWS; i++) {
-        block += `${(i * 0.001).toFixed(3)},${(Math.sin(i / 500) + random() * 0.1).toFixed(5)}\n`;
+        // A spike every 5003 rows, for the spike detector.
+        const a = (Math.sin(i / 500) + random() * 0.1 + (i % 5003 === 7 ? 5 : 0)).toFixed(5);
+        // A repeated stamp every 997 rows.
+        const t = ((i % 997 === 500 ? i - 1 : i) * 0.001).toFixed(3);
+        block += `${t},${a}\n`;
         if (block.length > 1 << 20) {
             if (!out.write(block)) await new Promise(resolve => out.once('drain', resolve));
             block = '';
@@ -120,6 +137,12 @@ try {
             const out = {};
             const memory = async () => {
                 const rows = (await source._conn.query('SELECT SUM(memory_usage_bytes)::DOUBLE AS b FROM duckdb_memory()')).toArray();
+                return Number(rows[0].toJSON().b);
+            };
+            // The tables alone (sinks, dataset tables): what the budget counts.
+            // The engine's total also holds the scan's and the queries' buffers.
+            const tableMemory = async () => {
+                const rows = (await source._conn.query("SELECT COALESCE(SUM(memory_usage_bytes), 0)::DOUBLE AS b FROM duckdb_memory() WHERE tag = 'IN_MEMORY_TABLE'")).toArray();
                 return Number(rows[0].toJSON().b);
             };
             const step = async (label, run) => {
@@ -195,6 +218,66 @@ try {
                 return { rows: result.count };
             });
             out['engine memory after the zero-phase filter'] = { beforeMB: Math.round(beforeZero / 1e6), afterMB: Math.round(await memory() / 1e6) };
+
+            // Phase 4b-3: the tools without state.
+            out['compute worker pool'] = { available: typeof Worker !== 'undefined' };
+            const create = async (label, tool, sourceName, name, config) => step(label, async () => {
+                const result = await app._applyLazyDataToolCreateMode(context(tool, sourceName, name), { tool, ...config }, { silent: true });
+                if (!result) throw new Error(app._dataToolMessage?.message || 'not created');
+                return { count: result.count };
+            });
+            await create('spikes, NaN (4b-3)', 'removeOutliers', 'a', 'sn', { method: 'spike', params: { sensitivity: 6 }, replacement: 'nan' });
+            await create('spikes, interpolated (4b-3)', 'removeOutliers', 'a', 'si', { method: 'spike', params: { sensitivity: 6 }, replacement: 'interpolate' });
+            // `a` with holes: its crests cut by hard bounds, SQL over the file.
+            await create('hard bounds (holes for the next ones)', 'removeOutliers', 'a', 'ah', { method: 'bounds', params: { lower: null, upper: 1.05 }, replacement: 'nan' });
+            await create('fill missing, linear, no gap limit (4b-3)', 'interpolate', 'ah', 'fl', { params: { method: 'linear', maxGap: 0, edges: 'leave', window: 21 } });
+            await create('fill missing, pchip (4b-3)', 'interpolate', 'ah', 'fp', { params: { method: 'pchip', maxGap: 0, edges: 'leave', window: 21 } });
+            await create('integral, interpolate across holes (4b-3)', 'integrate', 'ah', 'ib', { params: { method: 'trapezoidal', gapPolicy: 'interpolate', initial: 0 } });
+
+            // Phase 4b-4: the file tools, each a lazy dataset of its own.
+            const dataset = (label, recipe, name) => step(label, async () => {
+                const before = await memory();
+                const tablesBefore = await tableMemory();
+                const computed = recipe.tool === 'collapse'
+                    ? await app._computeCollapseDataset(fileId, data, { ...recipe, sourceFileId: fileId }, name)
+                    : await app._computeResampleDataset(fileId, data, { ...recipe, sourceFileId: fileId }, name);
+                const rowsOut = computed.data.metadata.numTimesteps;
+                const grown = (await memory()) - before;
+                const table = (await tableMemory()) - tablesBefore;
+                const t0 = performance.now();
+                const mid = Number(computed.data.metadata.timeStart) + (Number(computed.data.metadata.timeEnd) - Number(computed.data.metadata.timeStart)) / 2;
+                const zoom = await source.getRawColumnsRange(computed.data, ['a'], mid, mid + 1, 1e6);
+                const zoomMs = Math.round(performance.now() - t0);
+                await source.release(computed.data);
+                // Every numeric variable of the file rides along: the file's
+                // own and the outputs of the tools made before this one.
+                const columns = computed.names.length;
+                return {
+                    rows: rowsOut,
+                    columns,
+                    tableBytesPerRow: rowsOut ? Math.round((table / rowsOut) * 10) / 10 : null,
+                    tableBytesPerValue: rowsOut ? Math.round((table / rowsOut / (columns + 1)) * 10) / 10 : null,
+                    engineGrowthMB: Math.round(grown / 1e6),
+                    zoomRows: zoom.x.length,
+                    zoomMs,
+                };
+            });
+            await step('axis over the whole file: rows, repeats (4b-4)', async () => {
+                const steps = await app._lazyRealAxisSteps(data);
+                return { rows: steps.rows, repeats: steps.repeats };
+            });
+            await dataset('resample, bin mean, Δt 0.01 (10× down) (4b-4)', { tool: 'resample', sourceName: '', params: { gridMode: 'step', method: 'mean', step: 0.01, gapPolicy: 'leave' } }, 'rm');
+            await dataset('resample, linear, Δt 0.002 (2× down) (4b-4)', { tool: 'resample', sourceName: '', params: { gridMode: 'step', method: 'linear', step: 0.002, gapPolicy: 'leave' } }, 'rl');
+            await dataset('collapse repeated timestamps, mean (4b-4)', { tool: 'collapse', sourceName: '', params: { aggregate: 'mean' } }, 'cl');
+            await step('cross-correlation past its budget: refused (4b-4)', async () => {
+                try {
+                    await app._computeXcorrDataset(fileId, data, { tool: 'xcorr', sourceFileId: fileId, sourceName: 'a', params: { second: 'ah', maxLag: 1, normalization: 'coeff', removeMean: true } });
+                    return { refused: false };
+                } catch (err) {
+                    return { refused: true, code: err?.code || String(err?.message || err).slice(0, 80) };
+                }
+            });
+            out['engine memory at the end'] = { MB: Math.round(await memory() / 1e6) };
             return out;
         }, ROWS);
         for (const [label, value] of Object.entries(results)) show(label, value);

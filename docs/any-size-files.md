@@ -1527,6 +1527,76 @@ Pruebas:
   finitos del archivo y el resumen cuenta los huecos, con el archivo entero y
   con una selección; sin avisos ni errores de página.
 
+### Medido: la 4b-3 y la 4b-4 sobre 20 M filas, en Chromium
+
+`node bench/lazy-sink-job.mjs --rows 20000000 --configs memory`, ampliado con
+los trabajos de la 4b-3 y la 4b-4: el CSV `t,a` de 20 M filas (359 MB) de la
+4b-1, con un pico en `a` cada 5003 filas y un sello repetido cada 997. Los
+huecos para el relleno y la integral salen de la app misma: `ah` es `a` con
+sus crestas cortadas por límites duros (SQL sobre el archivo), rachas de
+algunas decenas de filas, 664 284 en total. Una tercera columna habría
+llevado el archivo a 527 MB, por encima de los 500 MB donde la app ofrece
+convertir a Parquet primero, que acá necesita la red. Chromium headless, un
+hilo para DuckDB, dos workers de cómputo; la base en memoria, sin
+`memory_limit`. Segundos:
+
+| Qué | Segundos | Salida |
+|---|---|---|
+| Abrir en lazy | 8,2 | — |
+| Pasada del eje del archivo entero (la 4a, la 4b-2 y la 4b-4 la comparten) | 34,2 | una vez por archivo |
+| Media móvil, ventana 101 (4b-1, para comparar) | 17,9 | 20 M filas |
+| Filtro hacia adelante / de fase cero (4b-2) | 18,0 / 31,7 | 20 M filas |
+| Picos, reemplazo por NaN | 20,8 | 3998 picos |
+| Picos, reemplazo por interpolación | 21,1 | 3998 picos |
+| Límites duros (los huecos de `ah`) | 13,7 | 664 284 valores |
+| Rellenar faltantes, lineal / pchip, sin límite de hueco | 21,4 / 21,3 | 664 284 muestras |
+| Integral con *interpolar* | 22,2 | 20 M filas |
+| Remuestreo, media por bins, Δt 0,01 (10× menos) | 19,6 | 2 M filas × 10 columnas |
+| Remuestreo, lineal, Δt 0,002 (2× menos) | 27,5 | 10 M filas × 10 columnas |
+| Colapsar sellos repetidos, media | 37,1 | 19 979 940 filas × 10 columnas |
+| Correlación cruzada con 20 M filas | 0,0 | rechazada por el presupuesto, con la razón |
+
+Lo que dicen:
+
+- **Toda herramienta por trozos cuesta lo que una lectura del CSV**: 18–22 s
+  por 20 M filas, ~1 M filas/s. Los picos, que en un hilo cuestan 10 s de JS
+  por 20 M filas, quedan a 3 s de la media móvil porque sus núcleos corren en
+  los dos workers mientras se lee el archivo. Rellenar faltantes y la
+  integral con *interpolar* no se notan sobre la lectura.
+- **Un dataset de remuestreo o colapsar lleva todas las variables numéricas
+  del archivo** — acá la original y las nueve salidas que las herramientas
+  anteriores dejaron —, y cuesta más que una herramienta de una columna
+  porque escribe diez. Sus tablas ocupan **4,1 a 6,6 bytes por valor** tras
+  la compresión de DuckDB; el presupuesto de resultados cuenta 8 por columna,
+  más la del tiempo: no promete lo que no hay. Un zoom sobre el dataset lee
+  su tabla, no el CSV: 3–7 ms.
+- **La pasada del eje cuesta 34 s** en esta máquina (la doc de la 4b-2 midió
+  20–24 s en otra). Medida la versión anterior a la 4b-3 contra la actual
+  sobre 3 M filas en Node: 4,8–5,1 s las dos; los conteos que agregaron la
+  4b-3 y la 4b-4 (filas, repetidos, tiempos no finitos) no la encarecen.
+
+Tres cosas que el bench encontró, corregidas en la misma rama:
+
+- **Colapsar 20 M filas agotaba la memoria del motor** (*Out of Memory: 3.1
+  GiB/3.1 GiB used*, a los 100 s). Al adoptar la tabla del dataset, el
+  resumen se armaba con `_overviewSql`, que numera las filas `ORDER BY
+  tiempo` y ordena la tabla entera. La tabla ya está escrita en orden de
+  tiempo: ahora se numera en orden de inserción (`ROW_NUMBER() OVER ()`, en
+  streaming) y solo se ordenan las filas del resumen. Colapsar pasó a 37 s y
+  la memoria del motor al final del bench, de 1679 a 784 MB.
+- **La pasada del eje se hacía tres veces** por archivo (34 s cada una): el
+  umbral de huecos de la integral (4a), el paso del filtro (4b-2) y la
+  medición de los datasets (4b-4) tenían cada uno su propia caché o
+  ninguna. Ahora las tres leen la de `_lazyAxisSteps`, y la segunda y la
+  tercera cuestan 0 s.
+- **El colapsador creaba seis arrays por racha**, casi uno por fila: ahora su
+  estado vive en arrays asignados una vez y se reinicia en su lugar, con la
+  misma aritmética (`test:dataset-chunks` lo sigue sosteniendo bit a bit). En
+  300 000 filas, de 1,6 a 0,6 s.
+
+Y uno que no es de estas fases: crear límites duros sobre un archivo lazy
+fallaba (sección "Implementado: histograma exacto"), corregido ya en `main`.
+
 ## 8. Riesgos y decisiones abiertas
 
 - **Parquet es una extensión que se descarga en tiempo de ejecución.
