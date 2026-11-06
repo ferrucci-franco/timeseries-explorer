@@ -782,13 +782,29 @@ export function installCompactToolsMethods(ViewerClass) {
             };
             const down = make(-1);
             const up = make(1);
+            // A field that stands alone in a column of labels and lists (the
+            // integral's initial condition) gets a row of its own, or − and
+            // + would stack above and below it.
+            const parent = input.parentElement;
+            const alone = parent && [...parent.children].some(child => child !== input && child.matches('label, select, .data-tool-label-row'));
+            let wrap = null;
+            if (alone) {
+                wrap = el('div', 'data-tool-step-row compact-tool-step-wrap');
+                input.before(wrap);
+                wrap.appendChild(input);
+            }
             input.before(down);
             input.after(up);
-            input.parentElement?.classList.add('compact-tool-has-steppers');
+            const row = input.parentElement;
+            row?.classList.add('compact-tool-has-steppers');
             toolState.restore.push(() => {
                 down.remove();
                 up.remove();
-                input.parentElement?.classList.remove('compact-tool-has-steppers');
+                row?.classList.remove('compact-tool-has-steppers');
+                if (wrap) {
+                    wrap.before(input);
+                    wrap.remove();
+                }
             });
         }
         for (const input of container.querySelectorAll('.data-tool-coefficients, input[type="text"]')) {

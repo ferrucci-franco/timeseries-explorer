@@ -202,6 +202,15 @@ Each destination opens a sheet.
   position.
 - **Closing.** A sheet closes by tapping its destination again, by dragging the handle
   down, with the system Back gesture or button (§6.3), or with Escape.
+- **One set of controls.** Whatever a sheet or a dialog lends from the desktop is
+  drawn as the phone's own: rounded fields of one height and tint, one drawn chevron
+  on every pick-list (never the browser's arrow or iOS's up-and-down one), dates and
+  numbers in the app's typeface, one slider with a thumb a finger finds, one
+  segmented control with the choice that is on filled with the accent, one round
+  tinted "?" and drawn icons where the desktop shows emoji. The layer is the
+  "One set of controls" section at the foot of `src/styles/compact.css`.
+- **Tablets.** Upright, the sheet spans the screen but its content keeps a measure of
+  about 680 px, centred; sideways it is a side sheet as on a phone.
 
 ### 4.4 One plot at a time
 
