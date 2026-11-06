@@ -20,9 +20,34 @@
 
 const flip = (layout) => (layout === 'horizontal' ? 'vertical' : 'horizontal');
 
+// Each analysis's drawing in the Analyze sheet, in the hand of the data tools'
+// tiles (compact-tools-methods.js): 24 × 24, stroked, tinted by the sheet.
+// "None" draws the plot that is left — a time series, or a 2D plot.
+const svg = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+const ICON = {
+    timeseries: svg('<path d="M4 4v16h16"/><path d="M7 13c1.6-5 3.2-5 4.8 0s3.2 5 4.8 0c.8-2.5 1.6-3.7 2.4-3.7"/>'),
+    phase2d: svg('<path d="M4 4v16h16"/><ellipse cx="13" cy="11.5" rx="6.2" ry="3" transform="rotate(-35 13 11.5)"/>'),
+    fft: svg('<path d="M3 20h18"/><path d="M4 18h2.5l1.5-12 1.5 12h2.5l1.2-6 1.2 6h2.3l.8-3 .8 3H20"/>'),
+    histogram: svg('<path d="M3 20h18"/><path d="M5 20v-5h3v-6h3v-4h3v6h3v5h2v4"/><path d="M8 20v-5M11 20v-11M14 20v-9M17 20v-4" stroke-opacity=".5"/>'),
+    heatmap: svg('<g stroke="none" fill="currentColor">'
+        + [[3.5, 3.5, 0.35], [9.6, 3.5, 1], [15.7, 3.5, 0.6],
+            [3.5, 9.6, 0.8], [9.6, 9.6, 0.25], [15.7, 9.6, 1],
+            [3.5, 15.7, 1], [9.6, 15.7, 0.55], [15.7, 15.7, 0.3]]
+            .map(([x, y, o]) => `<rect x="${x}" y="${y}" width="4.8" height="4.8" rx="1" fill-opacity="${o}"/>`).join('')
+        + '</g>'),
+    'temporal-profile': svg('<path d="M3 6.5c3.5 0 4.5 6 9 6s5.5-8 9-8M3 13.5c3.5 0 4.5 6 9 6s5.5-8 9-8" stroke-opacity=".45" stroke-dasharray="2 2.2"/><path d="M3 10c3.5 0 4.5 6 9 6s5.5-8 9-8"/>'),
+    integral: svg('<path d="M10.5 4.6c-1.9-1-3.4 0-3.6 2.6l-.8 9.6c-.2 2.6-1.7 3.6-3.6 2.6"/><path d="M14 20v-5M17.5 20v-10M21 20v-7"/>'),
+    correlation: svg('<path d="M4 19L20 5" stroke-opacity=".5"/><path stroke-width="3.2" d="M5.5 16h.01M9 16.5h.01M10.5 11.5h.01M14 12h.01M15 7.5h.01M18.5 8h.01"/>'),
+    'phase2d-fit': svg('<path d="M3.5 18.5c5 0 8-1.5 10-5.5s3.5-7 7-8"/><path stroke-width="3.2" d="M6 15.5h.01M10 18.5h.01M12 11h.01M16.5 11.5h.01M17 5h.01"/>'),
+    // A mode set up on the full layout, which the sheet only names.
+    other: svg('<path d="M4 4v16h16"/><path d="M7 16l4-5 3 3 5-7"/>'),
+};
+export const COMPACT_ANALYSIS_OTHER_ICON = ICON.other;
+
 export const COMPACT_ANALYSES = [
     {
         mode: 'timeseries',
+        icon: ICON.timeseries,
         labelKey: 'compactAnalysisNone',
         signals: true,
         fit: true,
@@ -31,6 +56,7 @@ export const COMPACT_ANALYSES = [
     },
     {
         mode: 'fft',
+        icon: ICON.fft,
         labelKey: 'analysisItemFft',
         signals: true,
         fit: true,
@@ -61,6 +87,7 @@ export const COMPACT_ANALYSES = [
     },
     {
         mode: 'histogram',
+        icon: ICON.histogram,
         labelKey: 'analysisItemHistogram',
         signals: true,
         fit: true,
@@ -97,6 +124,7 @@ export const COMPACT_ANALYSES = [
     },
     {
         mode: 'heatmap',
+        icon: ICON.heatmap,
         labelKey: 'analysisItemHeatmap',
         signals: true,
         fit: true,
@@ -142,6 +170,7 @@ export const COMPACT_ANALYSES = [
     },
     {
         mode: 'temporal-profile',
+        icon: ICON['temporal-profile'],
         labelKey: 'analysisItemProfile',
         signals: true,
         fit: true,
@@ -175,6 +204,7 @@ export const COMPACT_ANALYSES = [
     },
     {
         mode: 'integral',
+        icon: ICON.integral,
         labelKey: 'analysisItemIntegral',
         signals: true,
         fit: true,
@@ -211,10 +241,12 @@ export const COMPACT_ANALYSES = [
         // for each. Shown in the Analyze sheet beside the others, where
         // turning it off leaves the 2D plot the pairs belong to.
         mode: 'correlation',
+        icon: ICON.correlation,
         labelKey: 'modeCorrelationLabel',
         pairs: true,
         offMode: 'phase2d',
         offLabelKey: 'compactAnalysisNone2d',
+        offIcon: ICON.phase2d,
         pairHintKey: 'compactCorrelationHint',
         fit: true,
         windowZoom: true,
@@ -266,10 +298,12 @@ export const COMPACT_ANALYSES = [
         // mode (compactAnalysisFor), and this entry says how it is turned on
         // and off instead of which mode to switch to.
         mode: 'phase2d-fit',
+        icon: ICON['phase2d-fit'],
         labelKey: 'phase2dFitToggleLabel',
         onMode: 'phase2d',
         offMode: 'phase2d',
         offLabelKey: 'compactAnalysisNone2d',
+        offIcon: ICON.phase2d,
         matches: (plot) => plot?.mode === 'phase2d' && !!plot.phase2d?.fitEnabled,
         // On its own plot it is a toggle; coming from another plot the flag is
         // set first, so the 2D plot is built with the workspace already open.

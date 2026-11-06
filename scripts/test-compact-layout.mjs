@@ -176,6 +176,9 @@ assert.equal(isLandscapeViewport(390, 844), false);
 
     for (const entry of COMPACT_ANALYSES) {
         assert.ok(entry.labelKey, `${entry.mode} has a label for its radio in the Analyze sheet`);
+        assert.match(entry.icon || '', /^<svg viewBox="0 0 24 24"[^>]*>.+<\/svg>$/, `${entry.mode} has a drawing for its radio`);
+        // Turned off, it leaves a plot of its own kind: "None" draws that plot.
+        if (entry.offLabelKey) assert.match(entry.offIcon || '', /^<svg /, `${entry.mode} draws what turning it off leaves`);
         assert.equal(compactAnalysis(entry.mode), entry, `${entry.mode} is found by its mode`);
         assert.ok(!(entry.signals && entry.pairs), `${entry.mode} takes signals or pairs, not both`);
         if (entry.signals) {
