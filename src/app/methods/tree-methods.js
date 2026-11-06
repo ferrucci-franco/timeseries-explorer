@@ -504,6 +504,7 @@ proto._renderTreeNode = function(node, parentElement, level, filter, autoExpand)
         const icon  = document.createElement('span');
         icon.className = 'tree-icon';
         icon.textContent = '📦';
+        icon.setAttribute('data-icon', 'package');
 
         const label = document.createElement('span');
         label.className = 'tree-label';
@@ -605,6 +606,10 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         const icon  = document.createElement('span');
         icon.className = 'tree-icon';
         icon.textContent = this.parser.getVariableIcon(variable);
+        // What the emoji stands for, so the phone layout can draw it instead.
+        icon.setAttribute('data-icon', variable.kind === 'abscissa' || variable.kind === 'parameter'
+            ? variable.kind
+            : (variable.dataType === 'string' || variable.dataType === 'boolean' ? variable.dataType : 'real'));
 
         const label = document.createElement('span');
         label.className = 'tree-label';

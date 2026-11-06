@@ -5135,3 +5135,389 @@ html.compact:not(.compact-sheet-full):not(.compact-landscape) .compact-derived-f
 .theme-dark .compact-tool-result .data-tool-name-hint {
     color: #ff8a80;
 }
+
+/* ── One set of controls for every sheet ───────────────────────────────── */
+/* The sheets lend the desktop's own panels (FFT, histogram, heatmap,
+   profile, integral, correlation, fit, the data tools, the dialogs), each of
+   which drew its fields, sliders, segmented choices and "?" its own way, at
+   desktop size, with the browser's own arrows. Here they become one family:
+   rounded fields of the same height and tint, one drawn chevron, one slider,
+   one segmented control, one help button — on a phone and on a tablet. Last
+   in the file, so it is the word that counts. The tokens live on the body,
+   where the theme's colours are defined. */
+html.compact body {
+    --compact-field-bg: var(--bg-primary);
+    --compact-field-border: color-mix(in srgb, var(--text-primary) 20%, transparent);
+    --compact-field-radius: 10px;
+    --compact-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23616161' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
+
+html.compact body.theme-dark {
+    --compact-field-bg: color-mix(in srgb, var(--text-primary) 5%, var(--bg-primary));
+    --compact-field-border: color-mix(in srgb, var(--text-primary) 16%, transparent);
+    --compact-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b0b0b0' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/* Fields: a pick-list, a number, a date, a line of text. */
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) :is(select, input[type="text"], input[type="number"], input[type="search"], input[type="date"], input[type="time"], input[type="datetime-local"], input:not([type]), textarea) {
+    border: 1px solid var(--compact-field-border);
+    border-radius: var(--compact-field-radius);
+    background-color: var(--compact-field-bg);
+    color: var(--text-primary);
+    font-family: inherit;
+    box-shadow: none;
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) :is(select, input[type="text"], input[type="number"], input[type="search"], input[type="date"], input[type="time"], input[type="datetime-local"], input:not([type])):focus,
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) textarea:focus {
+    border-color: var(--primary-color);
+    outline: 2px solid color-mix(in srgb, var(--primary-color) 30%, transparent);
+    outline-offset: 0;
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) :is(select, input, textarea):disabled {
+    opacity: 0.5;
+}
+
+/* The browser's arrow — and iOS's up-and-down one — gives way to one drawn
+   chevron, the same in every list and both themes. */
+html.compact :is(.compact-sheet, .modal-dialog, .gaps-panel, .plot-settings-dialog) select {
+    -webkit-appearance: none;
+    appearance: none;
+    min-height: 44px;
+    padding: 0 36px 0 12px;
+    background-image: var(--compact-chevron);
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 18px 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+    line-height: 1.2;
+    cursor: pointer;
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) select[multiple] {
+    padding-right: 12px;
+    background-image: none;
+}
+
+/* Dates, numbers and text read in the app's face, not in the desktop's
+   monospace, and start at the left like any other value. */
+html.compact .compact-sheet-body :is(input[type="date"], input[type="time"], input[type="datetime-local"]) {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: left;
+}
+
+html.compact .compact-sheet-body :is(input[type="date"], input[type="time"], input[type="datetime-local"])::-webkit-date-and-time-value {
+    text-align: left;
+}
+
+html.compact .compact-sheet-body .fft-number-input,
+html.compact .compact-sheet-body .heatmap-datetime-input,
+html.compact .compact-sheet-body .heatmap-number-input,
+html.compact .compact-sheet-body .heatmap-text-input {
+    padding: 0 12px;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Sliders: one track and one thumb a finger can find, wherever the slider
+   comes from. */
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    min-height: 36px;
+    height: 36px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    touch-action: pan-y;
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 26px;
+    height: 26px;
+    margin-top: -10px;
+    border: 3px solid var(--bg-primary);
+    border-radius: 50%;
+    background: var(--primary-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border: 3px solid var(--bg-primary);
+    border-radius: 50%;
+    background: var(--primary-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+html.compact :is(.compact-sheet-body, .modal-dialog, .gaps-panel, .plot-settings-dialog) input[type="range"]:disabled {
+    opacity: 0.45;
+}
+
+/* Segmented choices — the analyses' (Full | Selection, bins, normalization,
+   geometry, period…) drawn like the sheet's own: one rounded frame, the
+   choice that is on filled with the accent. */
+html.compact .compact-sheet-body :is(.fft-segmented, .hist-segmented, .heatmap-segmented) {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    max-width: 100%;
+    margin: 4px 0 8px;
+    border: 1px solid var(--compact-field-border);
+    border-radius: var(--compact-field-radius);
+    overflow: hidden;
+    background: var(--compact-field-border);
+}
+
+html.compact .compact-sheet-body :is(.hist-segmented, .heatmap-segmented) {
+    display: flex;
+    width: 100%;
+}
+
+html.compact .compact-sheet-body :is(.fft-segmented button, .hist-seg-btn, .heatmap-segmented-btn) {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 42px;
+    height: auto;
+    margin: 0;
+    padding: 0 14px;
+    border: none;
+    border-radius: 0;
+    background: var(--compact-field-bg);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    box-shadow: none;
+}
+
+html.compact .compact-sheet-body :is(.fft-segmented button, .hist-seg-btn, .heatmap-segmented-btn).active {
+    background: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+}
+
+html.compact .compact-sheet-body :is(.fft-segmented button, .hist-seg-btn, .heatmap-segmented-btn):disabled {
+    opacity: 1;
+    color: color-mix(in srgb, var(--text-primary) 35%, transparent);
+}
+
+/* The tools' segmented choice (NaN or interpolate) in the same frame. */
+html.compact .compact-tool-settings .data-tool-radio-group {
+    border-color: var(--compact-field-border);
+}
+
+html.compact .compact-tool-settings .data-tool-radio-group .radio-label {
+    border-color: var(--compact-field-border);
+    background: var(--compact-field-bg);
+}
+
+html.compact .compact-tool-settings .data-tool-radio-group .radio-label:has(input:checked) {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+/* Inside an analysis's options, each group (Bins, Value range, Geometry,
+   Integration…) opens with a heading and a hairline, as the data tools'
+   groups do. */
+html.compact .compact-sheet .fft-options-subtitle,
+html.compact .compact-sheet .heatmap-options-subtitle,
+html.compact .compact-sheet .correlation-options .fft-options-section h4 {
+    margin: 16px 0 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 15px;
+    font-weight: 650;
+}
+
+/* A "?" is one round, tinted button everywhere: the analyses' options, the
+   data tools, the formula. */
+html.compact .compact-sheet-body .fft-help-btn:not(.file-transform-warning-btn),
+html.compact .compact-sheet-body .derived-help-toggle,
+html.compact .compact-tool-settings .data-tool-help-toggle,
+html.compact body.theme-dark .compact-tool-settings .data-tool-help-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+    color: var(--primary-color);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: none;
+}
+
+html.compact .compact-sheet-body .fft-help-btn:not(.file-transform-warning-btn):active,
+html.compact .compact-sheet-body .derived-help-toggle:active,
+html.compact .compact-tool-settings .data-tool-help-toggle:active {
+    background: color-mix(in srgb, var(--primary-color) 26%, transparent);
+}
+
+/* The variables' toolbar and rows: drawn icons for the desktop's emoji, in
+   the text's own colour. */
+html.compact .tree-controls {
+    gap: 6px;
+}
+
+html.compact .tree-controls .tree-control-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    min-height: 36px;
+    padding: 0 6px;
+    border: 1px solid var(--compact-field-border);
+    border-radius: 9px;
+    background: var(--compact-field-bg);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+html.compact .tree-controls .tree-control-btn.active,
+html.compact .tree-controls .tree-control-btn[aria-pressed="true"] {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
+}
+
+html.compact :is(#toggle-descriptions, #toggle-numeric-only, #expand-all, #collapse-all) > span {
+    font-size: 0;
+}
+
+html.compact :is(#toggle-descriptions, #expand-all, #collapse-all) > span::before,
+html.compact .tree-time-axis-inspect::before,
+html.compact .tree-icon[data-icon]::before {
+    content: '';
+    display: block;
+    width: 18px;
+    height: 18px;
+    background: currentColor;
+    -webkit-mask: var(--compact-icon) center / contain no-repeat;
+    mask: var(--compact-icon) center / contain no-repeat;
+}
+
+html.compact #toggle-numeric-only > span::before {
+    content: '123';
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+html.compact #toggle-descriptions {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M4 6h16M4 12h16M4 18h10'/%3E%3C/svg%3E");
+}
+
+html.compact #expand-all {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 6l5 5 5-5M7 13l5 5 5-5'/%3E%3C/svg%3E");
+}
+
+html.compact #collapse-all {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 11l5-5 5 5M7 18l5-5 5 5'/%3E%3C/svg%3E");
+}
+
+html.compact .tree-time-axis-inspect,
+html.compact .tree-icon[data-icon="abscissa"] {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7v5l3 2'/%3E%3C/svg%3E");
+}
+
+html.compact .tree-time-axis-inspect {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0;
+    color: var(--text-secondary);
+}
+
+html.compact .tree-icon[data-icon] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    font-size: 0;
+    color: var(--text-secondary);
+}
+
+html.compact .tree-icon[data-icon]::before {
+    width: 17px;
+    height: 17px;
+}
+
+html.compact .tree-icon[data-icon="real"] {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 16c3-8 6-8 9 0s6 8 9 0'/%3E%3C/svg%3E");
+}
+
+html.compact .tree-icon[data-icon="parameter"] {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h18'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E");
+}
+
+html.compact .tree-icon[data-icon="string"] {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 6h14M12 6v13'/%3E%3C/svg%3E");
+}
+
+html.compact .tree-icon[data-icon="boolean"] {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='7' width='18' height='10' rx='5'/%3E%3Ccircle cx='16' cy='12' r='2.5'/%3E%3C/svg%3E");
+}
+
+html.compact .tree-icon[data-icon="package"] {
+    --compact-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8l8-4 8 4v8l-8 4-8-4z'/%3E%3Cpath d='M4 8l8 4 8-4M12 12v8'/%3E%3C/svg%3E");
+}
+
+/* A tablet held upright: the sheet spans the screen, but its content keeps
+   a phone-like measure, centred, so fields and lists do not stretch to
+   800 px. Sideways it is a side sheet and already narrow. */
+@media (min-width: 700px) {
+    html.compact:not(.compact-landscape) .compact-sheet-body > .compact-page {
+        max-width: 680px;
+        margin-inline: auto;
+    }
+}
+
+/* A pick-list at the end of an options row takes the width its choice
+   needs ("Trapezoidal", "Frequency", "per hour (·h)"), not the desktop's
+   118 px, and leaves its label at least a third of the row. */
+html.compact .compact-sheet :is(.fft-option-row, .heatmap-option-row) > select {
+    width: auto;
+    min-width: 132px;
+    max-width: 62vw;
+    justify-self: end;
+}
+
+/* A value never touches the frame of its field. (Searches keep the room
+   their magnifier needs.) */
+html.compact :is(.compact-sheet-body, .modal-dialog) :is(input[type="text"], input[type="number"], input[type="search"], input:not([type])):not(.compact-derived-filter) {
+    padding-left: 12px;
+    padding-right: 12px;
+}

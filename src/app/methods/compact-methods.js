@@ -64,6 +64,7 @@ const SVG = {
     // A file's actions.
     table: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 9v11"/></svg>',
     layers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>',
+    undo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
     clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 7v5l3 2"/></svg>',
 };
 
@@ -1620,13 +1621,13 @@ export function installCompactMethods(ViewerClass) {
             ));
         } else if (mode !== 'timeseries') {
             // Fitting X and Y apart means nothing in a phase plot or a 3D scene.
-            const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
+            const autoBtn = button('compact-secondary-btn', i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))), { icon: SVG.fitAll });
             autoBtn.disabled = !hasContent;
             viewRow.appendChild(autoBtn);
         } else {
-            const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
-            const xBtn = button('compact-secondary-btn', i18n.t('autoScaleXTitle'), () => run(() => pm._autoScalePlotAxis(panelId, pm.plots.get(panelId), 'x')));
-            const yBtn = button('compact-secondary-btn', i18n.t('autoScaleYTitle'), () => run(() => pm._autoScalePlotAxis(panelId, pm.plots.get(panelId), 'y')));
+            const autoBtn = button('compact-secondary-btn', i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))), { icon: SVG.fitAll });
+            const xBtn = button('compact-secondary-btn', i18n.t('autoScaleXTitle'), () => run(() => pm._autoScalePlotAxis(panelId, pm.plots.get(panelId), 'x')), { icon: SVG.fitX });
+            const yBtn = button('compact-secondary-btn', i18n.t('autoScaleYTitle'), () => run(() => pm._autoScalePlotAxis(panelId, pm.plots.get(panelId), 'y')), { icon: SVG.fitY });
             [autoBtn, xBtn, yBtn].forEach(btn => { btn.disabled = !hasContent; viewRow.appendChild(btn); });
         }
         // How the plot reads its data — the desktop's View menu — as rows of
@@ -1636,10 +1637,10 @@ export function installCompactMethods(ViewerClass) {
         const viewItems = pm._viewMenuModel(panelId, plot) || [];
         for (const item of viewItems) {
             if (!item.action) continue;
-            const btn = button('compact-secondary-btn', '↶ ' + i18n.t(item.label), () => {
+            const btn = button('compact-secondary-btn', i18n.t(item.label), () => {
                 item.run();
                 this._compactAfterPlotChange();
-            }, { title: i18n.t(item.title) });
+            }, { title: i18n.t(item.title), icon: SVG.undo });
             btn.disabled = !!item.disabled;
             viewRow.appendChild(btn);
         }
@@ -1815,12 +1816,12 @@ export function installCompactMethods(ViewerClass) {
             container.appendChild(row);
             if (item.settings) {
                 const extra = el('div', 'compact-action-row');
-                const btn = button('compact-secondary-btn', '⚙ ' + i18n.t('timeseriesGapsSettings'), () => {
+                const btn = button('compact-secondary-btn', i18n.t('timeseriesGapsSettings'), () => {
                     // A sheet and a panel of its own never stack: the plot is
                     // shown with its settings on it.
                     this._closeCompactSheet();
                     item.settings();
-                });
+                }, { icon: SVG.gear });
                 btn.dataset.menuItem = `${item.key}-settings`;
                 btn.disabled = !!item.disabled;
                 extra.appendChild(btn);
