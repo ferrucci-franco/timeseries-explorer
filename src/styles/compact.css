@@ -932,6 +932,49 @@ html.compact.compact-landscape .compact-toast {
     cursor: default;
 }
 
+/* Analyze: each analysis leads with its drawing (as a data tool's tile does),
+   grey until chosen, and the radio sits at the end of the row. */
+.compact-analysis-list .compact-radio::before {
+    order: 2;
+    margin-left: auto;
+}
+
+.compact-analysis-list .compact-btn-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.compact-analysis-glyph {
+    --analysis-accent: var(--text-secondary);
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--analysis-accent) 15%, transparent);
+    color: var(--analysis-accent);
+}
+
+.compact-analysis-list .compact-radio.is-active .compact-analysis-glyph {
+    --analysis-accent: var(--primary-color);
+}
+
+.compact-analysis-list .compact-radio.is-active .compact-btn-label {
+    font-weight: 600;
+}
+
+.compact-analysis-glyph svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
 .compact-plot-signals {
     margin: 0;
     font-size: 0.95rem;

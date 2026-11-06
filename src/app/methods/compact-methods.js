@@ -22,6 +22,7 @@ import {
 import { button, el, section } from './compact-dom.js';
 import {
     COMPACT_ANALYSES,
+    COMPACT_ANALYSIS_OTHER_ICON,
     COMPACT_ANALYSIS_PANES,
     COMPACT_FIT_MODES,
     COMPACT_PAIR_MODES,
@@ -1980,8 +1981,15 @@ export function installCompactMethods(ViewerClass) {
         let restoreOptions = null;
 
         const choose = section(i18n.t('compactAnalysis'));
-        const list = el('div', 'compact-list compact-radio-list');
+        const list = el('div', 'compact-list compact-radio-list compact-analysis-list');
         list.setAttribute('role', 'radiogroup');
+        // Each choice leads with its drawing, as a data tool's tile does; the
+        // radio moves to the end of the row and says which one is on.
+        const glyph = (icon, target) => {
+            const node = el('span', 'compact-analysis-glyph');
+            node.innerHTML = icon;
+            target.prepend(node);
+        };
         // The analysis on this plot, if any, and the plot these radios drive:
         // a time series, or a 2D plot, which correlation and the fit are made
         // from.
@@ -1999,6 +2007,7 @@ export function installCompactMethods(ViewerClass) {
             current.setAttribute('role', 'radio');
             current.setAttribute('aria-checked', 'true');
             current.appendChild(el('span', 'compact-btn-label', this._compactPanelSummary(panelId).modeLabel));
+            glyph(COMPACT_ANALYSIS_OTHER_ICON, current);
             list.appendChild(current);
         }
         for (const analysis of COMPACT_ANALYSES) {
@@ -2016,6 +2025,7 @@ export function installCompactMethods(ViewerClass) {
             });
             item.setAttribute('role', 'radio');
             item.setAttribute('aria-checked', String(selected));
+            glyph(isOff && host?.offIcon ? host.offIcon : analysis.icon, item);
             list.appendChild(item);
         }
         choose.appendChild(list);

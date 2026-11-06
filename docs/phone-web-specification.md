@@ -268,6 +268,11 @@ Analyze holds whatever produces new numbers.
   - the workspace's plot fills the plot area;
   - its options panel (`aside.fft-options`) becomes the content of the Analyze sheet;
   - in portrait, FFT's time and spectrum panes stack vertically.
+  - each is chosen from a radio list led by its drawing, in the hand of the data
+    tools' tiles (§5.8): grey, and in the accent colour once chosen, with the radio
+    at the end of the row. "None" draws the plot that is left — a time series, or
+    a 2D plot. The drawing is the entry's `icon` (`offIcon` for "None") in
+    `compact-analyses.js`.
 - **Data tools** (§5.8): outliers, derivative, integrate, moving average,
   interpolate, detrend, filter, resample, xcorr and collapse.
 - **Derived variables** (§5.7), also reached from Data.
