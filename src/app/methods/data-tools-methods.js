@@ -64,9 +64,12 @@ export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
 export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 // What a lazy file offers (see _isDataToolAvailableForData).
-// Every tool over one variable; the file tools (resampling, cross-correlation,
-// collapsing repeated timestamps) wait for a later sub-phase.
-const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'interpolate', 'detrend', 'filter']);
+// Every tool: the ones over one variable as SQL or in the chunked executor, and
+// the file tools as lazy datasets of their own (lazy-dataset-methods.js).
+const LAZY_DATA_TOOLS = new Set([
+    'removeOutliers', 'derivative', 'integrate', 'movingAverage', 'interpolate', 'detrend', 'filter',
+    'resample', 'xcorr', 'collapse',
+]);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 const INTEGRAL_METHODS = kernelShared.CUMULATIVE_INTEGRAL_METHODS;
@@ -2754,8 +2757,9 @@ proto._isDataToolAvailableForData = function(tool, data) {
     // A lazy file's variables are DuckDB expressions, not arrays: the tools
     // written as SQL over the file (hard bounds, IQR, derivative, integral,
     // detrend) and those the chunked executor runs (moving average, filter,
-    // spikes, fill, the interpolating policies) work on one. The file tools
-    // wait for a later sub-phase (docs/any-size-files.md).
+    // spikes, fill, the interpolating policies) work on one; the resample and
+    // the collapse make lazy datasets, the cross-correlation reads the two
+    // columns whole up to a budget (docs/any-size-files.md).
     return LAZY_DATA_TOOLS.has(tool);
 };
 

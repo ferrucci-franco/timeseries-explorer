@@ -152,9 +152,16 @@ proto._seedResampleDefaults = function() {
     const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
     if (!data) return;
     const time = this._resampleTimeContext(data);
-    const length = Number(time.values?.length) || 0;
-    if (length < 2) return;
-    const { sourceStep } = this._resampleAxisMeasure(time.values, length);
+    let sourceStep;
+    if (this._isDataToolLazyData(data)) {
+        // The whole file's step, when it has been measured; the overview in
+        // memory is a sample of the rows and its spacing says nothing.
+        sourceStep = this._lazyDatasetAxisNow(data)?.sourceStep;
+    } else {
+        const length = Number(time.values?.length) || 0;
+        if (length < 2) return;
+        ({ sourceStep } = this._resampleAxisMeasure(time.values, length));
+    }
     if (!Number.isFinite(sourceStep) || sourceStep <= 0) return;
     const inUiUnits = sourceStep / this._resampleAxisScale(time.kind);
     input.value = String(Number(inUiUnits.toPrecision(6)));
@@ -163,6 +170,16 @@ proto._seedResampleDefaults = function() {
 proto._syncResampleControls = function() {
     const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
     const time = this._resampleTimeContext(data);
+    // A lazy file's step arrives when the axis has been measured over the
+    // whole file: the Δt box is seeded with it then, once per file.
+    if (data && this._isDataToolLazyData(data) && this._getSelectedDataTool() === 'resample') {
+        const key = this._lazyRealAxisKey(data, 'seed');
+        if (!this._lazyResampleSeeded) this._lazyResampleSeeded = new Set();
+        if (!this._lazyResampleSeeded.has(key) && this._lazyDatasetAxisNow(data)) {
+            this._lazyResampleSeeded.add(key);
+            this._seedResampleDefaults();
+        }
+    }
     // Availability first: it may send the mode back to Δt, and the collapse below
     // has to act on the mode that survives.
     this._syncResampleCompleteOption(data, time);
@@ -230,6 +247,11 @@ proto._resampleRegularSampling = function(data, time = this._resampleTimeContext
     if (!values || time.kind === 'index') {
         return { ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason: 'noTimeAxis' };
     }
+    // Judged over an array in memory; a lazy file's overview is a sample of
+    // its rows, which says nothing about whether every step is a multiple.
+    if (this._isDataToolLazyData(data)) {
+        return { ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason: 'lazy' };
+    }
     return this._memoByArray('regularSampling', values, () => detectRegularSampling(values));
 };
 
@@ -270,6 +292,7 @@ proto._syncResampleCompleteOption = function(data, time) {
         nonMonotonic: 'dataToolResampleCompleteBackwards',
         irregularStep: 'dataToolResampleCompleteIrregular',
         noTimeAxis: 'dataToolResampleCompleteNoAxis',
+        lazy: 'dataToolResampleCompleteLazy',
     }[regular.reason] || 'dataToolResampleCompleteIrregular';
     note.textContent = i18n.t(key);
 };
@@ -298,6 +321,10 @@ proto._syncResampleDetectedTag = function(data, time) {
 };
 
 proto._resampleDetectedStepInUiUnits = function(data, time = this._resampleTimeContext(data)) {
+    if (this._isDataToolLazyData(data)) {
+        const sourceStep = this._lazyDatasetAxisNow(data)?.sourceStep;
+        return Number.isFinite(sourceStep) && sourceStep > 0 ? sourceStep / this._resampleAxisScale(time.kind) : NaN;
+    }
     const length = Number(time?.values?.length) || 0;
     if (length < 2) return NaN;
     const { sourceStep } = this._resampleAxisMeasure(time.values, length);
@@ -310,6 +337,8 @@ proto._resampleDetectedStepInUiUnits = function(data, time = this._resampleTimeC
 proto._resampleSourceGaps = function(data, time = this._resampleTimeContext(data)) {
     const values = time?.values;
     if (!values || time.kind === 'index') return null;
+    // Over the whole file, from the same detector run as SQL.
+    if (this._isDataToolLazyData(data)) return this._lazyDatasetAxisNow(data)?.gaps || null;
     const info = this._axisStepInfo(values);
     return info.hasNominalStep && info.count > 0
         ? { count: info.count, missing: info.totalMissing }
@@ -346,16 +375,23 @@ proto._resampleAxisMeasure = function(x, length) {
 // planResampleGrid with the commit path, so the summary cannot promise a sample
 // count the resample then produces differently.
 proto._resamplePlan = function(data, time = this._resampleTimeContext(data)) {
-    const length = Number(time.values?.length) || Number(data?.metadata?.numTimesteps) || 0;
+    // A lazy file's axis is measured over the whole file, once; until it is,
+    // the summary says so rather than reading the overview's spacing.
+    const lazy = this._isDataToolLazyData(data);
+    const lazyAxis = lazy ? this._lazyDatasetAxisNow(data) : null;
+    if (lazy && !lazyAxis) return { ok: false, text: i18n.t('dataToolLazyMeasuringAxis') };
+    const length = lazy ? lazyAxis.rows : (Number(time.values?.length) || Number(data?.metadata?.numTimesteps) || 0);
     if (length < 2) return { ok: false, text: i18n.t('dataToolResampleTooShort') };
 
     const config = this._getResampleConfig();
     const params = this._resampleGridParams(config.params, time.kind);
     const scale = this._resampleAxisScale(time.kind);
-    const x = time.values && time.values.length === length ? time.values : null;
+    const x = !lazy && time.values && time.values.length === length ? time.values : null;
 
     // With no axis of its own the file is sampled by row, so a step is one row.
-    const measured = x ? this._resampleAxisMeasure(x, length) : { span: length - 1, sourceStep: 1 };
+    const measured = lazy
+        ? { span: lazyAxis.span, sourceStep: lazyAxis.sourceStep }
+        : (x ? this._resampleAxisMeasure(x, length) : { span: length - 1, sourceStep: 1 });
     const span = measured.span;
     const sourceStep = Number.isFinite(measured.sourceStep) && measured.sourceStep > 0
         ? measured.sourceStep
@@ -364,7 +400,8 @@ proto._resamplePlan = function(data, time = this._resampleTimeContext(data)) {
     let step;
     let count;
     try {
-        ({ step, count } = planResampleGrid({ span, sourceStep, params }));
+        // A lazy file's grid is written to a table, never held: no point limit.
+        ({ step, count } = planResampleGrid({ span, sourceStep, params, maxPoints: lazy ? Infinity : undefined }));
     } catch (err) {
         return { ok: false, text: i18n.t(err?.code || 'dataToolResampleStepInvalid') };
     }
@@ -427,11 +464,6 @@ proto.commitResampleTool = async function(options = {}) {
         this._setOutlierMessage(() => i18n.t('outlierLoadFileFirst'), 'error');
         return null;
     }
-    if (this._isDataToolLazyData(data)) {
-        this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
-        return null;
-    }
-
     const time = this._resampleTimeContext(data);
     const config = this._getResampleConfig();
     const plan = this._resamplePlan(data, time);
@@ -445,7 +477,7 @@ proto.commitResampleTool = async function(options = {}) {
     const recipe = { tool: 'resample', sourceFileId: fileId, sourceName: selection, params: config.params };
     let computed;
     try {
-        computed = await this._computeResampleDataset(fileId, data, recipe);
+        computed = await this._computeResampleDataset(fileId, data, recipe, outputName);
     } catch (err) {
         if (err?.cancelled) return null;
         if (err?.code === 'outlierNoVariables') {
@@ -530,7 +562,9 @@ proto.commitResampleTool = async function(options = {}) {
  * so all four produce exactly the same file.
  * @returns {Promise<{ data: object, resampled: object, names: string[] }>}
  */
-proto._computeResampleDataset = async function(sourceFileId, sourceData, recipe) {
+proto._computeResampleDataset = async function(sourceFileId, sourceData, recipe, name = '') {
+    // A lazy file's resample is a lazy file of its own (lazy-dataset-methods.js).
+    if (this._isDataToolLazyData(sourceData)) return this._computeLazyResampleDataset(sourceFileId, sourceData, recipe, name);
     const time = this._resampleTimeContext(sourceData);
     const names = this._resampleTargetNames(sourceData, recipe.sourceName || '');
     if (!names.length) {

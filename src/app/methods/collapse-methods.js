@@ -56,6 +56,14 @@ proto._collapsePlan = function(data, selection = this._collapseSelection()) {
     // A row index counts rows: it cannot repeat, and collapsing it would mean
     // merging rows that were never said to be at one instant.
     if (time.kind === 'index' || !time.values?.length) return { ...blank, code: 'dataToolCollapseNoTimeAxis' };
+    // A lazy file's repeats are counted over the whole file, with its axis;
+    // the overview in memory is a sample of the rows.
+    if (this._isDataToolLazyData(data)) {
+        const axis = this._lazyDatasetAxisNow?.(data);
+        if (!axis) return { ...blank, code: 'dataToolLazyMeasuringAxis' };
+        if (!axis.repeats) return { ...blank, code: 'dataToolCollapseNothing', samples: axis.rows };
+        return { ok: true, code: '', names, samples: axis.rows, groups: axis.rows - axis.repeats, collapsed: axis.repeats };
+    }
     const runs = timestampRuns(time.values);
     if (!runs.collapsed) return { ...blank, code: 'dataToolCollapseNothing', samples: time.values.length };
     return {
@@ -93,7 +101,9 @@ proto._syncCollapseControls = function() {
         .replace('{left}', i18n.formatNumber(plan.groups));
 };
 
-proto._computeCollapseDataset = async function(sourceFileId, sourceData, recipe) {
+proto._computeCollapseDataset = async function(sourceFileId, sourceData, recipe, name = '') {
+    // A lazy file's collapse is a lazy file of its own (lazy-dataset-methods.js).
+    if (this._isDataToolLazyData(sourceData)) return this._computeLazyCollapseDataset(sourceFileId, sourceData, recipe, name);
     const time = this._resampleTimeContext(sourceData);
     const names = this._resampleTargetNames(sourceData, recipe?.sourceName || RESAMPLE_ALL_VARIABLES);
     if (!names.length) {
@@ -192,10 +202,6 @@ proto.commitCollapseTool = async function(options = {}) {
         this._setOutlierMessage(() => i18n.t('outlierLoadFileFirst'), 'error');
         return null;
     }
-    if (this._isDataToolLazyData(data)) {
-        this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
-        return null;
-    }
     const selection = this._collapseSelection();
     const plan = this._collapsePlan(data, selection);
     if (!plan.ok) {
@@ -213,7 +219,7 @@ proto.commitCollapseTool = async function(options = {}) {
     };
     let computed;
     try {
-        computed = await this._computeCollapseDataset(fileId, data, recipe);
+        computed = await this._computeCollapseDataset(fileId, data, recipe, outputName);
     } catch (err) {
         if (err?.cancelled) return null;
         const code = err?.code;

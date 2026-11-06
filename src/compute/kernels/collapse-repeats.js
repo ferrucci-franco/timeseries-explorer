@@ -101,3 +101,106 @@ export function runCollapseRepeats({ time, columns = [], params = {} } = {}) {
     });
     return { time: out, columns: collapsedColumns, groups: runs.groups, collapsed: runs.collapsed, aggregate };
 }
+
+// ── A chunk at a time ──────────────────────────────────────────────────────
+
+/**
+ * runCollapseRepeats fed the rows a chunk at a time, giving one row per
+ * instant as each run closes: what the chunked executor runs over a file too
+ * large to hold (src/data/chunk-executor.js, runDatasetJob). A run may straddle
+ * two chunks; it is carried open until a row with another stamp arrives, or
+ * the series ends. The additions are made in the rows' order, as aggregateRun
+ * makes them, so the doubles are the same.
+ *
+ *   const collapser = createCollapser({ aggregate: 'mean' }, { columns: 2 });
+ *   for (const chunk of chunks) emit(collapser.push(chunk.x, [a, b]));
+ *   emit(collapser.flush());
+ *
+ * `push(time, columns)` returns `{ t, columns }`, the runs closed by this
+ * chunk; `flush()` the one still open. `report()` counts the rows read, the
+ * groups written and the rows collapsed, as runCollapseRepeats does.
+ */
+export function createCollapser(params = {}, { columns = 1 } = {}) {
+    const aggregate = normalizeCollapseAggregate(params.aggregate);
+    let open = null;   // { stamp, length, first[], last[], sum[], count[], max[], min[] }
+    let rows = 0;
+    let groups = 0;
+    let done = false;
+
+    // The run's accumulators read the row the way aggregateRun does, in order.
+    const take = (run, values, i) => {
+        for (let c = 0; c < columns; c++) {
+            const value = Number(values[c][i]);
+            run.last[c] = value;
+            if (!Number.isFinite(value)) continue;
+            run.sum[c] += value;
+            run.count[c]++;
+            if (value > run.max[c]) run.max[c] = value;
+            if (value < run.min[c]) run.min[c] = value;
+        }
+    };
+    const start = (stamp, values, i) => {
+        const run = {
+            stamp,
+            length: 1,
+            first: Array.from({ length: columns }, (_, c) => Number(values[c][i])),
+            last: new Array(columns).fill(NaN),
+            sum: new Float64Array(columns),
+            count: new Int32Array(columns),
+            max: new Float64Array(columns).fill(-Infinity),
+            min: new Float64Array(columns).fill(Infinity),
+        };
+        take(run, values, i);
+        return run;
+    };
+    const close = (run, c) => {
+        // A run of one row is that row, whatever it holds; a longer one is
+        // aggregated over its finite values, NaN when there is none.
+        if (run.length === 1) return run.first[c];
+        if (aggregate === 'first') return run.first[c];
+        if (aggregate === 'last') return run.last[c];
+        if (!run.count[c]) return NaN;
+        if (aggregate === 'max') return run.max[c];
+        if (aggregate === 'min') return run.min[c];
+        return run.sum[c] / run.count[c];
+    };
+
+    function feed(time, values, final) {
+        const n = time?.length || 0;
+        const t = [];
+        const outs = Array.from({ length: columns }, () => []);
+        const emit = (run) => {
+            t.push(run.stamp);
+            for (let c = 0; c < columns; c++) outs[c].push(close(run, c));
+            groups++;
+        };
+        for (let i = 0; i < n; i++) {
+            const stamp = Number(time[i]);
+            rows++;
+            // A finite stamp joins the open run when it is the same instant; a
+            // non-finite one never joins anything (timestampRuns).
+            if (open && Number.isFinite(open.stamp) && stamp === open.stamp) {
+                open.length++;
+                take(open, values, i);
+                continue;
+            }
+            if (open) emit(open);
+            open = start(stamp, values, i);
+        }
+        if (final && open) { emit(open); open = null; }
+        return { t: Float64Array.from(t), columns: outs.map(column => Float64Array.from(column)) };
+    }
+
+    return {
+        push(time, values) {
+            if (done) throw new Error('collapser: push after flush');
+            return feed(time, values, false);
+        },
+        flush() {
+            if (done) throw new Error('collapser: flush twice');
+            done = true;
+            return feed(null, null, true);
+        },
+        report: () => ({ aggregate, rows, groups, collapsed: rows - groups }),
+    };
+}

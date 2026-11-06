@@ -2,10 +2,11 @@
 // (lazy) mode, in a real browser with the DuckDB-WASM the app ships.
 //
 // A 12 MB CSV (above the 10 MB full-load limit set here) opens lazily. Through
-// the panel's own controls: the tool picker offers every tool over one
-// variable (derivative, detrend, integral, moving average, fill, filter and
-// outliers) and none of the file tools; every outlier method and both
-// replacements; every integral policy; every detrend method. A derivative, an
+// the panel's own controls: the tool picker offers every tool — the ones over
+// one variable (derivative, detrend, integral, moving average, fill, filter
+// and outliers) and the file tools (resample, collapse, cross-correlation);
+// every outlier method and both replacements; every integral policy; every
+// detrend method. A derivative, an
 // integral bridging holes, a linear detrend, a moving average, a
 // moving-average detrend, a designed filter, a zero-phase one, a spike
 // removal replaced by interpolation and a fill of missing samples are created
@@ -14,7 +15,10 @@
 // overlay that counts the rows; cancelled, it leaves no variable and no sink.
 // The filter designer reads the sample rate of the whole file (100 Hz),
 // measured once, not of the overview in memory. The spike detector's chunks
-// run in the compute worker pool.
+// run in the compute worker pool. A resample and a collapse of repeated
+// timestamps are lazy datasets of their own, written to a table and listed
+// under the source with their recipe; the cross-correlation reads the columns
+// whole. Each is drawn from its table (a zoom returns full resolution).
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:lazy-data-tools`.
 // Not part of test:release, which stays offline and browser-free.
@@ -28,7 +32,9 @@ function makeCsv() {
         const a = i % 5003 === 7 ? 90 : Math.sin(i / 500) + (i % 7) / 100;
         // Holes for the fill: singles and a run of 30.
         const hole = i % 1201 === 600 || (i > 200000 && i < 200030);
-        lines.push(`${(i * 0.01).toFixed(2)},${hole ? '' : a.toFixed(6)},${(i / 1000 + Math.cos(i / 90)).toFixed(6)}`);
+        // A repeated stamp now and then, for the collapse.
+        const t = (i - (i % 977 === 5 ? 1 : 0)) * 0.01;
+        lines.push(`${t.toFixed(2)},${hole ? '' : a.toFixed(6)},${(i / 1000 + Math.cos(i / 90)).toFixed(6)}`);
     }
     return { name: 'lazy-tools.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
 }
@@ -77,9 +83,7 @@ try {
 
     const picker = await page.evaluate(() => Object.fromEntries(
         [...document.querySelectorAll('#data-tool-select option')].filter(o => o.value).map(o => [o.value, !o.disabled])));
-    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'filter', 'integrate', 'interpolate', 'movingAverage', 'removeOutliers'],
-        'a lazy file offers every tool over one variable');
-    assert.deepEqual(Object.keys(picker).filter(k => !picker[k]).sort(), ['collapse', 'resample', 'xcorr'], 'and none of the file tools yet');
+    assert.deepEqual(Object.keys(picker).filter(k => !picker[k]), [], 'a lazy file offers every tool');
 
     await createAndPlot(page, 'derivative', 'a', 'da', () => pick(page, 'derivative-method', 'centered'));
 
@@ -221,6 +225,60 @@ try {
     assert.equal(cancelled.tables, cancelled.sinksBefore, 'no table is left behind in DuckDB');
     assert.match(cancelled.message, /never/, `the panel says it was not created (${cancelled.message})`);
 
+    // The file tools: lazy datasets of their own, and a correlation in memory.
+    async function createDataset(tool, source, output, configure = async () => {}) {
+        await pick(page, 'data-tool-select', tool);
+        if (source) await pick(page, 'outlier-variable', source);
+        // The panel measures the axis over the whole file first; the summary
+        // says so, then reads it.
+        await page.waitForFunction(() => !/…$/.test(document.getElementById('resample-info')?.textContent || '')
+            && !/…$/.test(document.getElementById('collapse-info')?.textContent || '')
+            && !/…$/.test(document.getElementById('xcorr-info')?.textContent || ''), null, { timeout: 120000 });
+        await configure();
+        await page.locator('#outlier-output-name').fill(output);
+        await page.locator('#outlier-output-name').dispatchEvent('input');
+        const blocked = await page.evaluate(() => {
+            const button = document.getElementById('data-tool-create-plot');
+            return button.disabled ? (document.getElementById('outlier-message')?.textContent || 'disabled') : '';
+        });
+        assert.equal(blocked, '', `${tool}: the create button is enabled`);
+        await page.locator('#data-tool-create-plot').click();
+        await page.waitForFunction(name => [...window.app.files.values()].some(entry => entry.name === name && entry.derivedDataset), output, { timeout: 180000 });
+        await page.waitForFunction(() => !window.app._dataToolBusy, null, { timeout: 120000 });
+        return page.evaluate(name => {
+            const [fileId, entry] = [...window.app.files.entries()].find(([, e]) => e.name === name);
+            const data = window.app.plotManager.files.get(fileId).data;
+            return { fileId, tool: entry.derivedDataset.tool, lazy: !!data._duckdb, rows: data.metadata.numTimesteps, variables: Object.keys(data.variables), metadata: JSON.parse(JSON.stringify({ resample: data.metadata.resample, collapse: data.metadata.collapse, xcorr: data.metadata.xcorr })) };
+        }, output);
+    }
+    const resampled = await createDataset('resample', '', 'rs', async () => {
+        await pick(page, 'resample-grid-mode', 'step');
+        await pick(page, 'resample-method', 'mean');
+        await page.locator('#resample-step').fill('0.1');
+        await page.locator('#resample-step').dispatchEvent('input');
+    });
+    assert.equal(resampled.lazy, true, 'a resample of a lazy file is a lazy dataset');
+    assert.equal(resampled.rows, 42000, `on the grid asked for (${resampled.rows} rows)`);
+    assert.equal(resampled.metadata.resample.method, 'mean', 'with its recipe');
+    const collapsed = await createDataset('collapse', '', 'cl', async () => pick(page, 'collapse-aggregate', 'mean'));
+    assert.equal(collapsed.lazy, true, 'a collapse is a lazy dataset');
+    assert.equal(collapsed.metadata.collapse.collapsed, 430, `the repeated stamps of the file (${collapsed.metadata.collapse.collapsed})`);
+    assert.equal(collapsed.rows, 420000 - 430, 'one row per instant');
+    const correlation = await createDataset('xcorr', 'a', 'xc', async () => {
+        await pick(page, 'xcorr-second', 'b');
+        await page.locator('#xcorr-max-lag').fill('2');
+        await page.locator('#xcorr-max-lag').dispatchEvent('input');
+    });
+    assert.equal(correlation.lazy, false, 'the correlation is held in memory');
+    assert.equal(correlation.rows, 401, `201 lags each side at 10 ms (${correlation.rows})`);
+    assert.ok(Math.abs(correlation.metadata.xcorr.dt - 0.01) < 1e-9, 'the lag axis from the step measured over the whole file');
+    const datasetZoom = await page.evaluate(async (fileId) => {
+        const data = window.app.plotManager.files.get(fileId).data;
+        const raw = await data._duckdb.source.getRawColumnsRange(data, ['a'], 1000, 1010, 1e6);
+        return raw.x.length;
+    }, resampled.fileId);
+    assert.equal(datasetZoom, 101, 'the dataset is read from its table: a 10 s zoom at 0.1 s returns 101 rows');
+
     // Each output is on a plot and reads the file, not the overview: a narrow
     // zoom returns every row in it.
     const zoom = await page.evaluate(async () => {
@@ -240,7 +298,7 @@ try {
         assert.ok(zoom.traced.includes(name), `${name} is plotted`);
     }
     assert.deepEqual(errors, [], 'no page error');
-    console.log('e2e lazy data tools: derivative, integral, detrend, moving averages, filters, spikes and fill created from the panel on a lazy file');
+    console.log('e2e lazy data tools: every data tool created from the panel on a lazy file, the file tools as lazy datasets');
 } finally {
     await browser.close();
     await server.close();
