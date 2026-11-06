@@ -28,15 +28,18 @@
 // a time read back from the work table, and its outputs replace those rows of
 // the sink. The work table goes when the job ends.
 //
-// What the later sub-phases add here (docs/any-size-files.md, 4b): overlap and
-// a look-ahead to the next finite sample for the kernels without state.
+// The kernels without state (the spike detector, the fill of missing samples,
+// the interpolation of outliers, the integral bridging a hole) come wrapped in
+// the adapters of src/compute/kernels/windowed.js, which give them the rows
+// around each chunk — a fixed overlap, or a look-ahead to the next finite
+// sample — and may answer asynchronously: `push` and `flush` are awaited.
 
 /**
  * @param {object} job
  * @param {object} job.data a lazy file
  * @param {string[]} job.sourceNames the variables the kernel reads
  * @param {{ push(chunk), flush(), backward?(s) }} job.kernel fed the stream's
- *   chunks — `{ rows, x, yByVar }` — in order; returns the outputs for the next
+ *   chunks — `{ rows, x, yByVar }` — in order; returns (or resolves to) the outputs for the next
  *   rows: one column, one per sink column, or `{ values, deferred }` when some
  *   of them belong to the second pass (see above)
  * @param {object} job.sink from DuckDbSource.createSink
@@ -108,11 +111,11 @@ export async function runChunkedJob({
             grown.set(rows, queue.length);
             queue = grown;
             rowsRead += rows.length;
-            await emit(kernel.push(chunk));
+            await emit(await kernel.push(chunk));
             onProgress?.({ rows: rowsRead, totalRows, pass: 1 });
             if (signal?.aborted) throw abortError();
         }
-        await emit(kernel.flush());
+        await emit(await kernel.flush());
         if (queue.length) throw new Error(`runChunkedJob: ${queue.length} rows were given no output`);
         if (signal?.aborted) throw abortError();
         await writer.finish();

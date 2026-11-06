@@ -4490,8 +4490,11 @@ export default class DuckDbSource {
 
     _boundsPredicateSql(baseExpression, params = {}) {
         const clauses = [];
-        const lower = Number(params.lower);
-        const upper = Number(params.upper);
+        // An empty bound is open: Number(null) is 0, and would read "no
+        // maximum" as a maximum of zero.
+        const bound = value => (value === null || value === undefined || value === '' ? NaN : Number(value));
+        const lower = bound(params.lower);
+        const upper = bound(params.upper);
         if (Number.isFinite(lower)) clauses.push(`${baseExpression} >= ${this._numericLiteral(lower)}`);
         if (Number.isFinite(upper)) clauses.push(`${baseExpression} <= ${this._numericLiteral(upper)}`);
         if (clauses.length >= 2 && lower > upper) return 'FALSE';

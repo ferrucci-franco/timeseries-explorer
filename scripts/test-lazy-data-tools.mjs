@@ -416,7 +416,9 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
     const irregular = await checkIntegral('irregular axis', lazy, eager, 'a', { method: 'trapezoidal', gapPolicy: 'zero', initial: 0 });
     assert.equal(irregular.hasNominalStep, false, 'an irregular axis has no nominal step');
     assert.equal(h._isLazySqlToolConfig({ tool: 'integrate', params: { gapPolicy: 'interpolate' } }), false,
-        'bridging a hole needs the next finite sample: not on a lazy file yet');
+        'bridging a hole needs the next finite sample: not SQL');
+    assert.equal(h._isLazySinkToolConfig({ tool: 'integrate', params: { gapPolicy: 'interpolate' } }), true,
+        'it runs in the chunked executor (scripts/test-lazy-window-tools.mjs)');
     console.log('lazy data tools: the integral matches the kernel bit for bit (3 methods, zero and propagate, gaps, holes, 3 axes)');
 }
 
@@ -470,9 +472,10 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
     console.log('lazy data tools: a diff() formula\'s overview is read from the file');
 }
 
-// ── What stays unavailable says so ──────────────────────────────────────────
+// ── Which path each tool takes ──────────────────────────────────────────────
 {
-    assert.equal(h._isDataToolAvailableForData('interpolate', lazy), false, 'filling holes waits for the chunked executor (4b-3)');
+    assert.equal(h._isDataToolAvailableForData('interpolate', lazy), true, 'filling holes runs in the chunked executor');
+    assert.equal(h._isDataToolAvailableForData('resample', lazy), false, 'resampling waits for a later sub-phase (4b-4)');
     assert.equal(h._isDataToolAvailableForData('derivative', lazy), true, 'the derivative is available');
     assert.equal(h._isDataToolAvailableForData('integrate', lazy), true, 'the integral is available');
     // The moving average and the filter run in the chunked executor, not as
@@ -483,6 +486,12 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
         'the moving-average baseline of a detrend is not SQL');
     assert.equal(h._isLazySinkToolConfig({ tool: 'detrend', params: { method: 'movingAverage' } }), true,
         'it runs in the chunked executor');
-    assert.equal(h._isLazySqlToolConfig({ tool: 'removeOutliers', method: 'spike' }), false, 'and the spike detector');
+    assert.equal(h._isLazySqlToolConfig({ tool: 'removeOutliers', method: 'spike' }), false, 'nor is the spike detector');
+    assert.equal(h._isLazySinkToolConfig({ tool: 'removeOutliers', method: 'spike', replacement: 'nan' }), true, 'it runs in the chunked executor');
+    assert.equal(h._isLazySqlToolConfig({ tool: 'removeOutliers', method: 'iqr', replacement: 'nan' }), true, 'IQR replacing with NaN is SQL');
+    assert.equal(h._isLazySqlToolConfig({ tool: 'removeOutliers', method: 'iqr', replacement: 'interpolate' }), false, 'interpolating the outliers is not');
+    assert.equal(h._isLazySinkToolConfig({ tool: 'removeOutliers', method: 'iqr', replacement: 'interpolate' }), true, 'it runs in the chunked executor');
+    assert.equal(h._isLazySinkToolConfig({ tool: 'removeOutliers', method: 'bounds', replacement: 'interpolate' }), true, 'so do interpolated hard bounds');
+    assert.equal(h._isLazySinkToolConfig({ tool: 'removeOutliers', method: 'bounds', replacement: 'nan' }), false, 'hard bounds replacing with NaN keep their own path');
 }
 console.log('lazy data tools: derivative, integral, IQR and detrend run over every row of a lazy file');

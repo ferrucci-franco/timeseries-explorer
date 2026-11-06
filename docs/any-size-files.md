@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a, 4b-1 y 4b-2 implementadas (secciones "Implementado (fase 4b-1)" y "Implementado (fase 4b-2)"); Parquet sin red resuelto (§8); el resto de la 4b diseñado (sección "Diseño (fase 4b)"); la base de DuckDB sigue en memoria, con OPFS medido y dejado para la 4b-4 (§10, "Decidido en la 4b-1"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a, 4b-1, 4b-2 y 4b-3 implementadas (secciones "Implementado (fase 4b-1)", "Implementado (fase 4b-2)" e "Implementado (fase 4b-3)"); Parquet sin red resuelto (§8); la 4b-4 diseñada (sección "Diseño (fase 4b)"); la base de DuckDB sigue en memoria, con OPFS medido y dejado para la 4b-4 (§10, "Decidido en la 4b-1"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -70,8 +70,8 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 
 | Función | En lazy | Cadena |
 |---|---|---|
-| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b**, ~~integral~~ en la 4a (salvo *interpolar*), ~~media móvil y detrend por media móvil~~ en la **4b-1**, ~~filtro~~ en la **4b-2** | `dataToolLazyDisabled` |
-| Outliers por picos | deshabilitados (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | `dataToolLazyBoundsOnly` |
+| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b**, ~~integral~~ en la 4a, ~~media móvil y detrend por media móvil~~ en la **4b-1**, ~~filtro~~ en la **4b-2**, ~~picos, relleno, reemplazo por interpolación e integral con *interpolar*~~ en la **4b-3**; quedan remuestreo, colapsar y correlación cruzada (**4b-4**) | `dataToolLazyDisabled` |
+| Outliers por picos | ~~deshabilitados~~ **resueltos en la 4b-3** (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | — |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
@@ -215,15 +215,15 @@ puede correr sobre trozos. Tres familias:
 | Outliers por cotas (`detectBoundsOutliers`) | puntual | SQL, **ya hecho** | — |
 | Derivada (`computeDerivative`) | ±1 (centrada), 1 (diferencia) | SQL `LAG`/`LEAD` como columna virtual, **hecho (3b)** | Exacta bit a bit y en streaming (`STREAMING_WINDOW`). Δt = 0 y no finitos replican el kernel. |
 | Media móvil (`computeMovingAverage`) | ventana *w* | forma incremental con estado (suma y conteo corridos), **hecho (4b-1)** | La suma corrida es sensible al orden: se lleva el estado, no se recalcula por trozo. Bit a bit. |
-| Integral (`computeIntegral`) | estado (acumulado) | `SUM() OVER (ROWS UNBOUNDED PRECEDING)` en streaming, **hecho (4a)** salvo la política *interpolar* | Exacta bit a bit. Cada zoom re-escanea desde el inicio del archivo: correcto, y en CSV igual de lento que cualquier zoom. |
-| Picos (`detectSpikeOutliers`) | ventana `half` | trozos con solape 25 (+16 para las rachas), en el pool de workers, **4b-3** | Sin estado: la mediana y la MAD de una ventana no dependen del orden de inserción. 10 s por 20 M en JS: por eso en workers. |
+| Integral (`computeIntegral`) | estado (acumulado) | `SUM() OVER (ROWS UNBOUNDED PRECEDING)` en streaming, **hecho (4a)**; la política *interpolar*, forma incremental con mirada hacia adelante al sumidero, **hecho (4b-3)** | Exacta bit a bit. Cada zoom re-escanea desde el inicio del archivo: correcto, y en CSV igual de lento que cualquier zoom. |
+| Picos (`detectSpikeOutliers`) | ventana `half` | trozos con solape `half + 2·maxRun + 2` filas, en el pool de workers, **hecho (4b-3)** | Sin estado: la mediana y la MAD de una ventana no dependen del orden de inserción. 10 s por 20 M en JS: por eso en workers. |
 | Outliers IQR (`detectIqrOutliers`) | global (cuantiles) | cuantiles exactos por pasadas de histograma, luego predicado puntual en SQL, **hecho (3b)** | `quantile_cont` guardaría la columna entera en memoria: no se usa. Exacto bit a bit. |
 | Detrend media / lineal / polinomio (`computeDetrend`) | global (ajuste) + puntual (aplicar) | agregados SQL (`fsum` de potencias), resolver en JS, aplicar como SQL, **hecho (3b)** | El ajuste coincide al redondeo; la resta, bit a bit. |
 | Detrend por primera muestra | puntual | **hecho (3b)** | — |
 | Detrend por media móvil | como media móvil | **4b-1** | — |
 | Filtro IIR hacia adelante (`applyFilter`) | estado | forma incremental con estado, **hecho (4b-2)** | El paso del eje es la pasada de la 4a, sobre el archivo entero; el avance `D` retiene las últimas `D` salidas de cada tramo. Bit a bit. |
 | Filtro IIR de fase cero | dos pasadas, la segunda **al revés** | tramos cortos en memoria; los largos, ida a una tabla de trabajo y vuelta leyéndola por rangos de `rn` en orden inverso, que corrige el sumidero en su lugar, **hecho (4b-2)** | Leer un CSV al revés en SQL es `ORDER BY t DESC` = sort completo. Un trozo del sumidero al revés cuesta 11 ms (medido). |
-| Rellenar faltantes (`fillMissingValues`) | vecinos a ambos lados del hueco | trozos con solape, mirada hacia adelante hasta la próxima muestra finita con tope, en workers, **4b-3** | Los 7 métodos son locales (`data-tool-sampling.md` §2). Un hueco más largo que el tope se omite, como uno más largo que `maxGap`. |
+| Rellenar faltantes (`fillMissingValues`) | vecinos a ambos lados del hueco | mirada hacia adelante hasta la próxima muestra finita con tope, en el hilo principal, **hecho (4b-3)** | Los 7 métodos son locales (`data-tool-sampling.md` §2). Un hueco más largo que el tope se omite, como uno más largo que `maxGap`. |
 | Remuestreo (`runResample`) | bucket (estado en el borde) | forma incremental con cursor; la salida es un **dataset lazy** cuya tabla es el sumidero, **4b-4** | Precedente: *Resample* ya produce **un archivo nuevo**. El tope de 20 M puntos no aplica: la grilla no se materializa. |
 | Colapsar timestamps repetidos (`runCollapseRepeats`) | racha (estado) | forma incremental; dataset lazy, **4b-4** | — |
 | Correlación cruzada (`runCrossCorrelation`) | global (FFT de ambas) | la selección en memoria hasta un presupuesto, como la FFT, **4b-4** | La ruta directa O(N·L) no se paga a 20 M × 5 M. |
@@ -285,7 +285,7 @@ En orden de valor visible por esfuerzo:
 | 2 | **Exportación exacta** para lazy sobre el stream (CSV; Parquet vía `COPY` directo) | 1 día | bajo; cierra el defecto §1.6 del blueprint, visible al usuario desde el primer día |
 | 3 | Herramientas puntuales y de ventana como **columnas virtuales SQL**: derivada, IQR, detrend (tras su pasada de agregados) | 1–2 días + paridad eager/lazy por herramienta | medio: semántica de no finitos y Δt = 0 |
 | 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
-| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
+| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital), **4b-3 hecha** (picos, relleno, reemplazo por interpolación, integral con *interpolar*) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
 | 5 | Proyecto por definición para archivos lazy | 2–3 días | medio: formato de sesión, compatibilidad hacia atrás |
 | 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
 
@@ -565,7 +565,7 @@ de multiplicar por 0,001. El e2e crea una integral desde el panel.
 
 ### Diseño (fase 4b): las herramientas que no se escriben en SQL
 
-**Estado: diseño; la 4b-1 y la 4b-2 están implementadas (secciones "Implementado (fase 4b-1)" y "Implementado (fase 4b-2)", con lo que cambió respecto de este diseño).** Lo que queda después de la 4a son las
+**Estado: diseño; la 4b-1, la 4b-2 y la 4b-3 están implementadas (secciones "Implementado (fase 4b-1)", "Implementado (fase 4b-2)" e "Implementado (fase 4b-3)", con lo que cambió respecto de este diseño); queda la 4b-4.** Lo que queda después de la 4a son las
 herramientas cuya salida no es una expresión sobre la fila y sus vecinas
 inmediatas: media móvil (y el detrend por media móvil), filtro digital (hacia
 adelante y de fase cero), picos, rellenar faltantes, las políticas *interpolar*
@@ -847,7 +847,7 @@ Node, y 5 M filas en Chromium con el bundle `eh` de la app:
 |---|---|---|
 | **4b-1** | El ejecutor, el sumidero en tabla con presupuesto y lectura por `_fromSql`, la forma incremental de la **media móvil** (y el detrend por media móvil), overlay con progreso y cancelación, sesión (re-ejecución), tests de borde de trozo, e2e. **Decidir base en OPFS o en memoria** midiendo las pasadas de la 3b y el escaneo de CSV bajo `memory_limit` (§10) | 2–3 días |
 | **4b-2** | **Filtro IIR** hacia adelante (estado, huecos con el umbral de la 4a, avance) y de **fase cero** (sumidero de trabajo, vuelta al revés) | 1–2 días |
-| **4b-3** | La familia sin estado en el pool de workers: **picos**, **rellenar faltantes**, reemplazo de outliers por interpolación, política *interpolar* de la integral; el tope de mirada hacia adelante | 2 días |
+| **4b-3** | La familia sin estado en el pool de workers: **picos**, **rellenar faltantes**, reemplazo de outliers por interpolación, política *interpolar* de la integral; el tope de mirada hacia adelante — **hecha** | 2 días |
 | **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto; los sumideros de desborde (Parquet en OPFS en web si la base quedó en memoria, Parquet nativo en escritorio) con sus mediciones; actualización en vivo por continuación | 2–3 días |
 
 Cada sub-fase es un PR con paridad bit a bit contra el kernel en memoria (el
@@ -1161,6 +1161,152 @@ Lo que dicen:
 - **El paso del eje se paga una vez por archivo** (lo guarda
   `_lazyAxisSteps`): el segundo filtro, y el diseñador, ya no lo miden. Es una
   pasada como el umbral de la integral, que mide lo mismo.
+
+### Implementado (fase 4b-3): picos, relleno, reemplazo por interpolación e integral con *interpolar*
+
+Las herramientas que leen el **vecindario** de una muestra y no el pasado
+entero: el detector de **picos** (con reemplazo por NaN o por interpolación),
+el reemplazo por **interpolación** de cualquier detector (también cotas e
+IQR), **rellenar faltantes** con sus siete métodos, y la **integral** con la
+política *interpolar* (los tres métodos). Todas corren por el ejecutor y el
+sumidero de la 4b-1 sobre todas las filas del archivo, bit a bit con el kernel
+en memoria. Con esto, **toda herramienta sobre una variable** está disponible
+en un archivo lazy; quedan las de archivo (remuestreo, colapsar, correlación
+cruzada: 4b-4).
+
+**Dos adaptadores, en vez de reescribir los kernels**
+(`src/compute/kernels/windowed.js`). El diseño pedía la forma incremental de
+cada kernel; para esta familia no hace falta: una función sobre un array con
+un *núcleo* — `compute(vista)` devuelve las salidas de las filas del núcleo,
+dadas las filas que lo rodean — corre igual sobre la serie entera (un solo
+núcleo) que sobre un archivo por trozos. Las funciones de array
+(`fillMissingValues`, `computeIntegral`) son esa única llamada, así que la
+paridad sigue siendo por construcción y los tests que ya existían las protegen.
+
+- **Solape fijo** (`createOverlapKernel`): cada trozo es un núcleo que recibe
+  `before` filas guardadas antes y `after` leídas después. Lo usa el detector
+  de picos, con `half + 2·maxRun + 2` filas a cada lado: la ventana de la
+  mediana y la MAD (`half` = 25), más lo que el filtro de rachas lee alrededor
+  de una racha de hasta `maxRun` candidatos (≤ 16), que puede expandirse otro
+  `maxRun`. Con eso, `detectSpikeOutliers` sobre el núcleo y sus alrededores
+  da para cada fila del núcleo lo que da sobre la serie entera: la ventana de
+  una fila es un multiconjunto, y una racha más larga que `maxRun` se descarta
+  de un modo u otro (`detectSpikeWindow` en `outliers.js`; la prueba lo
+  verifica en 420 cortes). `compute` puede devolver una promesa y hay hasta
+  `depth` núcleos **en vuelo**: así los núcleos corren en el **pool de
+  workers** que ya existía (`dataTool:spikeWindow` en `compute-worker.js`,
+  tres a la vez), solapados con la lectura del CSV, y lo que `push` devuelve son
+  las salidas que ya llegaron, en orden. Sin workers (Node, `file://`) corre en
+  línea.
+- **Mirada hacia adelante** (`createLookaheadKernel`): `compute` recibe todo
+  lo guardado y leído hasta ahí y dice cuántas filas **asienta** (`settled`) y
+  desde dónde hay que **conservar** (`keepFrom`: el vecino del que se tiende el
+  próximo puente, la ventana de suavizado). Un hueco se asienta entero cuando
+  la muestra finita que lo cierra está a la vista — con las muestras que el
+  método lee después de ella: tres a cada lado en pchip y akima, la ventana en
+  *smooth* —; hasta entonces espera. Lo usan el relleno (`createMissingFiller`
+  en `interpolate.js`), el reemplazo por interpolación de los outliers
+  (`interpolateFlaggedWindow`: la recta entre las muestras finitas vecinas,
+  la misma aritmética de `interpolateOutliers`) y la integral
+  (`createCumulativeIntegral` en `integral.js`, con estado: el acumulador, la
+  fila anterior y la última muestra finita viajan entre llamadas). Corre en el
+  hilo principal, en orden.
+- **El tope** (`LOOKAHEAD_MAX_ROWS` = 2²² = 4 M filas; 32 MB por columna): lo
+  que un kernel puede esperar hacia adelante, y lo que puede guardar hacia
+  atrás. Al llegar, la vista se corta y lo dice (`truncatedEnd`,
+  `truncatedStart`): un hueco más largo que el tope **no se tiende** — el
+  relleno lo deja como está y lo cuenta como omitido (una vez, aunque lo
+  atraviesen varios núcleos), la integral no agrega nada a lo largo de él
+  (entero, aunque su final llegue a verse después), un outlier cuyo vecino
+  finito está más allá queda en NaN —, y pchip/akima con menos vecinos a la
+  vista degradan a la secante, como en los bordes de la serie. Es la única
+  diferencia con el camino en memoria, y solo aparece con huecos de más de 4 M
+  muestras.
+
+**El reemplazo por interpolación, en dos etapas.** Encontrar la muestra
+finita *no outlier* más cercana depende de la detección, así que el detector
+no puede saber de antemano hasta dónde mirar. Se separó: la etapa 1 (solape
+fijo, en workers) devuelve la columna con NaN en los outliers y un **byte por
+fila** que los marca (`aux`); la etapa 2 (mirada hacia adelante, en línea)
+interpola las filas marcadas entre las muestras finitas vecinas. Cotas e IQR
+con interpolación entran por la etapa 2 directamente: la cerca se evalúa sobre
+cada muestra del trozo (los cuartiles de IQR son los exactos de la 3b, una
+pasada antes del trabajo). IQR con NaN sigue siendo SQL; cotas con NaN siguen
+su camino de la fase 1.
+
+**Qué lee cada herramienta del eje**, medido una vez por archivo
+(`_lazyAxisSteps`, la pasada de la 4b-2, que ahora devuelve también
+`usableAxis`): la integral, el paso nominal → el umbral de huecos de filas,
+como `detectSamplingGaps` sobre el array; el relleno, si el eje es **finito y
+nunca retrocede** (`interpolationCoordinates` en memoria: con un solo paso
+atrás, toda la serie interpola por número de fila, y la nota lo dice). El
+diseñador y el filtro ya pagaban esta pasada.
+
+**En la app** (`lazy-data-tools-methods.js`, `data-tools-methods.js`): el
+selector ofrece *rellenar faltantes*; outliers ofrece los dos métodos del menú
+y los dos reemplazos; la integral las tres políticas; los controles de cada
+herramienta se habilitan como en memoria. `_isLazySinkToolConfig` manda al
+sumidero el relleno, la integral con *interpolar*, picos, y cualquier outlier
+con interpolación; la firma del sumidero incluye ahora método y reemplazo (un
+cambio de NaN a interpolación es otra corrida). `dataTool` lleva lo que lleva
+en memoria (conteos del relleno, de la integral, `outlierCount`,
+`replacement`), y el panel muestra el mismo número y la misma nota
+(`_lazySinkCount`, `_lazySinkNote`). El estado en vivo del relleno ("rellenaría
+*n* muestras") no se lee del resumen — es una muestra de las filas — sino que
+dice que se cuenta al correr. Las fuentes: cualquier variable con SQL propio,
+salvo cotas con NaN, que siguen pidiendo una columna del archivo.
+
+**Un error que apareció en el camino, en los dos modos**: una cota vacía
+(`null`, "sin máximo") se leía como **0** — `Number(null)` es 0 y
+`Number.isFinite(0)` — en el kernel (`detectBoundsOutliers`), en el predicado
+SQL (`_boundsPredicateSql`) y al normalizar una definición
+(`_normalizeOutlierParams`). Un mínimo sin máximo marcaba todo lo positivo.
+Corregido en los tres lugares (`boundValue`): una cota vacía es una cota
+abierta.
+
+Pruebas:
+
+- `scripts/test-window-chunks.mjs`: los dos adaptadores contra las funciones
+  de array, bit a bit, en trozos de 1, 2, 7, 64, 1000 filas y de tamaños al
+  azar: picos a todas las sensibilidades con NaN e interpolación, con huecos,
+  rachas, picos junto a huecos, ±∞, y los núcleos respondiendo tarde y en
+  desorden como un pool (420 corridas); cotas e IQR con interpolación; el
+  relleno con los siete métodos, límites de hueco, bordes, eje regular, con
+  jitter, con timestamps repetidos y por índice, con los conteos del panel
+  (11 484 corridas); la integral con las tres políticas, tres métodos, ejes
+  numérico, calendario e índice, filas faltantes y huecos (3150 corridas); y
+  los topes: el hueco más largo que el tope no se tiende, y los conteos lo
+  dicen.
+- `scripts/test-lazy-window-tools.mjs` (DuckDB-WASM en Node): creadas como
+  las crea el panel, contra `_buildDataToolResult` sobre los arrays en memoria,
+  con los campos de `dataTool`, el conteo y la nota: 20 corridas de outliers
+  (picos a cuatro sensibilidades × dos reemplazos × dos columnas, cotas e IQR
+  interpolados, IQR con NaN como SQL), 28 de relleno (siete métodos × límites y
+  bordes) más un eje que retrocede (número de fila, y la nota), 12 integrales
+  con *interpolar*; las tres herramientas por `runChunkedJob` en trozos de 1,
+  777 y 5000 filas con el sumidero alineado con el archivo; un archivo con
+  filtro de filas y filas sin tiempo y uno con eje generado; cancelar sin
+  dejar sumidero; una edición que cambia el reemplazo vuelve a correr y borra
+  el sumidero viejo.
+- `scripts/e2e-lazy-data-tools.mjs` (Chromium): el selector ofrece todas las
+  herramientas sobre una variable y ninguna de archivo; outliers por picos con
+  interpolación (los núcleos en el pool de workers), la integral con
+  *interpolar*, y el relleno con pchip, creados desde el panel, con sus
+  conteos, dibujados desde el archivo.
+- Los tests que ya existían de los kernels (`test:compute-kernels`,
+  `test:interpolate-regrid`, `test:integral-analysis`, `test:data-tools`)
+  pasan sin tocarlos: `fillMissingValues` y `computeIntegral` conducen ahora
+  las formas por trozos, y dan los mismos bits.
+
+Lo que cambió respecto del diseño: el relleno y la integral no van al pool de
+workers — cuestan 0,26 s y menos de un segundo por 20 M filas (§"Hechos
+medidos"), y su mirada hacia adelante es variable, que en un worker exigiría
+ir y volver por trozo —; va solo el detector de picos, que es el que cuesta
+(10 s por 20 M). El solape de los picos es `half + 2·maxRun + 2` y no
+`25 + 16`: la expansión de una racha puede recorrer `maxRun` filas más allá de
+los `half` que lee el filtro. Y la integral con *interpolar* no es "un kernel
+con estado más": es el mismo `createCumulativeIntegral` que conduce
+`computeIntegral` en memoria para las tres políticas.
 
 ## 8. Riesgos y decisiones abiertas
 

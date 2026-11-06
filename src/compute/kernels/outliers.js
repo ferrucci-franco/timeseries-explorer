@@ -195,12 +195,19 @@ export function detectSpikeOutliers(values, params = {}) {
     return keepReturningOutlierRuns(indexes, src, spike.maxRun, half, spike.threshold);
 }
 
+// A bound left empty — null, undefined or '' — is open. (Number(null) is 0,
+// which would otherwise read "no maximum" as a maximum of zero.)
+export function boundValue(value) {
+    if (value === null || value === undefined || value === '') return NaN;
+    return Number(value);
+}
+
 export function detectBoundsOutliers(values, params = {}) {
-    const hasLower = Number.isFinite(Number(params.lower));
-    const hasUpper = Number.isFinite(Number(params.upper));
+    const hasLower = Number.isFinite(boundValue(params.lower));
+    const hasUpper = Number.isFinite(boundValue(params.upper));
     if (!hasLower && !hasUpper) throw new DataToolError('outlierBoundsMissing');
-    const lower = hasLower ? Number(params.lower) : -Infinity;
-    const upper = hasUpper ? Number(params.upper) : Infinity;
+    const lower = hasLower ? boundValue(params.lower) : -Infinity;
+    const upper = hasUpper ? boundValue(params.upper) : Infinity;
     if (lower > upper) throw new DataToolError('outlierBoundsInvalid');
 
     const src = asFloat64(values);
@@ -388,4 +395,82 @@ export function interpolateOutliers(values, outlierIndexes) {
         }
     }
     return cleaned;
+}
+
+// ─── A chunk at a time ────────────────────────────────────────────────────
+// What the spike detector reads around a row: the window of the median and
+// the MAD (`half` each side), and for a run of candidates the surroundings the
+// run filter judges it by — `half` rows past the run, which may be `maxRun`
+// long and be expanded by up to `maxRun` more. With this many rows kept before
+// and read after a core, detectSpikeOutliers over the core and its surroundings
+// gives, for every row of the core, what it gives over the whole series: the
+// window of a row is a multiset, and runs longer than maxRun are dropped either
+// way (src/compute/kernels/windowed.js, createOverlapKernel).
+export function spikeOverlapRows(params = {}) {
+    const spike = spikeParamsFromSensitivity(params.sensitivity);
+    return Math.floor(spike.window / 2) + 2 * spike.maxRun + 2;
+}
+
+/**
+ * The spike detector over a view (windowed.js): the core's values with its
+ * outliers replaced by NaN, and a byte per row of the core flagging them. Pure,
+ * so it runs in the compute worker.
+ */
+export function detectSpikeWindow({ values, coreStart, coreEnd }, params = {}) {
+    const src = asFloat64(values);
+    const indexes = detectSpikeOutliers(src, params);
+    const rows = coreEnd - coreStart;
+    const out = src.slice(coreStart, coreEnd);
+    const flags = new Uint8Array(rows);
+    for (let k = 0; k < indexes.length; k++) {
+        const index = indexes[k];
+        if (index < coreStart || index >= coreEnd) continue;
+        out[index - coreStart] = NaN;
+        flags[index - coreStart] = 1;
+    }
+    return { values: out, aux: flags };
+}
+
+/**
+ * interpolateOutliers a chunk at a time: the compute of a lookahead kernel
+ * (windowed.js) over values whose outliers are already NaN, with `aux`
+ * flagging them. A flagged row takes the line between the nearest finite
+ * samples on each side — the same arithmetic as interpolateOutliers, on
+ * positions — and waits for the one ahead when it is not in view yet; NaN
+ * when there is none (the series ends, or the cap cut the view: a hole longer
+ * than the cap is not bridged).
+ */
+export function interpolateFlaggedWindow(view) {
+    const { values, aux, coreStart, coreEnd, eof, truncatedEnd } = view;
+    const n = values.length;
+    const out = values.slice(coreStart, coreEnd);
+    let settledEnd = coreEnd;
+    let lastFinite = -1;
+    for (let j = coreStart - 1; j >= 0; j--) {
+        if (Number.isFinite(values[j])) { lastFinite = j; break; }
+    }
+    for (let i = coreStart; i < coreEnd; i++) {
+        if (Number.isFinite(values[i])) { lastFinite = i; continue; }
+        if (!aux?.[i]) continue;
+        let right = -1;
+        for (let j = i + 1; j < n; j++) {
+            if (Number.isFinite(values[j])) { right = j; break; }
+        }
+        if (right < 0 && !eof && !truncatedEnd) { settledEnd = i; break; }
+        if (lastFinite >= 0 && right >= 0) {
+            const l = values[lastFinite];
+            const r = values[right];
+            out[i - coreStart] = l + ((i - lastFinite) / (right - lastFinite)) * (r - l);
+        } else {
+            out[i - coreStart] = NaN;
+        }
+    }
+    // Keep from the last finite sample before the settled rows: the one the
+    // next flagged row is bridged from.
+    let keepFrom = settledEnd;
+    for (let j = settledEnd - 1; j >= 0; j--) {
+        if (Number.isFinite(values[j])) { keepFrom = j; break; }
+        if (j === 0) keepFrom = 0;
+    }
+    return { values: out.subarray(0, settledEnd - coreStart), settled: settledEnd - coreStart, keepFrom };
 }

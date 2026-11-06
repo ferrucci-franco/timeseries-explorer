@@ -12,16 +12,23 @@
 //
 // Hard bounds keep their original path (`_duckdbDataTool`, data-tools-methods.js).
 //
-// The moving average (and the moving-average detrend) has no SQL form: its
-// kernel runs over the file a chunk at a time (src/data/chunk-executor.js) and
-// writes its output to a sink, a table as long as the file, that the variable
-// reads (`definition.lazySink`). The run is a job behind an overlay with
-// progress and Cancel; a session keeps the definition and runs it again.
+// The moving average (and the moving-average detrend), the filter, the spike
+// detector, the interpolation of outliers, the fill of missing samples and the
+// integral bridging holes have no SQL form: their kernels run over the file a
+// chunk at a time (src/data/chunk-executor.js) and write their output to a
+// sink, a table as long as the file, that the variable reads
+// (`definition.lazySink`). The run is a job behind an overlay with progress
+// and Cancel; a session keeps the definition and runs it again. The spike
+// detector's chunks run in the compute worker pool, several at a time.
 
 import i18n from '../../i18n/index.js';
 import { runChunkedJob } from '../../data/chunk-executor.js';
 import { createMovingAverage } from '../../compute/kernels/moving-average.js';
 import { createForwardFilter, createZeroPhaseFilter } from '../../compute/kernels/iir.js';
+import { createCumulativeIntegral } from '../../compute/kernels/integral.js';
+import { createMissingFiller } from '../../compute/kernels/interpolate.js';
+import { createLookaheadKernel, createOverlapKernel, LOOKAHEAD_MAX_ROWS } from '../../compute/kernels/windowed.js';
+import { getComputePool, translateKernelError } from './data-tools-methods.js';
 import {
     derivativeWindows,
     detrendAnchorSql,
@@ -47,7 +54,14 @@ import {
     detrendScale,
     solveDetrendFit,
 } from '../../compute/kernels/detrend.js';
-import { iqrFences, interpolatedQuantile } from '../../compute/kernels/outliers.js';
+import {
+    boundValue,
+    detectSpikeWindow,
+    interpolateFlaggedWindow,
+    interpolatedQuantile,
+    iqrFences,
+    spikeOverlapRows,
+} from '../../compute/kernels/outliers.js';
 
 // Detrend methods the lazy path computes as SQL. The moving-average baseline,
 // a centred window of arbitrary width, runs in the chunked executor.
@@ -57,6 +71,12 @@ export const LAZY_DETREND_METHODS = new Set([...LAZY_SQL_DETREND_METHODS, 'movin
 // A stretch of a zero-phase filter up to this many samples is filtered in
 // memory; a longer one in two passes over the file (createZeroPhaseFilter).
 export const LAZY_FILTER_MEMORY_ROWS = 1 << 20;
+// How far the kernels bridging a hole look for the sample that ends it, and
+// how many rows they keep behind (src/compute/kernels/windowed.js). A hole
+// longer than this is left as it is.
+export const LAZY_LOOKAHEAD_ROWS = LOOKAHEAD_MAX_ROWS;
+// How many cores of the spike detector are in flight in the worker pool.
+const SPIKE_CORES_IN_FLIGHT = 3;
 
 export function installLazyDataToolsMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -68,7 +88,10 @@ proto._isLazySqlToolConfig = function(config) {
     // Bridging a hole ('interpolate') needs the next finite sample: a look
     // ahead a streaming window cannot make.
     if (config.tool === 'integrate') return (config.params?.gapPolicy || 'zero') !== 'interpolate';
-    if (config.tool === 'removeOutliers') return config.method === 'iqr';
+    // IQR replacing with NaN is a CASE over the file; interpolating in place of
+    // the outliers needs the finite samples around each, a look ahead the
+    // chunked executor makes.
+    if (config.tool === 'removeOutliers') return config.method === 'iqr' && (config.replacement || 'nan') !== 'interpolate';
     if (config.tool === 'detrend') {
         const method = config.params?.method ?? config.method;
         return DETREND_METHODS.has(method) && LAZY_SQL_DETREND_METHODS.has(method);
@@ -79,8 +102,12 @@ proto._isLazySqlToolConfig = function(config) {
 // Whether the chunked executor computes this configuration into a sink.
 proto._isLazySinkToolConfig = function(config) {
     if (!config) return false;
-    if (config.tool === 'movingAverage' || config.tool === 'filter') return true;
+    if (config.tool === 'movingAverage' || config.tool === 'filter' || config.tool === 'interpolate') return true;
     if (config.tool === 'detrend') return (config.params?.method ?? config.method) === 'movingAverage';
+    if (config.tool === 'integrate') return (config.params?.gapPolicy || 'zero') === 'interpolate';
+    // The spike detector reads a window around each sample; interpolating an
+    // outlier, whatever found it, reads the finite samples around it.
+    if (config.tool === 'removeOutliers') return config.method === 'spike' || (config.replacement || 'nan') === 'interpolate';
     return false;
 };
 
@@ -175,12 +202,17 @@ proto._lazyStepStats = async function(data, timeSql, timeWindows = [], { signal 
     const step = windowColumn(`CASE WHEN LAG(TRUE, 1, FALSE) OVER () THEN ${t} - LAG(${t}) OVER () END`, [...timeWindows, time]);
     const d = quoteIdent(step.column);
     const pass = source.passSql(data, [{ _duckdbWindows: mergeWindows(timeWindows, [time, step]) }], `CASE WHEN ${d} > 0 THEN ${d} END`);
-    const none = (reason, medianDt = NaN) => ({ medianDt, hasNominalStep: false, reason, count: 0, totalMissing: 0 });
     const counts = await source.aggregateOver(pass, [
         'COUNT(*)::BIGINT AS n',
         `COUNT(*) FILTER (WHERE ${d} < 0 AND isfinite(${d}))::BIGINT AS neg`,
         `COUNT(*) FILTER (WHERE ${d} > 0 AND isfinite(${d}))::BIGINT AS pos`,
+        `COUNT(*) FILTER (WHERE NOT COALESCE(isfinite(${t}), FALSE))::BIGINT AS bad`,
     ].join(', '), { signal });
+    // What the fill of missing samples asks of the axis before it interpolates
+    // in time rather than on row numbers (interpolationCoordinates in
+    // src/compute/kernels/interpolate.js): every time finite, none going back.
+    const usableAxis = counts.bad === 0 && counts.neg === 0;
+    const none = (reason, medianDt = NaN) => ({ medianDt, hasNominalStep: false, reason, count: 0, totalMissing: 0, usableAxis });
     if (counts.n < 3) return none('tooFewSamples');
     if (counts.neg > 0) return none('nonMonotonic');
     if (counts.pos < 2) return none('tooFewSamples');
@@ -199,7 +231,7 @@ proto._lazyStepStats = async function(data, timeSql, timeWindows = [], { signal 
         `COALESCE(SUM(GREATEST(1, round(${d} / ${doubleLiteral(median)}) - 1)) FILTER (WHERE ${d} > ${doubleLiteral(threshold)}), 0) AS missing`,
     ].join(', '), { signal });
     if (counts.pos >= GAP_STEP_MIN_SAMPLES && agree / counts.pos < GAP_STEP_MIN_AGREEMENT) return none('irregularStep', median);
-    return { medianDt: median, hasNominalStep: true, reason: null, count: gaps, totalMissing: missing };
+    return { medianDt: median, hasNominalStep: true, reason: null, count: gaps, totalMissing: missing, usableAxis };
 };
 
 // The integral's gap threshold: 1.5 × the nominal step, when there is one.
@@ -218,7 +250,7 @@ proto._lazySamplingGapThreshold = async function(data, timeSql, timeWindows = []
 // per file and axis: a reload is a new table, rows appended live a new count.
 proto._lazyAxisSteps = async function(data, { signal } = {}) {
     const axis = this._lazyToolTimeAxis(data);
-    if (!axis.timeSql) return { timed: false, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis', count: 0, totalMissing: 0 };
+    if (!axis.timeSql) return { timed: false, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis', count: 0, totalMissing: 0, usableAxis: false };
     const key = this._lazyAxisStepsKey(data, axis);
     if (!this._lazyAxisStepCache) this._lazyAxisStepCache = new Map();
     const cached = this._lazyAxisStepCache.get(key);
@@ -239,7 +271,7 @@ proto._lazyAxisStepsKey = function(data, axis) {
 // panel synced again when it is in.
 proto._lazyAxisStepsNow = function(data) {
     const axis = this._lazyToolTimeAxis(data);
-    if (!axis.timeSql) return { timed: false, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis', count: 0, totalMissing: 0 };
+    if (!axis.timeSql) return { timed: false, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis', count: 0, totalMissing: 0, usableAxis: false };
     const key = this._lazyAxisStepsKey(data, axis);
     const cached = this._lazyAxisStepCache?.get(key);
     if (cached) return cached;
@@ -382,8 +414,12 @@ proto._lazySqlToolVariable = function(data, name, definition) {
             method: definition.method || definition.params?.method || null,
             params: this._cloneDataToolParams(definition.params),
             ...(definition.tool === 'removeOutliers'
-                ? { replacement: 'nan', outlierCount: stats?.count ?? null }
+                ? {
+                    replacement: definition.replacement || 'nan',
+                    outlierCount: sink ? (sink.report?.outlierCount ?? null) : (stats?.count ?? null),
+                }
                 : {}),
+            ...(definition.tool === 'interpolate' ? this._lazyInterpolateDataTool(definition.params || {}, sink?.report) : {}),
             ...(definition.tool === 'movingAverage' ? { window: definition.params?.window } : {}),
             ...(definition.tool === 'filter' ? this._lazyFilterDataTool(definition.params || {}, sink?.report) : {}),
             ...(definition.tool === 'detrend'
@@ -394,11 +430,11 @@ proto._lazySqlToolVariable = function(data, name, definition) {
                     method: definition.params?.method,
                     gapPolicy: definition.params?.gapPolicy,
                     initial: definition.params?.initial,
-                    negativeDtCount: stats?.negativeDtCount ?? null,
-                    gapCount: stats?.gapCount ?? null,
-                    nanSegmentCount: stats?.nanSegmentCount ?? null,
-                    uncoveredTime: stats?.uncoveredTime ?? null,
-                    hasNominalStep: stats?.hasNominalStep ?? false,
+                    negativeDtCount: (sink ? sink.report : stats)?.negativeDtCount ?? null,
+                    gapCount: (sink ? sink.report : stats)?.gapCount ?? null,
+                    nanSegmentCount: (sink ? sink.report : stats)?.nanSegmentCount ?? null,
+                    uncoveredTime: (sink ? sink.report : stats)?.uncoveredTime ?? null,
+                    hasNominalStep: (sink ? sink.report : stats)?.hasNominalStep ?? false,
                 }
                 : {}),
         },
@@ -537,7 +573,7 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
         sourceName,
         method: config.method || null,
         params: this._cloneDataToolParams(config.params),
-        replacement: '',
+        replacement: tool === 'removeOutliers' ? (config.replacement || 'nan') : '',
     };
     const signature = this._lazySinkSignature(data, definition);
     const run = await this._runLazySinkJob(data, definition, options);
@@ -562,10 +598,10 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
     this._renderFilteredTree();
     this._syncDataTools();
     const report = definition.lazySink.report;
-    const note = tool === 'filter' && report ? () => this._filterNote(report) : null;
+    const note = this._lazySinkNote(tool, report, config.params);
     const result = {
         variable,
-        count: report?.filteredCount ?? 0,
+        count: this._lazySinkCount(tool, definition.lazySink),
         tool,
         name: outputName,
         warning: note && note() ? note : '',
@@ -574,6 +610,42 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
         this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName, dependents.length);
     }
     return result;
+};
+
+// What the panel says a run did: the filter's note on holes and restarts, the
+// fill's on what it left missing, the integral's on the span with no data.
+proto._lazySinkNote = function(tool, report, params = {}) {
+    if (!report) return null;
+    if (tool === 'filter') return () => this._filterNote(report);
+    if (tool === 'interpolate') return () => this._interpolateWarning(report);
+    if (tool === 'integrate') return () => this._integralWarning(report, params);
+    return null;
+};
+
+// The headline number of a run, as the in-memory results report it: what the
+// tool counted, or the rows it wrote.
+proto._lazySinkCount = function(tool, record) {
+    const report = record?.report;
+    if (tool === 'filter') return report?.filteredCount ?? 0;
+    if (tool === 'interpolate') return report?.filledCount ?? 0;
+    if (tool === 'removeOutliers') return report?.outlierCount ?? 0;
+    return record?.rows ?? 0;
+};
+
+// What a fill's output carries on `dataTool`, as _buildInterpolateResult
+// writes it for a file in memory.
+proto._lazyInterpolateDataTool = function(params, report) {
+    return {
+        method: params.method,
+        maxGap: params.maxGap,
+        edges: params.edges,
+        window: params.window,
+        filledCount: report?.filledCount ?? null,
+        filledRuns: report?.filledRuns ?? null,
+        skippedCount: report?.skippedCount ?? null,
+        skippedRuns: report?.skippedRuns ?? null,
+        missingCount: report?.missingCount ?? null,
+    };
 };
 
 // What a filter's output carries on `dataTool`, as _buildFilterResult writes
@@ -607,7 +679,7 @@ proto._lazyFilterDataTool = function(params, report) {
 proto._lazySinkSignature = function(data, definition) {
     const source = this._lazyToolSourceSignature(data, definition.sourceName);
     if (!source) return null;
-    return JSON.stringify([source, definition.tool, definition.params || {}]);
+    return JSON.stringify([source, definition.tool, definition.method || null, definition.replacement || '', definition.params || {}]);
 };
 
 proto._lazySinkRecord = function(run, signature) {
@@ -618,7 +690,9 @@ proto._lazySinkRecord = function(run, signature) {
         rows: run.rows,
         // The moving-average detrend's fit points (see computeDetrend).
         fitPoints: run.fitPoints,
-        // A filter's counts (see applyFilter): what the panel says about holes.
+        // A filter's counts (see applyFilter), a fill's (fillMissingValues),
+        // an integral's (computeIntegral), an outlier run's count: what the
+        // panel says about the run.
         report: run.report || null,
     };
 };
@@ -627,11 +701,46 @@ proto._lazySinkRecord = function(run, signature) {
 // the source column of each chunk. A filter also reads the time of each
 // sample (forward, when the axis has one: a stretch of time with no rows is a
 // hole) or runs a second pass (zero phase); `axis` is the step of the whole
-// time axis (_lazyAxisSteps).
-proto._lazySinkKernel = function(definition, { axis = null } = {}) {
+// time axis (_lazyAxisSteps), which the integral and the fill read too. The
+// kernels without state (src/compute/kernels/windowed.js) wait for the rows
+// around each chunk; `stats` are the quartiles of an IQR run (_computeLazyToolStats).
+proto._lazySinkKernel = function(data, definition, { axis = null, stats = null } = {}) {
     const params = definition.params || {};
     const sourceName = definition.sourceName;
     const column = chunk => chunk.yByVar.get(sourceName);
+    const timed = !!axis?.timed;
+    if (definition.tool === 'removeOutliers') return this._lazyOutlierKernel(definition, { stats, column });
+    if (definition.tool === 'interpolate') {
+        // A bridge is drawn in time when the whole axis allows it — finite and
+        // never decreasing, measured over the file — and on row numbers else.
+        const useTimeAxis = timed && !!axis.usableAxis;
+        const filler = createMissingFiller(params, { useTimeAxis });
+        const kernel = createLookaheadKernel(view => filler.compute(view), { cap: LAZY_LOOKAHEAD_ROWS, withTime: useTimeAxis });
+        return {
+            push: chunk => kernel.push(column(chunk), useTimeAxis ? chunk.x : null).values,
+            flush: () => kernel.flush().values,
+            report: () => filler.report(),
+            withTime: useTimeAxis,
+        };
+    }
+    if (definition.tool === 'integrate') {
+        // The nominal step of the whole axis decides a missing row, as
+        // detectSamplingGaps does over an array.
+        const detect = timed && params.method !== 'sum' && params.detectGaps !== false;
+        const gapThreshold = detect && axis.hasNominalStep ? axis.medianDt * GAP_THRESHOLD_FACTOR : null;
+        const integral = createCumulativeIntegral(params, {
+            kind: timed ? this._lazyToolTimeAxis(data).kind : 'index',
+            gapThreshold,
+            hasNominalStep: detect ? !!axis.hasNominalStep : false,
+        });
+        const kernel = createLookaheadKernel(view => integral.compute(view), { cap: LAZY_LOOKAHEAD_ROWS, withTime: timed });
+        return {
+            push: chunk => kernel.push(column(chunk), timed ? chunk.x : null).values,
+            flush: () => kernel.flush().values,
+            report: () => integral.report(),
+            withTime: timed,
+        };
+    }
     if (definition.tool === 'filter') {
         if (params.mode === 'zeroPhase') {
             const kernel = createZeroPhaseFilter(params, { axis, memoryRows: LAZY_FILTER_MEMORY_ROWS });
@@ -658,6 +767,92 @@ proto._lazySinkKernel = function(definition, { axis = null } = {}) {
         push: chunk => kernel.push(column(chunk)),
         flush: () => kernel.flush(),
         get used() { return kernel.used; },
+    };
+};
+
+// Outliers over a lazy file: the spike detector over each chunk with its
+// surroundings, in the compute worker pool when there is one (several cores in
+// flight; inline otherwise), or the bounds / IQR fences over each sample; then
+// NaN where they are, or — replacing by interpolation — the line between the
+// finite samples around each, which waits for the one ahead.
+proto._lazyOutlierKernel = function(definition, { stats = null, column }) {
+    const params = definition.params || {};
+    const method = definition.method;
+    const interpolate = (definition.replacement || 'nan') === 'interpolate';
+    let outlierCount = 0;
+    const count = (aux) => { for (let i = 0; i < (aux?.length || 0); i++) outlierCount += aux[i]; };
+    const stage2 = interpolate ? createLookaheadKernel(interpolateFlaggedWindow, { cap: LAZY_LOOKAHEAD_ROWS, withAux: true }) : null;
+    const replace = (cleaned, aux) => {
+        count(aux);
+        return stage2 ? stage2.push(cleaned, null, aux || new Uint8Array(cleaned.length)).values : cleaned;
+    };
+    const finish = () => (stage2 ? stage2.flush().values : new Float64Array(0));
+    const concat = (a, b) => {
+        if (!a.length) return b;
+        if (!b.length) return a;
+        const out = new Float64Array(a.length + b.length);
+        out.set(a, 0);
+        out.set(b, a.length);
+        return out;
+    };
+
+    if (method === 'spike') {
+        const overlap = spikeOverlapRows(params);
+        const pool = getComputePool();
+        const inline = view => detectSpikeWindow(view, params);
+        const compute = (view) => {
+            if (!pool?.available) return inline(view);
+            const payload = { values: view.values, coreStart: view.coreStart, coreEnd: view.coreEnd, params };
+            return pool.run('dataTool:spikeWindow', payload, { transfer: [view.values.buffer] }).catch(err => {
+                // Refused before anything was posted: the buffer is intact.
+                if (err?.workerUnavailable) return inline(view);
+                throw translateKernelError(err);
+            });
+        };
+        const stage1 = createOverlapKernel(compute, { before: overlap, after: overlap, depth: SPIKE_CORES_IN_FLIGHT });
+        return {
+            push: async chunk => {
+                const { values, aux } = await stage1.push(column(chunk));
+                return replace(values, aux);
+            },
+            flush: async () => {
+                const { values, aux } = await stage1.flush();
+                return concat(replace(values, aux), finish());
+            },
+            report: () => ({ outlierCount }),
+            withTime: false,
+        };
+    }
+
+    // Bounds and IQR: a fence on each sample, with no neighbours to read.
+    let low;
+    let high;
+    if (method === 'iqr') {
+        if (!stats || !Number.isFinite(stats.low) || !Number.isFinite(stats.high)) throw new Error('lazy outliers: the IQR fences were not computed');
+        ({ low, high } = stats);
+    } else {
+        low = Number.isFinite(boundValue(params.lower)) ? boundValue(params.lower) : -Infinity;
+        high = Number.isFinite(boundValue(params.upper)) ? boundValue(params.upper) : Infinity;
+    }
+    const fence = (values) => {
+        const aux = new Uint8Array(values.length);
+        const cleaned = new Float64Array(values.length);
+        for (let i = 0; i < values.length; i++) {
+            const v = values[i];
+            const out = Number.isFinite(v) && (v < low || v > high);
+            aux[i] = out ? 1 : 0;
+            cleaned[i] = out ? NaN : v;
+        }
+        return { cleaned, aux };
+    };
+    return {
+        push: chunk => {
+            const { cleaned, aux } = fence(column(chunk));
+            return replace(cleaned, aux);
+        },
+        flush: () => finish(),
+        report: () => ({ outlierCount }),
+        withTime: false,
     };
 };
 
@@ -725,14 +920,19 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
             : i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(done)));
     };
     try {
-        // A filter needs the step of the whole time axis first: a pass of its
-        // own, once per file.
+        // A filter, the integral and the fill need the step of the whole time
+        // axis first: a pass of its own, once per file. An IQR run needs its
+        // fences: the exact quartiles of the whole file.
         let axis = null;
-        if (definition.tool === 'filter') {
+        if (['filter', 'integrate', 'interpolate'].includes(definition.tool)) {
             overlay?.progress(i18n.t('dataToolSinkMeasuringAxis'));
             axis = await this._lazyAxisSteps(data, { signal: controller.signal });
         }
-        const kernel = this._lazySinkKernel(definition, { axis });
+        let stats = null;
+        if (definition.tool === 'removeOutliers' && definition.method === 'iqr') {
+            stats = await this._computeLazyToolStats(data, { ...definition, replacement: 'nan' });
+        }
+        const kernel = this._lazySinkKernel(data, definition, { axis, stats });
         const sink = await source.createSink(data);
         const { rows } = await runChunkedJob({
             data,
