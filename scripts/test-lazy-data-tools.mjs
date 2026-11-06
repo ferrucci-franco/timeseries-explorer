@@ -475,7 +475,7 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
 // ── Which path each tool takes ──────────────────────────────────────────────
 {
     assert.equal(h._isDataToolAvailableForData('interpolate', lazy), true, 'filling holes runs in the chunked executor');
-    assert.equal(h._isDataToolAvailableForData('resample', lazy), false, 'resampling waits for a later sub-phase (4b-4)');
+    assert.equal(h._isDataToolAvailableForData('resample', lazy), true, 'resampling makes a lazy dataset (scripts/test-lazy-datasets.mjs)');
     assert.equal(h._isDataToolAvailableForData('derivative', lazy), true, 'the derivative is available');
     assert.equal(h._isDataToolAvailableForData('integrate', lazy), true, 'the integral is available');
     // The moving average and the filter run in the chunked executor, not as
