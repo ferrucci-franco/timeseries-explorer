@@ -1,0 +1,35 @@
+LabVIEW Measurement	
+Writer_Version	2
+Reader_Version	2
+Separator	Tab
+Decimal_Separator	,
+Multi_Headings	Yes
+X_Columns	No
+Time_Pref	Absolute
+Operator	Administrador
+Date	2011/05/25
+Time	09:38:33,265625
+***End_of_Header***	
+	
+Channels	1	
+Samples	1	
+Date	2011/05/25	
+Time	09:38:33,265625	
+X_Dimension	Time	
+X0	0,0000000000000000E+0	
+Delta_X	1,000000	
+***End_of_Header***		
+X_Value	Untitled	Comment
+	0,510503
+
+Channels	1	
+Samples	1	
+Date	2011/05/25	
+Time	09:38:33,4375	
+X_Dimension	Time	
+X0	1,7187500000000000E-1	
+Delta_X	1,000000	
+***End_of_Header***		
+X_Value	Untitled	Comment
+	0,510503
+
