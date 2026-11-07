@@ -39,14 +39,14 @@ export function isMostlyNumericColumn(column) {
 
 // What one column of a sample holds. Empty cells and NaN are missing values and
 // count as neither.
-export function columnSampleCounts(rows, index, delimiter, decimalSeparator = 'auto') {
+export function columnSampleCounts(rows, index, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
     let nonEmptyCount = 0;
     let finiteCount = 0;
     for (const row of rows || []) {
         const raw = String(row?.[index] ?? '').trim();
         if (!raw || isMissingNumberCell(raw)) continue;
         nonEmptyCount++;
-        if (Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator))) finiteCount++;
+        if (Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator, thousandsSeparator))) finiteCount++;
     }
     return { nonEmptyCount, finiteCount };
 }
@@ -57,18 +57,18 @@ export function columnSampleCounts(rows, index, delimiter, decimalSeparator = 'a
  * 'unknown' means the sample held no value for it: the sample cannot answer,
  * and whoever asked has to decide what to do about that.
  */
-export function columnSampleVerdict(rows, index, delimiter, decimalSeparator = 'auto') {
-    const counts = columnSampleCounts(rows, index, delimiter, decimalSeparator);
+export function columnSampleVerdict(rows, index, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
+    const counts = columnSampleCounts(rows, index, delimiter, decimalSeparator, thousandsSeparator);
     if (counts.nonEmptyCount <= 0) return 'unknown';
     return isMostlyNumericColumn(counts) ? 'numeric' : 'text';
 }
 
 // Which columns of a sample to read as numbers — every one the sample does not
 // call text.
-export function inferNumericColumnIndexes(rows, columnCount, delimiter, decimalSeparator = 'auto') {
+export function inferNumericColumnIndexes(rows, columnCount, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
     const numericIndexes = [];
     for (let index = 0; index < columnCount; index++) {
-        if (columnSampleVerdict(rows, index, delimiter, decimalSeparator) !== 'text') numericIndexes.push(index);
+        if (columnSampleVerdict(rows, index, delimiter, decimalSeparator, thousandsSeparator) !== 'text') numericIndexes.push(index);
     }
     return numericIndexes;
 }

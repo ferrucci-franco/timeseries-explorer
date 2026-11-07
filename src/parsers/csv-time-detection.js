@@ -9,7 +9,8 @@
  *
  * Public API:
  *   detectCsvTimeAxis(rawHeaders, dataRows, { delimiter, preferredDateOrder })
- *   parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'auto')
+ *   parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'auto', thousandsSeparator = 'auto')
+ *   describeTimeSourcePattern(timeSource, rows) / dateNamesLanguage(tokens)
  *   parseCsvTimeValue(...) / customDatetimePatternInfo(pattern)
  *
  * Dependency-free, deterministic, browser-compatible (ES module).
@@ -36,6 +37,11 @@ const TIME_HEADER_KEYWORDS = [
     { kw: 'hora',       weight: 0.85, kind: 'time' },
     { kw: 'horaire',    weight: 0.80, kind: 'time' },
     { kw: 'orario',     weight: 0.80, kind: 'time' },
+    { kw: 'zeitstempel', weight: 1.00, kind: 'datetime' },
+    { kw: 'datum',      weight: 0.85, kind: 'date' },
+    { kw: 'uhrzeit',    weight: 0.85, kind: 'time' },
+    { kw: 'zeit',       weight: 0.85, kind: 'time' },
+    { kw: 'tijd',       weight: 0.85, kind: 'time', exact: true },
     // Italian 'data'/'ora' must be exact: as substrings they would match
     // "dataset", "storage", "temporal", ...
     { kw: 'data',       weight: 0.85, kind: 'date', exact: true },
@@ -68,30 +74,110 @@ const MATLAB_DATENUM_MAX = 900000;
 
 const MIN_CONFIDENCE = 0.30;
 
-const MONTH_LOOKUP = {
-    jan: 1, january: 1, janv: 1, janvier: 1, ene: 1, enero: 1, gen: 1, gennaio: 1, janeiro: 1,
-    feb: 2, february: 2, fev: 2, fevr: 2, fevrier: 2, febrero: 2, febbraio: 2, fevereiro: 2,
-    mar: 3, march: 3, mars: 3, marzo: 3, marz: 3, marco: 3,
-    apr: 4, april: 4, avr: 4, avril: 4, abr: 4, abril: 4, aprile: 4,
-    may: 5, mai: 5, mayo: 5, mag: 5, maggio: 5, maio: 5,
-    jun: 6, june: 6, juin: 6, junio: 6, giu: 6, giugno: 6, junho: 6, juni: 6,
-    jul: 7, july: 7, juil: 7, juillet: 7, julio: 7, lug: 7, luglio: 7, julho: 7, juli: 7,
-    aug: 8, august: 8, aou: 8, aout: 8, ago: 8, agosto: 8,
-    sep: 9, sept: 9, september: 9, septembre: 9, set: 9, septiembre: 9, settembre: 9, setembro: 9,
-    oct: 10, october: 10, octobre: 10, octubre: 10, ott: 10, ottobre: 10, outubro: 10, okt: 10, oktober: 10,
-    nov: 11, november: 11, novembre: 11, noviembre: 11, novembro: 11,
-    dec: 12, december: 12, decembre: 12, dic: 12, diciembre: 12, dicembre: 12, dez: 12, dezembro: 12, dezember: 12,
+// Month names per language, as written in full and in the abbreviations
+// spreadsheets and loggers use. Keys are lower case without accents or dots
+// (lookupMonthName normalizes the cell the same way). The language is what
+// the parsing dialog names when it says how a date column was read.
+const MONTH_NAMES = {
+    en: [
+        ['january', 'jan'], ['february', 'feb'], ['march', 'mar'], ['april', 'apr'],
+        ['may', 'may'], ['june', 'jun'], ['july', 'jul'], ['august', 'aug'],
+        ['september', 'sep', 'sept'], ['october', 'oct'], ['november', 'nov'], ['december', 'dec'],
+    ],
+    fr: [
+        ['janvier', 'janv', 'jan'], ['fevrier', 'fevr', 'fev'], ['mars', 'mar'], ['avril', 'avr'],
+        ['mai'], ['juin'], ['juillet', 'juil'], ['aout', 'aou'],
+        ['septembre', 'sept', 'sep'], ['octobre', 'oct'], ['novembre', 'nov'], ['decembre', 'dec'],
+    ],
+    es: [
+        ['enero', 'ene'], ['febrero', 'feb'], ['marzo', 'mar'], ['abril', 'abr'],
+        ['mayo', 'may'], ['junio', 'jun'], ['julio', 'jul'], ['agosto', 'ago'],
+        ['septiembre', 'setiembre', 'sep', 'sept', 'set'], ['octubre', 'oct'], ['noviembre', 'nov'], ['diciembre', 'dic'],
+    ],
+    it: [
+        ['gennaio', 'gen'], ['febbraio', 'feb'], ['marzo', 'mar'], ['aprile', 'apr'],
+        ['maggio', 'mag'], ['giugno', 'giu'], ['luglio', 'lug'], ['agosto', 'ago'],
+        ['settembre', 'set'], ['ottobre', 'ott'], ['novembre', 'nov'], ['dicembre', 'dic'],
+    ],
+    pt: [
+        ['janeiro', 'jan'], ['fevereiro', 'fev'], ['marco', 'mar'], ['abril', 'abr'],
+        ['maio', 'mai'], ['junho', 'jun'], ['julho', 'jul'], ['agosto', 'ago'],
+        ['setembro', 'set'], ['outubro', 'out'], ['novembro', 'nov'], ['dezembro', 'dez'],
+    ],
+    de: [
+        ['januar', 'jan', 'janner', 'jaenner'], ['februar', 'feb'], ['marz', 'mar', 'maerz', 'mrz'], ['april', 'apr'],
+        ['mai'], ['juni', 'jun'], ['juli', 'jul'], ['august', 'aug'],
+        ['september', 'sep', 'sept'], ['oktober', 'okt'], ['november', 'nov'], ['dezember', 'dez'],
+    ],
+    nl: [
+        ['januari', 'jan'], ['februari', 'feb'], ['maart', 'mrt'], ['april', 'apr'],
+        ['mei'], ['juni', 'jun'], ['juli', 'jul'], ['augustus', 'aug'],
+        ['september', 'sep', 'sept'], ['oktober', 'okt'], ['november', 'nov'], ['december', 'dec'],
+    ],
 };
+
+const WEEKDAY_NAMES = {
+    en: [['monday', 'mon'], ['tuesday', 'tue', 'tues'], ['wednesday', 'wed'], ['thursday', 'thu', 'thur', 'thurs'], ['friday', 'fri'], ['saturday', 'sat'], ['sunday', 'sun']],
+    fr: [['lundi', 'lun'], ['mardi', 'mar'], ['mercredi', 'mer'], ['jeudi', 'jeu'], ['vendredi', 'ven'], ['samedi', 'sam'], ['dimanche', 'dim']],
+    es: [['lunes', 'lun'], ['martes', 'mar'], ['miercoles', 'mie'], ['jueves', 'jue'], ['viernes', 'vie'], ['sabado', 'sab'], ['domingo', 'dom']],
+    it: [['lunedi', 'lun'], ['martedi', 'mar'], ['mercoledi', 'mer'], ['giovedi', 'gio'], ['venerdi', 'ven'], ['sabato', 'sab'], ['domenica', 'dom']],
+    pt: [['segunda', 'seg', 'segunda-feira'], ['terca', 'ter', 'terca-feira'], ['quarta', 'qua', 'quarta-feira'], ['quinta', 'qui', 'quinta-feira'], ['sexta', 'sex', 'sexta-feira'], ['sabado', 'sab'], ['domingo', 'dom']],
+    de: [['montag', 'mo', 'mon'], ['dienstag', 'di', 'die'], ['mittwoch', 'mi', 'mit'], ['donnerstag', 'do', 'don'], ['freitag', 'fr', 'fre'], ['samstag', 'sa', 'sam'], ['sonntag', 'so', 'son']],
+    nl: [['maandag', 'ma'], ['dinsdag', 'di'], ['woensdag', 'wo'], ['donderdag', 'do'], ['vrijdag', 'vr'], ['zaterdag', 'za'], ['zondag', 'zo']],
+};
+
+export const DATE_LANGUAGE_NAMES = {
+    en: 'English', fr: 'French', es: 'Spanish', it: 'Italian', pt: 'Portuguese', de: 'German', nl: 'Dutch',
+};
+
+// token -> { month, languages: Set, full: Set(languages where it is the full name) }
+const MONTH_INDEX = new Map();
+for (const [lang, months] of Object.entries(MONTH_NAMES)) {
+    months.forEach((names, monthIndex) => {
+        names.forEach((name, k) => {
+            const entry = MONTH_INDEX.get(name) || { month: monthIndex + 1, languages: new Set(), full: new Set() };
+            // The first language to claim a token keeps the month: no two
+            // languages give one abbreviation two different months here.
+            entry.languages.add(lang);
+            if (k === 0) entry.full.add(lang);
+            MONTH_INDEX.set(name, entry);
+        });
+    });
+}
+const WEEKDAY_INDEX = new Map();
+for (const [lang, days] of Object.entries(WEEKDAY_NAMES)) {
+    days.forEach((names, dayIndex) => {
+        names.forEach((name, k) => {
+            const entry = WEEKDAY_INDEX.get(name) || { day: dayIndex, languages: new Set(), full: new Set() };
+            entry.languages.add(lang);
+            if (k === 0) entry.full.add(lang);
+            WEEKDAY_INDEX.set(name, entry);
+        });
+    });
+}
+const MONTH_LOOKUP = Object.fromEntries([...MONTH_INDEX].map(([name, entry]) => [name, entry.month]));
 
 // ---------------------------------------------------------------------------
 // parseCsvNumber - exported public helper
 // ---------------------------------------------------------------------------
 
-export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'auto') {
-    const raw = String(rawValue ?? '').trim();
-    if (!raw) return NaN;
+// A plain number, as nearly every cell of a data file is written: nothing to
+// strip or translate, so it goes straight to Number().
+const PLAIN_NUMBER_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 
-    // Strip internal whitespace and translate Fortran-style D-exponents.
+export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'auto', thousandsSeparator = 'auto') {
+    let raw = String(rawValue ?? '').trim();
+    if (!raw) return NaN;
+    // Unless a dot groups thousands ("1.234" is then one thousand...).
+    if (thousandsSeparator !== '.' && PLAIN_NUMBER_RE.test(raw)) return Number(raw);
+    // A typographic minus (U+2212) or hyphen, as word processors and some
+    // localized exports write it, is a minus sign.
+    const first = raw.charCodeAt(0);
+    if (first === 0x2212 || first === 0x2010 || first === 0x2013) raw = '-' + raw.slice(1);
+
+    // Strip internal whitespace (which is also how space-grouped thousands,
+    // "1 234,5" with a no-break space, are read) and translate Fortran-style
+    // D-exponents.
     const normalized = raw
         .replace(/\s+/g, '')
         .replace(/[dD]([+-]?\d+)$/, 'e$1');
@@ -101,18 +187,50 @@ export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'au
     }
     if (/^nan$/i.test(normalized)) return NaN;
 
-    const decimalMode = decimalSeparator === ',' || decimalSeparator === '.' ? decimalSeparator : 'auto';
-    let decimalNormalized = normalized;
-    if (decimalMode === ',') {
-        decimalNormalized = normalized.replace(',', '.');
-    } else if (decimalMode === 'auto'
-        && delimiter !== ','
-        && normalized.includes(',')
-        && !normalized.includes('.')) {
-        decimalNormalized = normalized.replace(',', '.');
+    let decimalMode = decimalSeparator === 'auto' || !decimalSeparator ? 'auto' : String(decimalSeparator);
+    let thousandsMode = thousandsSeparator === 'auto' || !thousandsSeparator
+        ? 'auto'
+        : thousandsSeparator === 'none' ? 'none' : String(thousandsSeparator);
+    if (thousandsMode === ' ') thousandsMode = 'none'; // whitespace is already gone
+    // A grouping character implies the other one is the decimal separator.
+    if (decimalMode === 'auto' && thousandsMode === '.') decimalMode = ',';
+    if (decimalMode === 'auto' && thousandsMode === ',') decimalMode = '.';
+    if (thousandsMode !== 'auto' && thousandsMode === decimalMode) thousandsMode = 'none';
+
+    // The plain case — the one nearly every cell takes: nothing to translate.
+    if (decimalMode === 'auto' && thousandsMode === 'auto'
+        && normalized.indexOf(',') < 0 && normalized.indexOf("'") < 0 && normalized.indexOf('\u2019') < 0) {
+        return Number(normalized);
     }
 
-    return Number(decimalNormalized);
+    let value = normalized;
+    if (thousandsMode === 'auto') {
+        // Only groupings that cannot be read another way.
+        if (/^[+-]?\d{1,3}(?:['\u2019]\d{3})+(?:[.,]\d+)?$/.test(value)) {
+            value = value.replace(/['\u2019]/g, '');
+        } else if (decimalMode !== '.' && /^[+-]?\d{1,3}(?:\.\d{3})+,\d+$/.test(value)) {
+            value = value.replace(/\./g, '');
+            if (decimalMode === 'auto') decimalMode = ',';
+        } else if (decimalMode !== ',' && /^[+-]?\d{1,3}(?:,\d{3})+\.\d+$/.test(value)) {
+            value = value.replace(/,/g, '');
+        }
+    } else if (thousandsMode !== 'none') {
+        value = value.split(thousandsMode).join('');
+        if (thousandsMode === "'") value = value.replace(/\u2019/g, '');
+    }
+
+    if (decimalMode === ',') {
+        value = value.replace(',', '.');
+    } else if (decimalMode === 'auto') {
+        if (delimiter !== ',' && value.includes(',') && !value.includes('.')) {
+            value = value.replace(',', '.');
+        }
+    } else if (decimalMode !== '.') {
+        // A custom decimal mark (the reader set it): it becomes the dot.
+        value = value.split(decimalMode).join('.');
+    }
+
+    return Number(value);
 }
 
 function sniffDelimiter(text) {
@@ -284,13 +402,14 @@ export function detectCsvTimeAxis(rawHeaders, dataRows, options = {}) {
 export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ',', options = {}) {
     if (!timeSource?.ok) return NaN;
     const decimalSeparator = options.decimalSeparator || timeSource.decimalSeparator || 'auto';
+    const thousandsSeparator = options.thousandsSeparator || 'auto';
     const indexes = Array.isArray(timeSource.sourceIndexes) ? timeSource.sourceIndexes : [];
     const strategy = timeSource.strategy || timeSource.mode;
     const idx = indexes[0] ?? 0;
 
-    if (strategy === 'index-column') return parseCsvNumber(row?.[idx], delimiter, decimalSeparator);
+    if (strategy === 'index-column') return parseCsvNumber(row?.[idx], delimiter, decimalSeparator, thousandsSeparator);
     if (timeSource.kind === 'index' || strategy === 'generated-index') return rowIndex;
-    if (timeSource.kind === 'numeric') return parseCsvNumber(row?.[idx], delimiter, decimalSeparator);
+    if (timeSource.kind === 'numeric') return parseCsvNumber(row?.[idx], delimiter, decimalSeparator, thousandsSeparator);
     if (strategy === 'custom-format') return parseCustomFormatMs(row?.[idx], timeSource.format?.pattern || '');
     if (strategy === 'iso-datetime') return parseIsoMs(row?.[idx]);
     if (strategy === 'partial-year-month') return parsePartialYearMonthMs(row?.[idx]);
@@ -302,58 +421,114 @@ export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ','
         return parseYearlessDateTimeMs(row?.[idx], timeSource.format?.dateOrder || 'MDY');
     }
     if (strategy === 'month-name-date') return parseMonthNameDateMs(row?.[idx]);
-    if (strategy === 'decimal-year') return decimalYearToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator));
-    if (strategy === 'matlab-datenum') return matlabDatenumToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator));
-    if (strategy === 'excel-serial') return excelSerialToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator));
+    if (strategy === 'decimal-year') return decimalYearToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator, thousandsSeparator));
+    if (strategy === 'matlab-datenum') return matlabDatenumToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator, thousandsSeparator));
+    if (strategy === 'excel-serial') return excelSerialToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator, thousandsSeparator));
     if (timeSource.mode === 'split' && indexes.length >= 2) {
         return combineDateAndTimeMs(row?.[indexes[0]], row?.[indexes[1]], timeSource.format?.dateOrder || 'YMD');
     }
     if (timeSource.mode === 'parts' || strategy === 'parts') {
-        return parsePartsDateTimeMs(timeSource, row, delimiter, decimalSeparator);
+        return parsePartsDateTimeMs(timeSource, row, delimiter, decimalSeparator, thousandsSeparator);
     }
     return NaN;
+}
+
+// The tokens a custom datetime pattern is made of, longest first so "MMMM"
+// is read before "MM" and "yyyy" before "yy". `strf` is the DuckDB strptime
+// equivalent the lazy (SQL) readers use.
+const PATTERN_TOKENS = [
+    { key: 'AM/PM', strf: '%p', part: 'ampm' },
+    { key: 'yyyy', strf: '%Y', part: 'year' },
+    { key: 'yy', strf: '%y', part: 'year' },
+    { key: 'EEEE', strf: '%A', part: 'weekday' },
+    { key: 'EEE', strf: '%a', part: 'weekday' },
+    { key: 'MMMM', strf: '%b', part: 'monthName' },
+    { key: 'MMM', strf: '%b', part: 'monthName' },
+    { key: 'MM', strf: '%m', part: 'month' },
+    { key: 'M', strf: '%m', part: 'month' },
+    { key: 'dd', strf: '%d', part: 'day' },
+    { key: 'd', strf: '%d', part: 'day' },
+    { key: 'HH', strf: '%H', part: 'hour' },
+    { key: 'H', strf: '%H', part: 'hour' },
+    { key: 'hh', strf: '%I', part: 'hour12' },
+    { key: 'h', strf: '%I', part: 'hour12' },
+    { key: 'mm', strf: '%M', part: 'minute' },
+    { key: 'm', strf: '%M', part: 'minute' },
+    { key: 'ss', strf: '%S', part: 'second' },
+    { key: 's', strf: '%S', part: 'second' },
+    { key: 'XXX', strf: '%z', part: 'zone' },
+];
+
+/**
+ * A pattern as a list of tokens and literal text. Text in single quotes is
+ * literal ('T', 'h', 'de'), and '' is a quote character, as in Java and ICU.
+ */
+function tokenizeDatetimePattern(pattern) {
+    const source = String(pattern || '');
+    const parts = [];
+    for (let i = 0; i < source.length;) {
+        if (source[i] === "'") {
+            const close = source.indexOf("'", i + 1);
+            const end = close < 0 ? source.length : close;
+            const literal = source.slice(i + 1, end);
+            parts.push({ literal: literal === '' ? "'" : literal });
+            i = end + 1;
+            continue;
+        }
+        const token = readPatternToken(source, i);
+        if (token) {
+            parts.push({ token });
+            i += token.key.length;
+            continue;
+        }
+        parts.push({ literal: source[i] });
+        i++;
+    }
+    return parts;
+}
+
+// A run of S is the fraction of a second, any number of digits.
+function readPatternToken(pattern, i) {
+    if (pattern[i] === 'S') {
+        let j = i;
+        while (pattern[j] === 'S') j++;
+        const width = j - i;
+        return { key: pattern.slice(i, j), strf: width > 6 ? '%n' : '%f', part: 'fraction', width };
+    }
+    return PATTERN_TOKENS.find(token => pattern.startsWith(token.key, i)) || null;
 }
 
 export function customDatetimePatternInfo(pattern) {
     const source = String(pattern || '');
     if (!source.trim()) return null;
-    const tokens = [
-        ['yyyy', '%Y', 'year'],
-        ['yy', '%y', 'year'],
-        ['MMMM', '%b', 'monthName'],
-        ['MMM', '%b', 'monthName'],
-        ['MM', '%m', 'month'],
-        ['M', '%m', 'month'],
-        ['dd', '%d', 'day'],
-        ['d', '%d', 'day'],
-        ['HH', '%H', 'hour'],
-        ['H', '%H', 'hour'],
-        ['mm', '%M', 'minute'],
-        ['m', '%M', 'minute'],
-        ['ss', '%S', 'second'],
-        ['s', '%S', 'second'],
-        ['SSS', '%f', 'millisecond'],
-    ];
     const flags = {
         hasYear: false,
         hasMonth: false,
         hasDay: false,
         hasMonthName: false,
+        hasWeekday: false,
     };
     let out = '';
-    for (let i = 0; i < source.length;) {
-        const token = tokens.find(([key]) => source.startsWith(key, i));
+    const parts = tokenizeDatetimePattern(source);
+    for (let p = 0; p < parts.length; p++) {
+        const { token, literal } = parts[p];
         if (token) {
-            out += token[1];
-            if (token[2] === 'year') flags.hasYear = true;
-            if (token[2] === 'month' || token[2] === 'monthName') flags.hasMonth = true;
-            if (token[2] === 'monthName') flags.hasMonthName = true;
-            if (token[2] === 'day') flags.hasDay = true;
-            i += token[0].length;
+            if (token.part === 'weekday') {
+                // DuckDB only knows English weekday names; the SQL readers
+                // strip the weekday instead (see hasWeekday), so it is left
+                // out of the format, with the separator that followed it.
+                flags.hasWeekday = true;
+                while (parts[p + 1]?.literal != null && /^[\s,.]+$/.test(parts[p + 1].literal)) p++;
+                continue;
+            }
+            out += token.strf;
+            if (token.part === 'year') flags.hasYear = true;
+            if (token.part === 'month' || token.part === 'monthName') flags.hasMonth = true;
+            if (token.part === 'monthName') flags.hasMonthName = true;
+            if (token.part === 'day') flags.hasDay = true;
             continue;
         }
-        out += source[i];
-        i++;
+        out += literal.replace(/%/g, '%%');
     }
     let prefix = '';
     let suffix = '';
@@ -431,16 +606,27 @@ function scoreHeader(norm) {
 //   "Voltage [V]"     -> { name: 'Voltage', description: '[V]' }
 //   "speed (km/h)"    -> { name: 'speed',   description: '[km/h]' }
 //   ""                -> { name: fallback, description: '' }
+/**
+ * Whether the text in a header's brackets reads as a unit. "kW.h", "m/s",
+ * "°C", "deg C" do; "vierge si fiable" ("blank if reliable", a note a GTB
+ * export puts after Fiabilité) does not: three words or more are a phrase,
+ * and the header keeps them as part of its name.
+ */
+export function looksLikeUnitText(text) {
+    const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+    return words.length > 0 && words.length <= 2;
+}
+
 function parseHeader(rawHeader, fallbackIndex) {
     const fallback = fallbackIndex === 0 ? 'time' : `column_${fallbackIndex + 1}`;
     const raw = String(rawHeader ?? '').trim();
     if (!raw) return { name: fallback, description: '' };
 
     let m = raw.match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
-    if (m) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
+    if (m && looksLikeUnitText(m[2])) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
 
     m = raw.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
-    if (m) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
+    if (m && looksLikeUnitText(m[2])) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
 
     return { name: sanitizeName(raw, fallback), description: '' };
 }
@@ -450,47 +636,139 @@ function sanitizeName(name, fallback) {
     return cleaned || fallback;
 }
 
-function lookupMonthName(token) {
-    const norm = String(token ?? '')
+function normalizeNameToken(token) {
+    return String(token ?? '')
         .toLowerCase()
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
-        .replace(/\./g, '');
-    return MONTH_LOOKUP[norm] ?? null;
+        .replace(/[.,]/g, '');
 }
 
+function lookupMonthName(token) {
+    return MONTH_LOOKUP[normalizeNameToken(token)] ?? null;
+}
+
+function lookupWeekdayName(token) {
+    return WEEKDAY_INDEX.get(normalizeNameToken(token)) || null;
+}
+
+/**
+ * The language month (and weekday) names in a sample are written in, decided
+ * by which language accounts for all of them. "mars" is French, "marzo"
+ * Spanish or Italian, "Mar" any of four: the language that explains every
+ * token wins, and among those the one whose full names were used.
+ *
+ * @param {string[]} tokens month or weekday words as written in the file
+ * @returns {string|null} a key of DATE_LANGUAGE_NAMES
+ */
+export function dateNamesLanguage(tokens) {
+    const scores = new Map();
+    let counted = 0;
+    for (const token of tokens || []) {
+        const key = normalizeNameToken(token);
+        const entry = MONTH_INDEX.get(key) || WEEKDAY_INDEX.get(key);
+        if (!entry) continue;
+        counted++;
+        for (const lang of entry.languages) {
+            const score = scores.get(lang) || { hits: 0, full: 0 };
+            score.hits++;
+            if (entry.full.has(lang) && key.length > 3) score.full++;
+            scores.set(lang, score);
+        }
+    }
+    if (!counted) return null;
+    const order = Object.keys(DATE_LANGUAGE_NAMES);
+    const ranked = [...scores.entries()].sort((a, b) =>
+        (b[1].hits - a[1].hits) || (b[1].full - a[1].full) || (order.indexOf(a[0]) - order.indexOf(b[0])));
+    return ranked[0]?.[0] || null;
+}
+
+// A clock time after a date, as month-name dates are written: "10:05",
+// "10:05:22", "10:05:22.123" or ",123" (European loggers), "1:05 PM",
+// "13h05", and an optional zone (Z, UTC, GMT, +01:00).
+const NAMED_DATE_TIME = '(?:(?:[T\\s]+|\\s*[,@]\\s*|\\s+(?:at|a|à|um|alle|às|las|los)\\s+)'
+    + '(?<H>\\d{1,2})[:h](?<Mi>\\d{2})(?::(?<Se>\\d{2})(?:[.,](?<F>\\d+))?)?'
+    + '(?:\\s*(?<ampm>[AaPp]\\.?[Mm]\\.?))?'
+    + '(?:\\s*(?<tz>Z|(?:UTC|GMT)(?:[+\\-]\\d{1,2}(?::?\\d{2})?)?|[+\\-]\\d{2}:?\\d{2}))?)?';
+const NAMED_MONTH = '(?<mon>[\\p{L}]{3,12}\\.?)';
+const NAMED_DATE_SEP = '(?:\\s+de\\s+|\\s+del\\s+|[-\\s.,/]+)';
+const NAMED_DATE_PATTERNS = [
+    // 15 janvier 2024, 15-Jan-24, 15 de enero de 2024, 1er mars 2024
+    { order: 'DMY', re: new RegExp(`^(?<d>\\d{1,2})(?:er|st|nd|rd|th|º|°)?${NAMED_DATE_SEP}${NAMED_MONTH}${NAMED_DATE_SEP}(?<y>\\d{2,4})${NAMED_DATE_TIME}$`, 'u') },
+    // January 15, 2024 / Jan 15 2024
+    { order: 'MDY', re: new RegExp(`^${NAMED_MONTH}[-\\s.,/]+(?<d>\\d{1,2})(?:st|nd|rd|th)?,?[-\\s.,/]+(?<y>\\d{2,4})${NAMED_DATE_TIME}$`, 'u') },
+    // 2024-Jan-15 / 2024 janvier 15
+    { order: 'YMD', re: new RegExp(`^(?<y>\\d{4})[-\\s.,/]+${NAMED_MONTH}[-\\s.,/]+(?<d>\\d{1,2})${NAMED_DATE_TIME}$`, 'u') },
+    // Jan 15 10:00:00 2024 (C asctime, syslog with a year)
+    { order: 'MDY', re: new RegExp(`^${NAMED_MONTH}\\s+(?<d>\\d{1,2})\\s+(?<H>\\d{1,2}):(?<Mi>\\d{2})(?::(?<Se>\\d{2})(?:[.,](?<F>\\d+))?)?\\s+(?<y>\\d{4})$`, 'u'), timeBeforeYear: true },
+    // January 2024 / janv. 2024 (a month, day 01)
+    { order: 'MY', re: new RegExp(`^${NAMED_MONTH}[-\\s.,/]+(?<y>\\d{4})$`, 'u') },
+];
+
+function tzOffsetMinutes(tz) {
+    if (!tz) return 0;
+    const text = String(tz).toUpperCase();
+    if (text === 'Z' || text === 'UTC' || text === 'GMT') return 0;
+    const m = text.match(/([+\-])(\d{1,2})(?::?(\d{2}))?$/);
+    if (!m) return 0;
+    const minutes = Number(m[2]) * 60 + Number(m[3] || 0);
+    return m[1] === '-' ? -minutes : minutes;
+}
+
+/** Whether a cell is a date written with a month name (see below). */
+export function isMonthNameDateCell(cell) {
+    return matchMonthNameDate(cell) !== null;
+}
+
+/**
+ * A date written with a month name, in any of the languages above, with an
+ * optional weekday in front ("Mon, 15 Jan 2024 10:00:00 +0100", "lundi 15
+ * janvier 2024 10:00"). Null when the cell is not one.
+ */
 function matchMonthNameDate(cell) {
     const s = String(cell ?? '').trim();
-    const monthToken = '[\\p{L}.]{3,12}';
-    const timePart = '(?:[T\\s]+(\\d{1,2}):(\\d{2})(?::(\\d{2})(?:\\.(\\d+))?)?)?';
-
-    let m = s.match(new RegExp(`^(\\d{1,2})[-\\s.,]+(${monthToken})[-\\s.,]+(\\d{2,4})${timePart}$`, 'u'));
-    if (m) {
-        const mo = lookupMonthName(m[2]);
-        if (mo != null) return buildMonthNameMatch('DMY', +m[1], mo, +m[3], m);
-    }
-
-    m = s.match(new RegExp(`^(${monthToken})[-\\s.,]+(\\d{1,2}),?[-\\s.,]+(\\d{2,4})${timePart}$`, 'u'));
-    if (m) {
-        const mo = lookupMonthName(m[1]);
-        if (mo != null) return buildMonthNameMatch('MDY', +m[2], mo, +m[3], m);
-    }
-
+    if (!s || s.length > 64 || !/\p{L}{2}/u.test(s)) return null;
+    // The date as written, then without a leading weekday. In that order:
+    // "Mar 1 2000" is March (and "mar" a Spanish or French weekday only when
+    // what follows is a date by itself).
+    const direct = matchNamedDateBody(s, null);
+    if (direct) return direct;
+    const wm = s.match(/^([\p{L}-]{2,14})\.?,?\s+(?=[\d\p{L}])/u);
+    if (wm && lookupWeekdayName(wm[1])) return matchNamedDateBody(s.slice(wm[0].length), wm[1]);
     return null;
 }
 
-function buildMonthNameMatch(order, d, mo, y, m) {
-    return {
-        order,
-        d,
-        mo,
-        y,
-        H: m[4] != null ? +m[4] : 0,
-        Mi: m[5] != null ? +m[5] : 0,
-        Se: m[6] != null ? +m[6] : 0,
-        Ms: m[7] != null ? Math.round(Number('0.' + m[7]) * 1000) : 0,
-        hasTime: m[4] != null,
-    };
+function matchNamedDateBody(s, weekdayToken) {
+    for (const pattern of NAMED_DATE_PATTERNS) {
+        const m = s.match(pattern.re);
+        if (!m?.groups) continue;
+        const g = m.groups;
+        const mo = lookupMonthName(g.mon);
+        if (mo == null) continue;
+        let H = g.H != null ? +g.H : 0;
+        const ampm = g.ampm ? g.ampm.replace(/\./g, '').toUpperCase() : '';
+        if (ampm) {
+            if (H < 1 || H > 12) continue;
+            H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+        }
+        return {
+            order: pattern.order === 'MY' ? 'MDY' : pattern.order,
+            d: g.d != null ? +g.d : 1,
+            mo,
+            y: +g.y,
+            H,
+            Mi: g.Mi != null ? +g.Mi : 0,
+            Se: g.Se != null ? +g.Se : 0,
+            Ms: g.F != null ? Math.round(Number('0.' + g.F) * 1000) : 0,
+            hasTime: g.H != null,
+            tzOffsetMinutes: tzOffsetMinutes(g.tz),
+            hasZone: !!g.tz,
+            monthToken: g.mon,
+            weekdayToken,
+            dayless: pattern.order === 'MY',
+        };
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +803,8 @@ function profileColumnContent(sample, colIdx, delimiter) {
         monotonicInc: 0,
         sample: [],
         tzMode: null,          // 'utc' | 'offset' | 'naive'
+        fractionComma: 0,      // 10:05:22,123 — European loggers
+        weekdayPrefix: 0,      // "Mon, 15 Jan 2024"
     };
 
     let prevNum = null;
@@ -534,6 +814,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         const cell = String(raw);
         profile.nonEmpty++;
         if (profile.sample.length < 5) profile.sample.push(cell);
+        if (cell.indexOf(':') > 0 && /\d:\d{2}(?::\d{2})?,\d/.test(cell)) profile.fractionComma++;
 
         const num = parseCsvNumber(cell, delimiter);
         if (Number.isFinite(num)) {
@@ -546,7 +827,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
             prevNum = null;
         }
 
-        if (/^\d{1,2}:\d{2}(:\d{2})?(\.\d+)?$/.test(cell)) profile.timeOfDay++;
+        if (/^\d{1,2}:\d{2}(:\d{2})?([.,]\d+)?$/.test(cell)) profile.timeOfDay++;
 
         const pym = cell.match(/^(\d{4})([/-])(\d{1,2})$/);
         if (pym) {
@@ -556,7 +837,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         }
 
         const ym = cell.match(
-            /^(\d{1,2})([/-])(\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?$/i,
+            /^(\d{1,2})([/-])(\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?$/i,
         );
         if (ym) {
             profile.yearlessDateTime++;
@@ -569,7 +850,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         }
 
         const isoMatch = cell.match(
-            /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+\-]\d{2}:?\d{2})?)?$/,
+            /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?\s?(Z|[+\-]\d{2}(?::?\d{2})?)?)?$/,
         );
         if (isoMatch) {
             profile.iso++;
@@ -583,7 +864,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         }
 
         const sm = cell.match(
-            /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i,
+            /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i,
         );
         if (sm) {
             profile.slashDate++;
@@ -594,7 +875,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         }
 
         const dm = cell.match(
-            /^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i,
+            /^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i,
         );
         if (dm) {
             profile.dashDate++;
@@ -608,7 +889,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         // so a decimal number (12.5) never reaches here as a date — it was
         // counted as numeric above and fails this pattern anyway.
         const dot = cell.match(
-            /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i,
+            /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i,
         );
         if (dot && (dot[1].length === 4 ? dot[3].length <= 2 : (dot[1].length <= 2 && (dot[3].length === 2 || dot[3].length === 4)))) {
             profile.dotDate++;
@@ -622,6 +903,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         if (mn) {
             profile.monthNameDate++;
             if (mn.order === 'DMY') profile.monthNameDmy++;
+            if (mn.weekdayToken) profile.weekdayPrefix++;
             else profile.monthNameMdy++;
             if (mn.hasTime) profile.hasTimePart++;
         }
@@ -675,7 +957,7 @@ function evaluateSingleColumn(col, preferred) {
                 timezone: content.tzMode === 'utc' ? 'utc'
                         : content.tzMode === 'offset' ? 'offset'
                         : 'floating',
-                excelSerial: false,
+                excelSerial: false, fractionComma: content.fractionComma > 0,
             },
             descTag: 'iso-datetime',
             col,
@@ -693,7 +975,7 @@ function evaluateSingleColumn(col, preferred) {
                 dateOrder: 'YMD',
                 hasTime: false,
                 timezone: 'floating',
-                excelSerial: false,
+                excelSerial: false, fractionComma: content.fractionComma > 0,
                 partial: 'year-month',
                 assumedDay: 1,
                 dashSeparator: content.partialYearMonthDash >= content.partialYearMonth / 2,
@@ -713,7 +995,7 @@ function evaluateSingleColumn(col, preferred) {
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.5 * headerScore.score + 0.55 + 0.1 * (hasTime ? 1 : 0)),
-            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, ambiguous: order.ambiguous },
+            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, fractionComma: content.fractionComma > 0, ambiguous: order.ambiguous },
             descTag: 'slash-date',
             col,
         });
@@ -729,7 +1011,7 @@ function evaluateSingleColumn(col, preferred) {
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.5 * headerScore.score + 0.5 + 0.1 * (hasTime ? 1 : 0)),
-            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, dashSeparator: true, ambiguous: order.ambiguous },
+            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, fractionComma: content.fractionComma > 0, dashSeparator: true, ambiguous: order.ambiguous },
             descTag: 'dash-date',
             col,
         });
@@ -747,7 +1029,7 @@ function evaluateSingleColumn(col, preferred) {
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.5 * headerScore.score + 0.55 + 0.1 * (hasTime ? 1 : 0)),
-            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, dotSeparator: true, ambiguous: order.ambiguous },
+            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, fractionComma: content.fractionComma > 0, dotSeparator: true, ambiguous: order.ambiguous },
             descTag: 'dot-date',
             col,
         });
@@ -765,7 +1047,7 @@ function evaluateSingleColumn(col, preferred) {
                 dateOrder: order.order,
                 hasTime: true,
                 timezone: 'floating',
-                excelSerial: false,
+                excelSerial: false, fractionComma: content.fractionComma > 0,
                 yearless: true,
                 hasMeridiem: content.meridiemTimePart / Math.max(1, content.hasTimePart) >= 0.5,
                 dashSeparator: content.yearlessDash > content.yearlessSlash,
@@ -785,7 +1067,7 @@ function evaluateSingleColumn(col, preferred) {
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.5 * headerScore.score + 0.6 + 0.1 * (hasTime ? 1 : 0)),
-            format: { dateOrder: order, hasTime, timezone: 'floating', excelSerial: false, monthName: true },
+            format: { dateOrder: order, hasTime, timezone: 'floating', excelSerial: false, fractionComma: content.fractionComma > 0, monthName: true, weekday: content.weekdayPrefix > 0 },
             descTag: 'month-name-date',
             col,
         });
@@ -800,7 +1082,7 @@ function evaluateSingleColumn(col, preferred) {
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.72 + 0.18 * decimalYear.confidence + 0.08 * headerScore.score),
-            format: { dateOrder: 'YMD', hasTime: true, timezone: 'floating', excelSerial: false, decimalYear: true },
+            format: { dateOrder: 'YMD', hasTime: true, timezone: 'floating', excelSerial: false, fractionComma: content.fractionComma > 0, decimalYear: true },
             descTag: 'decimal-year',
             col,
         });
@@ -815,7 +1097,7 @@ function evaluateSingleColumn(col, preferred) {
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.86 + 0.14 * matlabDatenum.confidence + 0.08 * headerScore.score),
-            format: { dateOrder: 'YMD', hasTime: true, timezone: 'utc', excelSerial: false, matlabDatenum: true },
+            format: { dateOrder: 'YMD', hasTime: true, timezone: 'utc', excelSerial: false, fractionComma: content.fractionComma > 0, matlabDatenum: true },
             descTag: 'matlab-datenum',
             col,
         });
@@ -905,7 +1187,7 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
         kind: 'datetime',
         sourceIndexes: [dateCol.index, timeCol.index],
         score,
-        format: { dateOrder: order, hasTime: true, timezone: 'floating', excelSerial: false, dashSeparator, dotSeparator, ambiguous, monthName },
+        format: { dateOrder: order, hasTime: true, timezone: 'floating', excelSerial: false, dashSeparator, dotSeparator, ambiguous, monthName, fractionComma: tc.fractionComma > 0, weekday: dc.weekdayPrefix > 0 },
         descTag: 'split-date-time',
         col: dateCol,
         timeCol,
@@ -1112,7 +1394,7 @@ function parseIsoMs(cell) {
     if (cell == null || cell === '') return NaN;
     const s = String(cell).trim();
     const m = s.match(
-        /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+\-]\d{2}:?\d{2})?)?$/,
+        /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?\s?(Z|[+\-]\d{2}(?::?\d{2})?)?)?$/,
     );
     if (!m) return NaN;
 
@@ -1128,7 +1410,7 @@ function parseIsoMs(cell) {
     const tz = m[8];
 
     if (tz) {
-        const normalizedTz = tz === 'Z' ? 'Z' : tz.replace(/^([+\-]\d{2})(\d{2})$/, '$1:$2');
+        const normalizedTz = tz === 'Z' ? 'Z' : /^[+\-]\d{2}$/.test(tz) ? `${tz}:00` : tz.replace(/^([+\-]\d{2})(\d{2})$/, '$1:$2');
         const padded = `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
             + `T${String(H).padStart(2, '0')}:${String(Mi).padStart(2, '0')}:${String(Se).padStart(2, '0')}.${String(Ms).padStart(3, '0')}${normalizedTz}`;
         const ms = Date.parse(padded);
@@ -1152,10 +1434,10 @@ function parsePartialYearMonthMs(cell) {
 function parseFlexibleDateMs(cell, order, sep) {
     if (cell == null || cell === '') return NaN;
     const re = sep === '-'
-        ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i
+        ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?)?$/i
         : sep === '.'
-            ? /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i
-            : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i;
+            ? /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?)?$/i
+            : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?)?$/i;
     const m = String(cell).trim().match(re);
     if (!m) return NaN;
 
@@ -1239,41 +1521,66 @@ function combineDateAndTimeMs(dateCell, timeCell, order) {
     return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
 }
 
-function parseCustomFormatMs(cell, pattern) {
-    if (cell == null || cell === '' || !pattern) return NaN;
-    const tokens = [
-        ['AM/PM', '(?<ampm>AM|PM)'],
-        ['yyyy', '(?<year>\\d{4})'],
-        ['yy', '(?<year2>\\d{2})'],
-        ['MMMM', '(?<monthName>[\\p{L}.]{3,12})'],
-        ['MMM', '(?<monthName>[\\p{L}.]{3,12})'],
-        ['MM', '(?<month>\\d{2})'],
-        ['M', '(?<month>\\d{1,2})'],
-        ['dd', '(?<day>\\d{2})'],
-        ['d', '(?<day>\\d{1,2})'],
-        ['HH', '(?<hour>\\d{2})'],
-        ['H', '(?<hour>\\d{1,2})'],
-        ['hh', '(?<hour12>\\d{2})'],
-        ['h', '(?<hour12>\\d{1,2})'],
-        ['mm', '(?<minute>\\d{2})'],
-        ['m', '(?<minute>\\d{1,2})'],
-        ['ss', '(?<second>\\d{2})'],
-        ['s', '(?<second>\\d{1,2})'],
-        ['SSS', '(?<ms>\\d{1,3})'],
-    ];
+const CUSTOM_PATTERN_REGEX = {
+    'AM/PM': '(?<ampm>[AaPp]\\.?[Mm]\\.?)',
+    yyyy: '(?<year>\\d{4})',
+    yy: '(?<year2>\\d{2})',
+    EEEE: '(?<weekday>[\\p{L}-]{2,14}\\.?)',
+    EEE: '(?<weekday>[\\p{L}-]{2,14}\\.?)',
+    MMMM: '(?<monthName>[\\p{L}.]{3,12})',
+    MMM: '(?<monthName>[\\p{L}.]{3,12})',
+    MM: '(?<month>\\d{2})',
+    M: '(?<month>\\d{1,2})',
+    dd: '(?<day>\\d{2})',
+    d: '(?<day>\\d{1,2})',
+    HH: '(?<hour>\\d{2})',
+    H: '(?<hour>\\d{1,2})',
+    hh: '(?<hour12>\\d{2})',
+    h: '(?<hour12>\\d{1,2})',
+    mm: '(?<minute>\\d{2})',
+    m: '(?<minute>\\d{1,2})',
+    ss: '(?<second>\\d{2})',
+    s: '(?<second>\\d{1,2})',
+    XXX: '(?<zone>Z|[+\\-]\\d{2}(?::?\\d{2})?)',
+};
+const customPatternCache = new Map();
+
+function customPatternRegex(pattern) {
+    let cached = customPatternCache.get(pattern);
+    if (cached !== undefined) return cached;
     const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     let regex = '';
-    for (let i = 0; i < pattern.length;) {
-        const token = tokens.find(([key]) => pattern.startsWith(key, i));
+    const used = new Set();
+    for (const { token, literal } of tokenizeDatetimePattern(pattern)) {
         if (token) {
-            regex += token[1];
-            i += token[0].length;
+            const group = token.part === 'fraction'
+                ? '(?<ms>\\d{1,9})'
+                : CUSTOM_PATTERN_REGEX[token.key];
+            const name = group.match(/\(\?<(\w+)>/)?.[1];
+            // A part written twice ("dd/MM/yyyy dd") cannot be two groups of
+            // one name; the second is matched and ignored.
+            regex += name && used.has(name) ? group.replace(/\(\?<\w+>/, '(?:') : group;
+            if (name) used.add(name);
             continue;
         }
-        regex += escapeRegex(pattern[i]);
-        i++;
+        // One space in the pattern stands for any run of spaces in the file.
+        regex += literal.replace(/\s+/g, ' ').split(' ').map(escapeRegex).join('\\s+');
     }
-    const match = String(cell).trim().match(new RegExp(`^${regex}$`, 'iu'));
+    try {
+        cached = new RegExp(`^${regex}$`, 'iu');
+    } catch (_) {
+        cached = null;
+    }
+    if (customPatternCache.size > 64) customPatternCache.clear();
+    customPatternCache.set(pattern, cached);
+    return cached;
+}
+
+function parseCustomFormatMs(cell, pattern) {
+    if (cell == null || cell === '' || !pattern) return NaN;
+    const re = customPatternRegex(pattern);
+    if (!re) return NaN;
+    const match = String(cell).trim().match(re);
     if (!match?.groups) return NaN;
     let y = match.groups.year != null
         ? Number(match.groups.year)
@@ -1286,22 +1593,25 @@ function parseCustomFormatMs(cell, pattern) {
     let H = match.groups.hour != null
         ? Number(match.groups.hour)
         : match.groups.hour12 != null ? Number(match.groups.hour12) : 0;
-    const ampm = match.groups.ampm ? String(match.groups.ampm).toUpperCase() : '';
+    const ampm = match.groups.ampm ? String(match.groups.ampm).replace(/\./g, '').toUpperCase() : '';
     if (match.groups.hour12 != null) {
         if (H < 1 || H > 12 || !ampm) return NaN;
+        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+    } else if (ampm && H >= 1 && H <= 12) {
         H = (H % 12) + (ampm === 'PM' ? 12 : 0);
     }
     const Mi = match.groups.minute != null ? Number(match.groups.minute) : 0;
     const Se = match.groups.second != null ? Number(match.groups.second) : 0;
-    const Ms = match.groups.ms != null ? Number(String(match.groups.ms).padEnd(3, '0').slice(0, 3)) : 0;
+    const Ms = match.groups.ms != null ? Math.round(Number('0.' + match.groups.ms) * 1000) : 0;
     if (![y, mo, d, H, Mi, Se, Ms].every(Number.isFinite)) return NaN;
     if (!isValidDate(y, mo, d)) return NaN;
-    if (H < 0 || H > 24 || Mi < 0 || Mi > 59 || Se < 0 || Se > 59 || Ms < 0 || Ms > 999) return NaN;
+    if (H < 0 || H > 24 || Mi < 0 || Mi > 59 || Se < 0 || Se > 59 || Ms < 0 || Ms > 1000) return NaN;
     if (H === 24 && (Mi !== 0 || Se !== 0 || Ms !== 0)) return NaN;
-    return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
+    const zone = match.groups.zone ? tzOffsetMinutes(match.groups.zone) : 0;
+    return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms) - zone * 60000;
 }
 
-function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator = 'auto') {
+function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator = 'auto', thousandsSeparator = 'auto') {
     const parts = timeSource?.format?.parts || {};
     const hasPart = ['year', 'month', 'day', 'hour', 'minute', 'second']
         .some(name => Number.isInteger(parts[name]) && parts[name] >= 0);
@@ -1309,7 +1619,7 @@ function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator
     const readPart = (name, fallback = 0) => {
         const index = parts[name];
         if (index === null || index === undefined || index === '') return fallback;
-        const value = parseCsvNumber(row?.[index], delimiter, decimalSeparator);
+        const value = parseCsvNumber(row?.[index], delimiter, decimalSeparator, thousandsSeparator);
         return Number.isFinite(value) ? value : NaN;
     };
 
@@ -1333,7 +1643,7 @@ function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator
 function parseYearlessDateTimeMs(cell, order) {
     if (cell == null || cell === '') return NaN;
     const m = String(cell).trim().match(
-        /^(\d{1,2})[/-](\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?$/i,
+        /^(\d{1,2})[/-](\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?$/i,
     );
     if (!m) return NaN;
 
@@ -1366,12 +1676,13 @@ function parseMonthNameDateMs(cell) {
     let y = m.y;
     if (y < 100) y += (y >= 70 ? 1900 : 2000);
     if (!isValidDate(y, m.mo, m.d)) return NaN;
+    if (m.H > 24 || m.Mi > 59 || m.Se > 59) return NaN;
 
-    return Date.UTC(y, m.mo - 1, m.d, m.H, m.Mi, m.Se, m.Ms);
+    return Date.UTC(y, m.mo - 1, m.d, m.H, m.Mi, m.Se, m.Ms) - m.tzOffsetMinutes * 60000;
 }
 
 function parseTimeOfDay(cell) {
-    const t = String(cell ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?$/i);
+    const t = String(cell ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?$/i);
     if (!t) return null;
     let H = +t[1];
     const ampm = t[5] ? String(t[5]).toUpperCase() : '';
@@ -1422,6 +1733,253 @@ function isValidDate(y, mo, d) {
     if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
     const dt = new Date(Date.UTC(y, mo - 1, d));
     return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+// ---------------------------------------------------------------------------
+// The detected format, said as a pattern
+// ---------------------------------------------------------------------------
+
+// Letters that are pattern tokens: literal text containing one is quoted.
+const PATTERN_LETTERS = /[yEMdHhmsSXA]/;
+
+function quotePatternLiteral(text) {
+    if (!text) return '';
+    if (text.includes("'")) return text.replace(/'/g, "''");
+    return PATTERN_LETTERS.test(text) ? `'${text}'` : text;
+}
+
+const TIME_IN_CELL_RE = /(\d{1,2})([:h])(\d{2})(?::(\d{2})(?:([.,])(\d+))?)?(?:(\s*)([AaPp]\.?[Mm]\.?))?(?:(\s*)(Z|UTC|GMT|[+\-]\d{2}(?::?\d{2})?))?$/;
+
+/**
+ * One cell's pattern, as a list of parts with the widths each numeric part
+ * was written with, so a column's cells can be merged ("d" when any day has
+ * one digit, "dd" when every day has two).
+ */
+function cellPatternParts(cell, order) {
+    let s = String(cell ?? '').trim();
+    if (!s) return null;
+    const parts = [];
+    const words = { months: [], weekdays: [] };
+
+    const wm = s.match(/^([\p{L}-]{2,14})(\.?,?\s+)(?=[\d\p{L}])/u);
+    if (wm) {
+        const weekday = lookupWeekdayName(wm[1]);
+        // "Mar 1 2000" is March: a word that is both a month and a weekday is
+        // the weekday only when another month name follows it.
+        const rest = s.slice(wm[0].length);
+        const isMonthToo = lookupMonthName(wm[1]) != null
+            && !(rest.match(/\p{L}+/gu) || []).some(word => lookupMonthName(word) != null);
+        if (weekday && !isMonthToo) {
+            const full = weekday.full.size > 0 && normalizeNameToken(wm[1]).length > 3;
+            parts.push({ kind: full ? 'EEEE' : 'EEE' });
+            parts.push({ literal: wm[2] });
+            words.weekdays.push(wm[1]);
+            s = s.slice(wm[0].length);
+        }
+    }
+
+    // The clock time, if any, ends the cell (asctime puts the year after it).
+    let datePart = s;
+    let timeMatch = null;
+    let afterTime = '';
+    const asctime = s.match(/^(.*?\s)(\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)(\s+\d{4})$/);
+    if (asctime) {
+        datePart = asctime[1];
+        timeMatch = asctime[2].match(TIME_IN_CELL_RE);
+        afterTime = asctime[3];
+    } else {
+        const tm = s.match(TIME_IN_CELL_RE);
+        if (tm && tm.index > 0) {
+            datePart = s.slice(0, tm.index);
+            timeMatch = tm;
+        } else if (tm && tm.index === 0) {
+            datePart = '';
+            timeMatch = tm;
+        }
+    }
+    let joiner = '';
+    if (timeMatch && datePart) {
+        const j = datePart.match(/(\s*(?:T|at|a|à|um|alle|às|las|los|,|@)?\s*)$/u);
+        joiner = j ? j[1] : '';
+        datePart = datePart.slice(0, datePart.length - joiner.length);
+    }
+
+    // Date: runs of digits, runs of letters, and what lies between them.
+    const runs = datePart.match(/\d+|\p{L}+\.?|[^\d\p{L}]+/gu) || [];
+    const numeric = runs.filter(run => /^\d+$/.test(run));
+    const hasMonthWord = runs.some(run => /^\p{L}/u.test(run) && lookupMonthName(run) != null);
+    let roles;
+    if (hasMonthWord) {
+        const yearAt = numeric.findIndex(run => run.length === 4);
+        if (numeric.length === 1) roles = asctime || numeric[0].length <= 2 ? ['d'] : ['y'];
+        else if (yearAt === 0 || (yearAt < 0 && order === 'YMD')) roles = ['y', 'd'];
+        else roles = ['d', 'y'];
+    } else if (numeric.length === 3) {
+        if (numeric[0].length === 4 || order === 'YMD') roles = ['y', 'M', 'd'];
+        else if (order === 'MDY') roles = ['M', 'd', 'y'];
+        else roles = ['d', 'M', 'y'];
+    } else if (numeric.length === 2) {
+        // A partial date: year and month, or month and day.
+        if (numeric[0].length === 4) roles = ['y', 'M'];
+        else if (order === 'DMY') roles = ['d', 'M'];
+        else roles = ['M', 'd'];
+    } else {
+        roles = numeric.map(() => '?');
+    }
+    let k = 0;
+    for (const run of runs) {
+        if (/^\d+$/.test(run)) {
+            const role = roles[k++] || '?';
+            if (role === 'y') parts.push({ kind: run.length >= 4 ? 'yyyy' : 'yy' });
+            else if (role === 'M') parts.push({ kind: 'M', width: run.length });
+            else if (role === 'd') parts.push({ kind: 'd', width: run.length });
+            else parts.push({ literal: run });
+        } else if (/^\p{L}/u.test(run)) {
+            const word = run.replace(/\.$/, '');
+            if (lookupMonthName(word) != null) {
+                const entry = MONTH_INDEX.get(normalizeNameToken(word));
+                const full = !!entry && entry.full.size > 0 && normalizeNameToken(word).length > 3;
+                parts.push({ kind: 'month-name', full });
+                if (run.endsWith('.')) parts.push({ literal: '.' });
+                words.months.push(word);
+            } else {
+                parts.push({ literal: run });
+            }
+        } else {
+            parts.push({ literal: run });
+        }
+    }
+
+    if (timeMatch) {
+        if (joiner) parts.push({ literal: joiner });
+        const hasMeridiem = !!timeMatch[8];
+        parts.push({ kind: hasMeridiem ? 'h' : 'H', width: timeMatch[1].length });
+        parts.push({ literal: timeMatch[2] === 'h' ? 'h' : ':' });
+        parts.push({ kind: 'mm' });
+        if (timeMatch[4] != null) {
+            parts.push({ literal: ':' });
+            parts.push({ kind: 'ss' });
+            if (timeMatch[6] != null) {
+                parts.push({ literal: timeMatch[5] });
+                parts.push({ kind: 'S', width: timeMatch[6].length });
+            }
+        }
+        if (hasMeridiem) {
+            parts.push({ literal: timeMatch[7] || '' });
+            parts.push({ kind: 'AM/PM' });
+        }
+        if (timeMatch[10]) {
+            parts.push({ literal: timeMatch[9] || '' });
+            parts.push(/^[+\-]/.test(timeMatch[10]) ? { kind: 'XXX' } : { literal: timeMatch[10] });
+        }
+        if (afterTime) {
+            parts.push({ literal: afterTime.match(/^\s+/)[0] });
+            parts.push({ kind: 'yyyy' });
+        }
+    }
+    return { parts: parts.filter(part => part.kind || part.literal), words };
+}
+
+function partsKey(parts) {
+    return parts.map(part => part.kind || `"${part.literal}"`).join('|');
+}
+
+function renderPatternParts(parts) {
+    return parts.map(part => {
+        if (part.literal != null) return quotePatternLiteral(part.literal);
+        switch (part.kind) {
+            case 'M': return part.minWidth === 1 ? 'M' : 'MM';
+            case 'd': return part.minWidth === 1 ? 'd' : 'dd';
+            case 'H': return part.minWidth === 1 ? 'H' : 'HH';
+            case 'h': return part.minWidth === 1 ? 'h' : 'hh';
+            case 'S': return 'S'.repeat(Math.max(1, part.maxWidth || 3));
+            case 'month-name': return part.anyFull ? 'MMMM' : 'MMM';
+            default: return part.kind;
+        }
+    }).join('');
+}
+
+/**
+ * The pattern a date column is written in, read from its cells: what the
+ * parsing dialog shows for "Format: Auto" ("d MMMM yyyy HH:mm:ss", and the
+ * language when months are named) and what "Custom" starts from.
+ *
+ * The cells are described one by one and the most common shape wins; widths
+ * are merged across them, so a column with "9 janvier" and "10 janvier"
+ * reads "d", one with "09" and "10" reads "dd".
+ *
+ * @param {string[]} values the column's cells
+ * @param {{ dateOrder?: 'YMD'|'DMY'|'MDY' }} [options]
+ * @returns {{ pattern: string, language: string|null } | null}
+ */
+export function describeDatetimeValues(values, options = {}) {
+    const order = options.dateOrder || 'YMD';
+    const shapes = new Map();
+    const months = [];
+    const weekdays = [];
+    let counted = 0;
+    for (const value of values || []) {
+        if (counted >= 200) break;
+        const described = cellPatternParts(value, order);
+        if (!described || !described.parts.length) continue;
+        counted++;
+        months.push(...described.words.months);
+        weekdays.push(...described.words.weekdays);
+        const key = partsKey(described.parts);
+        const shape = shapes.get(key) || { parts: described.parts.map(part => ({ ...part })), count: 0 };
+        described.parts.forEach((part, i) => {
+            const merged = shape.parts[i];
+            if (part.width != null) {
+                merged.minWidth = Math.min(merged.minWidth ?? Infinity, part.width);
+                merged.maxWidth = Math.max(merged.maxWidth ?? 0, part.width);
+            }
+            if (part.kind === 'month-name' && part.full) merged.anyFull = true;
+        });
+        shape.count++;
+        shapes.set(key, shape);
+    }
+    if (!shapes.size) return null;
+    const best = [...shapes.values()].sort((a, b) => b.count - a.count)[0];
+    return {
+        pattern: renderPatternParts(best.parts),
+        language: dateNamesLanguage([...months, ...weekdays]),
+    };
+}
+
+/**
+ * The detected time source's format as a pattern, from the rows it was
+ * detected on. Null for sources that are not written as text dates (numbers,
+ * Excel serials, an index): those are named, not patterned.
+ */
+export function describeTimeSourcePattern(timeSource, rows, options = {}) {
+    if (!timeSource?.ok || timeSource.kind !== 'datetime') return null;
+    const strategy = timeSource.strategy || timeSource.mode;
+    if (['excel-serial', 'matlab-datenum', 'decimal-year', 'parts'].includes(strategy)) return null;
+    const indexes = Array.isArray(timeSource.sourceIndexes) ? timeSource.sourceIndexes : [];
+    if (!indexes.length) return null;
+    const limit = Number(options.limit) || 200;
+    const order = timeSource.format?.dateOrder || 'YMD';
+    const column = index => (rows || []).slice(0, limit * 2)
+        .map(row => String(row?.[index] ?? '').trim())
+        .filter(Boolean)
+        .slice(0, limit);
+    if (strategy === 'custom-format') {
+        const pattern = timeSource.format?.pattern || '';
+        const described = describeDatetimeValues(column(indexes[0]), { dateOrder: order });
+        return pattern ? { pattern, language: described?.language || null } : null;
+    }
+    if (timeSource.mode === 'split' && indexes.length >= 2) {
+        const date = describeDatetimeValues(column(indexes[0]), { dateOrder: order });
+        const time = describeDatetimeValues(column(indexes[1]), { dateOrder: order });
+        if (!date) return null;
+        return {
+            pattern: time ? `${date.pattern} + ${time.pattern}` : date.pattern,
+            language: date.language,
+            datePattern: date.pattern,
+            timePattern: time?.pattern || null,
+        };
+    }
+    return describeDatetimeValues(column(indexes[0]), { dateOrder: order });
 }
 
 // ---------------------------------------------------------------------------

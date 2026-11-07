@@ -987,6 +987,48 @@ const translations = {
             csvPreviewSampleEnd: 'End',
             csvPreviewLinesShown: 'Lines shown',
             csvPreviewLinesCustom: 'Custom',
+            csvPreviewCellRaw: 'Raw',
+            csvPreviewCellParsed: 'Parsed',
+            csvPreviewCellType: 'Type',
+            csvPreviewCellFrom: 'From',
+            csvPreviewCellPattern: 'Pattern',
+            csvPreviewCellTypeNumber: 'number',
+            csvPreviewCellTypeText: 'text',
+            csvPreviewCellTypeTime: 'time axis',
+            csvPreviewCellTypeMissing: 'empty: a missing value (NaN)',
+            csvPreviewCellTypeInvalid: 'not a number in a numeric column: loads as NaN',
+            csvPreviewCellTypeSkipped: 'column not imported',
+            csvPreviewCellTypeExtra: 'past the last column: ignored',
+            csvPreviewCellTypeHeader: 'header row: column names',
+            csvPreviewCellTypeUnits: 'units row',
+            csvPreviewCellTypePreamble: 'before the table: not imported',
+            csvPreviewCellTimeInvalid: 'not a valid time',
+            csvPreviewCellRowWidth: 'This row is left out: it has a different number of cells than the header.',
+            csvPreviewCellRowFiltered: 'This row is left out by the row filter.',
+            csvPreviewCellRowTime: 'This row is left out: its time does not parse.',
+            csvPreviewLinesAll: 'All',
+            csvPreviewAllLinesTruncated: 'The file is too large to show whole: only the first {shown} lines are shown (the file has about {total}).',
+            csvPreviewAllLinesTruncatedUnknown: 'The file is too large to show whole: only the first {shown} lines are shown.',
+            csvPreviewThousandsSeparator: 'Thousands separator',
+            csvPreviewThousandsSeparatorTooltip: 'The character that groups digits, as in 1.234,5 or 1,234.5. Auto uses what the rows show, and only when they cannot be read another way.',
+            csvPreviewThousandsNone: 'None',
+            csvPreviewThousandsSpace: '␣ space',
+            csvPreviewSeparatorCustom: 'Custom…',
+            csvPreviewDecimalCustomTooltip: 'Type the one character the file uses between the integer part and the decimals.',
+            csvPreviewThousandsCustomTooltip: 'Type the one character the file uses to group thousands.',
+            csvPreviewRowsWrongWidth: '{count} data row(s) have a different number of cells than the header and are left out (red in the preview). Turn on "Keep rows with missing cells" to keep the short ones.',
+            csvPreviewRowsWrongWidthLong: '{count} data row(s) have more cells than the header and are left out (red in the preview).',
+            csvPreviewRowsPadded: '{count} short row(s) are kept; their missing cells load as empty values.',
+            csvPreviewInvisibleCharsRemoved: '{count} invisible character(s) (control or zero-width) were removed from the file before reading it.',
+            csvPreviewPadShortRows: 'Keep rows with missing cells',
+            csvPreviewPadShortRowsTooltip: 'Rows with fewer cells than the header (a value the logger skipped, a last line cut off) are kept, and their missing cells load as empty values. Off: those rows are left out.',
+            csvPreviewDateLanguage_en: 'English',
+            csvPreviewDateLanguage_fr: 'French',
+            csvPreviewDateLanguage_es: 'Spanish',
+            csvPreviewDateLanguage_it: 'Italian',
+            csvPreviewDateLanguage_pt: 'Portuguese',
+            csvPreviewDateLanguage_de: 'German',
+            csvPreviewDateLanguage_nl: 'Dutch',
             csvPreviewCustomLinesOk: 'OK',
             csvPreviewCustomLinesTooltip: 'Enter a custom number of preview lines, up to {max}.',
             csvPreviewDelimiter: 'Delimiter',
@@ -1052,7 +1094,7 @@ const translations = {
             csvPreviewTimeFormat: 'Format',
             csvPreviewAutoTimeFormatHelp: 'Auto detects text dates, numeric elapsed time, Excel serial dates, MATLAB datenum, decimal years, and partial dates such as YYYY-MM.',
             csvPreviewAutoDetectedFormat: 'Detected: {format}',
-            csvPreviewAutoDetectedDatePattern: 'Detected: date pattern {pattern}',
+            csvPreviewAutoDetectedDatePattern: 'Detected: {pattern}',
             csvPreviewAutoDetectedNumeric: 'numeric elapsed time',
             csvPreviewAutoDetectedExcelSerial: 'Excel serial date',
             csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
@@ -1091,7 +1133,10 @@ const translations = {
                         <tr><td><code>m</code></td><td>Minutes, 1 or 2 digits. Lowercase matters.</td><td><code>0</code> to <code>59</code>.</td><td><code>5</code></td></tr>
                         <tr><td><code>ss</code></td><td>Seconds, exactly 2 digits.</td><td><code>00</code> to <code>59</code>.</td><td><code>08</code></td></tr>
                         <tr><td><code>s</code></td><td>Seconds, 1 or 2 digits.</td><td><code>0</code> to <code>59</code>.</td><td><code>8</code></td></tr>
-                        <tr><td><code>SSS</code></td><td>Milliseconds. One to three digits are accepted and padded to milliseconds.</td><td><code>0</code> to <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>S</code>, <code>SSS</code>, <code>SSSSSS</code>…</td><td>Fraction of a second, any number of digits (the number of <code>S</code> is how the detected pattern shows it). Written after <code>.</code> or <code>,</code>, as in the file.</td><td>1 to 9 digits.</td><td><code>125</code>, <code>1250000</code></td></tr>
+                        <tr><td><code>EEE</code>, <code>EEEE</code></td><td>Weekday name or abbreviation. Read and ignored: the date gives the day.</td><td>English, French, Spanish, Italian, Portuguese, German, Dutch.</td><td><code>Mon</code>, <code>lundi</code></td></tr>
+                        <tr><td><code>XXX</code></td><td>UTC offset. The time is converted to UTC.</td><td><code>Z</code>, <code>+01:00</code>, <code>+0100</code>, <code>-05</code>.</td><td><code>+02:00</code></td></tr>
+                        <tr><td><code>'text'</code></td><td>Text in single quotes is literal, even letters that are tokens.</td><td>Any text; <code>''</code> is a quote.</td><td><code>dd 'de' MMMM</code></td></tr>
                         <tr><td><code>AM/PM</code></td><td>12-hour clock marker.</td><td><code>AM</code> or <code>PM</code>, case-insensitive.</td><td><code>PM</code></td></tr>
                         <tr><td><code>Excel</code></td><td>Excel serial date number.</td><td>Numeric cells such as <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
                         <tr><td><code>Matlab</code></td><td>MATLAB datenum value.</td><td>Numeric cells such as <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>
@@ -4462,6 +4507,48 @@ const translations = {
             csvPreviewSampleEnd: 'Fin',
             csvPreviewLinesShown: 'Lignes affichees',
             csvPreviewLinesCustom: 'Personnalise',
+            csvPreviewCellRaw: 'Brut',
+            csvPreviewCellParsed: 'Interprete',
+            csvPreviewCellType: 'Type',
+            csvPreviewCellFrom: 'Depuis',
+            csvPreviewCellPattern: 'Patron',
+            csvPreviewCellTypeNumber: 'nombre',
+            csvPreviewCellTypeText: 'texte',
+            csvPreviewCellTypeTime: 'axe du temps',
+            csvPreviewCellTypeMissing: 'vide : valeur manquante (NaN)',
+            csvPreviewCellTypeInvalid: 'pas un nombre dans une colonne numerique : charge comme NaN',
+            csvPreviewCellTypeSkipped: 'colonne non importee',
+            csvPreviewCellTypeExtra: 'apres la derniere colonne : ignore',
+            csvPreviewCellTypeHeader: 'ligne d\'en-tete : noms des colonnes',
+            csvPreviewCellTypeUnits: 'ligne des unites',
+            csvPreviewCellTypePreamble: 'avant le tableau : non importe',
+            csvPreviewCellTimeInvalid: 'heure non valide',
+            csvPreviewCellRowWidth: 'Ligne ignoree : elle n\'a pas le meme nombre de cellules que l\'en-tete.',
+            csvPreviewCellRowFiltered: 'Ligne ignoree par le filtre de lignes.',
+            csvPreviewCellRowTime: 'Ligne ignoree : son heure n\'est pas lisible.',
+            csvPreviewLinesAll: 'Toutes',
+            csvPreviewAllLinesTruncated: 'Fichier trop grand pour etre affiche en entier : seules les {shown} premieres lignes sont affichees (le fichier en compte environ {total}).',
+            csvPreviewAllLinesTruncatedUnknown: 'Fichier trop grand pour etre affiche en entier : seules les {shown} premieres lignes sont affichees.',
+            csvPreviewThousandsSeparator: 'Separateur de milliers',
+            csvPreviewThousandsSeparatorTooltip: 'Le caractere qui groupe les chiffres, comme dans 1.234,5 ou 1 234,5. Auto utilise ce que montrent les lignes, seulement quand elles ne se lisent pas autrement.',
+            csvPreviewThousandsNone: 'Aucun',
+            csvPreviewThousandsSpace: '␣ espace',
+            csvPreviewSeparatorCustom: 'Personnalise…',
+            csvPreviewDecimalCustomTooltip: 'Tapez le caractere que le fichier met entre la partie entiere et les decimales.',
+            csvPreviewThousandsCustomTooltip: 'Tapez le caractere que le fichier utilise pour grouper les milliers.',
+            csvPreviewRowsWrongWidth: '{count} ligne(s) de donnees n\'ont pas le meme nombre de cellules que l\'en-tete et sont ignorees (en rouge). Activez "Garder les lignes incompletes" pour garder les plus courtes.',
+            csvPreviewRowsWrongWidthLong: '{count} ligne(s) de donnees ont plus de cellules que l\'en-tete et sont ignorees (en rouge).',
+            csvPreviewRowsPadded: '{count} ligne(s) courte(s) gardee(s) ; leurs cellules manquantes sont des valeurs vides.',
+            csvPreviewInvisibleCharsRemoved: '{count} caractere(s) invisible(s) (controle ou largeur nulle) retire(s) du fichier avant lecture.',
+            csvPreviewPadShortRows: 'Garder les lignes incompletes',
+            csvPreviewPadShortRowsTooltip: 'Les lignes avec moins de cellules que l\'en-tete (une valeur sautee par l\'enregistreur, une derniere ligne coupee) sont gardees, et leurs cellules manquantes sont vides. Desactive : ces lignes sont ignorees.',
+            csvPreviewDateLanguage_en: 'anglais',
+            csvPreviewDateLanguage_fr: 'francais',
+            csvPreviewDateLanguage_es: 'espagnol',
+            csvPreviewDateLanguage_it: 'italien',
+            csvPreviewDateLanguage_pt: 'portugais',
+            csvPreviewDateLanguage_de: 'allemand',
+            csvPreviewDateLanguage_nl: 'neerlandais',
             csvPreviewCustomLinesOk: 'OK',
             csvPreviewCustomLinesTooltip: 'Entrez un nombre personnalise de lignes de preview, jusqu a {max}.',
             csvPreviewDelimiter: 'Delimiteur',
@@ -4527,7 +4614,7 @@ const translations = {
             csvPreviewTimeFormat: 'Format',
             csvPreviewAutoTimeFormatHelp: 'Auto detecte les dates texte, le temps numerique ecoule, les dates serie Excel, MATLAB datenum, les annees decimales et les dates partielles comme YYYY-MM.',
             csvPreviewAutoDetectedFormat: 'Detecte : {format}',
-            csvPreviewAutoDetectedDatePattern: 'Detecte : patron de date {pattern}',
+            csvPreviewAutoDetectedDatePattern: 'Detecte : {pattern}',
             csvPreviewAutoDetectedNumeric: 'temps numerique ecoule',
             csvPreviewAutoDetectedExcelSerial: 'date serie Excel',
             csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
@@ -4566,7 +4653,10 @@ const translations = {
                         <tr><td><code>m</code></td><td>Minutes sur 1 ou 2 chiffres. La minuscule est importante.</td><td><code>0</code> a <code>59</code>.</td><td><code>5</code></td></tr>
                         <tr><td><code>ss</code></td><td>Secondes sur exactement 2 chiffres.</td><td><code>00</code> a <code>59</code>.</td><td><code>08</code></td></tr>
                         <tr><td><code>s</code></td><td>Secondes sur 1 ou 2 chiffres.</td><td><code>0</code> a <code>59</code>.</td><td><code>8</code></td></tr>
-                        <tr><td><code>SSS</code></td><td>Millisecondes. Un a trois chiffres sont acceptes et completes en millisecondes.</td><td><code>0</code> a <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>S</code>, <code>SSS</code>, <code>SSSSSS</code>…</td><td>Fraction de seconde, nombre de chiffres libre. Ecrite apres <code>.</code> ou <code>,</code>, comme dans le fichier.</td><td>1 a 9 chiffres.</td><td><code>125</code></td></tr>
+                        <tr><td><code>EEE</code>, <code>EEEE</code></td><td>Nom ou abreviation du jour. Lu et ignore : la date donne le jour.</td><td>Anglais, francais, espagnol, italien, portugais, allemand, neerlandais.</td><td><code>lun.</code>, <code>lundi</code></td></tr>
+                        <tr><td><code>XXX</code></td><td>Decalage UTC. L'heure est convertie en UTC.</td><td><code>Z</code>, <code>+01:00</code>, <code>+0100</code>, <code>-05</code>.</td><td><code>+02:00</code></td></tr>
+                        <tr><td><code>'texte'</code></td><td>Le texte entre apostrophes est litteral, meme les lettres qui sont des jetons.</td><td>Tout texte ; <code>''</code> est une apostrophe.</td><td><code>dd 'de' MMMM</code></td></tr>
                         <tr><td><code>AM/PM</code></td><td>Marqueur d horloge 12 h.</td><td><code>AM</code> ou <code>PM</code>, sans tenir compte de la casse.</td><td><code>PM</code></td></tr>
                         <tr><td><code>Excel</code></td><td>Date serie Excel.</td><td>Cellules numeriques comme <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
                         <tr><td><code>Matlab</code></td><td>Valeur MATLAB datenum.</td><td>Cellules numeriques comme <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>
@@ -7268,6 +7358,48 @@ const translations = {
             csvPreviewSampleEnd: 'Final',
             csvPreviewLinesShown: 'Lineas mostradas',
             csvPreviewLinesCustom: 'Personalizado',
+            csvPreviewCellRaw: 'Crudo',
+            csvPreviewCellParsed: 'Interpretado',
+            csvPreviewCellType: 'Tipo',
+            csvPreviewCellFrom: 'Desde',
+            csvPreviewCellPattern: 'Patron',
+            csvPreviewCellTypeNumber: 'numero',
+            csvPreviewCellTypeText: 'texto',
+            csvPreviewCellTypeTime: 'eje de tiempo',
+            csvPreviewCellTypeMissing: 'vacio: valor faltante (NaN)',
+            csvPreviewCellTypeInvalid: 'no es un numero en una columna numerica: se carga como NaN',
+            csvPreviewCellTypeSkipped: 'columna no importada',
+            csvPreviewCellTypeExtra: 'despues de la ultima columna: se ignora',
+            csvPreviewCellTypeHeader: 'fila de encabezado: nombres de columna',
+            csvPreviewCellTypeUnits: 'fila de unidades',
+            csvPreviewCellTypePreamble: 'antes de la tabla: no se importa',
+            csvPreviewCellTimeInvalid: 'no es una hora valida',
+            csvPreviewCellRowWidth: 'Esta fila se omite: no tiene la misma cantidad de celdas que el encabezado.',
+            csvPreviewCellRowFiltered: 'Esta fila se omite por el filtro de filas.',
+            csvPreviewCellRowTime: 'Esta fila se omite: su hora no se puede leer.',
+            csvPreviewLinesAll: 'Todas',
+            csvPreviewAllLinesTruncated: 'Archivo demasiado grande para mostrarlo entero: solo se muestran las primeras {shown} lineas (el archivo tiene unas {total}).',
+            csvPreviewAllLinesTruncatedUnknown: 'Archivo demasiado grande para mostrarlo entero: solo se muestran las primeras {shown} lineas.',
+            csvPreviewThousandsSeparator: 'Separador de miles',
+            csvPreviewThousandsSeparatorTooltip: 'El caracter que agrupa los digitos, como en 1.234,5 o 1,234.5. Auto usa lo que muestran las filas, solo cuando no se pueden leer de otra forma.',
+            csvPreviewThousandsNone: 'Ninguno',
+            csvPreviewThousandsSpace: '␣ espacio',
+            csvPreviewSeparatorCustom: 'Personalizado…',
+            csvPreviewDecimalCustomTooltip: 'Escriba el caracter que el archivo pone entre la parte entera y los decimales.',
+            csvPreviewThousandsCustomTooltip: 'Escriba el caracter que el archivo usa para agrupar los miles.',
+            csvPreviewRowsWrongWidth: '{count} fila(s) de datos no tienen la misma cantidad de celdas que el encabezado y se omiten (en rojo). Active "Conservar filas incompletas" para conservar las mas cortas.',
+            csvPreviewRowsWrongWidthLong: '{count} fila(s) de datos tienen mas celdas que el encabezado y se omiten (en rojo).',
+            csvPreviewRowsPadded: 'Se conservan {count} fila(s) cortas; sus celdas faltantes se cargan como valores vacios.',
+            csvPreviewInvisibleCharsRemoved: 'Se quitaron {count} caracter(es) invisible(s) (de control o de ancho cero) del archivo antes de leerlo.',
+            csvPreviewPadShortRows: 'Conservar filas incompletas',
+            csvPreviewPadShortRowsTooltip: 'Las filas con menos celdas que el encabezado (un valor que el registrador salto, una ultima linea cortada) se conservan, y sus celdas faltantes quedan vacias. Desactivado: esas filas se omiten.',
+            csvPreviewDateLanguage_en: 'ingles',
+            csvPreviewDateLanguage_fr: 'frances',
+            csvPreviewDateLanguage_es: 'espanol',
+            csvPreviewDateLanguage_it: 'italiano',
+            csvPreviewDateLanguage_pt: 'portugues',
+            csvPreviewDateLanguage_de: 'aleman',
+            csvPreviewDateLanguage_nl: 'neerlandes',
             csvPreviewCustomLinesOk: 'OK',
             csvPreviewCustomLinesTooltip: 'Ingresa un numero personalizado de lineas de preview, hasta {max}.',
             csvPreviewDelimiter: 'Delimitador',
@@ -7333,7 +7465,7 @@ const translations = {
             csvPreviewTimeFormat: 'Formato',
             csvPreviewAutoTimeFormatHelp: 'Auto detecta fechas de texto, tiempo numerico transcurrido, fechas seriales de Excel, MATLAB datenum, años decimales y fechas parciales como YYYY-MM.',
             csvPreviewAutoDetectedFormat: 'Detectado: {format}',
-            csvPreviewAutoDetectedDatePattern: 'Detectado: patron de fecha {pattern}',
+            csvPreviewAutoDetectedDatePattern: 'Detectado: {pattern}',
             csvPreviewAutoDetectedNumeric: 'tiempo numerico transcurrido',
             csvPreviewAutoDetectedExcelSerial: 'fecha serial de Excel',
             csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
@@ -7372,7 +7504,10 @@ const translations = {
                         <tr><td><code>m</code></td><td>Minutos, 1 o 2 cifras. La minuscula importa.</td><td><code>0</code> a <code>59</code>.</td><td><code>5</code></td></tr>
                         <tr><td><code>ss</code></td><td>Segundos, exactamente 2 cifras.</td><td><code>00</code> a <code>59</code>.</td><td><code>08</code></td></tr>
                         <tr><td><code>s</code></td><td>Segundos, 1 o 2 cifras.</td><td><code>0</code> a <code>59</code>.</td><td><code>8</code></td></tr>
-                        <tr><td><code>SSS</code></td><td>Milisegundos. Se aceptan de una a tres cifras y se completan como milisegundos.</td><td><code>0</code> a <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>S</code>, <code>SSS</code>, <code>SSSSSS</code>…</td><td>Fraccion de segundo, cualquier cantidad de cifras. Escrita despues de <code>.</code> o <code>,</code>, como en el archivo.</td><td>1 a 9 cifras.</td><td><code>125</code></td></tr>
+                        <tr><td><code>EEE</code>, <code>EEEE</code></td><td>Nombre o abreviatura del dia de la semana. Se lee y se ignora: la fecha da el dia.</td><td>Ingles, frances, espanol, italiano, portugues, aleman, neerlandes.</td><td><code>lun</code>, <code>lunes</code></td></tr>
+                        <tr><td><code>XXX</code></td><td>Desfase UTC. La hora se convierte a UTC.</td><td><code>Z</code>, <code>+01:00</code>, <code>+0100</code>, <code>-05</code>.</td><td><code>-03:00</code></td></tr>
+                        <tr><td><code>'texto'</code></td><td>El texto entre comillas simples es literal, aunque tenga letras que son tokens.</td><td>Cualquier texto; <code>''</code> es una comilla.</td><td><code>dd 'de' MMMM 'de' yyyy</code></td></tr>
                         <tr><td><code>AM/PM</code></td><td>Marcador de reloj de 12 h.</td><td><code>AM</code> o <code>PM</code>, sin distinguir mayusculas.</td><td><code>PM</code></td></tr>
                         <tr><td><code>Excel</code></td><td>Fecha serial de Excel.</td><td>Celdas numericas como <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
                         <tr><td><code>Matlab</code></td><td>Valor MATLAB datenum.</td><td>Celdas numericas como <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>
@@ -10054,6 +10189,48 @@ const translations = {
             csvPreviewSampleEnd: 'Fine',
             csvPreviewLinesShown: 'Righe mostrate',
             csvPreviewLinesCustom: 'Personalizzato',
+            csvPreviewCellRaw: 'Grezzo',
+            csvPreviewCellParsed: 'Interpretato',
+            csvPreviewCellType: 'Tipo',
+            csvPreviewCellFrom: 'Da',
+            csvPreviewCellPattern: 'Pattern',
+            csvPreviewCellTypeNumber: 'numero',
+            csvPreviewCellTypeText: 'testo',
+            csvPreviewCellTypeTime: 'asse del tempo',
+            csvPreviewCellTypeMissing: 'vuoto: valore mancante (NaN)',
+            csvPreviewCellTypeInvalid: 'non e un numero in una colonna numerica: caricato come NaN',
+            csvPreviewCellTypeSkipped: 'colonna non importata',
+            csvPreviewCellTypeExtra: 'dopo l\'ultima colonna: ignorato',
+            csvPreviewCellTypeHeader: 'riga di intestazione: nomi delle colonne',
+            csvPreviewCellTypeUnits: 'riga delle unita',
+            csvPreviewCellTypePreamble: 'prima della tabella: non importato',
+            csvPreviewCellTimeInvalid: 'ora non valida',
+            csvPreviewCellRowWidth: 'Riga esclusa: non ha lo stesso numero di celle dell\'intestazione.',
+            csvPreviewCellRowFiltered: 'Riga esclusa dal filtro righe.',
+            csvPreviewCellRowTime: 'Riga esclusa: la sua ora non si legge.',
+            csvPreviewLinesAll: 'Tutte',
+            csvPreviewAllLinesTruncated: 'File troppo grande per mostrarlo intero: sono mostrate solo le prime {shown} righe (il file ne ha circa {total}).',
+            csvPreviewAllLinesTruncatedUnknown: 'File troppo grande per mostrarlo intero: sono mostrate solo le prime {shown} righe.',
+            csvPreviewThousandsSeparator: 'Separatore delle migliaia',
+            csvPreviewThousandsSeparatorTooltip: 'Il carattere che raggruppa le cifre, come in 1.234,5 o 1,234.5. Auto usa cio che mostrano le righe, solo quando non si leggono in altro modo.',
+            csvPreviewThousandsNone: 'Nessuno',
+            csvPreviewThousandsSpace: '␣ spazio',
+            csvPreviewSeparatorCustom: 'Personalizzato…',
+            csvPreviewDecimalCustomTooltip: 'Digitare il carattere che il file mette tra la parte intera e i decimali.',
+            csvPreviewThousandsCustomTooltip: 'Digitare il carattere che il file usa per raggruppare le migliaia.',
+            csvPreviewRowsWrongWidth: '{count} riga/e di dati hanno un numero di celle diverso dall\'intestazione e sono escluse (in rosso). Attivare "Tieni righe incomplete" per tenere quelle piu corte.',
+            csvPreviewRowsWrongWidthLong: '{count} riga/e di dati hanno piu celle dell\'intestazione e sono escluse (in rosso).',
+            csvPreviewRowsPadded: '{count} riga/e corte sono tenute; le celle mancanti sono valori vuoti.',
+            csvPreviewInvisibleCharsRemoved: '{count} carattere/i invisibile/i (di controllo o a larghezza zero) rimossi dal file prima della lettura.',
+            csvPreviewPadShortRows: 'Tieni righe incomplete',
+            csvPreviewPadShortRowsTooltip: 'Le righe con meno celle dell\'intestazione (un valore saltato dal registratore, un\'ultima riga troncata) sono tenute, e le celle mancanti sono vuote. Disattivato: quelle righe sono escluse.',
+            csvPreviewDateLanguage_en: 'inglese',
+            csvPreviewDateLanguage_fr: 'francese',
+            csvPreviewDateLanguage_es: 'spagnolo',
+            csvPreviewDateLanguage_it: 'italiano',
+            csvPreviewDateLanguage_pt: 'portoghese',
+            csvPreviewDateLanguage_de: 'tedesco',
+            csvPreviewDateLanguage_nl: 'olandese',
             csvPreviewCustomLinesOk: 'OK',
             csvPreviewCustomLinesTooltip: 'Inserisci un numero personalizzato di righe di preview, fino a {max}.',
             csvPreviewDelimiter: 'Delimitatore',
@@ -10119,7 +10296,7 @@ const translations = {
             csvPreviewTimeFormat: 'Formato',
             csvPreviewAutoTimeFormatHelp: 'Auto rileva date testuali, tempo numerico trascorso, date seriali Excel, MATLAB datenum, anni decimali e date parziali come YYYY-MM.',
             csvPreviewAutoDetectedFormat: 'Rilevato: {format}',
-            csvPreviewAutoDetectedDatePattern: 'Rilevato: pattern data {pattern}',
+            csvPreviewAutoDetectedDatePattern: 'Rilevato: {pattern}',
             csvPreviewAutoDetectedNumeric: 'tempo numerico trascorso',
             csvPreviewAutoDetectedExcelSerial: 'data seriale Excel',
             csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
@@ -10158,7 +10335,10 @@ const translations = {
                         <tr><td><code>m</code></td><td>Minuti, 1 o 2 cifre. La minuscola e importante.</td><td><code>0</code> a <code>59</code>.</td><td><code>5</code></td></tr>
                         <tr><td><code>ss</code></td><td>Secondi, esattamente 2 cifre.</td><td><code>00</code> a <code>59</code>.</td><td><code>08</code></td></tr>
                         <tr><td><code>s</code></td><td>Secondi, 1 o 2 cifre.</td><td><code>0</code> a <code>59</code>.</td><td><code>8</code></td></tr>
-                        <tr><td><code>SSS</code></td><td>Millisecondi. Sono accettate da una a tre cifre e vengono completate come millisecondi.</td><td><code>0</code> a <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>S</code>, <code>SSS</code>, <code>SSSSSS</code>…</td><td>Frazione di secondo, qualsiasi numero di cifre. Scritta dopo <code>.</code> o <code>,</code>, come nel file.</td><td>Da 1 a 9 cifre.</td><td><code>125</code></td></tr>
+                        <tr><td><code>EEE</code>, <code>EEEE</code></td><td>Nome o abbreviazione del giorno. Letto e ignorato: la data da il giorno.</td><td>Inglese, francese, spagnolo, italiano, portoghese, tedesco, olandese.</td><td><code>lun</code>, <code>lunedi</code></td></tr>
+                        <tr><td><code>XXX</code></td><td>Scostamento UTC. L'ora e convertita in UTC.</td><td><code>Z</code>, <code>+01:00</code>, <code>+0100</code>, <code>-05</code>.</td><td><code>+02:00</code></td></tr>
+                        <tr><td><code>'testo'</code></td><td>Il testo tra apici e letterale, anche le lettere che sono token.</td><td>Qualsiasi testo; <code>''</code> e un apice.</td><td><code>dd 'de' MMMM</code></td></tr>
                         <tr><td><code>AM/PM</code></td><td>Marcatore di orologio a 12 h.</td><td><code>AM</code> o <code>PM</code>, senza distinzione maiuscole.</td><td><code>PM</code></td></tr>
                         <tr><td><code>Excel</code></td><td>Data seriale Excel.</td><td>Celle numeriche come <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
                         <tr><td><code>Matlab</code></td><td>Valore MATLAB datenum.</td><td>Celle numeriche come <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>

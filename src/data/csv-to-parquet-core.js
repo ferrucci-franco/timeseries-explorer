@@ -7,6 +7,13 @@ import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
 import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import { columnIndexSet, columnSampleVerdict, forcedColumnTypes, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
+import { csvNumberFormat } from '../parsers/csv-text-normalize.js';
+import {
+    csvNumericCastSql,
+    csvProfileUsesDecimalComma,
+    csvReadRepairOptions,
+    csvRepairProjectionSql,
+} from './csv-sql-normalize.js';
 
 const require = createRequire(import.meta.url);
 const duckDbModulePath = (() => {
@@ -44,16 +51,19 @@ export function csvReadExpr(sqlInput, profile) {
     if (profile.delimiter === 'whitespace') {
         throw new Error('CSV-to-Parquet conversion does not yet support variable-width whitespace delimiters.');
     }
+    const specs = csvColumnSpecs(profile);
     const options = [
         `auto_detect=false`,
         `header=false`,
         `skip=${Math.max(0, Number(profile.dataStartIndex) || 0)}`,
-        `columns=${duckDbColumnsStruct(csvColumnSpecs(profile))}`,
+        `columns=${duckDbColumnsStruct(specs)}`,
         `ignore_errors=true`,
+        ...csvReadRepairOptions(profile),
     ];
     if (profile.delimiter) options.push(`delim='${escapeSqlString(profile.delimiter)}'`);
     if (csvUsesDecimalComma(profile)) options.push(`decimal_separator=','`);
-    return `read_csv('${sqlInput}', ${options.join(', ')})`;
+    const readSql = `read_csv('${sqlInput}', ${options.join(', ')})`;
+    return csvRepairProjectionSql(readSql, profile, specs.map(spec => spec.name)) || readSql;
 }
 
 // `withVerdict` adds what the sample says about each column ('numeric', 'text',
@@ -75,6 +85,7 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
     const scannedNumeric = columnIndexSet(profile?.scannedNumericColumns);
     const scannedText = columnIndexSet(profile?.scannedTextColumns);
     const validTimeRows = sampleRowsWithValidTime(sampleRows, profile);
+    const numberFormat = csvNumberFormat(profile);
     return rawHeaders.map((raw, index) => {
         const header = headers[index] || {};
         const name = header.name || String(raw || `column_${index + 1}`);
@@ -93,7 +104,7 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
                 ? { type: 'VARCHAR', readType: 'VARCHAR' }
             : numericIndexes
                 ? (numericIndexes.has(index) ? { type: 'DOUBLE', readType: 'VARCHAR' } : { type: 'VARCHAR', readType: 'VARCHAR' })
-            : inferDuckDbCsvType(validTimeRows, index, profile.delimiter, profile.decimalSeparator);
+            : inferDuckDbCsvType(validTimeRows, index, profile.delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator);
         const spec = {
             name,
             description: String(header.description || ''),
@@ -107,7 +118,7 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
                     ? 'chosen'
                     : scanned
                         ? 'scanned'
-                        : columnSampleVerdict(validTimeRows, index, profile?.delimiter, profile?.decimalSeparator);
+                        : columnSampleVerdict(validTimeRows, index, profile?.delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator);
         }
         return spec;
     });
@@ -168,9 +179,9 @@ export function sampleRowsWithValidTime(sampleRows, profile) {
     const timeSource = profile?.timeSource;
     if (!timeSource?.ok || timeSource.strategy === 'generated-index') return sampleRows || [];
     const delimiter = profile?.delimiter || ',';
-    const decimalSeparator = profile?.decimalSeparator || 'auto';
+    const { decimalSeparator, thousandsSeparator } = csvNumberFormat(profile);
     return (sampleRows || []).filter((row, index) =>
-        Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator }))
+        Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator, thousandsSeparator }))
     );
 }
 
@@ -178,8 +189,8 @@ export function sampleRowsWithValidTime(sampleRows, profile) {
 // a channel the logger never recorded — is numbers, not a string column (#311).
 // resolveUnknownCsvColumnTypes settles those columns against the whole file
 // before anything is written; this is what stands if that scan cannot run.
-export function inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto') {
-    return columnSampleVerdict(sampleRows, index, delimiter, decimalSeparator) === 'text'
+export function inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
+    return columnSampleVerdict(sampleRows, index, delimiter, decimalSeparator, thousandsSeparator) === 'text'
         ? { type: 'VARCHAR', readType: 'VARCHAR' }
         : { type: 'DOUBLE', readType: 'VARCHAR' };
 }
@@ -192,16 +203,7 @@ export function duckDbColumnsStruct(specs) {
 }
 
 export function csvUsesDecimalComma(profile) {
-    if (profile?.decimalSeparator === ',') return true;
-    if (profile?.decimalSeparator === '.') return false;
-    if (!profile || profile.delimiter === ',') return false;
-    for (const row of profile.sampleRows || []) {
-        for (const cell of row || []) {
-            const raw = String(cell ?? '').trim();
-            if (/^[+-]?\d+,\d+(?:[eEdD][+-]?\d+)?$/.test(raw)) return true;
-        }
-    }
-    return false;
+    return csvProfileUsesDecimalComma(profile);
 }
 
 export function timeInfoFromProfile(profile) {
@@ -315,6 +317,7 @@ function customFormatSql(expr, pattern) {
     const info = customDatetimePatternInfo(pattern);
     if (!info?.format) return null;
     let valueExpr = `CAST(${expr} AS VARCHAR)`;
+    if (info.hasWeekday) valueExpr = `regexp_replace(trim(${valueExpr}), '^[\\p{L}-]{2,14}\\.?,?\\s+', '')`;
     if (info.valuePrefix) valueExpr = `'${escapeSqlString(info.valuePrefix)}' || ${valueExpr}`;
     if (info.valueSuffix) valueExpr = `${valueExpr} || '${escapeSqlString(info.valueSuffix)}'`;
     if (info.hasMonthName) valueExpr = normalizedMonthNameSql(valueExpr);
@@ -404,10 +407,7 @@ export function rowFilterSql(profile) {
 }
 
 function numericCastSql(expr, profile = null) {
-    const value = csvUsesDecimalComma(profile)
-        ? `replace(CAST(${expr} AS VARCHAR), ',', '.')`
-        : expr;
-    return `try_cast(${value} AS DOUBLE)`;
+    return csvNumericCastSql(expr, profile);
 }
 
 export function quoteIdent(name) {
@@ -608,7 +608,7 @@ function monthNameFormats() {
 }
 
 function normalizedMonthNameSql(expr) {
-    let sql = `lower(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g'))`;
+    let sql = `lower(strip_accents(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g')))`;
     const replacements = [
         ['january', 'jan'], ['janvier', 'jan'], ['enero', 'jan'], ['ene', 'jan'], ['gennaio', 'jan'], ['gen', 'jan'], ['janeiro', 'jan'],
         ['february', 'feb'], ['fevrier', 'feb'], ['fevr', 'feb'], ['febrero', 'feb'], ['febbraio', 'feb'], ['fevereiro', 'feb'],
