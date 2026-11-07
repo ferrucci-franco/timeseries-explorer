@@ -283,7 +283,7 @@ proto._createHistogramChart = function(panelId, panelEl) {
                 // The chart may have been rebuilt meanwhile (a signal taken
                 // off), or a pane hidden: Plotly rejects a div not on screen.
                 for (const div of [timeDiv, histDiv]) {
-                    if (div.isConnected && div.offsetParent !== null) Promise.resolve(Plotly.Plots.resize(div)).catch(() => {});
+                    this._resizePlotlyDiv(div);
                 }
             }, 50);
         });
@@ -537,6 +537,15 @@ proto._recomputeHistogram = async function(panelId, plot = this.plots.get(panelI
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     plot._histAbort = controller;
     try {
+        // A lazy file whose axis is the row number must be counted before its
+        // domain can be told; counted once, then this pass runs again.
+        const uncounted = [...new Set((plot.traces || []).filter(trace => isLazyTrace(this, trace)).map(trace => trace.fileId))]
+            .filter(fileId => this._needsLazyRowCount(fileId));
+        if (uncounted.length) {
+            await Promise.all(uncounted.map(fileId => this._ensureLazyRowCount(fileId)));
+            if (plot._histToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'histogram') return;
+            return this._recomputeHistogram(panelId, plot);
+        }
         await this._recomputeHistogramNow(panelId, plot, token, controller?.signal || null);
     } catch (err) {
         if (err?.name === 'AbortError' || plot._histToken !== token) return;
@@ -927,8 +936,8 @@ proto._setHistogramLayout = function(panelId, layout) {
     this._ensureHistogramState(plot).layout = layout;
     plot.histogramContainer.classList.toggle('hist-layout-horizontal', layout === 'horizontal');
     plot.histogramContainer.classList.toggle('hist-layout-vertical', layout === 'vertical');
-    Plotly.Plots.resize(plot.div);
-    Plotly.Plots.resize(plot.histogramDiv);
+    this._resizePlotlyDiv(plot.div);
+    this._resizePlotlyDiv(plot.histogramDiv);
 };
 
 proto._toggleHistogramTimeSeries = function(panelId) {
@@ -943,10 +952,10 @@ proto._toggleHistogramTimeSeries = function(panelId) {
         button.setAttribute('aria-pressed', String(state.timeSeriesHidden));
     }
     if (!state.timeSeriesHidden && plot.div) {
-        Plotly.Plots.resize(plot.div);
+        this._resizePlotlyDiv(plot.div);
         this._refreshPanelDomOverlays(plot);
     }
-    if (plot.histogramDiv) Plotly.Plots.resize(plot.histogramDiv);
+    if (plot.histogramDiv) this._resizePlotlyDiv(plot.histogramDiv);
 };
 
 proto._toggleHistogramOptions = function(panelId) {
@@ -962,8 +971,8 @@ proto._toggleHistogramOptions = function(panelId) {
         optionsBtn.classList.toggle('active', state.optionsVisible);
         optionsBtn.setAttribute('aria-pressed', String(state.optionsVisible));
     }
-    Plotly.Plots.resize(plot.div);
-    Plotly.Plots.resize(plot.histogramDiv);
+    this._resizePlotlyDiv(plot.div);
+    this._resizePlotlyDiv(plot.histogramDiv);
 };
 
 proto._resetHistogramView = function(panelId) {
@@ -1035,8 +1044,8 @@ proto._installHistogramSplitterHandlers = function(panelId, plot) {
             : (event.clientX - rect.left) / rect.width;
         state.split = Math.max(0.2, Math.min(0.8, fraction));
         plot.histogramContainer.style.setProperty('--hist-split', `${Math.round(state.split * 1000) / 10}%`);
-        Plotly.Plots.resize(plot.div);
-        Plotly.Plots.resize(plot.histogramDiv);
+        this._resizePlotlyDiv(plot.div);
+        this._resizePlotlyDiv(plot.histogramDiv);
     };
     splitter.addEventListener('mousedown', event => { dragging = true; event.preventDefault(); document.body.classList.add('fft-split-dragging'); });
     const onMove = event => { if (dragging) apply(event); };

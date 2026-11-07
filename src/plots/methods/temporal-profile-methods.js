@@ -69,7 +69,7 @@ const fallbackText = {
     temporalProfileModeLabel: 'Profile',
     temporalProfileDrop: 'Drop one or more calendar signals for the temporal profile',
     temporalProfileCalendarRequired: 'Temporal Profile requires Calendar time mode.',
-    temporalProfileLazyDerivedUnsupported: 'this derived lazy signal cannot be profiled exactly',
+    temporalProfileLazyDerivedUnsupported: 'this signal exists only on the overview of a large file (it has no exact source in the file), so it is left out',
     temporalProfileCalculating: 'Calculating exact profile…',
     temporalProfileNoFinite: 'no finite values in range',
     temporalProfileWarningSeePanel: 'Warning: see message in the Profile side panel',
@@ -493,7 +493,7 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
         let timer;
         const observer = new ResizeObserver(() => {
             clearTimeout(timer);
-            timer = setTimeout(() => { Plotly.Plots.resize(timeDiv); Plotly.Plots.resize(profileDiv); }, 50);
+            timer = setTimeout(() => { this._resizePlotlyDiv(timeDiv); this._resizePlotlyDiv(profileDiv); }, 50);
         });
         observer.observe(panelEl);
         plot.resizeObserver = observer;
@@ -706,6 +706,16 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
     if (!plot?.temporalProfileDiv || plot.mode !== 'temporal-profile') return;
     const token = (plot._temporalProfileToken || 0) + 1;
     plot._temporalProfileToken = token;
+    // A lazy file whose axis is the row number must be counted before its
+    // domain can be told; counted once, then this pass runs again.
+    const uncounted = [...new Set((plot.traces || []).filter(trace => traceIsLazy(this, trace)).map(trace => trace.fileId))]
+        .filter(fileId => this._needsLazyRowCount(fileId));
+    if (uncounted.length) {
+        this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
+        await Promise.all(uncounted.map(fileId => this._ensureLazyRowCount(fileId)));
+        if (plot._temporalProfileToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'temporal-profile') return;
+        return this._recomputeTemporalProfile(panelId, plot);
+    }
     const state = this._ensureTemporalProfileState(plot);
     const range = state.rangeFull ? null : this._activeTemporalProfileRange(plot);
     const dataStep = this._temporalProfileDataStepMinutes(plot);
@@ -751,9 +761,12 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
                 ...profileGeometryArgs(state),
                 dayGrouping: state.dayGrouping,
                 combineWeekends: state.combineWeekends,
-                // Eager arrays are already cropped with binary bounds.
-                rangeStart: null,
-                rangeEnd: null,
+                // The arrays are already cut to the selection (binary bounds),
+                // so the kernel drops nothing; the bounds tell it which periods
+                // the selection cuts, as the lazy query is told — a day the
+                // selection enters at 07:30 is partial in both modes.
+                rangeStart: range ? range[0] : null,
+                rangeEnd: range ? range[1] : null,
                 discardIncomplete: state.discardIncomplete,
             });
             if (!result.ok) {
@@ -771,10 +784,15 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
         this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
         this._setTemporalProfileComputing(plot, true);
         plot.temporalProfileContainer?.setAttribute('aria-busy', 'true');
+        // Every row of each lazy file, aggregated in DuckDB by the axis the
+        // panel shows (_lazyCalendarTimeSql) with the file's transforms; a
+        // signal with SQL over the file (a column, a data tool's output, a
+        // formula) is exact, one that exists only on the overview is left out.
         const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
             const data = this.files.get(fileId)?.data;
             const source = data?._duckdb?.source;
-            if (!source?.getTemporalProfileAggregates) return { fileId, entries, unsupported: true };
+            const timeSql = this._lazyCalendarTimeSql(fileId);
+            if (!source?.getTemporalProfileAggregates || !timeSql) return { fileId, entries, unsupported: true };
             const transform = this._fileTransform(fileId);
             const timeShiftMs = this._parseTimeShift(fileId, transform.timeShift) || 0;
             const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
@@ -797,6 +815,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
                     cropRange,
                     selectionRange: state.rangeFull ? null : range,
                     transforms,
+                    timeSql,
                 });
                 return { fileId, entries, result };
             } catch (error) {
@@ -809,11 +828,14 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
         if (!plot._temporalProfileLazyStepMs) plot._temporalProfileLazyStepMs = new Map();
         for (const job of settled) {
             if (job.unsupported) {
-                for (const entry of job.entries) if (this._isVisible(entry.trace)) warnings.push(`${entry.name}: ${text('temporalProfileLazyDerivedUnsupported')}`);
+                for (const entry of job.entries) if (this._isVisible(entry.trace)) warnings.push(`${entry.name}: ${text('temporalProfileCalendarRequired')}`);
                 continue;
             }
             if (job.error || !job.result?.ok) {
-                const reason = job.error?.message || job.result?.reason || text('temporalProfileLazyDerivedUnsupported');
+                const reason = job.error?.message
+                    || ({ notDatetime: text('temporalProfileCalendarRequired'), tooManyBins: text('temporalProfileTooManyBins') })[job.result?.reason]
+                    || job.result?.reason
+                    || text('temporalProfileNoFinite');
                 for (const entry of job.entries) if (this._isVisible(entry.trace)) warnings.push(`${entry.name}: ${reason}`);
                 continue;
             }
@@ -1086,6 +1108,13 @@ proto._temporalProfileDomain = function(plot) {
     for (const trace of plot?.traces || []) {
         const values = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (values?.length) arrays.push(values);
+        // A lazy file's overview is a sample of its rows: its ends are the
+        // file's, read from the metadata (and from the row count, for an axis
+        // generated from the row number).
+        if (traceIsLazy(this, trace)) {
+            const extent = this._lazyTimeExtent?.(trace.fileId);
+            if (extent?.length) arrays.push(extent);
+        }
     }
     const extent = this._finiteSortedExtent(arrays);
     return extent ? { min: extent.min, max: extent.max } : null;
@@ -1244,8 +1273,8 @@ proto._setTemporalProfileLayout = function(panelId, layout) {
     this._ensureTemporalProfileState(plot).layout = layout;
     plot.temporalProfileContainer.classList.toggle('hist-layout-horizontal', layout === 'horizontal');
     plot.temporalProfileContainer.classList.toggle('hist-layout-vertical', layout === 'vertical');
-    Plotly.Plots.resize(plot.div);
-    Plotly.Plots.resize(plot.temporalProfileDiv);
+    this._resizePlotlyDiv(plot.div);
+    this._resizePlotlyDiv(plot.temporalProfileDiv);
 };
 
 proto._toggleTemporalProfileTimeSeries = function(panelId) {
@@ -1262,10 +1291,10 @@ proto._toggleTemporalProfileTimeSeries = function(panelId) {
         button.setAttribute('aria-pressed', String(state.timeSeriesHidden));
     }
     if (!state.timeSeriesHidden && plot.div) {
-        Plotly.Plots.resize(plot.div);
+        this._resizePlotlyDiv(plot.div);
         this._refreshPanelDomOverlays(plot);
     }
-    if (plot.temporalProfileDiv) Plotly.Plots.resize(plot.temporalProfileDiv);
+    if (plot.temporalProfileDiv) this._resizePlotlyDiv(plot.temporalProfileDiv);
 };
 
 proto._toggleTemporalProfileOptions = function(panelId) {
@@ -1281,8 +1310,8 @@ proto._toggleTemporalProfileOptions = function(panelId) {
         button.classList.toggle('active', state.optionsVisible);
         button.setAttribute('aria-pressed', String(state.optionsVisible));
     }
-    Plotly.Plots.resize(plot.div);
-    Plotly.Plots.resize(plot.temporalProfileDiv);
+    this._resizePlotlyDiv(plot.div);
+    this._resizePlotlyDiv(plot.temporalProfileDiv);
 };
 
 proto._resetTemporalProfileView = function(panelId) {
@@ -1348,8 +1377,8 @@ proto._installTemporalProfileSplitterHandlers = function(panelId, plot) {
             : (event.clientX - rect.left) / rect.width;
         state.split = Math.max(0.2, Math.min(0.8, fraction));
         plot.temporalProfileContainer.style.setProperty('--hist-split', `${Math.round(state.split * 1000) / 10}%`);
-        Plotly.Plots.resize(plot.div);
-        Plotly.Plots.resize(plot.temporalProfileDiv);
+        this._resizePlotlyDiv(plot.div);
+        this._resizePlotlyDiv(plot.temporalProfileDiv);
     };
     splitter.addEventListener('mousedown', event => { dragging = true; event.preventDefault(); document.body.classList.add('fft-split-dragging'); });
     const onMove = event => { if (dragging) apply(event); };

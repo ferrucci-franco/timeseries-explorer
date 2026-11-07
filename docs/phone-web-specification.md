@@ -202,6 +202,10 @@ Each destination opens a sheet.
   position.
 - **Closing.** A sheet closes by tapping its destination again, by dragging the handle
   down, with the system Back gesture or button (§6.3), or with Escape.
+- **The way back, sideways.** The side sheet's Hide chevron sends it off the right
+  edge, while the rail is on the left. A pill stays on that right edge while the
+  sheet is hidden, pointing at it, and a tap brings the same sheet back. Upright the
+  chevron points down at the bottom bar, which is the way back, and there is no pill.
 - **One set of controls.** Whatever a sheet or a dialog lends from the desktop is
   drawn as the phone's own: rounded fields of one height and tint, one drawn chevron
   on every pick-list (never the browser's arrow or iOS's up-and-down one), dates and
