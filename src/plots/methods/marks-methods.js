@@ -312,7 +312,8 @@ export function installPlotMarksMethods(TargetClass) {
         // open for every trace above it.
         if (!t || plot?.timeseriesStacked || this._isLazyViewFile(t.fileId)) return null;
         const variable = this.files.get(t.fileId)?.data?.variables?.[t.varName];
-        if (!variable || variable.kind === 'parameter') return null;
+        // A state band has no line to break; an empty cell is a blank run.
+        if (!variable || variable.kind === 'parameter' || this._isStateBandVariable?.(variable)) return null;
         const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
         if (!times?.length || !this._timesMonotonic(times)) return null;
         const width = widthPx || plot?.div?._fullLayout?.xaxis?._length || plot?.div?.clientWidth || 1000;
@@ -361,7 +362,8 @@ export function installPlotMarksMethods(TargetClass) {
         for (const t of plot?.traces || []) {
             if (!this._isVisible(t) || this._isLazyViewFile(t.fileId)) continue;
             const variable = this.files.get(t.fileId)?.data?.variables?.[t.varName];
-            if (!variable || variable.kind === 'parameter') continue;
+            // Text is not NaN: a state band shows its empty cells itself.
+            if (!variable || variable.kind === 'parameter' || this._isStateBandVariable?.(variable)) continue;
             const values = this._getTransformedVariableData(t.fileId, t.varName);
             const runs = this._nanRunsFor(values);
             if (!runs.count) continue;
@@ -518,6 +520,8 @@ export function installPlotMarksMethods(TargetClass) {
         const perFile = new Map();
         for (const t of plot.traces) {
             if (!this._isVisible(t)) continue;
+            // Read as numbers, every value of a text column would be NaN.
+            if (this._isStateBandTrace?.(t)) continue;
             const data = this.files.get(t.fileId)?.data;
             const source = data?._duckdb?.source;
             if (!source?.getMissingIntervals || !data._duckdb.viewMode) continue;

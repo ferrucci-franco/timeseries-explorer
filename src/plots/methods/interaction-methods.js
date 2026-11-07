@@ -361,6 +361,8 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const fftGapsByFile = fftGapInfo ? new Map(fftGapInfo.perFile.map(f => [f.fileId, f])) : null;
     let drawn = null;
     plot.traces.forEach((t, idx) => {
+        // State bands are bars, restyled on their own below.
+        if (tsMode && this._isStateBandTrace?.(t)) return;
         const breaks = tsMode ? this._traceBreakIntervals(plot, t, viewLo, viewHi) : null;
         const attachSourceX = !!breaks || fftMode;
         const built = this._buildTimeTrace(t, traceBuildRange, plot, idx, attachSourceX ? { attachSourceX: true } : {});
@@ -396,6 +398,10 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
             : Plotly.restyle(plot.div, update, indices);
     } else if (options.layoutUpdate) {
         drawn = Plotly.update(plot.div, {}, options.layoutUpdate);
+    }
+    if (tsMode) {
+        const bands = this._refreshStateBands?.(plot, range);
+        if (bands) drawn = Promise.all([drawn, bands]).then(([first]) => first);
     }
     if (plot.mode === 'timeseries') this._refreshSamplesNotice(plot);
     // Keep the overlays in step with the zoom: gap bands (adaptive width),
@@ -446,6 +452,12 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
     // Truthful NaN/Inf and Gaps marks for the visible range (opt-in; their own
     // async DuckDB query, token-guarded, independent of the trace-data queries).
     this._refreshLazyMissingBands(panelId, plot, t0, t1, token);
+    // State bands: their own query (changes of value), and meanwhile what
+    // they already hold for this view.
+    if (plot.mode === 'timeseries' && this._stateBandTraces?.(plot)?.length) {
+        this._refreshStateBands(plot, range);
+        this._refreshStateBandsLazy(panelId, plot, t0, t1);
+    }
     const perf = this._beginLazyPerf(panelId, plot, {
         token,
         range: [t0, t1],
@@ -458,6 +470,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
     const immediateResults = [];
     const queryGroups = new Map();
     plot.traces.forEach((t, idx) => {
+        if (plot.mode === 'timeseries' && this._isStateBandTrace?.(t)) return;
         const fileEntry = this.files.get(t.fileId);
         const data = fileEntry?.data;
         const lazyMeta = data?._duckdb;
@@ -2025,7 +2038,10 @@ proto._onHover = function(sourcePanelId, eventData) {
         clearTimeout(this._hoverClearTimer);
         this._hoverClearTimer = null;
     }
-    const sourceXVal = this._coerceAxisValue(pt.x);   // hovered time value
+    // A bar of a state band reports its LENGTH as x: the time under the
+    // pointer is what the hover is about.
+    const hoveredBand = !!(pt.data?.meta?.stateBand || pt.fullData?.meta?.stateBand);
+    const sourceXVal = this._coerceAxisValue(hoveredBand ? (eventData.xvals?.[0] ?? pt.x) : pt.x);
     if (!Number.isFinite(sourceXVal)) return;
 
     this._hovering = true;
@@ -2056,8 +2072,15 @@ proto._onHover = function(sourcePanelId, eventData) {
             if (plot.mode === 'timeseries') {
                 const lines = [`<b>t = ${this._escapeHTML(formatHoverTime(targetFid, xVal))}${targetTimeSuffix}</b>`];
                 const markers = [];
+                const stateColors = this._stateBandTraces?.(plot)?.length ? this._stateBandColorMap(plot) : null;
                 plot.traces.forEach(t => {
                     if (t.visible === 'legendonly' || t.visible === false) return;
+                    if (stateColors && this._isStateBandTrace?.(t)) {
+                        // A state holds forward: the value at or before t.
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, t.fileId, sourceXVal);
+                        lines.push(this._stateBandHoverLine(plot, t, traceXVal, stateColors));
+                        return;
+                    }
                     const d    = this.files.get(t.fileId)?.data;
                     const v    = d?.variables[t.varName];
                     const tdata = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
@@ -2645,7 +2668,9 @@ proto._resolveCursorTrace = function(view, which) {
     const plot = view.plot;
     if (!plot?.traces?.length) return null;
     const cursors = this._viewCursors(view);
-    const visibleTraces = plot.traces.filter(t => t.visible !== false && t.visible !== 'legendonly');
+    // A cursor measures a curve; a state band is read in its own row.
+    const visibleTraces = plot.traces.filter(t => t.visible !== false && t.visible !== 'legendonly'
+        && !this._isStateBandTrace?.(t));
     if (!visibleTraces.length) return null;
     const key = which === 'b' ? 'traceB' : 'traceA';
     if (!cursors[key] && cursors.trace) {
@@ -4040,7 +4065,7 @@ proto._updateCursorBox = function(view) {
     const colorA = traceA?.color || '#ff9800';
     const colorB = traceB?.color || '#2196f3';
     const visibleTraces = plot.traces
-        .filter(t => t.visible !== false && t.visible !== 'legendonly');
+        .filter(t => t.visible !== false && t.visible !== 'legendonly' && !this._isStateBandTrace?.(t));
     const traceKey = (trace) => trace ? `${trace.fileId}\u0000${trace.varName}` : '';
     const optionsKey = visibleTraces
         .map(t => `${t.fileId}\u0000${t.varName}\u0000${t.color || ''}`)
@@ -4174,6 +4199,7 @@ proto._updateCursorBox = function(view) {
             ${view.isSpectrum ? '' : `<div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>`}
             <div><b>${invDxLabel}=</b>${inverseDxText}</div>
             ${inverseSpacingHTML}
+            ${view.isSpectrum ? '' : (this._stateBandCursorRows?.(plot, aX, bX) || '')}
     `;
     // The phone layout shows the same reading in a sheet of its own, and its
     // differences in the app bar (compact-methods). HTML escaped as above.
@@ -5185,7 +5211,7 @@ proto._logAxisHiddenCount = function(plot) {
             if (!this._isVisible(trace)) continue;
             if (!this._axisIsLog(plot, this._traceYAxis(trace, plot))) continue;
             const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
-            if (!variable || variable.kind === 'parameter') continue;
+            if (!variable || variable.kind === 'parameter' || this._isStateBandVariable?.(variable)) continue;
             const values = this._getTransformedVariableData(trace.fileId, trace.varName);
             let n = 0;
             for (const value of values || []) {

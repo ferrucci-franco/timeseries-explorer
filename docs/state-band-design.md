@@ -1,7 +1,8 @@
 # Banda de estados: columnas de texto en la serie temporal
 
-Estado: diseño, sin implementar. Este documento fija el alcance y los puntos de
-enganche para que la implementación se haga sobre él.
+Estado: implementado, en memoria y en memory-saving. Donde la construcción se
+apartó del borrador, la sección lo dice, y *Cómo quedó construido* (al final) junta
+esas diferencias.
 
 Relacionado: [marks-menu-nan-gaps-design.md](marks-menu-nan-gaps-design.md) (las tiras
 NaN/Inf y Repetidos, el precedente de "una franja fina a lo largo del tiempo"),
@@ -162,9 +163,13 @@ el hover*. El recuento es sobre el archivo entero (un `Set` en memoria; `COUNT
   de bandas. El cap de 0.4 evita que seis carriles en un panel bajo dejen a las
   señales sin sitio; pasado el cap, los carriles se comprimen por igual.
 - El carril `i` (0 = el de arriba) ocupa `y ∈ [n−1−i, n−i]` en `yaxis3`; la barra
-  tiene `width: 0.8`, centrada. A la izquierda, pegado al borde del área de dibujo,
-  una anotación (`xref: 'paper', x: 0, xanchor: 'left', yref: 'y3'`) con el nombre de
-  la variable en tinta secundaria, el mismo texto que `_traceName` sin la unidad.
+  tiene `width: 0.8`, centrada. A la izquierda, en el margen (que junto a los
+  carriles no lleva marcas del eje Y), una anotación (`xref: 'paper', x: 0,
+  xanchor: 'right', yref: 'y3'`) con el nombre de la variable, cortado a 9
+  caracteres; el nombre completo va en su hover.
+- **Construido:** el eje de tiempo se ancla a los carriles (`xaxis.anchor: 'y3'`).
+  Anclado al eje numérico quedaba a la altura de `yaxis.domain[0]` y dibujaba sus
+  marcas y su título encima de las bandas.
 - *Fit Y* y el arrastre vertical tocan `yaxis`/`yaxis2`; `yaxis3` es `fixedrange`.
   Las bandas de *Gaps* (altura completa, `yref: 'paper'`) cubren también los
   carriles, y está bien: un hueco de filas es un hueco también para la banda. Las
@@ -225,27 +230,43 @@ un archivo de millones de filas cuesta tantas barras como píxeles, y hacer zoom
 devuelve los tramos exactos.
 
 El refresco en cada zoom sigue el camino de hoy: `_refreshTimeseriesVisuals`
-reconstruye la traza para el rango y la envía en el mismo `Plotly.restyle` por
-lotes, con `base`, `x`, `marker.color`, `text`, `textfont.color` y `customdata` en
-lugar de `x`, `y`, `customdata`.
+reconstruye la traza para el rango. **Construido:** las bandas no viajan en el
+`restyle` de las curvas sino en uno propio (`_refreshStateBands`), con `base`, `x`,
+`y`, colores, tramas, `text`, `textfont.color` y `customdata`, y como
+`Plotly.update` que repite el tipo y el rango del eje X. Restilar `x` hace que
+Plotly vuelva a adivinar el tipo del eje desde los datos, y la `x` de una barra es
+una duración en ms: un panel solo de bandas pasaba de fechas a una recta numérica.
+`Plotly.update` emite `plotly_update`, no el `plotly_relayout` del que se lee un
+zoom, así que nada responde a esa llamada con otro refresco.
+
+**Construido:** los tramos se dibujan recortados a la vista (más un 2 % a cada
+lado, para el arrastre). Plotly centra la etiqueta en la barra entera, y un tramo
+que salía de la pantalla escribía su valor fuera de ella. El hover conserva el
+inicio y el fin reales.
 
 ### Leyenda
 
 La traza de barras no entra en la leyenda de Plotly (`showlegend: false`): la
 muestra que Plotly daría es el color de la primera barra, que diría algo falso. En
-su lugar, una **fila de fichas** propia del panel, `.state-band-legend`, bajo la
-leyenda (o bajo el gráfico cuando la leyenda está a la derecha), una ficha por valor
+su lugar, una **fila de fichas** propia del panel, `.state-band-legend`, bajo el
+título del eje de tiempo (en el espacio que el layout reserva con
+`STATE_BAND_LEGEND_PX`), una ficha por valor
 del mapa del panel: muestra de color (con trama si la tiene), texto del valor. Se
 reconstruye cuando cambian el mapa o las bandas, como se reconstruye el menú
-*Marcas* desde el estado del panel. En la primera versión no es interactiva;
+*Marcas* desde el estado del panel. **Construido:** se coloca midiendo el título
+del eje; en el teléfono el margen automático lo baja, y una fila fija al borde
+inferior quedaba debajo de él. Si no cabe, el margen crece. Una banda con más de
+16 valores tiene su propia ficha (*nombre: un gris por cambio*). En la primera
+versión no es interactiva;
 pulsar una ficha para resaltar ese valor (atenuando los demás tramos) es la
 extensión natural.
 
 El menú contextual de la leyenda (`_showLegendTraceMenu`, `plot-manager.js:2193`)
-no alcanza a las bandas porque no están en la leyenda: la banda se quita desde su
-etiqueta de carril (clic derecho sobre la anotación, mismo menú con *Quitar* y sin
-*Forma de línea* ni *Y2*), y desde la lista de señales en el teléfono, como
-cualquier traza.
+no alcanza a las bandas porque no están en la leyenda. **Construido:** la banda se
+quita con **Mayús+clic** sobre la etiqueta de su carril, el mismo gesto que quita
+una curva desde la leyenda (el hover de la etiqueta lo dice), y desde la lista de
+señales en el teléfono, como cualquier traza. El menú contextual del borrador
+quedó fuera.
 
 ## Hover, cursores, tarjetas
 
@@ -310,7 +331,13 @@ nuevos del origen, coordinados por rango como las marcas lazy
    recorta `VARCHAR`); `''` y `NULL` son ambos ausentes. Si `COUNT(*)` de cambios en
    el rango supera `maxRuns`, el método devuelve en cambio la reducción por cubeta:
    una cubeta por columna de píxel con `mode(value)` (DuckDB lo tiene) y el número
-   de cambios, exactamente lo que dibuja el camino en memoria reducido.
+   de cambios. **Diferencia con memoria:** `mode` elige el valor de más *filas*
+   en la columna, no el de más *tiempo*; con un muestreo regular es lo mismo.
+   Una columna sin filas conserva el valor de la anterior.
+   **Construido:** el tramo que ya regía en el borde izquierdo empieza, para
+   DuckDB, en la fila del borde, porque la consulta lee la vista y no lo anterior.
+   Ese inicio queda fuera de la pantalla, a la izquierda; solo el "desde" de su
+   hover es la fila del borde y no el inicio real del tramo.
 2. `getStateValues(fileId, column, limit)`: `SELECT value, MIN(t) FROM … GROUP BY
    value ORDER BY 2 LIMIT limit + 1`, para el mapa de colores en orden de primera
    aparición y el cap de 16; cacheado en el objeto de datos del archivo.
@@ -398,26 +425,62 @@ El badge del árbol sigue diciendo `(string)` sin traducir, como hoy (`getVariab
 ## Tests
 
 - `scripts/test-state-band.mjs` (`npm run test:state-band`, entra solo en
-  `test:release`): codificación por tramos (cambios, vacíos, timestamps repetidos,
-  última fila, incremental tras un append), corte por rango con el tramo anterior,
-  reducción por columna (valor dominante por duración, recuento de cambios, fusión
-  de columnas iguales, presupuesto), mapa de colores (orden de aparición, estabilidad
-  bajo zoom y tras un valor nuevo, cap de 16, tramas 9–16, grises por encima), tinta
-  por contraste, la traza (`base`/`x` en calendario, elapsed y numérico; una traza
-  por banda; `showlegend: false`), los dominios (0, 1, 3 carriles; el cap de 0.4; sin
-  bandas el layout es idéntico al de hoy), las compuertas por modo, el hover
-  en-o-antes, la exportación con comillas.
-- `scripts/test-state-band-lazy.mjs`: `getStateRuns` y `getStateValues` contra DuckDB
-  real sobre el mismo CSV que el camino en memoria, tramos y cubetas en paridad;
-  `NULL` y `''` como ausentes.
-- `test-session-state-roundtrip`: una vista con dos bandas y una curva se guarda y
-  vuelve con los mismos carriles.
-- `test-mode-toolbar` / `test-i18n-consistency`: claves nuevas en los cuatro idiomas.
-- `scripts/e2e-state-band.mjs` (Chromium, en la cadena `npm run e2e`): arrastrar la
-  columna `state` del fixture, la banda aparece bajo la curva con la curva intacta
-  arriba; hover sobre un tramo; zoom in muestra las etiquetas y conserva los
-  colores; soltarla en FFT muestra el pill; en el dashboard la tarjeta dice `RUN`;
-  el mismo archivo abierto como memory-saving dibuja los mismos tramos.
+  `test:release`): codificación por tramos (cambios, recorte, vacíos y `null`,
+  timestamps repetidos, última fila con y sin paso, continuación tras un append,
+  relectura de una columna más corta), corte por rango con el tramo que rige en el
+  borde, reducción por columna (valor dominante, recuento de cambios, fusión de
+  columnas iguales, columna mayormente vacía en blanco, zoom de vuelta a lo
+  exacto), la fila en-o-antes, paleta y tramas, mapa de colores por orden de
+  aparición, tinta por contraste. Y el SQL contra **DuckDB real**: los cambios dan
+  los mismos tramos que la lectura en memoria (recortados, `NULL` y `''` como
+  ausentes), la fila del borde de una ventana, el tope de filas, las columnas y
+  sus cambios, los valores distintos en orden de aparición.
+- `test-i18n-consistency`: las claves nuevas en los cuatro idiomas.
+- `scripts/e2e-state-band.mjs` (`npm run e2e:state-band`, Chromium, en la cadena
+  `npm run e2e`): el árbol deja arrastrar una serie de texto y no le pone signo; la
+  banda en su carril bajo la curva, el eje Y de la curva intacto y el de tiempo
+  bajo los carriles; un tramo por cambio, el hueco de las celdas vacías, un color
+  por valor, la duración de un tramo y del último; las fichas en orden de aparición;
+  la columna de 200 valores en grises, con su aviso; etiquetas dentro de los
+  tramos; el zoom con los tramos de la ventana; el cuadro de hover sobre la curva,
+  sobre una celda vacía y sobre una barra; la fila de la lectura A|B; un análisis
+  que deja atrás las bandas, el rechazo al soltar texto en él y la vuelta a la
+  serie temporal; las tarjetas del dashboard; la exportación CSV con comillas; una
+  vista guardada que las trae de vuelta; Mayús+clic sobre la etiqueta; el tema
+  oscuro; y un archivo memory-saving de 400 000 filas cuyos tramos, leídos de
+  DuckDB, son los de la lectura en memoria.
+- `e2e-dashboard`: una señal de texto vuelve como banda al pasar de tarjetas a
+  serie temporal.
 - Fixture: `test-files/csv/state-band.csv`, pequeño: `time`, `temperature`, `state`
-  (`RUN`/`STOP`/`FAULT`, con celdas vacías y un timestamp repetido) y `note` con un
-  texto distinto por fila, para el camino de más de 16 valores.
+  (`RUN`/`STOP`/`FAULT`/`IDLE`, con celdas vacías y un timestamp repetido) y `note`
+  con un texto distinto por fila, con comas, para el camino de más de 16 valores y
+  el entrecomillado.
+
+## Cómo quedó construido
+
+Lo que difiere del borrador, en un lugar:
+
+- **Alta y baja sin redibujar.** Una banda que llega o se va no reconstruye el
+  panel: un `relayout` de los carriles (`_stateBandLayoutUpdate`) va primero, para
+  que una barra nunca caiga en un eje que todavía no existe, y después
+  `addTraces`/`deleteTraces` y el refresco. Reconstruir mientras Plotly terminaba su
+  primer dibujo tiraba un error de Plotly sobre un div ya purgado (el mismo riesgo
+  que el código ya documenta en #39).
+- **Eje de tiempo anclado a los carriles** y **tipo y rango del eje fijados en el
+  refresco** (ver *Presentación*).
+- **Tramos recortados a la vista**, para que la etiqueta caiga en la parte visible.
+- **Mayús+clic** sobre la etiqueta del carril quita la banda, en lugar de un menú.
+- **Cursores A|B:** una banda no se elige como traza del cursor (los cursores miden
+  curvas: Δy, pendiente, extremos). La lectura agrega una fila por banda visible con
+  el valor en A y en B.
+- **Exportación de archivos memory-saving:** `_rawRowsSql` lee las columnas de
+  texto como `VARCHAR`, el stream las extrae como texto y
+  `_transformFetchedPhaseTrajectory` no les aplica ganancia ni signo; el CSV las
+  escribe con `csvTextCell`, como las de memoria.
+- **Tema:** al cambiar de tema las bandas se repintan con los pasos oscuros de la
+  paleta (`_refreshStateBandsForTheme`); el `relayout` del tema no alcanzaba a los
+  colores de las barras.
+- **Dashboard → serie temporal:** una señal de texto ya no se queda atrás; vuelve
+  como banda. `e2e-dashboard` afirmaba lo contrario y se actualizó.
+- **Llamadas opcionales:** el código compartido llama a los métodos de banda con
+  `?.()`, porque varios tests cargan métodos sueltos sobre un prototipo parcial.

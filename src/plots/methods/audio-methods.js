@@ -298,6 +298,8 @@ export function installPlotAudioMethods(TargetClass) {
         const seen = new Set();
         const sources = [];
         for (const trace of traces) {
+            // A state band is text: nothing to hear.
+            if (this._isStateBandTrace?.(trace)) continue;
             const key = this._audioTraceKey(trace);
             if (seen.has(key)) continue;
             seen.add(key);

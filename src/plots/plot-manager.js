@@ -20,6 +20,7 @@ import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
 import { installPlotDashboardMethods } from './methods/dashboard-methods.js';
+import { installPlotStateBandMethods, STATE_BAND_LEGEND_PX } from './methods/state-band-methods.js';
 import { sceneAspectUpdate, sceneZoomAspect } from '../ui/plot-3d-gestures.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { streamColumns } from '../data/column-stream.js';
@@ -896,6 +897,10 @@ class PlotManager {
         this._refreshAudioPlayhead?.(plot);
         // So is a held dashboard's instant.
         this._refreshDashboardTimeMarks?.(plot);
+        // The lanes of the state bands are a height in pixels: a resize moves
+        // their share of the plot. Their row of value chips sits under it.
+        this._syncStateBandLanes?.(plot);
+        this._renderStateBandLegend?.(plot);
     }
 
     autoZoomAll() {
@@ -964,11 +969,22 @@ class PlotManager {
             && timeTraceModes.has(mode);
         // A card can show what a plot cannot draw (a text signal, a parameter):
         // those stay behind when the dashboard turns back into a plot.
+        // A state band is drawn on a time series and read on a card: it
+        // stays behind in the analyses, and comes back with either.
         const drawable = trace => {
-            if (previousMode !== 'dashboard' || mode === 'dashboard') return true;
+            if (mode === 'dashboard') return true;
             const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+            if (this._isStateBandVariable?.(variable)) return mode === 'timeseries';
+            if (previousMode !== 'dashboard') return true;
             return !!variable && variable.plottable !== false && variable.kind !== 'abscissa' && variable.dataType !== 'string';
         };
+        const leftBands = preserveTimeTraces && mode !== 'timeseries' && mode !== 'dashboard'
+            ? plot.traces.filter(trace => this._isStateBandTrace?.(trace))
+            : [];
+        const returningBands = preserveTimeTraces && (mode === 'timeseries' || mode === 'dashboard')
+            ? (plot._leftStateBands || []).filter(trace => this.files.get(trace.fileId)?.data?.variables?.[trace.varName]
+                && !plot.traces.some(t => t.fileId === trace.fileId && t.varName === trace.varName))
+            : [];
         const preservedTraces = preserveTimeTraces
             ? plot.traces.filter(drawable).map(trace => {
                 const clone = { ...trace, axis: 'y' };
@@ -1020,7 +1036,13 @@ class PlotManager {
         this._destroyChart(panelId);
         plot.mode         = mode;
         plot.stateAnimDim = nextDim;
-        plot.traces       = preservedTraces;
+        plot.traces       = preservedTraces.concat(returningBands.map(trace => ({ ...trace, axis: 'y' })));
+        if (leftBands.length) {
+            plot._leftStateBands = leftBands.map(trace => ({ ...trace }));
+            this._showStateBandNotice?.(panelId, i18n.t('stateBandLeftBehind'));
+        } else if (!preserveTimeTraces || returningBands.length || mode === 'timeseries' || mode === 'dashboard') {
+            delete plot._leftStateBands;
+        }
         plot.phaseTraces  = preservedPhaseTraces;
         plot.phasePending = preservedPhasePending;
         plot.stateSlots   = { x: [], dx: [], fileId: null };
@@ -1326,7 +1348,8 @@ class PlotManager {
         }
         const names = varNames.filter(varName => {
             const variable = this.data?.variables?.[varName];
-            return variable && variable.plottable !== false && variable.kind !== 'abscissa' && variable.dataType !== 'string';
+            if (!variable || variable.plottable === false || variable.kind === 'abscissa') return false;
+            return variable.dataType !== 'string' || this._acceptsStateBand(panelId, variable, varName);
         });
         if (!names.length) return;
 
@@ -1508,6 +1531,17 @@ class PlotManager {
 
     // ─── Adding variables ──────────────────────────────────────────
 
+    // Whether a text variable can go on this panel: as a state band on a time
+    // series (an empty panel is one), never on an analysis. A refusal says so.
+    _acceptsStateBand(panelId, variable, varName) {
+        if (!this._isStateBandVariable?.(variable)) return false;
+        const mode = this.plots.get(panelId)?.mode || 'timeseries';
+        if (mode === 'timeseries') return true;
+        const label = this._traceName(varName, this.activeFileId, { units: false });
+        this._showStateBandNotice(panelId, i18n.t('stateBandRefusedMode').replace('{name}', label));
+        return false;
+    }
+
     addTrace(panelId, varName, panelEl, options = {}) {
         if (!this.data) return;
         // A card shows a text signal as well as a number.
@@ -1516,7 +1550,9 @@ class PlotManager {
             return;
         }
         const variable = this.data.variables[varName];
-        if (!variable || variable.plottable === false || variable.kind === 'abscissa' || variable.dataType === 'string') return;
+        if (!variable || variable.plottable === false || variable.kind === 'abscissa') return;
+        // A text column is drawn as a state band, on a time series only.
+        if (variable.dataType === 'string' && !this._acceptsStateBand(panelId, variable, varName)) return;
 
         if (!this.plots.has(panelId)) {
             this.plots.set(panelId, this._makeState());
@@ -1573,13 +1609,23 @@ class PlotManager {
         const plot = this.plots.get(panelId);
         if (!plot?.div || plot.mode !== 'timeseries') return false;
         if (!Number.isInteger(idx) || idx < 0 || idx >= plot.traces.length) return false;
+        // A band's lane goes with it, and bands left without a curve lose the
+        // Y axis: either way the lanes are laid out again once it is gone.
+        const relayLanes = this._isStateBandTrace?.(plot.traces[idx]) || this._stateBandTraces?.(plot)?.length > 0;
         plot.traces.splice(idx, 1);
         const markerWasAfterTrace = Number.isInteger(plot.markerTraceIdx) && idx < plot.markerTraceIdx;
         Plotly.deleteTraces(plot.div, idx).then(() => {
             if (markerWasAfterTrace) plot.markerTraceIdx -= 1;
             this._syncTimeseriesMarkerColors(plot);
             if (plot.traces.length === 0) this._clearPanel(panelId);
-            else this._syncCursorDisplay(panelId, plot);
+            else {
+                this._syncCursorDisplay(panelId, plot);
+                if (relayLanes) {
+                    Plotly.relayout(plot.div, this._stateBandLayoutUpdate(plot))
+                        .then(() => this._refreshTimeseriesVisuals(panelId, plot))
+                        .catch(error => console.warn('[state band] lanes relayout failed:', error));
+                }
+            }
             this._syncAudioStrip?.(panelId);
         });
         return true;
@@ -1601,6 +1647,8 @@ class PlotManager {
             ...(options.traceStyle || {}),
         });
 
+        const added = plot.traces[plot.traces.length - 1];
+        if (this._isStateBandTrace?.(added)) this._noticeStateBandOverflow?.(panelId, added);
         if (!plot.div) {
             // This panel is getting its first curve. Dropped beside panels that
             // already show one, it must not open on a window of its own: see
@@ -1608,6 +1656,11 @@ class PlotManager {
             // window (only Y expands), which is the behaviour this extends.
             plot._adoptLinkedTimeWindow = true;
             this._createChart(panelId, panelEl);
+        } else if (this._stateBandTraces?.(plot)?.length) {
+            // Beside state bands the axes are laid out again (a band takes a
+            // lane; the first curve brings the Y axis back), then the trace
+            // joins the chart that is there — never a redraw from scratch.
+            this._addTimeTracesBesideBands(panelId, plot, [added]);
         } else {
             const t = plot.traces[plot.traces.length - 1];
             const insertIndex = Number.isInteger(plot.markerTraceIdx) ? plot.markerTraceIdx : undefined;
@@ -1684,6 +1737,18 @@ class PlotManager {
             if (!pending.length || !plot.div) return;
         }
 
+        if (this._stateBandTraces?.(plot)?.length
+            || pending.some(varName => this._isStateBandVariable?.(this.data?.variables?.[varName]))) {
+            // Bands on the panel, or coming: the lanes are laid out first.
+            const states = pending.map((varName) => {
+                const state = { varName, color: this._nextTraceColor(plot.traces), fileId: this.activeFileId, axis };
+                plot.traces.push(state);
+                if (this._isStateBandTrace?.(state)) this._noticeStateBandOverflow?.(panelId, state);
+                return state;
+            });
+            this._addTimeTracesBesideBands(panelId, plot, states);
+            return;
+        }
         const insertAt = Number.isInteger(plot.markerTraceIdx) ? plot.markerTraceIdx : null;
         const currentRange = plot.div._fullLayout?.xaxis?.range || plot.div.layout?.xaxis?.range || null;
         const built = [];
@@ -1952,6 +2017,7 @@ class PlotManager {
             }
             // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
             if (plot.mode === 'timeseries') {
+                this._installStateBandLabelEvents?.(panelId, plot);
                 div.on('plotly_relayouting', (ed) => this._onRelayouting(panelId, ed));
                 div.on('plotly_relayout', (ed) => this._onRelayout(panelId, ed));
                 div.on('plotly_hover',    (ed) => this._onHover(panelId, ed));
@@ -3428,6 +3494,10 @@ class PlotManager {
                 for (let i = 0; i < rowIndex.length; i++) rowIndex[i] = chunk.rowStart + i;
                 const { time, valuesByVar } = self._transformFetchedPhaseTrajectory(
                     fileId, chunk.x, rowIndex, chunk.yByVar, varNames);
+                for (const name of varNames) {
+                    if (data.variables?.[name]?.dataType !== 'string') continue;
+                    valuesByVar.set(name, Array.from(valuesByVar.get(name) || [], csvTextCell));
+                }
                 if (time.length) {
                     return {
                         time: self._formatTimeColumnForExport(fileId, time),
@@ -3468,7 +3538,11 @@ class PlotManager {
     _memoryCsvRowFeeder(fileId, varNames) {
         const rawTime = this._getTransformedTimeDataForVariable(fileId, varNames[0]);
         const time = this._formatTimeColumnForExport(fileId, rawTime);
-        const values = new Map(varNames.map(name => [name, this._getTransformedVariableData(fileId, name)]));
+        const textVariable = name => this.files.get(fileId)?.data?.variables?.[name]?.dataType === 'string';
+        const values = new Map(varNames.map(name => {
+            const column = this._getTransformedVariableData(fileId, name);
+            return [name, textVariable(name) ? Array.from(column, csvTextCell) : column];
+        }));
         const length = Math.max(time.length, ...[...values.values()].map(column => column.length));
         let offset = 0;
         return {
@@ -3540,7 +3614,10 @@ class PlotManager {
             }
             headers.push(csvTextCell(u ? `${name} [${u}]` : name));
             // Read, never written: no copy of what may be millions of samples.
-            columns.push(this._getTransformedVariableData(t.fileId, t.varName));
+            // Text is the exception: a value can hold the delimiter, a quote
+            // or a newline, and a spreadsheet must never run it.
+            const values = this._getTransformedVariableData(t.fileId, t.varName);
+            columns.push(v.dataType === 'string' ? Array.from(values, csvTextCell) : values);
         }
     }
 
@@ -3814,6 +3891,9 @@ class PlotManager {
                 this._renderCalendarHeatmapModels?.(panelId, plot, { preserveView: true });
             }
             this._refreshAxisDecorations(plot);
+            // State bands have a palette per theme (and lane labels in the
+            // theme's ink): repainted, not relaid out.
+            this._refreshStateBandsForTheme?.(plot);
             // Origin cross marker color follows theme; restyle it separately.
             this._refreshOriginCross(plot);
         }
@@ -4426,6 +4506,8 @@ class PlotManager {
                 if (!this._isVisible(t)) return;
                 const v = this.files.get(t.fileId)?.data?.variables?.[t.varName];
                 if (!v) return;
+                // A state band has no Y: it lives in its own lane.
+                if (this._isStateBandVariable?.(v)) return;
                 if (primaryFileId === null) primaryFileId = t.fileId;
                 // Fit Y fits what is on screen. For a lazy file that is the
                 // viewport detail DuckDB sent for this zoom, not the in-memory
@@ -4729,6 +4811,7 @@ class PlotManager {
             if (plot.mode === 'timeseries') {
                 update.margin = this._marginConfig();
                 update.margin.b += 6;
+                if (this._stateBandTraces?.(plot)?.length) update.margin.b += STATE_BAND_LEGEND_PX;
             }
             else if (plot.mode === 'phase2d') update.margin = { l: 60, r: 15, t: this.legendPosition === 'above' ? 50 : 10, b: 50 };
             Plotly.relayout(plot.div, update);
@@ -4992,7 +5075,7 @@ class PlotManager {
     }
 
     _timeseriesLiveAppendView(plot, fileId, captured, policy) {
-        const visibleTraces = plot.traces.filter(t => this._isVisible(t));
+        const visibleTraces = plot.traces.filter(t => this._isVisible(t) && !this._isStateBandTrace?.(t));
         if (!visibleTraces.length) return captured;
 
         const traceSeries = [];
@@ -5098,6 +5181,7 @@ class PlotManager {
         plot.traces.forEach((t, index) => {
             if (!this._isVisible(t)) return;
             if (!this.files.get(t.fileId)?.data?.variables?.[t.varName]) return;
+            if (this._isStateBandTrace?.(t)) return;
             const drawn = this._drawnLazySeries(plot, t, index);
             const x = drawn?.x ?? this._getTransformedTimeDataForVariable(t.fileId, t.varName);
             const y = drawn?.y ?? this._getTransformedVariableData(t.fileId, t.varName);
@@ -5493,6 +5577,7 @@ installPlotTemporalProfileMethods(PlotManager);
 installPlotIntegralMethods(PlotManager);
 installPlotExportMethods(PlotManager);
 installPlotDashboardMethods(PlotManager);
+installPlotStateBandMethods(PlotManager);
 installPlotAudioMethods(PlotManager);
 installPlotViewHistoryMethods(PlotManager);
 

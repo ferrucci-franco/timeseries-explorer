@@ -14,7 +14,8 @@
 //     the cards;
 //   - a saved view brings the dashboard back as it was, units and
 //     separators included;
-//   - turned back into a plot, the panel keeps the signals it can draw;
+//   - turned back into a plot, the panel keeps its signals, a text one as a
+//     state band;
 //   - a dashboard held at an instant marks it on the time plots with a line
 //     that drags its time; Latest hides it.
 //
@@ -265,12 +266,12 @@ try {
     assert.deepEqual(await items(page), ['| Proceso', 'pressure', 'flow', '| Estado', 'Temperatura', 'state', 'temp_k'], 'and the separators');
     assert.equal(await page.evaluate(() => document.querySelector('.dashboard-grid').classList.contains('size-l')), true, 'and the size');
 
-    // ── Back to a plot: the signals it can draw ──
+    // ── Back to a plot: the signals, the text one as a state band ──
     const restoredId = await page.evaluate(() => document.querySelector('.layout-panel').dataset.id);
     await page.click(`.layout-panel[data-id="${restoredId}"] .mode-btn[data-mode="timeseries"]`);
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, restoredId);
     const traces = await page.evaluate(id => window.app.plotManager.plots.get(id).traces.map(t => t.varName), restoredId);
-    assert.deepEqual(traces, ['pressure', 'flow', 'temp', 'temp_k'], 'the text signal stays behind');
+    assert.deepEqual(traces, ['pressure', 'flow', 'temp', 'state', 'temp_k'], 'the text signal comes back as a state band');
     assert.equal(await page.locator(`.layout-panel[data-id="${restoredId}"] .dashboard-tools-group`).count(), 0,
         'the card size buttons go with the dashboard');
 
