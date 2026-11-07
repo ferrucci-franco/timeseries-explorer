@@ -78,6 +78,11 @@ try {
     const lineOptions = await page.locator('.csv-preview-toolbar select').first().locator('option').allTextContents();
     assert.ok(lineOptions.includes('1000') && lineOptions.includes('All'), lineOptions.join(','));
     assert.match(await page.locator('.csv-preview-side').textContent(), /Detected: d MMMM yyyy HH:mm:ss \(French\)/);
+    // Hovering a cell says what it is read as.
+    const firstData = page.locator('.csv-preview-grid tr.is-data-row').first();
+    assert.equal(await firstData.locator('td').nth(2).getAttribute('title'),
+        'Raw: «1.234,5»\nParsed: 1234.5\nType: number');
+    assert.match(await firstData.locator('td').nth(0).getAttribute('title'), /^Parsed: 2024-01-01 13:05:22\nFrom: «1 janvier 2024 13:05:22»/);
     const hideInvalid = page.locator('.csv-preview-check', { hasText: 'Hide invalid lines' }).locator('input');
     assert.equal(await hideInvalid.isChecked(), false, 'invalid lines are shown by default');
     assert.equal(await page.locator('.csv-preview-grid tr.is-invalid-row').count(), 1, 'the short row is shown, in red');

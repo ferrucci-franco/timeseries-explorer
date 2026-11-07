@@ -4,7 +4,7 @@ import { csvRowMatchesFilter, normalizeCsvRowFilter, stripUnitBrackets } from '.
 // The dialog reads a column the visible rows hold no value for as numbers, the
 // same as every other path (#311): the preview shows a handful of rows, and an
 // empty one is no evidence of text.
-import { columnSampleVerdict, csvProfileWithoutScan, inferNumericColumnIndexes } from '../parsers/csv-column-types.js';
+import { columnSampleVerdict, csvProfileWithoutScan, inferNumericColumnIndexes, isMissingNumberCell } from '../parsers/csv-column-types.js';
 import {
     customDatetimePatternInfo,
     dateSeparatorForStrategy,
@@ -3167,7 +3167,7 @@ export default class CsvParsingPreviewDialog {
             if (isDataRow && rowPassesFilter) {
                 const parsed = parseCsvTimeValue(this.resultProfile.timeSource, row, rowIndex, delimiter, numberFormat);
                 parsedCell.textContent = formatParsedTimeValue(this.resultProfile?.timeSource, parsed);
-                parsedCell.title = parsedCell.textContent;
+                parsedCell.title = this._parsedTimeTooltip(row, parsed);
                 if (!Number.isFinite(parsed)) parsedCell.classList.add('is-invalid-cell');
             }
             tr.appendChild(parsedCell);
@@ -3175,7 +3175,9 @@ export default class CsvParsingPreviewDialog {
             for (let c = 0; c < maxColumns; c++) {
                 const td = document.createElement('td');
                 td.textContent = row[c] ?? '';
-                td.title = td.textContent;
+                // Raw and parsed, and what the column becomes: what the cell
+                // is read as, without loading the file to find out.
+                td.title = this._cellTooltip(this._cellInfo(entry, c, rowIndex, numberFormat, delimiter));
                 if (timeIndexes.has(c)) td.classList.add('is-time-column');
                 if (hasInvalidNumericCell
                     && (this.resultProfile?.numericColumnIndexes || []).includes(c)
@@ -3183,7 +3185,6 @@ export default class CsvParsingPreviewDialog {
                     && String(row[c] ?? '').trim()
                     && !Number.isFinite(parseCsvNumber(row[c], delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator))) {
                     td.classList.add('is-invalid-cell');
-                    td.title = `${td.textContent} (${i18n.t('csvPreviewInvalidNumericCell')})`;
                 }
                 if (isDataRow && rowPassesFilter && timeIndexes.has(c)) {
                     const parsed = parseCsvTimeValue(this.resultProfile.timeSource, row, rowIndex, delimiter, numberFormat);
@@ -3203,6 +3204,116 @@ export default class CsvParsingPreviewDialog {
         });
         table.appendChild(tbody);
         this.gridWrap.replaceChildren(table);
+    }
+
+    /**
+     * What one preview cell is read as: its raw text, the value it becomes
+     * and the kind of value, or why it is not read at all. Pure: the grid's
+     * tooltip is made from it, and the tests read it directly.
+     *
+     * @returns {{ raw: string, parsed: string|null, kind: string, unit: string, notes: string[] }}
+     */
+    _cellInfo(entry, c, rowIndex = 0, numberFormat = this._numberFormat(), delimiter = this.resultProfile?.delimiter || ',') {
+        const profile = this.resultProfile || {};
+        const raw = String(entry?.row?.[c] ?? '');
+        const info = { raw, parsed: null, kind: 'text', unit: '', notes: [] };
+        const isStart = this._isStartSample();
+        const logical = entry?.logicalIndex;
+        if (isStart && this.state.hasHeader && logical === this.state.headerIndex) {
+            info.kind = 'header';
+            return info;
+        }
+        if (isStart && this.state.unitsMode === 'row' && logical === this.state.unitRowIndex) {
+            info.kind = 'units';
+            return info;
+        }
+        if (!entry?.isDataRow) {
+            info.kind = entry?.isEmpty ? 'empty-row' : 'preamble';
+            return info;
+        }
+        const width = profile.rawHeaders?.length || 0;
+        if (width && c >= width) {
+            info.kind = 'extra';
+            return info;
+        }
+        if (!entry.hasValidWidth) info.notes.push('row-width');
+        else if (!entry.rowPassesFilter) info.notes.push('row-filter');
+        else if (!entry.hasValidTime) info.notes.push('row-time');
+        info.unit = unitTextFromDescription(profile.headers?.[c]?.description);
+
+        const timeSource = profile.timeSource;
+        if ((timeSource?.sourceIndexes || []).includes(c)) {
+            info.kind = 'time';
+            const parsed = parseCsvTimeValue(timeSource, entry.row, rowIndex, delimiter, numberFormat);
+            info.parsed = Number.isFinite(parsed) ? formatParsedTimeValue(timeSource, parsed) : null;
+            if (timeSource.kind === 'datetime') info.unit = '';
+            return info;
+        }
+        if ((profile.ignoredColumns || []).includes(c)) {
+            info.kind = 'skipped';
+            return info;
+        }
+        if (!(profile.numericColumnIndexes || []).includes(c)) {
+            info.kind = 'text';
+            info.parsed = raw.trim();
+            return info;
+        }
+        const trimmed = raw.trim();
+        if (!trimmed || isMissingNumberCell(trimmed)) {
+            info.kind = 'missing';
+            return info;
+        }
+        const value = parseCsvNumber(trimmed, delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator);
+        if (Number.isFinite(value) || value === Infinity || value === -Infinity) {
+            info.kind = 'number';
+            info.parsed = String(value);
+        } else {
+            info.kind = 'invalid';
+        }
+        return info;
+    }
+
+    _cellTooltip(info) {
+        // A no-break space is shown, since it is what makes "8 597" read as
+        // one number or not; the quotes show leading and trailing spaces.
+        const shown = `«${info.raw.replace(/[\u00A0\u202F]/g, '\u237D')}»`;
+        const lines = [`${i18n.t('csvPreviewCellRaw')}: ${shown}`];
+        const kindKey = {
+            header: 'csvPreviewCellTypeHeader',
+            units: 'csvPreviewCellTypeUnits',
+            preamble: 'csvPreviewCellTypePreamble',
+            'empty-row': 'csvPreviewCellTypePreamble',
+            extra: 'csvPreviewCellTypeExtra',
+            time: 'csvPreviewCellTypeTime',
+            skipped: 'csvPreviewCellTypeSkipped',
+            text: 'csvPreviewCellTypeText',
+            missing: 'csvPreviewCellTypeMissing',
+            number: 'csvPreviewCellTypeNumber',
+            invalid: 'csvPreviewCellTypeInvalid',
+        }[info.kind] || 'csvPreviewCellTypeText';
+        if (info.parsed !== null && info.parsed !== undefined) {
+            lines.push(`${i18n.t('csvPreviewCellParsed')}: ${info.parsed}${info.unit ? ` ${info.unit}` : ''}`);
+        } else if (info.kind === 'time') {
+            lines.push(`${i18n.t('csvPreviewCellParsed')}: ${i18n.t('csvPreviewCellTimeInvalid')}`);
+        }
+        lines.push(`${i18n.t('csvPreviewCellType')}: ${i18n.t(kindKey)}`);
+        const noteKey = { 'row-width': 'csvPreviewCellRowWidth', 'row-filter': 'csvPreviewCellRowFiltered', 'row-time': 'csvPreviewCellRowTime' };
+        for (const note of info.notes) lines.push(i18n.t(noteKey[note]));
+        return lines.join('\n');
+    }
+
+    // The parsed-time column: the instant, the cells it came from, and the
+    // pattern Auto read them with.
+    _parsedTimeTooltip(row, parsed) {
+        const timeSource = this.resultProfile?.timeSource;
+        const lines = [`${i18n.t('csvPreviewCellParsed')}: ${Number.isFinite(parsed)
+            ? formatParsedTimeValue(timeSource, parsed)
+            : i18n.t('csvPreviewCellTimeInvalid')}`];
+        const sources = (timeSource?.sourceIndexes || []).map(index => `«${String(row?.[index] ?? '')}»`);
+        if (sources.length) lines.push(`${i18n.t('csvPreviewCellFrom')}: ${sources.join(' + ')}`);
+        const described = this.state.timeFormat === 'custom' ? null : this._detectedTimePattern();
+        if (described?.pattern) lines.push(`${i18n.t('csvPreviewCellPattern')}: ${describedPatternText(described)}`);
+        return lines.join('\n');
     }
 
     _buildGridMessageRow(message, maxColumns, variant = '') {

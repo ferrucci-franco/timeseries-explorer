@@ -119,6 +119,12 @@ described pattern parses its column exactly as Auto does.
   except the delimiter.
 - Thousands separator: Auto, None, comma, dot, space, apostrophe or Custom.
 - "Hide invalid lines" stays off by default.
+- Hovering a cell shows its raw text in «quotes» (a no-break space shows as
+  ⍽), the value it is parsed as with the column's unit, and its type: number,
+  text, time axis, missing value, invalid number, column not imported, header,
+  units or preamble. A row that is left out says why. The parsed-time column
+  shows the instant, the cells it came from and the pattern Auto used.
+  `_cellInfo` computes it without the DOM, so it is unit-tested.
 - Saved settings files carry `thousandsSeparator` and `raggedRows`.
 
 ## Tests

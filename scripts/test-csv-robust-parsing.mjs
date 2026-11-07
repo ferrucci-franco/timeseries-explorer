@@ -417,3 +417,33 @@ console.log('CSV robust parsing tests passed.');
     assert.equal(dialog.resultProfile.headers[2].description, '[vierge si fiable]', 'a format chosen by hand takes the brackets');
     console.log('Inline unit phrase tests passed.');
 }
+
+// Hovering a preview cell: raw text, parsed value with its unit, and type.
+{
+    const text = 'Horodatage;Puissance (kW);Etat;Note\n'
+        + '1 janvier 2024 13:05:22;1.234,5;ok;x\n'
+        + '2 janvier 2024 13:05:22;;ok;x\n'
+        + '3 janvier 2024 13:05:22;erreur;ok;x\n'
+        + '4 janvier 2024 13:05:22;1.000,0;ok;x\n'
+        + '5 janvier 2024 13:05:22;2.000,0\n';
+    const dialog = openDialog(utf8(text));
+    dialog.state.ignoredColumns = [3];
+    dialog._rebuildProfile();
+    const entries = dialog._allPreviewRowEntries();
+    const info = (row, column) => dialog._cellInfo(entries[row], column);
+    assert.equal(info(0, 1).kind, 'header');
+    assert.deepEqual(info(1, 1), { raw: '1.234,5', parsed: '1234.5', kind: 'number', unit: 'kW', notes: [] });
+    assert.equal(info(1, 0).kind, 'time');
+    assert.equal(info(1, 0).parsed, '2024-01-01 13:05:22');
+    assert.equal(info(2, 1).kind, 'missing');
+    assert.equal(info(3, 1).kind, 'invalid');
+    assert.equal(info(1, 2).kind, 'text');
+    assert.equal(info(1, 3).kind, 'skipped');
+    assert.deepEqual(info(5, 1).notes, ['row-width'], 'the short row says why it is left out');
+    const tooltip = dialog._cellTooltip(info(1, 1));
+    assert.match(tooltip, /^Raw: «1\.234,5»\nParsed: 1234\.5 kW\nType: number$/); // crlf-ok: a tooltip string built in memory, not a file
+    assert.match(dialog._cellTooltip(info(3, 1)), /not a number in a numeric column/);
+    assert.match(dialog._parsedTimeTooltip(entries[1].row, Date.UTC(2024, 0, 1, 13, 5, 22)),
+        /Parsed: 2024-01-01 13:05:22\nFrom: «1 janvier 2024 13:05:22»\nPattern: d MMMM yyyy HH:mm:ss \(French\)/); // crlf-ok: a tooltip string built in memory, not a file
+    console.log('Cell tooltip tests passed.');
+}
