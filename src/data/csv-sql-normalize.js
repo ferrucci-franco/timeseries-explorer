@@ -85,6 +85,10 @@ export function csvReadRepairOptions(profile) {
     // skipped the wrong number of lines (or failed) when the lines above the
     // table mixed LF and CRLF, and the preamble and header became data.
     if (profile?.lineEnding === 'crlf') options.push("new_line='\\r\\n'");
+    // Fields quoted with ' (an apostrophe in SQL is written twice), and a
+    // backslash before quotes, as the sample showed (CsvParser._detectQuoting).
+    if (profile?.quoteChar === "'") options.push("quote=''''");
+    if (profile?.escapeChar === '\\') options.push("escape='\\'");
     return options;
 }
 

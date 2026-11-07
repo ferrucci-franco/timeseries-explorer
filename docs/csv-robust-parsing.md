@@ -87,7 +87,21 @@ next to the reader's own `decimalSeparator` and `thousandsSeparator`.
 comma, space, no-break space or apostrophe, and a typographic minus. Plain
 numbers take a fast path, which made `parse` about 20% faster on a 15 MB file.
 
-## Delimiter
+## Delimiter and quoting
+
+The candidates are comma, semicolon, tab, pipe and whitespace. Each one is
+scored two ways. The first is the table reading: a header over rows of numbers
+and dates. The second is CleverCSV's data consistency, pattern times type
+(van den Burg et al., 2019). The table reading decides, unless consistency
+prefers another candidate by more than 1.25 times, or no candidate reads as a
+numeric table.
+
+Quoting is detected once the delimiter is known: `"` or `'`, and `\` as an
+escape character. Every reader then uses it. `bench/dialect/README.md` measures
+the result on the paper's corpus. On the held-out half it reaches 96.8%
+dialect accuracy, against 95.2% for CleverCSV 0.8.5.
+
+## Delimiter details
 
 The candidates are comma, semicolon, tab, pipe and whitespace. Month-name dates
 now count as data when the delimiter is chosen; the French fixture

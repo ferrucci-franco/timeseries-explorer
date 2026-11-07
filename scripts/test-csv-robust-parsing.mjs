@@ -447,3 +447,36 @@ console.log('CSV robust parsing tests passed.');
         /Parsed: 2024-01-01 13:05:22\nFrom: «1 janvier 2024 13:05:22»\nPattern: d MMMM yyyy HH:mm:ss \(French\)/); // crlf-ok: a tooltip string built in memory, not a file
     console.log('Cell tooltip tests passed.');
 }
+
+// Dialect detection on general CSV files, not only measurement tables
+// (bench/dialect measures it on the CSV_Wrangling corpus).
+{
+    // Words only: no row of numbers, so the table reading finds nothing and
+    // the data consistency decides. It used to fall back to a comma.
+    assert.equal(parser._detectDelimiter('name;city;country\nAna;Lyon;France\nBo;Oslo;Norway\nCy;Lima;Peru\n'), ';');
+    assert.equal(parser._detectDelimiter('name\tcity\nAna Maria\tSan José\nBo\tNew York\nCy\tLima\n'), '\t');
+    // One column with spaces inside the values stays one column.
+    const dates = 'birth_date\n1958-03-06 00:00:00\n1950-07-06 00:00:00\n1948-09-14 00:00:00\n';
+    const one = parser._parseRows(dates, parser._detectDelimiter(dates)).filter(r => r.some(c => c));
+    assert.ok(one.every(row => row.length === 1), 'a datetime is not split at its space');
+    // Space-separated numbers are still columns.
+    assert.equal(parser._detectDelimiter('t v w\n0 1.5 2\n1 1.6 3\n2 1.7 4\n'), 'whitespace');
+
+    // Single quotes, without taking an apostrophe for one.
+    const single = "id,year,state\n1,'09/10',ok\n2,'06/07',ok\n3,'07/08',ok\n4,l'eau,ok\n";
+    assert.deepEqual(parser._detectQuoting(single, ','), { quoteChar: "'", escapeChar: '', quotedFields: 3 });
+    const singleData = await parser.parse(utf8(single));
+    assert.deepEqual(Array.from(singleData.variables.year.data), ['09/10', '06/07', '07/08', "l'eau"]);
+    assert.equal(singleData.variables.year.data[0], '09/10', 'the quotes are not part of the value');
+    // A backslash before quotes.
+    const escaped = 'a,b,c\n1,"say \\"hi\\"",2\n3,"x \\"y\\"",4\n5,"z",6\n';
+    assert.equal(parser._detectQuoting(escaped, ',').escapeChar, '\\');
+    const escapedData = await parser.parse(utf8(escaped));
+    assert.equal(escapedData.variables.b.data[0], 'say "hi"');
+    assert.deepEqual(Array.from(escapedData.variables.c.data), [2, 4, 6]);
+    // RFC 4180 doubled quotes are not a backslash escape.
+    assert.equal(parser._detectQuoting('a,b\n"he said ""hi""",1\n"x",2\n', ',').escapeChar, '');
+    // DuckDB is told.
+    assert.deepEqual(csvReadRepairOptions({ quoteChar: "'", escapeChar: '\\' }), ["quote=''''", "escape='\\'"]);
+    console.log('Dialect detection tests passed.');
+}

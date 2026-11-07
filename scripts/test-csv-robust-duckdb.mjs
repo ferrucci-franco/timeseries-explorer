@@ -97,6 +97,17 @@ try {
         assert.equal(typeof rows[0]['Fiabilité (vierge si fiable)'] === 'string', false, 'an empty column is not text');
     });
 
+    await convert('single-quotes', "id,year,v\n1,'09/10',1.5\n2,'06/07',2.5\n3,'07/08',3.5\n", (rows, profile) => {
+        assert.equal(profile.quoteChar, "'");
+        assert.deepEqual(rows.map(row => row.year), ['09/10', '06/07', '07/08']);
+    });
+
+    await convert('backslash-escape', 'id,label,v\n1,"say \\"hi\\", ok",1\n2,"x \\"y\\"",2\n3,"z",3\n', (rows, profile) => {
+        assert.equal(profile.escapeChar, '\\');
+        assert.deepEqual(rows.map(row => row.label), ['say "hi", ok', 'x "y"', 'z']);
+        assert.deepEqual(rows.map(row => row.v), [1, 2, 3]);
+    });
+
     await convert('pipe', 'time|a|b\n0|1|2\n1|3|4\n2|5|6\n', (rows, profile) => {
         assert.equal(profile.delimiter, '|');
         assert.deepEqual(rows.map(row => row.b), [2, 4, 6]);
