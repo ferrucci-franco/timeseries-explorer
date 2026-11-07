@@ -1381,6 +1381,7 @@ proto._applyLazyDataToolCreateMode = async function(context, config, options = {
         dataToolModified: false,
         dataTool: { ...definition, outlierCount: null },
         _duckdbCol: sourceVariable._duckdbCol,
+        ...(sourceVariable._duckdbNumberFormat ? { _duckdbNumberFormat: { ...sourceVariable._duckdbNumberFormat } } : {}),
         _duckdbDataTool: definition,
     };
     delete variable.formula;
@@ -2253,6 +2254,7 @@ proto._baseDataToolVariable = function(sourceValues, sourceVariable, config, val
     if (config.replacement) variable.dataTool.replacement = config.replacement;
     if (config.targetMode === 'create') {
         delete variable._duckdbCol;
+        delete variable._duckdbNumberFormat;
         delete variable._duckdbDataTool;
         delete variable.formula;
     }
@@ -3030,6 +3032,7 @@ proto._reapplyDataToolDefinition = function(fileId, data, name, definition) {
                     derived: true,
                     dataTool: lazyDefinition,
                     _duckdbCol: sourceVariable._duckdbCol,
+                    ...(sourceVariable._duckdbNumberFormat ? { _duckdbNumberFormat: { ...sourceVariable._duckdbNumberFormat } } : {}),
                     _duckdbDataTool: lazyDefinition,
                 };
                 definition.variable = data.variables[name];
