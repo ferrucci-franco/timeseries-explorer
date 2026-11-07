@@ -175,9 +175,16 @@ export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'au
     const first = raw.charCodeAt(0);
     if (first === 0x2212 || first === 0x2010 || first === 0x2013) raw = '-' + raw.slice(1);
 
-    // Strip internal whitespace (which is also how space-grouped thousands,
-    // "1 234,5" with a no-break space, are read) and translate Fortran-style
-    // D-exponents.
+    // Spaces inside a number are thousands groups ("1 234,5", with a
+    // no-break space too) or follow a sign ("- 5"); anywhere else they
+    // separate two values. "0        299", a fixed-width row cut at a comma,
+    // used to read as 299 and made the comma look like the delimiter.
+    if (/\s/.test(raw)) {
+        if (/^[+-]?\d{1,3}(?:\s\d{3})+(?:[.,]\d+)?(?:[eEdD][+-]?\d+)?$/.test(raw)) raw = raw.replace(/\s/g, '');
+        else if (/^[+-]\s+\S+$/.test(raw)) raw = raw.replace(/\s+/, '');
+        else if (/\d\s+\d/.test(raw)) return NaN;
+    }
+    // Translate Fortran-style D-exponents.
     const normalized = raw
         .replace(/\s+/g, '')
         .replace(/[dD]([+-]?\d+)$/, 'e$1');
@@ -222,7 +229,12 @@ export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'au
     if (decimalMode === ',') {
         value = value.replace(',', '.');
     } else if (decimalMode === 'auto') {
-        if (delimiter !== ',' && value.includes(',') && !value.includes('.')) {
+        // With a comma delimiter, a comma inside a cell was quoted:
+        // "2,0825" or "-0,087" is a decimal comma. Only "1,234", which a US
+        // file writes for a thousand, stays unread until the file's number
+        // format says which it is.
+        if (value.includes(',') && !value.includes('.')
+            && (delimiter !== ',' || !/^[+-]?[1-9]\d{0,2}(?:,\d{3})+$/.test(value))) {
             value = value.replace(',', '.');
         }
     } else if (decimalMode !== '.') {
@@ -373,6 +385,12 @@ export function detectCsvTimeAxis(rawHeaders, dataRows, options = {}) {
     // absorbs. This matters for files with "Date" + "Time(s)": the clock column
     // name looks numeric, but values such as 09:58:45 are time-of-day and must
     // be combined with the date column.
+    // A pair whose date already has its clock is never the answer. It still
+    // stands aside for a real date + time pair, as it always has (eco2mix
+    // writes Date, Heure and "Date et Heure", and the pair is read); alone,
+    // the date column with its clock is the time axis.
+    const realSplit = unique.some(c => c.mode === 'split' && !c.dateHasClock && c.score >= 0.5);
+    if (!realSplit) unique = unique.filter(c => !(c.mode === 'split' && c.dateHasClock));
     const splitDateIndexes = new Set();
     const splitAbsorbedIndexes = new Set();
     for (const c of unique) {
@@ -388,6 +406,7 @@ export function detectCsvTimeAxis(rawHeaders, dataRows, options = {}) {
                   || splitAbsorbedIndexes.has(c.sourceIndexes[0]))),
         );
     }
+    unique = unique.filter(c => !(c.mode === 'split' && c.dateHasClock));
 
     if (unique.length === 0 || unique[0].score < MIN_CONFIDENCE) {
         warnings.push(unique.length === 0
@@ -798,6 +817,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         dashCounts:  { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         dotCounts:   { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         hasTimePart: 0,
+        clockNotMidnight: 0,   // a date with its own time of day: 2022-02-01 13:00
         meridiemTimePart: 0,
         excelSerialCandidate: 0,
         monotonicInc: 0,
@@ -807,6 +827,13 @@ function profileColumnContent(sample, colIdx, delimiter) {
         weekdayPrefix: 0,      // "Mon, 15 Jan 2024"
     };
 
+    // A comma-delimited file with quoted decimal commas ("0,050", MoTeC):
+    // once the column shows a comma that can only be a decimal one, its
+    // "1,000" is one second too, not a thousand left unread.
+    const columnDecimal = delimiter === ',' && sample.some(row => {
+        const cell = String(row?.[colIdx] ?? '').trim();
+        return /^[+-]?\d*,(?:\d{1,2}|\d{4,})$/.test(cell) || /^[+-]?0,\d+$/.test(cell);
+    }) ? ',' : 'auto';
     let prevNum = null;
     for (const row of sample) {
         const raw = row?.[colIdx];
@@ -815,8 +842,12 @@ function profileColumnContent(sample, colIdx, delimiter) {
         profile.nonEmpty++;
         if (profile.sample.length < 5) profile.sample.push(cell);
         if (cell.indexOf(':') > 0 && /\d:\d{2}(?::\d{2})?,\d/.test(cell)) profile.fractionComma++;
+        if (cell.indexOf(':') > 0) {
+            const clock = cell.match(/\d[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+            if (clock && (+clock[1] || +clock[2] || +(clock[3] || 0))) profile.clockNotMidnight++;
+        }
 
-        const num = parseCsvNumber(cell, delimiter);
+        const num = parseCsvNumber(cell, delimiter, columnDecimal);
         if (Number.isFinite(num)) {
             profile.numeric++;
             profile.numericValues.push(num);
@@ -1150,6 +1181,12 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
     const dateRatio = (dc.iso + dc.slashDate + dc.dashDate + dc.dotDate + dc.monthNameDate) / dc.nonEmpty;
     const timeRatio = tc.timeOfDay / tc.nonEmpty;
     if (dateRatio < 0.8 || timeRatio < 0.8) return null;
+    // A date that already carries its time of day ("2022-02-01 13:00") is the
+    // time axis by itself; the hour column beside it, as Environment Canada
+    // writes, repeats it, and joining the two reads no instant at all.
+    // Midnight everywhere ("01/02/2024 00:00:00", Excel's date cells) still
+    // takes the clock from the other column.
+    const dateHasClock = dc.clockNotMidnight / dc.nonEmpty >= 0.5;
 
     let order = 'YMD';
     let ambiguous = false;
@@ -1191,6 +1228,7 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
         descTag: 'split-date-time',
         col: dateCol,
         timeCol,
+        dateHasClock,
     };
 }
 
