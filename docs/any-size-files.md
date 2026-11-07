@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b (4b-1 a 4b-4) implementadas (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"): toda herramienta de datos corre en lazy. De la 4b quedan sin hacer los sumideros de desborde a Parquet y la actualización en vivo por continuación (dicho en "Implementado (fase 4b-4)"); Parquet sin red resuelto (§8); la base de DuckDB sigue en memoria, con OPFS medido (§10, "Decidido en la 4b-1"); el resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b (4b-1 a 4b-4) implementadas (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"): toda herramienta de datos corre en lazy; histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"). De la 4b quedan sin hacer los sumideros de desborde a Parquet y la actualización en vivo por continuación (dicho en "Implementado (fase 4b-4)"); Parquet sin red resuelto (§8); la base de DuckDB sigue en memoria, con OPFS medido (§10, "Decidido en la 4b-1"); el resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -73,6 +73,8 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | ~~deshabilitadas~~ **todas resueltas**: derivada y detrend en la **3b**, integral en la **4a**, media móvil y detrend por media móvil en la **4b-1**, filtro en la **4b-2**, picos, relleno, reemplazo por interpolación e integral con *interpolar* en la **4b-3**, remuestreo, colapsar y correlación cruzada en la **4b-4** | — |
 | Outliers por picos | ~~deshabilitados~~ **resueltos en la 4b-3** (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | — |
 | Histograma | ~~rechazado en lazy~~ **exacto sobre todas las filas** (sección "Implementado: histograma exacto"); solo se rechaza una señal que existe únicamente en el resumen | `histogramLazyUnsupported` |
+| Heatmap calendario | exacto en SQL desde la 3a para las columnas; las señales derivadas con SQL (derivada, media móvil, integral, fórmulas) ya entraban; **resuelto** lo que faltaba (sección "Implementado: heatmap y perfil temporal exactos"): un eje calendario generado desde una fecha de origen o un eje numérico promovido a calendario se agregan por el eje que el panel muestra, en vez de dibujarse desde el resumen o rechazarse como "aún no disponible"; solo se deja fuera, con aviso, una señal que existe únicamente en el resumen | `heatmapLazyDerivedUnsupported` |
+| Perfil temporal | exacto en SQL desde la 3a; **resuelto** lo mismo que el heatmap, más *fines de semana combinados* (que la consulta lazy ignoraba) y los períodos cortados por la selección, que los dos modos cuentan ahora igual | `temporalProfileLazyDerivedUnsupported` |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
@@ -1526,6 +1528,90 @@ Pruebas:
   lazy, un panel pasado a Histograma: las barras suman los 419 650 valores
   finitos del archivo y el resumen cuenta los huecos, con el archivo entero y
   con una selección; sin avisos ni errores de página.
+
+### Implementado: heatmap y perfil temporal exactos
+
+Los dos análisis calendario ya se calculaban en SQL sobre todas las filas de
+un archivo lazy (`getCalendarHeatmapAggregates`, `getTemporalProfileAggregates`,
+fase 3a), y una señal derivada con SQL propio — una derivada por ventanas, una
+media móvil leída de su sumidero, una integral, una fórmula, también con
+`diff()` — entraba por el mismo `_fromSql` que el resto de las consultas. Lo
+que no era igual al modo estándar estaba en el **eje**, no en los valores:
+
+- Un archivo lazy cuyo eje calendario es **generado desde una fecha de origen**
+  (filas × Δt: un CSV sin columna de tiempo, o una columna de tiempo que el
+  usuario reindexó) el heatmap lo trataba como en memoria y lo dibujaba
+  **desde el resumen** (`traceIsLazy` lo excluía a propósito), 10 000 filas en
+  silencio; el perfil lo rechazaba (`generatedTime`) o, peor, agregaba por la
+  columna de tiempo detectada mientras el panel mostraba otro eje. Un eje
+  **numérico promovido a calendario** (origen + segundos × 1000) se rechazaba
+  en los dos.
+- Los avisos decían *"aún no disponible para archivos lazy"* en caminos que ya
+  eran exactos, y una clave muerta (`heatmapLazyIntegralUnsupported`) seguía en
+  las cuatro traducciones.
+
+Ahora el panel le pasa a la consulta **el eje que muestra, como SQL en ms de
+época** (`PlotManager._lazyCalendarTimeSql`): la columna datetime tal cual; para
+un eje generado, `origen + ((fila × Δt) × 1000)` con la fila como ventana
+`ROW_NUMBER()` sobre el archivo (la misma que numera `streamColumns`), operación
+por operación como `_generatedIndexDisplayTime`; para un eje numérico promovido,
+`origen + (t × 1000)`. Las dos consultas agrupan por él (`options.timeSql`,
+`_calendarTimeSql` en `duckdb-source.js`), llevan sus ventanas en el `FROM` y lo
+incluyen en su clave de caché; sin la opción, la columna datetime del archivo,
+como antes. Un eje que no se muestra como calendario (índice, tiempo
+transcurrido, segundos) se rechaza con el mismo texto que en memoria
+(`heatmapCalendarRequired`, `temporalProfileCalendarRequired`), y una señal que
+existe solo en el resumen se deja fuera con el texto del histograma.
+
+Para colocar ese eje hace falta **cuántas filas tiene el archivo**: un CSV
+abierto como vista no se cuenta al cargar (sería otra pasada entera), y sin la
+cuenta el resumen de un archivo reindexado se dibujaba comprimido en sus
+primeras 10 000 filas y el dominio de los paneles llegaba hasta ahí. Los tres
+paneles (heatmap, perfil, histograma) cuentan una vez (`_ensureLazyRowCount`,
+un `COUNT(*)` sobre las filas que sirve toda consulta lazy) antes de la primera
+pasada cuando el eje es el número de fila y la cuenta falta, y `setFileTransform`
+la pide al reindexar y redibuja los paneles del archivo; el dominio de un
+archivo lazy es su extensión real en el eje mostrado (`_lazyTimeExtent`,
+compartido por los tres), no la del resumen.
+
+**Tres diferencias entre modos que la prueba de paridad encontró**, corregidas:
+
+- La consulta lazy del perfil **ignoraba *fines de semana combinados***: el
+  panel lo pedía, el SQL devolvía sábado y domingo por separado.
+- Con una selección, el camino en memoria **cortaba los arrays y le decía al
+  kernel que no había selección**: un día en el que la selección entra a las
+  07:30 contaba como completo, y en lazy (y en el kernel con el rango) como
+  parcial. Ahora el camino en memoria pasa los bordes de la selección —no
+  descarta ninguna fila, ya están cortadas— y los dos modos coinciden.
+- Multianual sin filas en el rango: lazy devolvía un bin **1970** (el año de la
+  época 0, `Number(null)`), en memoria ninguno.
+
+Y una fragilidad vista en la e2e: `Plotly.Plots.resize` **lanza** (no rechaza)
+sobre un gráfico que no se muestra; una reconstrucción del panel durante un
+render en vuelo lo provocaba. Los tres módulos pasan por `_resizePlotlyDiv`,
+que no redimensiona lo que no está conectado o visible.
+
+Pruebas:
+
+- `scripts/test-lazy-heatmap-profile.mjs` (DuckDB-WASM en Node): la columna, la
+  derivada, la media móvil (sumidero), la integral y dos fórmulas creadas como
+  las crea la app sobre el archivo lazy, contra `buildCalendarHeatmap` /
+  `buildTemporalProfile` sobre todas las filas transformadas por
+  `_transformFetchedPhaseTrajectory`: 72 heatmaps (seis agregaciones, integral
+  incluida, dos modos, tres rangos, con y sin recorte, desplazamiento,
+  ganancia, offset y signo) y 36 perfiles (los seis períodos, por tipo de día
+  con fines de semana combinados, descartando incompletos); una señal solo del
+  resumen dejada fuera y nombrada; un eje no calendario rechazado; una columna
+  datetime reindexada desde un origen (la cuenta de filas y la extensión
+  incluidas), un archivo sin columna de tiempo con eje generado, un eje
+  numérico promovido a calendario con signo y desplazamiento. Un eje corrido
+  un minuto a propósito lo detecta.
+- `scripts/e2e-lazy-heatmap-profile.mjs` (Chromium): un CSV de 14 MB con
+  fechas abierto en lazy, una derivada creada desde Herramientas de datos y
+  dibujada con `a`; en Heatmap y en Perfil temporal las celdas cuentan las
+  300 000 filas del archivo y sus 299 750 valores finitos, sin avisos; el eje
+  reindexado desde 2024-01-01 a 1 min pone las filas de enero a julio de 2024
+  en los dos paneles; sin errores de página.
 
 ### Medido: la 4b-3 y la 4b-4 sobre 20 M filas, en Chromium
 

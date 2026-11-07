@@ -121,9 +121,7 @@ const fallbackText = {
     heatmapDatetimeRequired: 'Heatmap requires a DateTime index.',
     heatmapGeneratedTimeUnsupported: 'Heatmap cannot use a generated numeric time index.',
     heatmapWarningSeePanel: 'Warning: see message in the Heatmap side panel',
-    heatmapLazyUnsupported: 'Exact Heatmaps for lazy files are not available yet; the overview was not used.',
-    heatmapLazyIntegralUnsupported: 'The Integral is not available for lazy files yet; use All/Selection with another aggregation.',
-    heatmapLazyDerivedUnsupported: 'This overview-derived signal has no exact lazy aggregate.',
+    heatmapLazyDerivedUnsupported: 'this signal exists only on the overview of a large file (it has no exact source in the file), so it is left out',
     heatmapNoRows: 'No rows in the selected time scope.',
     heatmapLoading: 'Building Heatmap…',
     heatmapReady: 'Heatmap ready',
@@ -266,9 +264,10 @@ function gridCellCount(grid) {
     return rows * columns;
 }
 
+// A lazy file is aggregated in DuckDB whatever axis it shows: a generated
+// calendar axis (origin + row × Δt) is bucketed there too (_lazyCalendarTimeSql),
+// never over the overview in memory.
 function traceIsLazy(manager, trace) {
-    const timeVariable = manager._getTimeVar?.(trace.fileId);
-    if (manager._isGeneratedCalendarTime?.(trace.fileId, timeVariable)) return false;
     return !!manager.files.get(trace.fileId)?.data?._duckdb;
 }
 
@@ -576,8 +575,8 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
                 clearTimeout(timer);
                 timer = setTimeout(() => {
                     this._applyCalendarHeatmapMinHeight(plot);
-                    if (plot.div) Plotly.Plots.resize(plot.div);
-                    if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
+                    if (plot.div) this._resizePlotlyDiv(plot.div);
+                    if (plot.heatmapDiv) this._resizePlotlyDiv(plot.heatmapDiv);
                 }, 50);
             });
             observer.observe(panelEl);
@@ -725,11 +724,15 @@ proto._calendarHeatmapDomain = function(plot) {
     const arrays = [];
     for (const trace of plot?.traces || []) {
         if (!this._calendarHeatmapTraceEligibility(trace).ok) continue;
-        // Lazy files expose a downsampled overview whose first/last rows are the
-        // exact time endpoints, so the x-axis extent is correct without a query.
-        // The overview is never used as the heatmap result.
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (times?.length) arrays.push(times);
+        // A lazy file's overview is a sample of its rows: its ends are the
+        // file's, read from the metadata (and from the row count, for an axis
+        // generated from the row number). The overview is never the result.
+        if (traceIsLazy(this, trace)) {
+            const extent = this._lazyTimeExtent?.(trace.fileId);
+            if (extent?.length) arrays.push(extent);
+        }
     }
     const extent = this._finiteSortedExtent(arrays);
     return extent ? { min: extent.min, max: extent.max } : null;
@@ -960,6 +963,17 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
         eager.push(trace);
     }
 
+    // A lazy file whose axis is the row number must be counted before its
+    // domain can be told; counted once, then this pass runs again.
+    const uncounted = [...new Set(lazyTraces.map(trace => trace.fileId))].filter(fileId => this._needsLazyRowCount(fileId));
+    if (uncounted.length) {
+        Promise.all(uncounted.map(fileId => this._ensureLazyRowCount(fileId))).then(() => {
+            if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
+            this._recomputeCalendarHeatmap(panelId, plot);
+        });
+        return;
+    }
+
     if (!eager.length && !lazyTraces.length) {
         plot._calendarHeatmapModels = [];
         state.warnings = warnings;
@@ -1106,6 +1120,10 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
 
 // Query DuckDB for the lazy traces (grouped per file, one scan each), densify
 // each returned sparse trace through the shared kernel, and fill modelByTrace.
+// Every row of the file is aggregated, by the axis the panel shows
+// (_lazyCalendarTimeSql) and with the file's transforms; a signal whose values
+// have SQL over the file — a column, a data tool's output, a formula — is
+// exact, and one that exists only on the overview is left out and said so.
 proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces, densifyOptions, ctx) {
     const byFile = new Map();
     for (const trace of lazyTraces) {
@@ -1116,8 +1134,9 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
         if (plot._calendarHeatmapToken !== token) return;
         const data = this.files.get(fileId)?.data;
         const source = data?._duckdb?.source;
-        if (!source?.getCalendarHeatmapAggregates) {
-            for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapLazyUnsupported')}`);
+        const timeSql = this._lazyCalendarTimeSql(fileId);
+        if (!source?.getCalendarHeatmapAggregates || !timeSql) {
+            for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapCalendarRequired')}`);
             continue;
         }
         const transform = this._fileTransform(fileId);
@@ -1140,10 +1159,12 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
                 cropRange,
                 selectionRange: ctx.rangeFull ? null : [ctx.rangeStart, ctx.rangeEnd],
                 transforms,
+                timeSql,
             });
             if (plot._calendarHeatmapToken !== token) return;
             if (!result?.ok) {
-                for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapLazyUnsupported')}`);
+                const reason = result?.reason === 'notDatetime' ? text('heatmapCalendarRequired') : (result?.reason || text('heatmapNoRows'));
+                for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${reason}`);
                 continue;
             }
             for (const blockedName of result.blocked || []) {
@@ -1154,6 +1175,12 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
                 const entry = entryByVar.get(trace.varName);
                 const cells = entry?.cells;
                 if (!cells) continue;
+                // No row of the file in the scope (a selection outside the crop):
+                // what the in-memory branch says of an empty series.
+                if (!cells.some(cell => Number(cell.nScope) > 0)) {
+                    ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapNoRows')}`);
+                    continue;
+                }
                 if (densifyOptions.aggregation === 'integral' && entry.integralAvailable === false) {
                     ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapIntegralUnsorted')}`);
                 }
@@ -1562,8 +1589,8 @@ proto._setCalendarHeatmapLayout = function(panelId, layout) {
     const splitter = plot.heatmapContainer.querySelector('.heatmap-splitter');
     splitter?.setAttribute('aria-orientation', layout === 'vertical' ? 'horizontal' : 'vertical');
     this._applyCalendarHeatmapMinHeight(plot);
-    if (plot.div) Plotly.Plots.resize(plot.div);
-    if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
+    if (plot.div) this._resizePlotlyDiv(plot.div);
+    if (plot.heatmapDiv) this._resizePlotlyDiv(plot.heatmapDiv);
 };
 
 proto._toggleCalendarHeatmapTimeSeries = function(panelId) {
@@ -1578,11 +1605,11 @@ proto._toggleCalendarHeatmapTimeSeries = function(panelId) {
         button.setAttribute('aria-pressed', String(state.timeSeriesHidden));
     }
     if (!state.timeSeriesHidden && plot.div) {
-        Plotly.Plots.resize(plot.div);
+        this._resizePlotlyDiv(plot.div);
         this._refreshPanelDomOverlays?.(plot);
     }
     this._applyCalendarHeatmapMinHeight(plot);
-    if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
+    if (plot.heatmapDiv) this._resizePlotlyDiv(plot.heatmapDiv);
     this._syncCursorDisplay?.(panelId, plot);
 };
 
@@ -1601,8 +1628,8 @@ proto._toggleCalendarHeatmapOptions = function(panelId) {
         button.textContent = state.optionsVisible ? text('heatmapHideOptions') : text('heatmapShowOptions');
         button.title = button.textContent;
     }
-    if (plot.div) Plotly.Plots.resize(plot.div);
-    if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
+    if (plot.div) this._resizePlotlyDiv(plot.div);
+    if (plot.heatmapDiv) this._resizePlotlyDiv(plot.heatmapDiv);
 };
 
 proto._resetCalendarHeatmapView = function(panelId) {
@@ -1647,8 +1674,8 @@ proto._installCalendarHeatmapSplitterHandlers = function(panelId, plot) {
         splitter.setAttribute('aria-valuemax', '80');
         splitter.setAttribute('aria-valuenow', String(Math.round(state.split * 100)));
         this._applyCalendarHeatmapMinHeight(plot);
-        if (plot.div) Plotly.Plots.resize(plot.div);
-        if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
+        if (plot.div) this._resizePlotlyDiv(plot.div);
+        if (plot.heatmapDiv) this._resizePlotlyDiv(plot.heatmapDiv);
     };
     const applyPointer = (event) => {
         const state = this._ensureCalendarHeatmapState(plot);

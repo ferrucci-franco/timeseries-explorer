@@ -254,22 +254,9 @@ proto._lazyHistogramCounts = async function(entries, range, spec, { signal = nul
     return out;
 };
 
-/**
- * The time extent of a lazy trace's file, transformed as its rows are: the
- * overview in memory is a sample of the rows and may not reach the ends the
- * file does. Null when it cannot be told (a generated axis with no row count).
- */
+/** The time extent of a lazy trace's file, transformed as its rows are (_lazyTimeExtent). */
 proto._lazyHistogramTimeExtent = function(fileId) {
-    const data = this.files.get(fileId)?.data;
-    const meta = data?._duckdb;
-    if (!meta) return null;
-    const start = Number(data.metadata?.timeStart);
-    const end = Number(data.metadata?.timeEnd);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-    const rows = Number(meta.totalRows);
-    const rowIndex = Float64Array.from([0, Number.isFinite(rows) && rows > 0 ? rows - 1 : NaN]);
-    const transformed = this._transformFetchedPhaseTrajectory(fileId, Float64Array.from([start, end]), rowIndex, new Map(), []);
-    return transformed.time.length ? transformed.time : null;
+    return this._lazyTimeExtent(fileId);
 };
 
 }

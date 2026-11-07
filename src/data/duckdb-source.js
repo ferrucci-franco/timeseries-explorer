@@ -2715,12 +2715,19 @@ export default class DuckDbSource {
      * where each `cell` matches the kernel accumulator shape consumed by
      * densifyCalendarHeatmap: { columnStartMs, rowIndex, nScope, nFinite,
      * nInvalid, sum, mean, min, max }.
+     *
+     * `options.timeSql` is the axis the panel shows, in epoch ms, as SQL over
+     * the file's rows (`{ sql, windows }`, see _calendarTimeSql): a generated
+     * calendar axis (origin + row × Δt) or a numeric axis promoted to a
+     * calendar is bucketed as it is displayed, the same as the rows in memory.
+     * Without it the file's datetime column is the axis.
      */
     async getCalendarHeatmapAggregates(legacyData, varNames, options = {}) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getCalendarHeatmapAggregates: data is not DuckDB-backed (eager mode)');
         const calendarMode = options.calendarMode === 'day-hour' ? 'day-hour' : 'week-day';
-        if (legacyData?.metadata?.timeKind !== 'datetime') {
+        const timeSql = this._calendarTimeSql(legacyData, options);
+        if (!timeSql) {
             return { ok: false, reason: 'notDatetime', calendarMode, blocked: [], traces: [] };
         }
 
@@ -2746,12 +2753,12 @@ export default class DuckDbSource {
         const integral = options.aggregation === 'integral';
 
         const cacheKey = this._calendarHeatmapCacheKey(meta, usable, {
-            calendarMode, shiftMs, cropRange, selectionRange, transforms, integral,
+            calendarMode, shiftMs, cropRange, selectionRange, transforms, integral, timeSql,
         });
         const cached = cacheKey ? this._heatmapCache.get(cacheKey) : null;
         if (cached) return (cached instanceof Promise) ? cached : cached;
 
-        const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked };
+        const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql };
         const promise = integral
             ? this._queryCalendarHeatmapIntegral(meta, legacyData, usable, queryOpts)
             : this._queryCalendarHeatmapAggregates(meta, legacyData, usable, queryOpts);
@@ -2799,6 +2806,7 @@ export default class DuckDbSource {
             tableName,
             'calheat',
             Number(meta.appendRows) || 0,
+            opts.timeSql?.sql || '',
             opts.calendarMode,
             opts.shiftMs,
             opts.cropRange ? opts.cropRange.join('_') : '',
@@ -2809,14 +2817,14 @@ export default class DuckDbSource {
     }
 
     async _queryCalendarHeatmapAggregates(meta, legacyData, usable, opts) {
-        const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked } = opts;
-        const tableName = this._fromSql(legacyData, usable.map(item => item.variable));
+        const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql } = opts;
+        const tableName = this._fromSql(legacyData, [...usable.map(item => item.variable), { _duckdbWindows: timeSql.windows }]);
         // epoch-ms in display space (pre-shift); crop compares against this.
-        const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
+        const baseMsExpr = `CAST((${timeSql.sql}) AS HUGEINT)`;
         // Shifted epoch-ms drives bucketing and the selection filter.
         const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
 
-        const where = [`(${meta.timeExprSql}) IS NOT NULL`];
+        const where = [`(${timeSql.sql}) IS NOT NULL`];
         if (cropRange) {
             where.push(`${baseMsExpr} BETWEEN ${this._numericLiteral(cropRange[0])} AND ${this._numericLiteral(cropRange[1])}`);
         }
@@ -2906,13 +2914,13 @@ export default class DuckDbSource {
     // is attributed to each hour/day it crosses. Verified cell-for-cell against
     // the JS kernel (fine + coarse sampling, gaps, week-day, pre-1970).
     async _queryCalendarHeatmapIntegral(meta, legacyData, usable, opts) {
-        const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked } = opts;
-        const tableName = this._fromSql(legacyData, usable.map(item => item.variable));
+        const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql } = opts;
+        const tableName = this._fromSql(legacyData, [...usable.map(item => item.variable), { _duckdbWindows: timeSql.windows }]);
         const cm = calendarMode === 'day-hour' ? 3600000 : 86400000;
-        const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
+        const baseMsExpr = `CAST((${timeSql.sql}) AS HUGEINT)`;
         const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
 
-        const where = [`(${meta.timeExprSql}) IS NOT NULL`];
+        const where = [`(${timeSql.sql}) IS NOT NULL`];
         if (cropRange) {
             where.push(`${baseMsExpr} BETWEEN ${this._numericLiteral(cropRange[0])} AND ${this._numericLiteral(cropRange[1])}`);
         }
@@ -3318,7 +3326,10 @@ export default class DuckDbSource {
     async getTemporalProfileAggregates(legacyData, varNames, options = {}) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getTemporalProfileAggregates: data is not DuckDB-backed (eager mode)');
-        if (legacyData?.metadata?.timeKind !== 'datetime' || meta.generatedTime) {
+        // The axis the panel shows, in epoch ms (`options.timeSql`, see
+        // _calendarTimeSql); the file's datetime column without it.
+        const timeSql = this._calendarTimeSql(legacyData, options);
+        if (!timeSql) {
             return { ok: false, reason: 'notDatetime', blocked: [], traces: [] };
         }
         const requested = [...new Set(varNames || [])]
@@ -3347,9 +3358,9 @@ export default class DuckDbSource {
         }
         const selectionRange = this._normalizeMsRange(options.selectionRange);
         const transforms = options.transforms || {};
-        const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
+        const baseMsExpr = `CAST((${timeSql.sql}) AS HUGEINT)`;
         const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
-        const where = [`(${meta.timeExprSql}) IS NOT NULL`];
+        const where = [`(${timeSql.sql}) IS NOT NULL`];
         if (cropRange?.[0] != null) where.push(`${baseMsExpr} >= ${this._numericLiteral(cropRange[0])}`);
         if (cropRange?.[1] != null) where.push(`${baseMsExpr} <= ${this._numericLiteral(cropRange[1])}`);
         if (selectionRange) where.push(`${tExpr} BETWEEN ${this._numericLiteral(selectionRange[0])} AND ${this._numericLiteral(selectionRange[1])}`);
@@ -3365,13 +3376,15 @@ export default class DuckDbSource {
         });
         const cacheKey = this._temporalProfileCacheKey(meta, usable, {
             period, resolutionUnit, resolutionMinutes, shiftMs, cropRange, selectionRange,
-            transforms, dayGrouping: options.dayGrouping, discardIncomplete: options.discardIncomplete,
+            transforms, dayGrouping: options.dayGrouping, combineWeekends: options.combineWeekends === true,
+            discardIncomplete: options.discardIncomplete, timeSql,
         });
         const cached = cacheKey ? this._temporalProfileCache.get(cacheKey) : null;
         if (cached) return cached instanceof Promise ? cached : cached;
 
         const promise = (async () => {
-            const statsArgs = { tableName: meta.tableName, timeExpression: tExpr, whereSql };
+            // The time axis alone, with the windows it may read (a row number).
+            const statsArgs = { tableName: this._fromSql(legacyData, [{ _duckdbWindows: timeSql.windows }]), timeExpression: tExpr, whereSql };
             let statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql(statsArgs)));
             let stats = statsRows[0] || {};
             let ordered = Number(stats.order_violations) > 0;
@@ -3393,7 +3406,7 @@ export default class DuckDbSource {
             const aggregate = buildTemporalProfileFinalSql({
                 spanStartMs,
                 spanEndMs,
-                tableName: this._fromSql(legacyData, usable.map(item => item.variable)),
+                tableName: this._fromSql(legacyData, [...usable.map(item => item.variable), { _duckdbWindows: timeSql.windows }]),
                 timeExpression: tExpr,
                 whereSql,
                 valueExpressions,
@@ -3406,6 +3419,7 @@ export default class DuckDbSource {
                 scopeEnd,
                 selectionActive: !!selectionRange,
                 dayGrouping: options.dayGrouping,
+                combineWeekends: options.combineWeekends === true,
                 discardIncomplete: options.discardIncomplete,
                 numericLiteral: value => this._numericLiteral(value),
                 ordered,
@@ -3419,6 +3433,7 @@ export default class DuckDbSource {
                 spanStartMs,
                 spanEndMs,
                 dayGrouping: options.dayGrouping,
+                combineWeekends: options.combineWeekends === true,
                 discardIncomplete: options.discardIncomplete,
                 valueCount: usable.length,
                 medianStepMs,
@@ -3461,6 +3476,7 @@ export default class DuckDbSource {
             'profile',
             Number(meta.appendRows) || 0,
             Number(meta.appendBytes) || 0,
+            options.timeSql?.sql || '',
             options.period,
             options.resolutionUnit,
             options.resolutionMinutes ?? '',
@@ -3468,6 +3484,7 @@ export default class DuckDbSource {
             options.cropRange?.join('_') || '',
             options.selectionRange?.join('_') || '',
             options.dayGrouping || '',
+            options.combineWeekends ? 1 : 0,
             options.discardIncomplete ? 1 : 0,
             variables,
         ].join('\u001e');
@@ -4595,6 +4612,24 @@ export default class DuckDbSource {
         return meta.timeExprSql || (legacyData?.metadata?.timeKind === 'datetime'
             ? `epoch_ms("${escTime}")::DOUBLE`
             : `"${escTime}"::DOUBLE`);
+    }
+
+    /**
+     * The calendar axis an exact analysis (heatmap, temporal profile) buckets
+     * by, in epoch ms, as SQL over the file's rows: `{ sql, windows }`, the
+     * windows the SQL reads (a row number, for a generated axis) to be carried
+     * in the query's FROM (_fromSql). `options.timeSql` is the axis as the
+     * panel shows it (PlotManager._lazyCalendarTimeSql); without it, the
+     * file's own datetime column. Null when there is no calendar axis.
+     */
+    _calendarTimeSql(legacyData, options = {}) {
+        const given = options.timeSql;
+        if (given?.sql) return { sql: given.sql, windows: Array.isArray(given.windows) ? given.windows : [] };
+        if (given !== undefined) return null;
+        const meta = legacyData?._duckdb;
+        if (!meta || meta.generatedTime || legacyData?.metadata?.timeKind !== 'datetime') return null;
+        const sql = this.timeValueSql(legacyData);
+        return sql ? { sql, windows: [] } : null;
     }
 
     // The FROM item a query reading `variables` must select from. The file

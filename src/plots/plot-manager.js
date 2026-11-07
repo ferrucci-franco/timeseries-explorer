@@ -412,6 +412,18 @@ class PlotManager {
             }
             this._rebuildPanel(panelId, { restoreView });
         }
+        // A lazy file reindexed to its row number needs its row count to place
+        // the overview's samples (a CSV opened as a view is not counted when it
+        // loads): counted once, then the panels showing it are drawn again.
+        if (this._needsLazyRowCount?.(fileId)) {
+            const data = entry.data;
+            this._ensureLazyRowCount(fileId).then((rows) => {
+                if (!rows || this.files.get(fileId)?.data !== data || !this._isGeneratedIndexTime(fileId)) return;
+                for (const [panelId, plot] of this.plots) {
+                    if ((plot.traces || []).some(trace => trace.fileId === fileId)) this._rebuildPanel(panelId, { restoreView: { xRange: null } });
+                }
+            });
+        }
     }
 
     // If fileId's CURRENT render signature no longer matches another file it shares
@@ -826,6 +838,17 @@ class PlotManager {
      * whose SVG keeps its old pixel height until it is told. Waiting for the
      * ResizeObserver leaves the drag layer overhanging what is now below it.
      */
+    // Resize one Plotly chart if it is displayed. Plotly throws (not rejects)
+    // for a chart that is not: a div a rebuild detached while a render was in
+    // flight, a pane folded away, a panel the phone layout is not showing. Such
+    // a chart is resized when it is shown again.
+    _resizePlotlyDiv(div) {
+        if (!div?.isConnected || div.offsetParent === null) return;
+        try {
+            Promise.resolve(Plotly.Plots.resize(div)).catch(() => {});
+        } catch { /* not displayed */ }
+    }
+
     _resizePanelCharts(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
