@@ -51,6 +51,7 @@ import {
 } from './pair-regression-sql.js';
 import { linearFromMoments, quadraticFromMoments, powerFromMoments } from '../utils/regression.js';
 import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } from './missing-buckets-sql.js';
+import { buildStateChangesSql, buildStateColumnsSql, buildStateValuesSql } from './state-runs-sql.js';
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
@@ -759,8 +760,12 @@ export default class DuckDbSource {
         const tableName = this._fromSql(legacyData, requested.map(item => item.variable));
         const lit = (v) => this._numericLiteral(v);
         const tExpr = this.timeValueSql(legacyData);
+        // A text column (a state band, exported) is read as the text it is;
+        // as a DOUBLE every value of it would be NULL.
         const valueSelect = requested
-            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
+            .map(({ variable, varName }, index) => (variable?.dataType === 'string'
+                ? `CAST((${this._valueExpressionSql(variable, varName)}) AS VARCHAR) AS v${index}`
+                : `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`))
             .join(',\n                               ');
         const valueNames = requested.map((_, index) => `v${index}`).join(', ');
         const ranged = Number.isFinite(lo) && Number.isFinite(hi);
@@ -960,7 +965,9 @@ export default class DuckDbSource {
         const column = (idx) => this._joinedColumn(batches, idx);
         const x = column(0);
         const yByVar = new Map();
-        requested.forEach(({ varName }, index) => yByVar.set(varName, column(index + 1)));
+        requested.forEach(({ varName, variable }, index) => yByVar.set(varName, variable?.dataType === 'string'
+            ? batches.flatMap(batch => this._extractColumnAsStrings(batch, index + 1))
+            : column(index + 1)));
         return { x, yByVar, rowStart };
     }
 
@@ -1580,6 +1587,68 @@ export default class DuckDbSource {
         };
     }
 
+    /**
+     * What a state band draws for [t0, t1] (source time units; see
+     * state-runs-sql.js). Up to `maxRuns` changes: `{ mode: 'changes', t,
+     * values }`, the first row being the one holding at t0. More: `{ mode:
+     * 'columns', rows: [{ b, value, changes }] }`, one per screen column.
+     */
+    async getStateRuns(legacyData, varName, t0, t1, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getStateRuns: data is not DuckDB-backed (eager mode)');
+        const variable = legacyData.variables?.[varName];
+        if (!variable) return { mode: 'changes', t: new Float64Array(0), values: [] };
+        let lo = Number(t0);
+        let hi = Number(t1);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { mode: 'changes', t: new Float64Array(0), values: [] };
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const maxRuns = Math.max(1, Math.floor(options.maxRuns || 4000));
+        const columns = Math.max(1, Math.floor(options.columns || 500));
+        const timeExpr = this._timeExpressionSql(legacyData, meta);
+        const valueExpr = this._valueExpressionSql(variable, varName);
+        const from = this._fromSql(legacyData, [variable]);
+        const lit = (v) => this._numericLiteral(v);
+        const changes = await this._interactiveQuery(
+            buildStateChangesSql(timeExpr, valueExpr, from, lit, lo, hi, maxRuns + 1),
+            { signal: options.signal });
+        if (changes.numRows <= maxRuns) {
+            return {
+                mode: 'changes',
+                t: this._extractColumnAsFloat64(changes, 0, 'DOUBLE'),
+                values: this._extractColumnAsStrings(changes, 1),
+            };
+        }
+        const result = await this._interactiveQuery(
+            buildStateColumnsSql(timeExpr, valueExpr, from, lit, lo, hi, columns),
+            { signal: options.signal });
+        const b = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        const values = this._extractColumnAsStrings(result, 1);
+        const counts = this._extractColumnAsFloat64(result, 2, 'DOUBLE');
+        const rows = [];
+        for (let i = 0; i < b.length; i++) rows.push({ b: b[i], value: values[i], changes: counts[i] });
+        return { mode: 'columns', rows, columns };
+    }
+
+    /**
+     * The distinct values of a text column in order of first appearance, at
+     * most `limit` + 1 of them (one more than the band colours tells it to
+     * stop colouring by value). Cached on the data object: the colours of a
+     * band must not depend on the view.
+     */
+    async getStateValues(legacyData, varName, limit = 16, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getStateValues: data is not DuckDB-backed (eager mode)');
+        const variable = legacyData.variables?.[varName];
+        if (!variable) return [];
+        const sql = buildStateValuesSql(
+            this._timeExpressionSql(legacyData, meta),
+            this._valueExpressionSql(variable, varName),
+            this._fromSql(legacyData, [variable]),
+            limit + 1);
+        const result = await this._interactiveQuery(sql, { signal: options.signal });
+        return this._extractColumnAsStrings(result, 0);
+    }
+
     // The time expression used by the diagnostics queries — identical to the one
     // the viewport queries read, so the numbers describe the plotted axis.
     _timeExpressionSql(legacyData, meta) {
@@ -2113,7 +2182,7 @@ export default class DuckDbSource {
         if (!meta) throw new Error('countOutOfBounds: data is not DuckDB-backed (eager mode)');
         const variable = legacyData.variables?.[varName];
         if (!variable) throw new Error(`countOutOfBounds: unknown variable "${varName}"`);
-        const base = `try_cast(${this._quoteIdent(variable._duckdbCol || varName)} AS DOUBLE)`;
+        const base = this._numericColumnSql(variable, this._quoteIdent(variable._duckdbCol || varName));
         const predicate = this._boundsPredicateSql(base, params);
         if (!predicate) throw new Error('countOutOfBounds: missing finite bounds');
         const timeCol = meta.timeColumn;
@@ -4688,17 +4757,44 @@ export default class DuckDbSource {
         return meta.readWhere ? `(SELECT * FROM ${joined} WHERE ${meta.readWhere})` : joined;
     }
 
+    /**
+     * The number format a CSV's text columns are translated with, reduced to
+     * what csvNumericCastSql reads, or null when a plain try_cast reads them.
+     * Plain data, so it survives the structuredClone of a variable.
+     */
+    _csvNumberCastFormat(csvProfile) {
+        if (!csvProfile) return null;
+        if (csvNumericCastSql('x', csvProfile) === 'try_cast(x AS DOUBLE)') return null;
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat(csvProfile);
+        return {
+            decimalSeparator: csvProfileUsesDecimalComma(csvProfile) ? ',' : decimalSeparator,
+            thousandsSeparator,
+            delimiter: csvProfile.delimiter || ',',
+        };
+    }
+
+    // A file column read as a DOUBLE: translated from its text when the CSV
+    // writes numbers some other way than DuckDB reads them.
+    _numericColumnSql(variable, column) {
+        return variable?._duckdbNumberFormat
+            ? csvNumericCastSql(column, variable._duckdbNumberFormat)
+            : `try_cast(${column} AS DOUBLE)`;
+    }
+
     _valueExpressionSql(variable, fallbackName = '', options = {}) {
         // A formula translated to SQL is its own expression over the file's
         // columns (src/expr/sql.js), already a DOUBLE or NULL.
         if (variable?._duckdbExpr) {
             return options.castDouble ? `try_cast((${variable._duckdbExpr}) AS DOUBLE)` : variable._duckdbExpr;
         }
-        const base = this._quoteIdent(variable?._duckdbCol || fallbackName || variable?.name);
+        const column = this._quoteIdent(variable?._duckdbCol || fallbackName || variable?.name);
+        // A column held as text with a number format of its own is a number
+        // only once translated: as the overview's projection reads it.
+        const base = variable?._duckdbNumberFormat ? this._numericColumnSql(variable, column) : column;
         const definition = variable?._duckdbDataTool;
         let expr = base;
         if (definition?.tool === 'removeOutliers' && definition.method === 'bounds') {
-            const numericBase = `try_cast(${base} AS DOUBLE)`;
+            const numericBase = variable?._duckdbNumberFormat ? base : `try_cast(${base} AS DOUBLE)`;
             const predicate = this._boundsPredicateSql(numericBase, definition.params || {});
             if (predicate) {
                 expr = `CASE WHEN ${numericBase} IS NULL THEN NULL WHEN ${predicate} THEN ${numericBase} ELSE NULL END`;
@@ -4788,10 +4884,10 @@ export default class DuckDbSource {
 
         const usedNames = new Set();
         const variablePaths = new Map();
-        const csvDescriptionsByColumn = sourceInfo.format === 'csv'
-            ? new Map((this._csvColumnSpecs(sourceInfo.csvProfile) || [])
-                .map(spec => [spec.name, String(spec.description || '')]))
-            : new Map();
+        const csvSpecs = sourceInfo.format === 'csv' ? (this._csvColumnSpecs(sourceInfo.csvProfile) || []) : [];
+        const csvDescriptionsByColumn = new Map(csvSpecs.map(spec => [spec.name, String(spec.description || '')]));
+        const csvTextColumns = new Set(csvSpecs.filter(spec => spec.readType === 'VARCHAR').map(spec => spec.name));
+        const csvNumberCast = sourceInfo.format === 'csv' ? this._csvNumberCastFormat(sourceInfo.csvProfile) : null;
         const sanitize = (raw) => {
             const base = String(raw ?? '').trim() || `column`;
             return base;
@@ -4848,6 +4944,12 @@ export default class DuckDbSource {
                 source: sourceInfo.format === 'parquet' ? 'parquet' : 'csv',
                 _duckdbCol: columnNames[i],
             };
+            // The file holds this column as text ("8 597", "1,5"); every read
+            // of it after the overview has to translate it the way the
+            // projection did, or it reads NaN.
+            if (isNumeric && csvNumberCast && csvTextColumns.has(columnNames[i])) {
+                result.variables[uniqueName]._duckdbNumberFormat = { ...csvNumberCast };
+            }
             if (columnPath) {
                 result.variables[uniqueName].displayName = columnPath.join('.');
                 result.variables[uniqueName].pandas = { columnPath: columnPath.slice() };

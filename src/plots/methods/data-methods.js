@@ -1757,7 +1757,12 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
     // afterwards holds ~3x the memory — enough to OOM the browser on a
     // multi-million-row lazy FFT fetch. `k` counts kept rows.
     const outTime = new Float64Array(n);
-    const outCols = varNames.map(name => ({ name, src: rawByVar?.get(name) || null, dst: new Float64Array(n) }));
+    // A text column (read for an export) keeps its text: no gain, no sign.
+    const variables = this.files.get(fileId)?.data?.variables || {};
+    const outCols = varNames.map(name => {
+        const text = variables[name]?.dataType === 'string';
+        return { name, text, src: rawByVar?.get(name) || null, dst: text ? new Array(n) : new Float64Array(n) };
+    });
     let k = 0;
     const generatedCalendar = generatedFromDetectedTime && this._isGeneratedCalendarTime(fileId, timeVar);
     const highResolutionCalendar = generatedCalendar && this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
@@ -1778,6 +1783,10 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
         if (cropped && (displayTime < lo || displayTime > hi)) continue;
         outTime[k] = displayTime + timeShift;
         for (const col of outCols) {
+            if (col.text) {
+                col.dst[k] = col.src ? col.src[i] ?? '' : '';
+                continue;
+            }
             const value = col.src ? Number(col.src[i]) : NaN;
             const sign = this.isVariableSignInverted?.(fileId, col.name) ? -1 : 1;
             col.dst[k] = Number.isFinite(value) ? value * transform.gain * sign + yOffset : value;
@@ -1805,6 +1814,7 @@ proto._buildPlotData = function(plot) {
             const tsMode = plot.mode === 'timeseries';
             const traces = plot.traces
                 .map((t, idx) => {
+                    if (tsMode && this._isStateBandTrace?.(t)) return this._buildStateBandTrace(t, null, plot);
                     const breaks = tsMode ? this._traceBreakIntervals(plot, t) : null;
                     const built = this._buildTimeTrace(t, null, plot, idx, breaks ? { attachSourceX: true } : {});
                     if (built && breaks) this._applyLineBreaks(built, breaks);
@@ -1827,7 +1837,9 @@ proto._timeseriesStackAttrs = function(plot, traceIndex = 0) {
         // signals. Interpolation preserves the continuous stacked envelope;
         // explicit zero-padding below still handles genuinely disjoint support.
         stackgaps: 'interpolate',
-        fill: traceIndex === 0 ? 'tozeroy' : 'tonexty',
+        // The first CURVE fills to zero; a state band ahead of it in the list
+        // is not in the stack.
+        fill: (plot.traces || []).slice(0, traceIndex).some(t => !this._isStateBandTrace?.(t)) ? 'tonexty' : 'tozeroy',
     };
 };
 
@@ -1895,6 +1907,7 @@ proto._timeseriesStackBoundaryTimes = function(plot) {
     const boundaries = new Set();
     for (const trace of plot.traces || []) {
         if (!this._isVisible(trace)) continue;
+        if (this._isStateBandTrace?.(trace)) continue;
         const support = this._timeseriesTraceSupport(trace);
         if (!support) continue;
         boundaries.add(support.startX);
@@ -2026,6 +2039,11 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     if (!fileData) return null;
     const variable = fileData.variables[t.varName];
     if (!variable) return null;
+    // A text column is a state band (state-band-methods.js), drawn on a time
+    // series only.
+    if (this._isStateBandVariable?.(variable)) {
+        return plot?.mode === 'timeseries' ? this._buildStateBandTrace(t, visibleRange, plot) : null;
+    }
     const timeVar  = this._getTimeVar(t.fileId);
     const timeData = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
     const values   = this._getTransformedVariableData(t.fileId, t.varName);
@@ -2243,6 +2261,7 @@ proto._timeseriesSampleMarkersEligible = function(plot, t) {
     const data = this.files.get(t.fileId)?.data;
     if (!data || data._duckdb) return false;
     const variable = data.variables?.[t.varName];
+    if (this._isStateBandVariable?.(variable)) return false;
     // A series of events is drawn as dots already.
     if (variable?.eventSamples) return false;
     return variable?.kind !== 'parameter';
@@ -2320,9 +2339,12 @@ proto._buildTimeLayout = function(plot, options = {}) {
             autorange: false,
         }
         : {};
+    // A state band has its own lane, not a Y axis: it does not count for
+    // the "one curve names the axis" rule.
+    const curves = plot.traces.filter(t => !this._isStateBandTrace?.(t));
     const axisTraces = {
-        y: plot.traces.filter(t => this._traceYAxis(t, plot) === 'y'),
-        y2: plot.traces.filter(t => this._traceYAxis(t, plot) === 'y2'),
+        y: curves.filter(t => this._traceYAxis(t, plot) === 'y'),
+        y2: curves.filter(t => this._traceYAxis(t, plot) === 'y2'),
     };
     const axisTitle = (traces) => {
         if (traces.length !== 1) return '';
@@ -2377,6 +2399,8 @@ proto._buildTimeLayout = function(plot, options = {}) {
         const { items, overflow } = this._gapBandItemsForView(plot, null);
         if (!overflow) layout.shapes = this._adaptiveGapBandShapes(plot, items);
     }
+    // State bands: their lanes under the curves (no band: layout unchanged).
+    if (plot.mode === 'timeseries') this._applyStateBandLayout?.(plot, layout);
     return layout;
 };
 

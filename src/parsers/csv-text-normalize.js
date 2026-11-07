@@ -201,7 +201,147 @@ export function decodeCsvBytes(buffer, requested = 'auto') {
         // would garble every good character to save a few bad ones.
         return { text: decodeWith('utf-8', bytes).replace(/^\uFEFF/, ''), encoding: 'utf-8', detection: 'utf-8-damaged' };
     }
-    return { text: decodeWith('windows-1252', bytes).replace(/^\uFEFF/, ''), encoding: 'windows-1252', detection: 'single-byte' };
+    const legacy = detectLegacyEncoding(bytes);
+    return { text: decodeWith(legacy, bytes).replace(/^\uFEFF/, ''), encoding: legacy, detection: legacy === 'windows-1252' ? 'single-byte' : 'legacy-script' };
+}
+
+const LETTER = /\p{L}/u;
+
+// What the non-ASCII characters of a decoding are: the script they belong to,
+// and how many letters stand in runs of non-ASCII letters (two or more), or in
+// whole words of them (three or more). Words of a non-Latin script are such
+// runs; a Western text's accents sit alone between ASCII letters ("Débit",
+// "Größe"), or in pairs at most ("ção").
+function scriptProfile(text) {
+    const p = { nonAscii: 0, kana: 0, cjk: 0, hangul: 0, fullwidth: 0, cyrillic: 0, cyrillicLower: 0, letters: 0, inRuns: 0, inWords: 0 };
+    let run = 0;
+    const endRun = () => {
+        if (run >= 2) p.inRuns += run;
+        if (run >= 3) p.inWords += run;
+        run = 0;
+    };
+    for (const ch of text) {
+        const u = ch.codePointAt(0);
+        if (u < 128) { endRun(); continue; }
+        p.nonAscii++;
+        if (u >= 0x3040 && u <= 0x30FF) p.kana++;
+        else if (u >= 0x4E00 && u <= 0x9FFF) p.cjk++;
+        else if (u >= 0xAC00 && u <= 0xD7AF) p.hangul++;
+        else if (u >= 0xFF00 && u <= 0xFFEF) p.fullwidth++;
+        else if (u >= 0x400 && u <= 0x4FF) {
+            p.cyrillic++;
+            if (ch !== ch.toUpperCase()) p.cyrillicLower++;
+        }
+        if (LETTER.test(ch)) {
+            p.letters++;
+            run++;
+        } else {
+            endRun();
+        }
+    }
+    endRun();
+    p.runRatio = p.letters ? p.inRuns / p.letters : 0;
+    p.wordRatio = p.letters ? p.inWords / p.letters : 0;
+    return p;
+}
+
+function tryDecode(label, bytes) {
+    try {
+        return new TextDecoder(label, { fatal: true }).decode(bytes);
+    } catch (_) {
+        return null;
+    }
+}
+
+
+/**
+ * The legacy encoding of a file that is neither UTF-8 nor UTF-16: Shift_JIS,
+ * EUC-KR (CP949), GBK, Big5, a Cyrillic code page (Windows-1251, DOS 866,
+ * KOI8-R), Windows-1250, or else Windows-1252.
+ *
+ * Every candidate is decoded and judged by what it produces, not by byte
+ * statistics: Japanese has kana, which GBK never yields from the same bytes;
+ * every reading must give words, runs of letters, since a Western "AÑO"
+ * decodes as GBK too, to one ideograph between Latin letters;
+ * Korean decodes to Hangul; a Cyrillic text is words of Cyrillic letters,
+ * which shows as runs of non-ASCII letters that a Western text never has; and
+ * Windows-1250 is chosen only on evidence that cannot be read the Western
+ * way (ł that 1252 reads as ³, the Slovak ý). Japanese, Chinese, Korean, Russian
+ * and Slovak PLC and SCADA exports used to arrive as Windows-1252 mojibake.
+ */
+export function detectLegacyEncoding(buffer) {
+    const all = toBytes(buffer);
+    let sample = all.subarray(0, 262144);
+    // End on a line break, so no multi-byte character is cut in half.
+    const lastBreak = sample.lastIndexOf(10);
+    if (lastBreak > 0 && sample.length < all.length) sample = sample.subarray(0, lastBreak);
+    let highBytes = 0;
+    for (let i = 0; i < sample.length; i++) if (sample[i] >= 0x80) highBytes++;
+    if (highBytes < 4) return 'windows-1252';
+
+    const sjis = tryDecode('shift_jis', sample);
+    if (sjis !== null) {
+        const p = scriptProfile(sjis);
+        if (p.kana > 0 && p.runRatio >= 0.5 && (p.kana + p.cjk + p.fullwidth) / Math.max(1, p.nonAscii) >= 0.9) return 'shift_jis';
+    }
+    const korean = tryDecode('euc-kr', sample);
+    if (korean !== null) {
+        const p = scriptProfile(korean);
+        // GB2312 bytes are valid EUC-KR too, half of them Hangul; the other
+        // half are Hanja, which Korean text hardly writes.
+        if (p.runRatio >= 0.5 && p.hangul / Math.max(1, p.nonAscii) >= 0.6
+            && p.cjk / Math.max(1, p.nonAscii) < 0.1) return 'euc-kr';
+    }
+    for (const label of ['gbk', 'big5']) {
+        const text = tryDecode(label, sample);
+        if (text === null) continue;
+        const p = scriptProfile(text);
+        if (p.runRatio >= 0.5 && p.cjk / Math.max(1, p.nonAscii) >= 0.85) return label;
+    }
+
+    // Cyrillic: the code page whose reading is words of Cyrillic letters.
+    // Read with the wrong one of the three, the same bytes give box-drawing
+    // symbols or letters scattered between them.
+    let cyrillic = null;
+    for (const label of ['windows-1251', 'ibm866', 'koi8-r']) {
+        const p = scriptProfile(new TextDecoder(label).decode(sample));
+        const share = p.cyrillic / Math.max(1, p.nonAscii);
+        if (share < 0.9 || p.wordRatio < 0.6) continue;
+        // Windows-1251 and KOI8-R both read Cyrillic letters from the same
+        // bytes, upper case in one where the other has lower case; text is
+        // mostly lower case.
+        const score = share + p.wordRatio + p.cyrillicLower / Math.max(1, p.cyrillic);
+        if (!cyrillic || score > cyrillic.score) cyrillic = { label, score };
+    }
+    if (cyrillic) return cyrillic.label;
+
+    const western = new TextDecoder('windows-1252').decode(sample);
+
+    // Windows-1250 or 1252. Most bytes the two read differently are letters
+    // in both (č or è, ř or ø), which says nothing. What does: a byte that is
+    // a letter in one and a symbol in the other (ł or ³, ą or ¹, ľ or ¾),
+    // and the shared letters one language family writes and the other does
+    // not: ý in Czech and Slovak, ç in French and Portuguese.
+    const central = new TextDecoder('windows-1250').decode(sample);
+    const a = [...central];
+    const b = [...western];
+    let centralEvidence = 0;
+    let westernEvidence = 0;
+    for (let i = 0; i < a.length && i < b.length; i++) {
+        const x = a[i];
+        const y = b[i];
+        if (x === y) {
+            if (x === 'ý' || x === 'Ý') centralEvidence++;
+            else if (x === 'ç' || x === 'Ç') westernEvidence++;
+            continue;
+        }
+        const xLetter = LETTER.test(x);
+        const yLetter = LETTER.test(y);
+        if (xLetter && !yLetter) centralEvidence++;
+        else if (yLetter && !xLetter) westernEvidence++;
+    }
+    if (centralEvidence >= 3 && centralEvidence > 2 * westernEvidence) return 'windows-1250';
+    return 'windows-1252';
 }
 
 // ---------------------------------------------------------------------------
@@ -338,15 +478,19 @@ export function detectCsvNumberFormat(rows, options = {}) {
             }
             if (matched) continue;
             // One separator, and a fraction that is not three digits long: the
-            // separator can only be the decimal one.
-            let m = cell.match(/^[+-]?\d*,(\d+)(?:[eE][+-]?\d+)?$/);
-            if (m && m[1].length !== 3 && delimiter !== ',') { decimalComma++; continue; }
-            m = cell.match(/^[+-]?\d*\.(\d+)(?:[eE][+-]?\d+)?$/);
-            if (m && m[1].length !== 3) { decimalDot++; continue; }
+            // separator can only be the decimal one. These are split cells, so
+            // a comma in a comma-delimited file was quoted: "2,0825" says
+            // decimal comma there as much as anywhere.
+            // Four digits or more before it ("46622,538") also rule out a
+            // thousands group, which holds three at most.
+            let m = cell.match(/^[+-]?(\d*),(\d+)(?:[eE][+-]?\d+)?$/);
+            if (m && (m[2].length !== 3 || m[1].length > 3)) { decimalComma++; continue; }
+            m = cell.match(/^[+-]?(\d*)\.(\d+)(?:[eE][+-]?\d+)?$/);
+            if (m && (m[2].length !== 3 || m[1].length > 3)) { decimalDot++; continue; }
             // "0,500" / "0.500": a leading zero is never a thousands group.
             m = cell.match(/^[+-]?0([.,])\d+$/);
             if (m) {
-                if (m[1] === ',' && delimiter !== ',') decimalComma++;
+                if (m[1] === ',') decimalComma++;
                 else if (m[1] === '.') decimalDot++;
             }
         }
@@ -381,8 +525,6 @@ export function detectCsvNumberFormat(rows, options = {}) {
             // into others, so auto stays and each cell is read on its own.
         }
     }
-    // Only commit to a decimal separator the delimiter leaves possible.
-    if (decimalSeparator === delimiter) decimalSeparator = 'auto';
     return {
         decimalSeparator,
         thousandsSeparator,

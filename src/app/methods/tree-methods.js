@@ -122,7 +122,8 @@ proto._selectedVariableNamesForDrag = function(varName) {
     const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
     return [...this.selectedVariables].filter(name => {
         const variable = data?.variables?.[name];
-        return variable && variable.plottable !== false && variable.dataType !== 'string';
+        return variable && variable.plottable !== false
+            && (variable.dataType !== 'string' || variable.kind === 'variable');
     });
 };
 
@@ -594,7 +595,10 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         itemDiv.className = 'tree-item' + (variable.derived ? ' tree-item-derived' : '');
         itemDiv.classList.toggle('tree-item-modified', !!variable.dataToolModified);
         itemDiv.classList.toggle('selected', !foreign && this.selectedVariables.has(variable.name));
-        const canPlot = variable.plottable !== false && variable.dataType !== 'string';
+        // A text series is plotted too, as a state band; text parameters and
+        // metadata leaves are not.
+        const isTextSeries = variable.dataType === 'string' && variable.kind === 'variable';
+        const canPlot = variable.plottable !== false && (variable.dataType !== 'string' || isTextSeries);
         itemDiv.classList.toggle('tree-item-nonplottable', !canPlot);
         itemDiv.setAttribute('draggable', canPlot ? 'true' : 'false');
         itemDiv.setAttribute('data-var-name', variable.name);
@@ -632,7 +636,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         }
 
         itemDiv.append(spacer, icon, label, info);
-        if (canPlot && variable.kind !== 'abscissa') {
+        if (canPlot && variable.kind !== 'abscissa' && !isTextSeries) {
             const inverted = this.plotManager.isVariableSignInverted(leafFileId, variable.name);
             const signToggle = document.createElement('button');
             signToggle.type = 'button';

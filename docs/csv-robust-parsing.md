@@ -25,7 +25,13 @@ the CSV readers now detect and repair, where it lives, and which tests pin it.
 3. Strict UTF-8. A character cut off by the end of a preview sample no longer
    counts against it; it used to turn the whole file into Windows-1252.
 4. UTF-8 with a few damaged bytes among many good multi-byte characters.
-5. Windows-1252 for everything else.
+5. A legacy code page (`detectLegacyEncoding`). Each candidate is decoded and
+   judged by the text it gives: kana for Shift_JIS, Hangul without Hanja for
+   EUC-KR, ideographs for GBK or Big5, whole Cyrillic words for Windows-1251,
+   DOS 866 or KOI8-R, and letters that 1252 would read as symbols (ł, ą) or
+   the Slovak ý for Windows-1250. Every reading must give runs of letters: a
+   Spanish "AÑO" also decodes as GBK, to one ideograph between Latin letters.
+6. Windows-1252 for everything else.
 
 The dialog offers 18 encodings and labels Auto with what it found, for example
 "Auto (UTF-16 LE)". Changing the encoding keeps every other setting.
@@ -86,6 +92,18 @@ next to the reader's own `decimalSeparator` and `thousandsSeparator`.
 `parseCsvNumber` also reads a custom decimal mark, thousands grouped by dot,
 comma, space, no-break space or apostrophe, and a typographic minus. Plain
 numbers take a fast path, which made `parse` about 20% faster on a 15 MB file.
+Spaces inside a number count only as thousands groups or after a sign:
+`0        299`, a fixed-width row cut at a comma, is not a number.
+
+With a comma delimiter, a comma inside a cell was quoted, so `"2,0825"` and
+`"-0,087"` are decimal commas (German and French exports). `"1,234"` stays
+unread on Auto until the file's number format says which it is. The dialog
+offers a decimal comma with a comma delimiter, and DuckDB reads it with
+`decimal_separator=','`. A separator after four digits or more (`46622,538`)
+is always decimal.
+
+Missing values: `NaN`, `NULL`, `None`, `N/A`, `#N/A` and runs of up to three
+dashes. They neither end a table nor turn a numeric column into text.
 
 ## Delimiter and quoting
 
@@ -108,6 +126,20 @@ now count as data when the delimiter is chosen; the French fixture
 `05_french_month_names_semicolon.csv` was read with the wrong delimiter before.
 A whitespace split whose cells still hold another delimiter is penalised.
 
+## Where the table starts
+
+`_detectTableRows` scores every row as a header over the data rows below it.
+These rules come from the real-world corpus (`bench/real-world/README.md`):
+
+- A row that holds only values, too few to look like data on its own (a time
+  with no reading yet), counts as data next to the table and is never a header.
+- A long run of rows with one number each, under a key/value preamble, is the
+  table (chromatographs, oscilloscope channels).
+- Up to three rows above a blank line, with words or gaps where the table below
+  has numbers, are settings: the data starts after the blank line.
+- One data row at the end of the file, under its header, is a table.
+- 12-hour clocks ("01:45:00 PM") count as dates.
+
 ## Dates
 
 - Fractions of a second after a comma: `13:05:22,123`.
@@ -116,6 +148,9 @@ A whitespace split whose cells still hold another delimiter is penalised.
   2024 10:00:00 +0100`, `lundi 1 janvier 2024 13:05`, `15 de enero de 2024`,
   `Jan 15 10:00:00 2024`.
 - UTC offsets on ISO and month-name dates.
+- A date that carries its own clock ("2022-02-01 01:00") is the time axis even
+  with an hour column beside it, unless a real date column and time column
+  pair up.
 - German and Dutch time headers: Zeit, Zeitstempel, Datum, Uhrzeit, tijd.
 
 `describeTimeSourcePattern` reads the pattern from the cells. The dialog shows

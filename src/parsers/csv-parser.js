@@ -915,6 +915,9 @@ export default class CsvParser {
         const cell = String(value ?? '').trim();
         if (!cell || isMissingNumberCell(cell) || /^(?:null|none|nil|n\/a|na|-)$/i.test(cell)) return true;
         if (cell.length > 200) return false;
+        // Two numbers with a column of spaces between them ("0        299")
+        // are two cells of a fixed-width row, split at the wrong character.
+        if (/\d\s{2,}[+-]?\d/.test(cell)) return false;
         if (Number.isFinite(parseCsvNumber(cell, delimiter))) return true;
         if (/^[-+]?[$€£¥]?\s?[-+]?\d[\d.,\s]*\s?[%$€£¥]?$/u.test(cell)) return true;
         if (this._looksLikeDateTimeCell(cell) || /^\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:\s*[AaPp][Mm])?$/.test(cell)) return true;
@@ -1143,6 +1146,8 @@ export default class CsvParser {
     _detectTableRows(rows, delimiter = ',') {
         const limit = Math.min(rows.length, 250);
         let best = null;
+        let lastWritten = rows.length - 1;
+        while (lastWritten >= 0 && !(rows[lastWritten] || []).some(cell => String(cell ?? '').trim() !== '')) lastWritten--;
 
         for (let headerIndex = 0; headerIndex < limit; headerIndex++) {
             const header = rows[headerIndex] || [];
@@ -1158,6 +1163,9 @@ export default class CsvParser {
             // therefore arrived as column_1..column_N with the names and the
             // units both thrown away.
             if (!header.some(cell => String(cell ?? '').trim() !== '')) continue;
+            // Nor does a row holding one value and nothing else, the time of
+            // a reading that is missing: it is a data row.
+            if (!this._isDataLikeRow(header, delimiter) && this._isSparseDataRow(header, delimiter)) continue;
             // Rows may end in empty cells the header does not have (a trailing
             // delimiter), or stop before header cells that are empty.
             const minWidth = minimumRowWidth(header);
@@ -1165,6 +1173,14 @@ export default class CsvParser {
             let dataStartIndex = -1;
             let dataCount = 0;
             let skippedAfterHeader = 0;
+            // Rows that hold only values, too few to be data-like on their
+            // own: "05.11.2023 00:10;" before sunrise, in a solar logger. Right
+            // under the header and right before the data, they are its first
+            // rows; anywhere else they are skipped like any other row.
+            let sparseStart = -1;
+            let sparseCount = 0;
+            let windowStart = -1;
+            let blankAfterShortBlock = false;
             // Two separate budgets, and the difference decides which row wins.
             // Looking for the data: at most 30 rows below the header, so a
             // header is never matched to a table far below it. Counting the
@@ -1186,27 +1202,72 @@ export default class CsvParser {
 
             for (let i = headerIndex + 1; i < rows.length; i++) {
                 const end = dataStartIndex < 0
-                    ? headerLookaheadEnd
-                    : Math.min(rows.length, dataStartIndex + 30);
+                    ? Math.min(rows.length, headerLookaheadEnd + sparseCount, headerIndex + 250)
+                    : Math.min(rows.length, Math.max(dataStartIndex + 30, windowStart + 1));
                 if (i >= end) break;
                 const row = fitCsvRowToWidth(rows[i] || [], width, { minWidth });
                 if (!row) {
-                    if (dataCount === 0) skippedAfterHeader++;
+                    if (dataCount > 0 && dataCount <= 3 && !(rows[i] || []).some(cell => String(cell ?? '').trim() !== '')) {
+                        blankAfterShortBlock = true;
+                    }
+                    if (dataCount === 0) {
+                        skippedAfterHeader += 1 + sparseCount;
+                        sparseStart = -1;
+                        sparseCount = 0;
+                    }
                     continue;
                 }
                 if (this._isDataLikeRow(row, delimiter)) {
-                    if (dataStartIndex < 0) dataStartIndex = i;
+                    // A few rows, a blank line, then the table: when the rows
+                    // above the blank leave empty or hold words where the
+                    // table holds numbers, they were settings ("Port 851",
+                    // "SampleTime[ms] 10") or a channel numbering, not data.
+                    if (blankAfterShortBlock) {
+                        blankAfterShortBlock = false;
+                        const block = [];
+                        for (let k = dataStartIndex; k < i; k++) {
+                            const earlier = fitCsvRowToWidth(rows[k] || [], width, { minWidth });
+                            if (earlier) block.push(earlier);
+                        }
+                        if (block.length && block.every(earlier => this._lacksValuesOf(earlier, row, delimiter))) {
+                            skippedAfterHeader += i - dataStartIndex;
+                            dataStartIndex = i;
+                            windowStart = i;
+                            dataCount = 1;
+                            continue;
+                        }
+                    }
+                    if (dataStartIndex < 0) {
+                        windowStart = i;
+                        dataStartIndex = sparseStart >= 0 ? sparseStart : i;
+                        dataCount = Math.min(sparseCount, 30);
+                    }
                     dataCount++;
                     continue;
                 }
+                if (this._isSparseDataRow(row, delimiter)) {
+                    if (dataStartIndex >= 0) {
+                        dataCount++;
+                    } else {
+                        if (sparseStart < 0) sparseStart = i;
+                        sparseCount++;
+                    }
+                    continue;
+                }
                 if (dataCount === 0) {
-                    skippedAfterHeader++;
+                    skippedAfterHeader += 1 + sparseCount;
+                    sparseStart = -1;
+                    sparseCount = 0;
                     continue;
                 }
                 break;
             }
 
-            if (dataStartIndex < 0 || dataCount < 2) continue;
+            // One data row is a table only when it ends the file under its
+            // header: a status table that logs one record (Campbell TOA5).
+            // Anywhere else one row can be a line of settings.
+            const loneFinalRow = dataCount === 1 && dataStartIndex === lastWritten && dataStartIndex > headerIndex;
+            if (dataStartIndex < 0 || (dataCount < 2 && !loneFinalRow)) continue;
             const following = rows.slice(dataStartIndex, Math.min(rows.length, dataStartIndex + 6));
             let effectiveHeaderIndex = headerIndex;
             let effectiveHeader = header;
@@ -1231,11 +1292,31 @@ export default class CsvParser {
                 effectiveSkippedAfterHeader * 2;
 
             if (!best || score > best.score) {
-                best = { headerIndex: effectiveHeaderIndex, dataStartIndex, hasHeader, score };
+                best = { headerIndex: effectiveHeaderIndex, dataStartIndex, hasHeader, score, dataCount };
             }
         }
 
+        // One value per line under a key/value preamble (a chromatograph's
+        // export, an oscilloscope channel): no row has two values, so no
+        // table above is the data. A long run of such rows, much longer than
+        // the best table found, is.
+        const single = this._singleValueRun(rows, delimiter);
+        if (single && single.length >= 20 && (!best || single.length >= 3 * best.dataCount)) {
+            const above = rows[single.start - 1];
+            const aboveCells = (above || []).filter(cell => String(cell ?? '').trim() !== '');
+            const named = aboveCells.length === 1 && !Number.isFinite(parseCsvNumber(aboveCells[0], delimiter))
+                && (above || []).length === (rows[single.start] || []).length;
+            const table = {
+                headerIndex: named ? single.start - 1 : single.start,
+                dataStartIndex: single.start,
+                hasHeader: named,
+                score: 0,
+            };
+            table.unitRowIndex = null;
+            return table;
+        }
         if (best) {
+            delete best.dataCount;
             best.unitRowIndex = this._findUnitRowIndex(rows, best, delimiter);
             return best;
         }
@@ -1284,10 +1365,52 @@ export default class CsvParser {
         return dataCount >= Math.max(2, Math.ceil(nonEmpty.length * 0.5));
     }
 
+    // Whether a row is empty or not a number in a column where a data row
+    // holds a number.
+    _lacksValuesOf(row, dataRow, delimiter = ',') {
+        for (let c = 0; c < dataRow.length; c++) {
+            if (!Number.isFinite(parseCsvNumber(dataRow[c], delimiter))) continue;
+            const cell = String(row[c] ?? '').trim();
+            if (!cell || !Number.isFinite(parseCsvNumber(cell, delimiter))) return true;
+        }
+        return false;
+    }
+
+    // The longest run of rows with exactly one cell written, a number.
+    _singleValueRun(rows, delimiter = ',') {
+        let best = null;
+        let start = -1;
+        let width = -1;
+        const close = (end) => {
+            if (start >= 0 && (!best || end - start > best.length)) best = { start, length: end - start };
+            start = -1;
+        };
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i] || [];
+            const written = row.filter(cell => String(cell ?? '').trim() !== '');
+            const value = written.length === 1 && (Number.isFinite(parseCsvNumber(written[0], delimiter)) || isMissingNumberCell(written[0]));
+            if (value && start >= 0 && row.length === width) continue;
+            close(i);
+            if (value) { start = i; width = row.length; }
+        }
+        close(rows.length);
+        return best;
+    }
+
+    // A row that holds nothing but values, fewer than a data-like row needs:
+    // a time and an empty reading, one number between empty cells.
+    _isSparseDataRow(row, delimiter = ',') {
+        const nonEmpty = (row || []).filter(cell => String(cell ?? '').trim() !== '' && !isMissingNumberCell(cell));
+        if (!nonEmpty.length) return false;
+        return nonEmpty.every(cell => Number.isFinite(parseCsvNumber(cell, delimiter)) || this._looksLikeDateTimeCell(cell));
+    }
+
     _looksLikeDateTimeCell(value) {
         const text = String(value ?? '').trim();
         return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s?(?:Z|[+\-]\d{2}(?::?\d{2})?)?)?$/.test(text)
-            || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?$/.test(text)
+            // "10/13/23 01:45:00 PM": HOBO and other US loggers write a
+            // 12-hour clock.
+            || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:\s?[AaPp]\.?[Mm]\.?)?)?$/.test(text)
             || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?$/.test(text)
             || /^(?:\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})|\d{4}\.\d{1,2}\.\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?$/.test(text)
             // "09-Janvier-2024 07:05:08", "Mon, 15 Jan 2024": without this a
