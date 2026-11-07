@@ -1,11 +1,11 @@
-// Guards the four language blocks (en/fr/es/it) against drift: every key must
+// Guards the five language blocks (en/fr/es/it/zh) against drift: every key must
 // exist in every language with a non-empty value, and no language may carry an
 // extra key. Also spot-checks the time-axis keys added on this branch.
 import assert from 'node:assert/strict';
 import translations from '../src/i18n/translations.js';
 
 const langs = Object.keys(translations);
-assert.deepEqual(langs.sort(), ['en', 'es', 'fr', 'it'], 'exactly the four expected languages');
+assert.deepEqual(langs.sort(), ['en', 'es', 'fr', 'it', 'zh'], 'exactly the five expected languages');
 
 const keySets = Object.fromEntries(langs.map(l => [l, new Set(Object.keys(translations[l]))]));
 const reference = keySets.en;
