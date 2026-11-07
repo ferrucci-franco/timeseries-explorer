@@ -68,6 +68,9 @@
 /test-files/csv/correlation-large.csv
 /test-files/csv/missing-large.csv
 /test-files/csv/temporal-profile-lazy*/
+# Real-world CSV/text exports from instruments, PLCs, loggers (parser benchmark corpus).
+!/test-files/csv-real-world/
+!/test-files/csv-real-world/**
 !/test-files/excel/
 !/test-files/excel/**
 !/test-files/parquet/
