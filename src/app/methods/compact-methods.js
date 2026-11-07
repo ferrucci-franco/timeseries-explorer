@@ -182,6 +182,7 @@ export function installCompactMethods(ViewerClass) {
             landscape: false,
             override,
             sheet: null,          // id of the open sheet
+            lastSheet: null,      // the one hidden most recently: what the edge pill brings back
             sheetSize: 'half',    // 'half' | 'full'
             pages: [],            // [{ title, node, onClose }], top is shown
             historyEntries: 0,    // history entries this layout pushed
@@ -369,7 +370,15 @@ export function installCompactMethods(ViewerClass) {
         this._compactSheetBody = el('div', 'compact-sheet-body');
         sheet.append(handle, header, this._compactSheetBody);
 
-        document.body.append(appBar, sheet, nav);
+        // Sideways, the sheet is hidden with a chevron that sends it off the
+        // right edge, and the rail that brings it back is on the far left: a
+        // pill on that same right edge, where the hand already is, brings the
+        // hidden sheet back. Upright the chevron points down at the bar it
+        // goes to, so the bar is the way back and the pill stays away.
+        this._compactSheetRestoreBtn = button('compact-sheet-restore', '', () => this._restoreCompactSheet(), { icon: SVG.back, title: i18n.t('compactShowSheet') });
+        this._compactSheetRestoreBtn.hidden = true;
+
+        document.body.append(appBar, sheet, nav, this._compactSheetRestoreBtn);
         this._compactAppBar = appBar;
         this._compactNav = nav;
         this._compactSheet = sheet;
@@ -472,6 +481,8 @@ export function installCompactMethods(ViewerClass) {
         root.classList.toggle('compact-landscape', want && landscape);
         this._syncCompactSizeButton?.();
         if (!changed) {
+            // Turned, the hidden sheet's pill appears or goes with the rail.
+            if (turned) this._syncCompactSheetRestore?.();
             if (want && turned) {
                 this._resetCompactZoom();
                 if (this._compact.sheet) this._applyCompactSheetSize();
@@ -498,6 +509,7 @@ export function installCompactMethods(ViewerClass) {
             document.querySelectorAll('.layout-panel.compact-active-panel').forEach(node => node.classList.remove('compact-active-panel'));
             document.querySelectorAll('.layout-split-child.compact-path').forEach(node => node.classList.remove('compact-path'));
         }
+        this._syncCompactSheetRestore();
         this._scheduleCompactResize(0);
     };
 
@@ -600,6 +612,8 @@ export function installCompactMethods(ViewerClass) {
         this._compactBackBtn.setAttribute('aria-label', i18n.t('compactBack'));
         this._compactCloseBtn.title = i18n.t('compactHide');
         this._compactCloseBtn.setAttribute('aria-label', i18n.t('compactHide'));
+        this._compactSheetRestoreBtn.title = i18n.t('compactShowSheet');
+        this._compactSheetRestoreBtn.setAttribute('aria-label', i18n.t('compactShowSheet'));
         this._syncCompactSizeButton();
         const exampleLabel = this._compactEmptyExample?.querySelector('.compact-btn-label');
         if (exampleLabel) exampleLabel.textContent = i18n.t('compactTryExample');
@@ -850,6 +864,7 @@ export function installCompactMethods(ViewerClass) {
         }
         this._compactSheet.hidden = false;
         document.documentElement.classList.add('compact-sheet-open');
+        this._syncCompactSheetRestore();
         this._applyCompactSheetSize();
         this._compactNavButtons.forEach((btn, key) => btn.setAttribute('aria-pressed', String(key === id)));
         this._renderCompactSheetContent({ force: true });
@@ -862,12 +877,14 @@ export function installCompactMethods(ViewerClass) {
     proto._closeCompactSheet = function({ fromHistory = false, silent = false } = {}) {
         if (!this._compact?.sheet) return;
         this._releaseCompactPages({ unwind: false });
+        this._compact.lastSheet = this._compact.sheet;
         this._compact.sheet = null;
         this._compactSheet.classList.remove('is-shown');
         this._compactSheet.hidden = true;
         document.documentElement.classList.remove('compact-sheet-open', 'compact-sheet-full');
         document.querySelector('.main-container')?.removeAttribute('inert');
         this._compactNavButtons.forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+        this._syncCompactSheetRestore();
         // The cursors' reading in the app bar says the sheet is gone.
         this._compactSyncCursorChip();
         if (!fromHistory) this._unwindCompactHistory();
@@ -879,6 +896,28 @@ export function installCompactMethods(ViewerClass) {
                 try { opener.focus({ preventScroll: true }); } catch (_) { /* nothing to return to */ }
             }
         }
+    };
+
+    // The pill on the right edge, sideways, while a sheet is hidden. It needs
+    // something to bring back: before any sheet was opened the rail is the
+    // only way in, and the pill would only point at nothing.
+    proto._syncCompactSheetRestore = function() {
+        const btn = this._compactSheetRestoreBtn;
+        if (!btn || !this._compact) return;
+        const show = this._compact.active && this._compact.landscape && !this._compact.sheet && !!this._compact.lastSheet;
+        btn.hidden = !show;
+    };
+
+    proto._restoreCompactSheet = function() {
+        const id = this._compact?.lastSheet;
+        if (!id || !this._compact.active) return;
+        // The cursors' sheet only exists while the cursors are on; gone, the
+        // Analyze sheet that holds them is the nearest place.
+        if (id === 'cursors' && !this.plotManager._anyCursorEnabled?.(this.plotManager.plots.get(this._compactActivePanelId()))) {
+            this._openCompactSheet('analyze', { toggle: false });
+            return;
+        }
+        this._openCompactSheet(id, { toggle: false });
     };
 
     proto._toggleCompactSheetSize = function() {

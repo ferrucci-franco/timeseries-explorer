@@ -616,6 +616,36 @@ try {
     assert.equal(await page.evaluate(() => window.app.plotManager._anyCursorEnabled(window.app.plotManager.plots.get(window.app._compactActivePanelId()))), true,
         'rotating kept the cursors');
     assert.match(await page.locator('.compact-cursor-chip').innerText(), /Δ/, 'and their reading');
+
+    // ── Sideways, a hidden sheet leaves a pill on the right edge ────────────
+    // The Hide chevron sends the side sheet off the right edge; the rail is on
+    // the far left. The pill on the right brings the same sheet back.
+    const restore = page.locator('.compact-sheet-restore');
+    await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'analyze');
+    assert.equal(await restore.isVisible(), false, 'while a sheet is open there is nothing to bring back');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    assert.equal(await restore.isVisible(), true, 'hidden sideways, the sheet leaves a pill on the right edge');
+    {
+        const box = await restore.boundingBox();
+        const view = page.viewportSize();
+        assert.ok(box.x + box.width >= view.width - 1, 'the pill sits on the right edge, where the sheet went');
+        assert.ok(box.height >= 44, 'and is tall enough for a finger');
+        assert.equal(await restore.getAttribute('aria-label'), 'Show the panel');
+    }
+    await shot(page, 'landscape-restore');
+    await restore.click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'analyze');
+    assert.equal(await restore.isVisible(), false, 'a tap brings the same sheet back, and the pill goes');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => !document.documentElement.classList.contains('compact-landscape'));
+    assert.equal(await restore.isVisible(), false, 'upright, the bottom bar is the way back: no pill');
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.waitForFunction(() => document.documentElement.classList.contains('compact-landscape'));
+    assert.equal(await restore.isVisible(), true, 'turned sideways again, the pill is back');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForFunction(() => !document.documentElement.classList.contains('compact-landscape'));
 
