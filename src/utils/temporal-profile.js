@@ -80,6 +80,8 @@ function nextUtcYear(ms) {
  * @returns {{ edgesMs: number[], years: number[] }|null}
  */
 export function multiYearBinEdges(startMs, endMs) {
+    // No span (nothing in scope) is no years — not the year of epoch 0.
+    if (startMs == null || endMs == null) return null;
     const lo = Number(startMs);
     const hi = Number(endMs);
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;

@@ -4,6 +4,7 @@ import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { hoverNumberFormat } from '../../utils/hover-precision.js';
 import { distinguishingParameterNames, runParameterLabel } from '../../utils/run-parameters.js';
 import { countDistinctPositions, sampleMarkersVisible, SAMPLE_POSITION_SCAN_LIMIT } from '../../utils/sample-markers.js';
+import { quoteIdent, rowIndexWindow } from '../../data/lazy-tool-sql.js';
 
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 
@@ -601,6 +602,104 @@ proto._generatedIndexDisplayTime = function(fileId, rowIndex, timeVar = null) {
         return originMs + row * this._indexTimeStepSeconds(fileId) * 1000;
     }
     return mode === 'index' ? row : row * this._indexTimeStepSeconds(fileId);
+};
+
+// The calendar axis of a lazy file as the panel shows it, in epoch ms, as SQL
+// over the file's rows: what the exact calendar analyses (heatmap, temporal
+// profile) bucket by in DuckDB instead of reading the rows. Mirrors
+// _timeDisplayValueForVar, operation for operation, for the axes shown as a
+// calendar: a datetime column shown as calendar dates; a generated axis stepped
+// from an origin date (origin + row × Δt; the row a window over the file's rows,
+// numbered as streamColumns numbers them); a numeric axis promoted to a
+// calendar (origin + seconds × 1000). Returns { sql, windows } — the windows
+// the SQL reads, for the query's FROM — or null when the axis is not shown as a
+// calendar (a plain index, elapsed time, numeric seconds).
+proto._lazyCalendarTimeSql = function(fileId) {
+    const data = this.files.get(fileId)?.data;
+    const source = data?._duckdb?.source;
+    if (!source) return null;
+    const literal = (value) => `(${String(Number(value))})::DOUBLE`;
+    const timeVar = this._getTimeVar(fileId);
+    if (this._isGeneratedIndexTime(fileId, timeVar)) {
+        if (!this._isGeneratedCalendarTime(fileId, timeVar)) return null;
+        const row = rowIndexWindow();
+        const step = this._indexTimeStepSeconds(fileId);
+        // _generatedIndexDisplayTime: row × Δt in seconds when the step is
+        // below a millisecond, otherwise the origin plus row × Δt × 1000.
+        const sql = this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)
+            ? `(${quoteIdent(row.column)} * ${literal(step)})`
+            : `(${literal(this._timeOriginMsForVar(fileId, timeVar))} + ((${quoteIdent(row.column)} * ${literal(step)}) * 1000))`;
+        return { sql, windows: [row] };
+    }
+    const raw = source.timeValueSql?.(data);
+    if (!raw) return null;
+    if (this._isNumericCalendarAxis(fileId, timeVar)) {
+        return { sql: `(${literal(this._timeOriginMsForVar(fileId, timeVar))} + (${raw}) * 1000)`, windows: [] };
+    }
+    if (timeVar?.timeKind !== 'datetime' || this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return null;
+    return { sql: raw, windows: [] };
+};
+
+// The time extent of a lazy file as the panel shows it, transformed as its
+// rows are (_transformFetchedPhaseTrajectory on the first and last row): the
+// overview in memory is a sample of the rows and may not reach the ends the
+// file does, and on an axis generated from the row number its positions are
+// not the file's. Null when it cannot be told (a generated axis with no row
+// count). What the histogram, heatmap and temporal profile take as the domain
+// of a lazy trace.
+proto._lazyTimeExtent = function(fileId) {
+    const data = this.files.get(fileId)?.data;
+    const meta = data?._duckdb;
+    if (!meta) return null;
+    const start = Number(data.metadata?.timeStart);
+    const end = Number(data.metadata?.timeEnd);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    const rows = Number(meta.totalRows);
+    const rowIndex = Float64Array.from([0, Number.isFinite(rows) && rows > 0 ? rows - 1 : NaN]);
+    const transformed = this._transformFetchedPhaseTrajectory(fileId, Float64Array.from([start, end]), rowIndex, new Map(), []);
+    return transformed.time.length ? transformed.time : null;
+};
+
+// Whether a lazy file's rows must be counted before its axis can be placed: a
+// CSV opened as a view is not counted when it loads (one more scan of the
+// file), and an axis generated from the row number needs the count to put the
+// overview's samples and the file's last row where they are.
+proto._needsLazyRowCount = function(fileId) {
+    const data = this.files.get(fileId)?.data;
+    const meta = data?._duckdb;
+    if (!meta) return false;
+    const rows = Number(meta.totalRows);
+    if (Number.isFinite(rows) && rows > 0) return false;
+    return this._isGeneratedIndexTime(fileId);
+};
+
+// Count the rows of a lazy file once (COUNT over the rows every lazy query
+// serves) and keep the count in its metadata; the transform cache is dropped so
+// the overview's row positions are recomputed from it. Resolves to the count,
+// or null when it cannot be had. One count at a time per file.
+proto._ensureLazyRowCount = function(fileId) {
+    const entry = this.files.get(fileId);
+    const data = entry?.data;
+    const meta = data?._duckdb;
+    if (!meta) return Promise.resolve(null);
+    const known = Number(meta.totalRows);
+    if (Number.isFinite(known) && known > 0) return Promise.resolve(known);
+    if (!meta._rowCountPromise) {
+        const source = meta.source;
+        meta._rowCountPromise = Promise.resolve()
+            .then(() => source.aggregateOver(source.passSql(data, [], 'TRUE'), 'COUNT(*)::BIGINT AS n'))
+            .then(({ n }) => {
+                if (!Number.isFinite(n) || n <= 0) return null;
+                if (this.files.get(fileId)?.data === data) {
+                    meta.totalRows = n;
+                    entry._transformCache = null;
+                }
+                return n;
+            })
+            .catch(() => null)
+            .finally(() => { meta._rowCountPromise = null; });
+    }
+    return meta._rowCountPromise;
 };
 
 proto._approxRowIndexFromSourceTime = function(fileId, rawTime, fallbackIndex = null) {
