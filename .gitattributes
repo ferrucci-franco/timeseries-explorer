@@ -16,3 +16,8 @@
 # defaults to autocrlf=true and hid this on the ordinary clone path; this makes
 # it true on every path instead of by luck.
 *.bat text eol=crlf
+
+# Real-world parser corpus: the bytes are the test. CRLF, CR CR LF, UTF-16, CP1251,
+# Shift-JIS and BOMs must reach the parser exactly as the instrument wrote them, so
+# git must not normalise anything in the data folders (README/manifest stay LF).
+/test-files/csv-real-world/*/** -text
