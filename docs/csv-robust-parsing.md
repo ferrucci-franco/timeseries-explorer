@@ -54,8 +54,25 @@ empty. Other short rows are left out by default. With the profile setting
 and their missing cells load as empty values. In DuckDB that setting maps to
 `null_padding=true`; DuckDB 1.4 already accepts trailing empty cells by itself.
 
+A header that ends in a delimiter over empty columns loses those columns
+(`trimmedTableWidth`), so no unnamed empty variable appears.
+
 A row with a different width no longer blocks Apply in the dialog. It is red in
 the preview and counted in a warning.
+
+## Line endings
+
+`detectLineEnding` looks at the lines from the first data row on. When they end
+in CRLF, the DuckDB readers pass `new_line='\r\n'`. Without it DuckDB skipped
+the wrong number of lines, or failed, when the preamble mixed LF and CRLF, and
+the preamble and the header were read as data. Building-management exports
+write files like that.
+
+## Units in headers
+
+On Auto, brackets hold a unit only when they hold one or two words: "(kW.h)"
+is a unit, and "(vierge si fiable)" stays part of the name. A bracket format
+chosen by hand in the dialog takes whatever the brackets hold.
 
 ## Number format
 

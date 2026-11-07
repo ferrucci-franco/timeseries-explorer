@@ -83,6 +83,20 @@ try {
         ]);
     });
 
+    // A GTB export: the preamble mixes LF and CRLF, which made DuckDB skip
+    // two lines too few and read the header as data.
+    await convert('gtb', '"Nom du point - CPT03",,,\nValeur min. - 8597  (kW.h),,,\n'
+        + '"zone - Etage RDC",,,\r\nURL,=HYPERLINK("https://10.6.40.1/x"),,\r\n'
+        + 'Horodatage,Valeur des données (kW.h),Fiabilité (vierge si fiable),\r\n'
+        + '"1 octobre 2026 00:00:00","8\u00A0597","",,\r\n'
+        + '"1 octobre 2026 00:01:00","8\u00A0598","",,\r\n'
+        + '"1 octobre 2026 00:02:00","8\u00A0601","",,\r\n', rows => {
+        assert.equal(rows.length, 3);
+        assert.deepEqual(Object.keys(rows[0]), ['Horodatage', 'Valeur des données', 'Fiabilité (vierge si fiable)']);
+        assert.deepEqual(rows.map(row => row['Valeur des données']), [8597, 8598, 8601]);
+        assert.equal(typeof rows[0]['Fiabilité (vierge si fiable)'] === 'string', false, 'an empty column is not text');
+    });
+
     await convert('pipe', 'time|a|b\n0|1|2\n1|3|4\n2|5|6\n', (rows, profile) => {
         assert.equal(profile.delimiter, '|');
         assert.deepEqual(rows.map(row => row.b), [2, 4, 6]);

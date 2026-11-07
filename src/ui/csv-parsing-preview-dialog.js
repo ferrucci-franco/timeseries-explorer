@@ -10,6 +10,7 @@ import {
     dateSeparatorForStrategy,
     describeTimeSourcePattern,
     detectCsvTimeAxis,
+    looksLikeUnitText,
     parseCsvNumber,
     parseCsvTimeValue,
 } from '../parsers/csv-time-detection.js';
@@ -21,6 +22,7 @@ import {
     normalizeDecimalSeparator,
     normalizeRaggedRowPolicy,
     normalizeThousandsSeparator,
+    trimmedTableWidth,
 } from '../parsers/csv-text-normalize.js';
 import {
     normalizeCsvGrouping,
@@ -795,6 +797,9 @@ function parseInlineUnitHeader(rawHeader, index, format = 'auto') {
         if (!match) continue;
         const name = String(match[1] || '').trim() || fallback;
         const unit = String(match[2] || '').trim();
+        // On Auto, a phrase in brackets ("vierge si fiable") is part of the
+        // name; a format the reader picked takes whatever the brackets hold.
+        if (format === 'auto' && !looksLikeUnitText(unit)) continue;
         if (unit) return { name, description: `[${unit}]`, unit };
     }
     return { name: raw || fallback, description: '', unit: '' };
@@ -2000,6 +2005,15 @@ export default class CsvParsingPreviewDialog {
             : (sourceHeaderRow || []).map((_cell, index) => `column_${index + 1}`);
         if (!isStartSample && previousHeaders.length) rawHeaders = previousHeaders.map(cell => String(cell ?? '').trim());
         rawHeaders = rawHeaders.filter((_cell, index) => index < (sourceHeaderRow?.length || 0));
+        if (isStartSample && hasHeader) {
+            // A header ending in a delimiter over empty columns: those are
+            // not columns, as the parser decides (trimmedTableWidth).
+            const dataCells = previewEntries
+                .filter(entry => !entry.isEmpty && entry.logicalIndex >= dataStartIndex)
+                .map(entry => entry.row);
+            const width = trimmedTableWidth(rawHeaders, dataCells);
+            if (width < rawHeaders.length) rawHeaders = rawHeaders.slice(0, width);
+        }
         const usesGeneratedIndex = this.state.timeMode === 'index';
         if (rawHeaders.length < 1) {
             messages.push('Header/data row must expose at least one column.');

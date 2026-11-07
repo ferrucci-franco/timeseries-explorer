@@ -12,7 +12,7 @@
  * numeric files are also supported; column names are generated automatically.
  */
 import MatParser from './mat-parser.js';
-import { detectCsvTimeAxis, isMonthNameDateCell, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
+import { detectCsvTimeAxis, isMonthNameDateCell, looksLikeUnitText, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 import { columnSampleCounts, forcedColumnTypes, isMissingNumberCell, isMostlyNumericColumn } from './csv-column-types.js';
 import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
 import { buildCsvTree, resolveCsvGrouping } from './csv-tree-grouping.js';
@@ -20,6 +20,8 @@ import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
 import {
     csvNumberFormat,
     decodeCsvBytes,
+    detectLineEnding,
+    trimmedTableWidth,
     detectCsvNumberFormat,
     fitCsvRowToWidth,
     fitCsvTableRows,
@@ -98,14 +100,15 @@ export default class CsvParser {
         const table = this._detectTableRows(rows, delimiter);
         const hasHeader = table.hasHeader;
         const headerRow = rows[table.headerIndex] || [];
-        const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
+        let rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
         if (rawHeaders.length < 1) throw new Error('CSV must contain at least one column.');
 
         const fitted = fitCsvTableRows(rows, table.dataStartIndex, headerRow);
-        const dataRows = fitted.rows;
+        let dataRows = fitted.rows;
         if (dataRows.length < 1) {
             throw new Error('CSV must contain at least one data row.');
         }
+        ({ rawHeaders, dataRows } = this._withoutEmptyTrailingColumns(rawHeaders, dataRows));
         const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
         if (!timeSource.ok) throw new Error(timeSource.reason);
@@ -304,14 +307,19 @@ export default class CsvParser {
         const table = this._detectTableRows(rows, delimiter);
         const hasHeader = table.hasHeader;
         const headerRow = rows[table.headerIndex] || [];
-        const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
+        let rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
         if (rawHeaders.length < 1) throw new Error('CSV sample must contain at least one column.');
 
         const fitted = fitCsvTableRows(rows, table.dataStartIndex, headerRow);
-        const dataRows = fitted.rows;
+        let dataRows = fitted.rows;
         if (dataRows.length < 1) {
             throw new Error('CSV sample must contain at least one data row.');
         }
+        const fullWidth = rawHeaders.length;
+        ({ rawHeaders, dataRows } = this._withoutEmptyTrailingColumns(rawHeaders, dataRows));
+        // Cells the rows carry past the table's width, now counting the
+        // unnamed empty columns just dropped.
+        const trailingEmptyCells = Math.max(fitted.trailingEmpty, 0) + (fullWidth - rawHeaders.length);
 
         const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
@@ -328,7 +336,8 @@ export default class CsvParser {
             // the profile (worker, DuckDB, the converter) applies the same.
             ...(decoded.removedChars ? { removedInvisibleChars: decoded.removedChars } : {}),
             detectedNumberFormat,
-            ...(fitted.trailingEmpty ? { trailingEmptyCells: fitted.trailingEmpty } : {}),
+            ...(trailingEmptyCells ? { trailingEmptyCells } : {}),
+            lineEnding: detectLineEnding(text, table.dataStartIndex),
             ...(fitted.dropped ? { sampleColumnCountMismatches: fitted.dropped } : {}),
             hasHeader,
             headerIndex: table.headerIndex,
@@ -742,6 +751,16 @@ export default class CsvParser {
             encoding: decoded.encoding,
             detection: decoded.detection,
             removedChars: sanitized.removed,
+        };
+    }
+
+    // A header ending in a delimiter, over columns that are empty: dropped.
+    _withoutEmptyTrailingColumns(rawHeaders, dataRows) {
+        const width = trimmedTableWidth(rawHeaders, dataRows);
+        if (width >= rawHeaders.length) return { rawHeaders, dataRows };
+        return {
+            rawHeaders: rawHeaders.slice(0, width),
+            dataRows: dataRows.map(row => row.slice(0, width)),
         };
     }
 
@@ -1236,6 +1255,8 @@ export default class CsvParser {
             if (!match) continue;
             const name = this._sanitizeHeaderName(match[1], fallback);
             const unit = String(match[2] || '').trim();
+            // As in the parsing dialog: on Auto, a phrase is part of the name.
+            if (format === 'auto' && !looksLikeUnitText(unit)) continue;
             // `unit` travels alongside the description so the caller can ask
             // whether a unit was taken at all (inlineUnitSplitCollides).
             if (unit) return { name, description: `[${unit}]`, unit };
@@ -1249,7 +1270,7 @@ export default class CsvParser {
         if (!raw) return { name: fallback, description: '', unit: '' };
 
         const bracketUnit = raw.match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
-        if (bracketUnit) {
+        if (bracketUnit && looksLikeUnitText(bracketUnit[2])) {
             return {
                 name: this._sanitizeHeaderName(bracketUnit[1], fallback),
                 description: `[${bracketUnit[2].trim()}]`,
@@ -1258,7 +1279,7 @@ export default class CsvParser {
         }
 
         const parenUnit = raw.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
-        if (parenUnit) {
+        if (parenUnit && looksLikeUnitText(parenUnit[2])) {
             return {
                 name: this._sanitizeHeaderName(parenUnit[1], fallback),
                 description: `[${parenUnit[2].trim()}]`,

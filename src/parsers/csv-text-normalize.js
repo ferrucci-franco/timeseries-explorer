@@ -491,3 +491,49 @@ export function fitCsvTableRows(rows, startIndex, headerRow, options = {}) {
     }
     return { rows: out, dropped, repaired, trailingEmpty };
 }
+
+/**
+ * The header's width without trailing columns that have neither a name nor
+ * a value: a header ending in a delimiter ("Horodatage,Valeur,Fiabilite,")
+ * otherwise adds an empty, unnamed variable to every file a GTB exports.
+ */
+export function trimmedTableWidth(headerRow, dataRows) {
+    let width = (headerRow || []).length;
+    while (width > 1 && isBlankCell(headerRow[width - 1])
+        && (dataRows || []).every(row => isBlankCell(row?.[width - 1]))) {
+        width--;
+    }
+    return width;
+}
+
+/**
+ * How the data rows end their lines, from the first data line on:
+ * 'crlf', 'lf', 'cr', or 'mixed'. DuckDB needs to be told when it
+ * is CRLF and the lines above the table do not all agree: it counts the
+ * lines to skip differently, or fails, when a preamble mixes LF and CRLF.
+ */
+export function detectLineEnding(text, fromLine = 0) {
+    const source = String(text ?? '');
+    // The data region: past `fromLine` line breaks (the preamble and header).
+    let start = 0;
+    for (let seen = 0; seen < fromLine && start < source.length; start++) {
+        const c = source.charCodeAt(start);
+        if (c === 10 || (c === 13 && source.charCodeAt(start + 1) !== 10)) seen++;
+    }
+    const tail = source.slice(start, start + 65536);
+    let crlf = 0;
+    let lf = 0;
+    let cr = 0;
+    for (let i = 0; i < tail.length; i++) {
+        const c = tail.charCodeAt(i);
+        if (c === 13) {
+            if (tail.charCodeAt(i + 1) === 10) { crlf++; i++; } else cr++;
+        } else if (c === 10) {
+            lf++;
+        }
+    }
+    if (crlf && !lf && !cr) return 'crlf';
+    if (lf && !crlf && !cr) return 'lf';
+    if (cr && !crlf && !lf) return 'cr';
+    return crlf || lf || cr ? 'mixed' : 'lf';
+}

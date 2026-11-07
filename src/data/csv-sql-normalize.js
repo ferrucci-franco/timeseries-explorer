@@ -79,7 +79,13 @@ export function csvNumericCastSql(expr, profile = null) {
  * chose to keep them ('pad'), and then their missing cells are NULL.
  */
 export function csvReadRepairOptions(profile) {
-    return profile?.raggedRows === 'pad' ? ['null_padding=true'] : [];
+    const options = [];
+    if (profile?.raggedRows === 'pad') options.push('null_padding=true');
+    // Data lines ending in CRLF: said explicitly. Left to itself, DuckDB
+    // skipped the wrong number of lines (or failed) when the lines above the
+    // table mixed LF and CRLF, and the preamble and header became data.
+    if (profile?.lineEnding === 'crlf') options.push("new_line='\\r\\n'");
+    return options;
 }
 
 /**

@@ -606,16 +606,27 @@ function scoreHeader(norm) {
 //   "Voltage [V]"     -> { name: 'Voltage', description: '[V]' }
 //   "speed (km/h)"    -> { name: 'speed',   description: '[km/h]' }
 //   ""                -> { name: fallback, description: '' }
+/**
+ * Whether the text in a header's brackets reads as a unit. "kW.h", "m/s",
+ * "°C", "deg C" do; "vierge si fiable" ("blank if reliable", a note a GTB
+ * export puts after Fiabilité) does not: three words or more are a phrase,
+ * and the header keeps them as part of its name.
+ */
+export function looksLikeUnitText(text) {
+    const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+    return words.length > 0 && words.length <= 2;
+}
+
 function parseHeader(rawHeader, fallbackIndex) {
     const fallback = fallbackIndex === 0 ? 'time' : `column_${fallbackIndex + 1}`;
     const raw = String(rawHeader ?? '').trim();
     if (!raw) return { name: fallback, description: '' };
 
     let m = raw.match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
-    if (m) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
+    if (m && looksLikeUnitText(m[2])) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
 
     m = raw.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
-    if (m) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
+    if (m && looksLikeUnitText(m[2])) return { name: sanitizeName(m[1], fallback), description: `[${m[2].trim()}]` };
 
     return { name: sanitizeName(raw, fallback), description: '' };
 }

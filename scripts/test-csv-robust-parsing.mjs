@@ -374,3 +374,46 @@ console.log('CSV robust parsing tests passed.');
     assert.equal(parseCsvTimeValue(weekday, ['mar 2 ene 2024']), Date.UTC(2024, 0, 2), 'a weekday when a month follows');
     console.log('Month/weekday ambiguity tests passed.');
 }
+
+// A building-management (GTB) export: a preamble with a HYPERLINK formula,
+// mixed LF/CRLF line ends, thousands with a no-break space, a header ending
+// in a delimiter, two empty cells after every row, and a note in brackets.
+{
+    const text = '\uFEFF"Nom du point - CPT03",,,\n'
+        + 'Valeur min. - 8597  (kW.h),,,\n'
+        + 'Valeur moyenne - 8763  (kW.h),,,\r\n'
+        + '"zone - Etage RDC",,,\r\n'
+        + 'URL de l\'équipement,=HYPERLINK("https://10.6.40.1/UI/#/space/x"),,\r\n'
+        + 'Horodatage,Valeur des données (kW.h),Fiabilité (vierge si fiable),\r\n'
+        + '"1 octobre 2026 00:00:00","8\u00A0597","",,\r\n'
+        + '"1 octobre 2026 00:01:00","8\u00A0598","",,\r\n'
+        + '"1 octobre 2026 00:02:00","8\u00A0601","",,\r\n';
+    const profile = parser.inspectSample(utf8(text));
+    assert.equal(profile.headerIndex, 5, 'the title row is found under the preamble');
+    assert.deepEqual(profile.rawHeaders, ['Horodatage', 'Valeur des données (kW.h)', 'Fiabilité (vierge si fiable)'],
+        'no unnamed empty column for the trailing delimiter');
+    assert.equal(profile.lineEnding, 'crlf', 'the data lines end in CRLF, which DuckDB is told');
+    const data = await parser.parse(utf8(text));
+    assert.deepEqual(Object.keys(data.variables), ['Horodatage', 'Valeur des données', 'Fiabilité (vierge si fiable)']);
+    assert.equal(data.variables['Valeur des données'].description, '[kW.h]');
+    assert.deepEqual(values(data, 'Valeur des données'), [8597, 8598, 8601]);
+    assert.equal(data.metadata.timeOriginMs, Date.UTC(2026, 9, 1));
+    const dialog = openDialog(utf8(text), profile);
+    assert.equal(dialog.resultProfile.rawHeaders.length, 3);
+    assert.equal(dialog.validation.ok, true, dialog.validation.messages.join('; '));
+    assert.deepEqual(csvReadRepairOptions(profile), ["new_line='\\r\\n'"]);
+    console.log('GTB export tests passed.');
+}
+{
+    const dialog = openDialog(utf8('Horodatage,Valeur des données (kW.h),Fiabilité (vierge si fiable)\n'
+        + '2026-10-01 00:00,1,\n2026-10-01 00:01,2,\n2026-10-01 00:02,3,\n'));
+    dialog.state.unitsMode = 'inline';
+    dialog.state.inlineUnitFormat = 'auto';
+    dialog._rebuildProfile();
+    assert.deepEqual(dialog.resultProfile.headers.map(h => [h.name, h.description]),
+        [['Horodatage', ''], ['Valeur des données', '[kW.h]'], ['Fiabilité (vierge si fiable)', '']]);
+    dialog.state.inlineUnitFormat = 'paren';
+    dialog._rebuildProfile();
+    assert.equal(dialog.resultProfile.headers[2].description, '[vierge si fiable]', 'a format chosen by hand takes the brackets');
+    console.log('Inline unit phrase tests passed.');
+}
