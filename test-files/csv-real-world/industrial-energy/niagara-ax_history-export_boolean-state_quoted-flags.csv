@@ -1,0 +1,85 @@
+﻿history:GTC_Multisite_Inwi/RAB-MCO OF-DJ-CLIM-4
+
+Timestamp,Trend Flags,Status,Value
+31-Jan-25 2:09:00 PM WEST,{start},"{alarm,unackedAlarm}",ON
+04-Feb-25 12:52:44 PM WEST,{ },{alarm},ON
+06-Feb-25 10:56:08 AM WEST,{ },"{down,alarm}",ON
+06-Feb-25 11:01:11 AM WEST,{ },{alarm},ON
+11-Feb-25 11:37:28 AM WEST,{start},{alarm},ON
+12-Feb-25 2:26:00 AM WEST,{ },"{down,alarm}",ON
+12-Feb-25 2:54:17 AM WEST,{ },{alarm},ON
+13-Feb-25 11:50:16 AM WEST,{ },{unackedAlarm},OFF
+13-Feb-25 3:38:42 PM WEST,{start},{unackedAlarm},OFF
+13-Feb-25 4:42:35 PM WEST,{start},{unackedAlarm},OFF
+14-Feb-25 9:28:33 AM WEST,{start},{unackedAlarm},OFF
+20-Feb-25 8:58:50 AM WEST,{start},{unackedAlarm},OFF
+20-Feb-25 9:00:32 AM WEST,{start},{unackedAlarm},OFF
+26-Feb-25 2:16:38 AM WET,{ },"{down,unackedAlarm}",OFF
+26-Feb-25 2:21:44 AM WET,{ },{unackedAlarm},OFF
+28-Feb-25 1:52:54 AM WET,{ },"{down,unackedAlarm}",OFF
+28-Feb-25 1:57:55 AM WET,{ },{unackedAlarm},OFF
+12-Mar-25 11:52:59 AM WET,{ },"{down,unackedAlarm}",OFF
+12-Mar-25 12:03:24 PM WET,{ },{unackedAlarm},OFF
+12-Mar-25 1:39:45 PM WET,{ },"{alarm,unackedAlarm}",ON
+20-Mar-25 10:36:33 AM WET,{ },"{down,alarm,unackedAlarm}",ON
+20-Mar-25 11:35:16 AM WET,{ },"{alarm,unackedAlarm}",ON
+20-Mar-25 11:35:16 AM WET,{ },"{alarm,stale,unackedAlarm}",OFF
+20-Mar-25 11:35:18 AM WET,{ },"{alarm,unackedAlarm}",ON
+20-Mar-25 12:09:50 PM WET,{ },"{down,alarm,unackedAlarm}",ON
+20-Mar-25 12:14:50 PM WET,{ },"{alarm,unackedAlarm}",ON
+20-Mar-25 12:14:50 PM WET,{ },"{alarm,stale,unackedAlarm}",OFF
+20-Mar-25 12:14:52 PM WET,{ },"{alarm,unackedAlarm}",ON
+09-Apr-25 4:23:38 PM WEST,{start},"{alarm,unackedAlarm}",ON
+13-Apr-25 8:05:42 PM WEST,{start},"{alarm,unackedAlarm}",ON
+23-Apr-25 12:10:54 PM WEST,{start},"{alarm,unackedAlarm}",ON
+28-Apr-25 10:23:43 PM WEST,{ },{alarm},ON
+20-May-25 9:01:32 AM WEST,{start},{alarm},ON
+29-May-25 6:15:23 PM WEST,{ },{unackedAlarm},OFF
+29-May-25 6:15:33 PM WEST,{ },"{alarm,unackedAlarm}",ON
+29-May-25 6:29:23 PM WEST,{ },{unackedAlarm},OFF
+29-May-25 8:02:03 PM WEST,{ },"{alarm,unackedAlarm}",ON
+30-May-25 11:52:54 AM WEST,{ },{unackedAlarm},ON
+12-Jun-25 11:10:52 AM WEST,{start},{unackedAlarm},ON
+12-Jun-25 11:10:54 AM WEST,{ },"{alarm,unackedAlarm}",OFF
+12-Jun-25 12:16:54 PM WEST,{start},"{alarm,unackedAlarm}",OFF
+12-Jun-25 12:26:50 PM WEST,{start},"{alarm,unackedAlarm}",OFF
+12-Jun-25 12:29:23 PM WEST,{start},"{alarm,unackedAlarm}",OFF
+14-Jun-25 4:36:28 PM WEST,{ },{unackedAlarm},ON
+14-Jun-25 4:36:38 PM WEST,{ },"{alarm,unackedAlarm}",OFF
+14-Jun-25 4:36:57 PM WEST,{ },{unackedAlarm},ON
+14-Jun-25 4:38:08 PM WEST,{ },"{alarm,unackedAlarm}",OFF
+14-Jun-25 5:04:18 PM WEST,{ },{unackedAlarm},ON
+19-Jun-25 1:01:55 PM WEST,{ },"{down,unackedAlarm}",ON
+23-Jun-25 11:46:07 AM WEST,{start},"{down,stale}",OFF
+23-Jun-25 11:49:59 AM WEST,{ },{stale},OFF
+23-Jun-25 11:49:59 AM WEST,{ },{unackedAlarm},ON
+25-Jun-25 9:31:42 AM WEST,{start},{unackedAlarm},ON
+02-Jul-25 12:29:13 PM WEST,{start},{unackedAlarm},ON
+09-Jul-25 3:49:23 PM WEST,{start},{unackedAlarm},ON
+09-Jul-25 5:30:36 PM WEST,{start},{unackedAlarm},ON
+16-Jul-25 2:20:45 PM WEST,{start},{unackedAlarm},ON
+17-Jul-25 4:01:23 AM WEST,{ },"{down,unackedAlarm}",ON
+17-Jul-25 4:11:49 AM WEST,{ },{unackedAlarm},ON
+17-Jul-25 4:11:49 AM WEST,{ },"{stale,unackedAlarm}",OFF
+17-Jul-25 4:11:51 AM WEST,{ },{unackedAlarm},ON
+23-Jul-25 4:31:11 PM WEST,{start},{unackedAlarm},ON
+23-Jul-25 4:41:37 PM WEST,{start},{unackedAlarm},ON
+10-Aug-25 3:44:05 PM WEST,{start},{unackedAlarm},ON
+25-Aug-25 9:34:01 AM WEST,{start},{unackedAlarm},ON
+25-Aug-25 11:28:27 AM WEST,{start},{unackedAlarm},ON
+27-Aug-25 9:02:31 AM WEST,{start},{unackedAlarm},ON
+28-Aug-25 10:31:55 AM WEST,{start},{unackedAlarm},ON
+01-Sep-25 5:27:03 PM WEST,{start},{unackedAlarm},ON
+02-Sep-25 9:07:22 AM WEST,{start},{unackedAlarm},ON
+22-Sep-25 1:24:16 PM WEST,{start},{unackedAlarm},ON
+23-Sep-25 11:40:17 AM WEST,{start},{unackedAlarm},ON
+27-Sep-25 7:47:57 PM WEST,{start},{unackedAlarm},ON
+30-Sep-25 12:22:18 PM WEST,{start},{unackedAlarm},ON
+10-Oct-25 12:03:39 PM WEST,{start},{unackedAlarm},ON
+13-Oct-25 9:14:15 AM WEST,{start},{unackedAlarm},ON
+15-Oct-25 11:18:34 AM WEST,{start},{unackedAlarm},ON
+15-Oct-25 11:52:46 AM WEST,{start},{unackedAlarm},ON
+15-Oct-25 12:27:16 PM WEST,{start},{unackedAlarm},ON
+16-Oct-25 12:16:07 PM WEST,{start},{unackedAlarm},ON
+20-Oct-25 9:06:38 AM WEST,{start},{unackedAlarm},ON
+22-Oct-25 6:19:54 PM WEST,{start},{unackedAlarm},ON

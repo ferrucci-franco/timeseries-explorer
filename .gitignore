@@ -68,6 +68,11 @@
 /test-files/csv/correlation-large.csv
 /test-files/csv/missing-large.csv
 /test-files/csv/temporal-profile-lazy*/
+# Real-world CSV/text exports from instruments, PLCs, loggers (parser benchmark corpus).
+!/test-files/csv-real-world/
+!/test-files/csv-real-world/**
+# Optional files over ~6 MB: listed in the manifest, fetched on demand by verify.mjs --fetch.
+/test-files/csv-real-world/_large/
 !/test-files/excel/
 !/test-files/excel/**
 !/test-files/parquet/
