@@ -449,6 +449,7 @@ proto._lazySqlToolVariable = function(data, name, definition) {
         },
     };
     delete variable._duckdbCol;
+    delete variable._duckdbNumberFormat;
     delete variable._duckdbDataTool;
     delete variable._duckdbExpr;
     delete variable._duckdbWindows;
