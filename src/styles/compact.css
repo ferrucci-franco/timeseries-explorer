@@ -366,6 +366,70 @@ html.compact.compact-landscape .compact-sheet.is-shown {
     transform: none;
 }
 
+/* ── The way back, sideways ──────────────────────────────────────────── */
+/* The side sheet is hidden with a chevron that sends it off the right edge,
+   and the rail that would bring it back is on the far left. This pill waits on
+   that right edge instead, drawn like the desktop's edge toggle, pointing at
+   the sheet it brings back. It only exists sideways and only while a sheet is
+   hidden (compact-methods: _syncCompactSheetRestore); upright, the chevron
+   points down at the bar, and the bar is the way back. */
+.compact-sheet-restore {
+    display: none;
+}
+
+html.compact.compact-landscape .compact-sheet-restore:not([hidden]) {
+    position: fixed;
+    top: calc(var(--compact-chrome-top) + var(--compact-usable-h) / 2);
+    right: var(--sar);
+    transform: translateY(-50%);
+    width: 22px;
+    height: 56px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--primary-color) 40%, var(--border-color));
+    border-right: none;
+    border-radius: 999px 0 0 999px;
+    background: color-mix(in srgb, var(--primary-color) 10%, var(--bg-primary));
+    color: color-mix(in srgb, var(--primary-color) 70%, var(--text-secondary));
+    box-shadow: -1px 1px 3px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    z-index: 1120;
+}
+
+/* A finger needs more than the pill shows: the hit area reaches past its
+   drawing on every side, without covering more of the plot than it must. */
+html.compact.compact-landscape .compact-sheet-restore:not([hidden])::before {
+    content: '';
+    position: absolute;
+    inset: -8px 0 -8px -12px;
+}
+
+html.compact.compact-landscape .compact-sheet-restore .compact-btn-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+html.compact.compact-landscape .compact-sheet-restore .compact-btn-icon svg {
+    stroke-width: 2.2;
+}
+
+html.compact.compact-landscape .compact-sheet-restore:active,
+html.compact.compact-landscape .compact-sheet-restore:focus-visible {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 20%, var(--bg-primary));
+}
+
+html.compact.compact-landscape .compact-sheet-restore:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
 .compact-sheet-handle {
     flex: 0 0 auto;
     display: flex;
