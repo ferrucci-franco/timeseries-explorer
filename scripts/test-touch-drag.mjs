@@ -112,7 +112,7 @@ assert.match(app, /this\._showTouchHintIfNeeded\?\.\(\)/, 'on startup');
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['touchHintTitle', 'touchHintDrag', 'touchHintZoom', 'touchHintReset']) {
-    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} in four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 5, `${key} in five languages`);
 }
 
 console.log('Touch-drag checks passed.');

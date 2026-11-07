@@ -62,7 +62,7 @@ assert.match(ui, /isProjectExample\s*\n?\s*\?\s*\(this\.files\.size > 0 \|\| thi
 assert.match(ui, /loadProjectExampleWarning/, 'a project example uses the workspace-replace warning');
 
 // The desktop messages must NOT carry the browser-only guidance.
-for (const locale of ['en', 'fr', 'es', 'it']) {
+for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     for (const key of ['openModelicaTempPathCopiedDesktop', 'dymolaDirectoryPathCopiedDesktop', 'loadProjectExampleWarning']) {
         assert.ok(translations[locale]?.[key], `${locale}.${key} is translated`);
     }

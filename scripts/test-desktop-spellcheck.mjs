@@ -38,8 +38,8 @@ assert.deepEqual(SPELLCHECK_LANGUAGES.map(item => item.label),
 // offer a dictionary for a UI the app cannot present.
 const translations = read('src/i18n/translations.js');
 for (const key of ['spellcheckLanguageMenu', 'spellcheckAddToDictionary', 'spellcheckNoSuggestions']) {
-    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 4,
-        `${key} is translated in all four languages`);
+    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 5,
+        `${key} is translated in all five languages`);
 }
 
 // ── Tags in, one of ours out ────────────────────────────────────────────────

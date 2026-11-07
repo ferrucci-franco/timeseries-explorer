@@ -86,7 +86,7 @@ assert.equal(compactToolSheetSize(COMPACT_TOOL_HALF_MIN_HEIGHT - 1), 'full');
 assert.equal(compactToolSheetSize(COMPACT_TOOL_HALF_MIN_HEIGHT), 'half');
 
 // ── Words, in every language ────────────────────────────────────────────────
-const languages = ['en', 'fr', 'es', 'it'];
+const languages = ['en', 'fr', 'es', 'it', 'zh'];
 const phoneKeys = Object.keys(translations.en).filter(key => key.startsWith('compactTool'));
 assert.ok(phoneKeys.length > 40, 'the phone\'s data-tool strings are in the English table');
 for (const lang of languages) {

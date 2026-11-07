@@ -934,7 +934,7 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(methods.includes("barmode: grouped ? 'group' : 'overlay'"), 'grouped bars are drawn side by side');
     ok(methods.includes('sortSelect.disabled = grouped'), 'Order is disabled while the columns are a timeline');
 
-    for (const lang of ['en', 'fr', 'es', 'it']) {
+    for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
         const block = translations.slice(translations.indexOf(`        ${lang}: {`));
         for (const key of ['integralGroupBy', 'integralGroupNone', 'integralGroupYear',
             'integralGroupByTip', 'integralTooManyGroups', 'temporalProfileMultiYear',

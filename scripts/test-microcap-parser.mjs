@@ -215,9 +215,9 @@ await check(() => {
     const input = html.match(/<input[^>]*id="file-input"[^>]*>/)?.[0] || '';
     assert.ok(input && !/\baccept=/.test(input), 'the file picker offers every file, Micro-Cap output included');
     const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-    assert.equal([...translations.matchAll(/fileTypeMicroCap:/g)].length, 4, 'file-type label in all locales');
-    assert.equal([...translations.matchAll(/fileTypeMicroCapTooltip:/g)].length, 4, 'file-type tooltip in all locales');
-    assert.equal([...translations.matchAll(/Micro-Cap numeric output<\/td>|Sortie numérique Micro-Cap<\/td>|Salida numérica de Micro-Cap<\/td>|Output numerico Micro-Cap<\/td>/g)].length, 4,
+    assert.equal([...translations.matchAll(/fileTypeMicroCap:/g)].length, 5, 'file-type label in all locales');
+    assert.equal([...translations.matchAll(/fileTypeMicroCapTooltip:/g)].length, 5, 'file-type tooltip in all locales');
+    assert.equal([...translations.matchAll(/Micro-Cap numeric output<\/td>|Sortie numérique Micro-Cap<\/td>|Salida numérica de Micro-Cap<\/td>|Output numerico Micro-Cap<\/td>|Micro-Cap 数值输出<\/td>/g)].length, 5,
         'supported-formats table lists Micro-Cap in all locales');
 });
 

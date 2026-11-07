@@ -76,8 +76,8 @@ assert.match(applyBody, /timeSource\.kind === 'numeric'/, 'only a numeric axis t
 
 // ── Strings ─────────────────────────────────────────────────────────────────
 for (const key of ['csvPreviewColumnUnitPlaceholder', 'csvPreviewColumnUnitTitle']) {
-    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 4,
-        `${key} is translated in all four languages`);
+    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 5,
+        `${key} is translated in all five languages`);
 }
 // The help under the checkbox described one box; there are two now.
 for (const match of translations.matchAll(/csvPreviewColumnsHelp: '([^']*)'/g)) {

@@ -220,6 +220,7 @@ function localizedWeekdays() {
     const language = i18n.currentLang;
     if (language === 'es') return ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
     if (language === 'fr') return ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+    if (language === 'zh') return ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
     if (language === 'it') return ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica'];
     return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 }

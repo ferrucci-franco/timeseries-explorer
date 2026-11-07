@@ -235,8 +235,8 @@ assert.match(exportMethods, /await this\._exportCSV\(panelId,/,
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['csvExportBuilding', 'csvExportProgress']) {
-    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 4,
-        `${key} is translated in all four languages`);
+    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 5,
+        `${key} is translated in all five languages`);
 }
 for (const match of translations.matchAll(/csvExportProgress: '([^']*)'/g)) {
     assert.ok(match[1].includes('{done}') && match[1].includes('{total}'),

@@ -80,7 +80,7 @@ assert.match(app, /\.replace\('\{run\}', i18n\.formatNumber\(summary\.longestRun
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 assert.doesNotMatch(translations, /datetimeAxisStalledHint/, 'the hint that announced the switch is gone');
 for (const key of ['datetimeRepeatsHint', 'datetimeAxisRepeatedDialogBody']) {
-    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 4, `${key} in four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 5, `${key} in five languages`);
 }
 // Every language's text carries both numbers, or a language quietly says less.
 for (const line of translations.split('\n')) {

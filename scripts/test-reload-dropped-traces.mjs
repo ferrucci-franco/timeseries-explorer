@@ -121,7 +121,7 @@ assert.match(files, /const dropped = this\.plotManager\.updateFileData\(id, data
 assert.match(files, /this\._reportReloadOutcome\(droppedTraces, datasetFailures\);/,
     'and reports once the loading overlay is down, so the dialog is not behind it');
 for (const key of ['reloadDroppedTracesTitle', 'reloadDroppedTracesBody']) {
-    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 4, `${key} in four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 5, `${key} in five languages`);
 }
 
 console.log('Reload dropped-trace checks passed.');

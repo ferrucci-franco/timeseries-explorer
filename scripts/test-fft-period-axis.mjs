@@ -131,7 +131,7 @@ const translations = readFileSync(new URL('../src/i18n/translations.js', import.
 for (const key of ['fftXAxis', 'fftXAxisFrequency', 'fftXAxisPeriod', 'fftXAxisTooltip',
     'fftTMin', 'fftTMax', 'fftTMinTooltip', 'fftTMaxTooltip',
     'fftAutoXRangePeriod', 'fftAutoXRangePeriodTooltip']) {
-    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} in four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 5, `${key} in five languages`);
 }
 
 console.log('FFT period-axis checks passed.');

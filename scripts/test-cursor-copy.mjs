@@ -70,7 +70,7 @@ assert.ok(!/<label class="cursor-secant-toggle">[^]*cursor-copy-btn[^]*<\/label>
 // Every language names the button and both outcomes.
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['cursorCopy', 'cursorCopied', 'cursorCopyFailed']) {
-    assert.equal(translations.match(new RegExp(`\\b${key}:`, 'g'))?.length, 4, `${key} in all four languages`);
+    assert.equal(translations.match(new RegExp(`\\b${key}:`, 'g'))?.length, 5, `${key} in all five languages`);
 }
 
 console.log('cursor copy: ok');

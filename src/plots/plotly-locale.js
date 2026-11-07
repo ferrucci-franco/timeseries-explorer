@@ -5,6 +5,7 @@ const PLOTLY_LOCALE_BY_APP_LANGUAGE = Object.freeze({
     fr: 'fr',
     es: 'es',
     it: 'it',
+    zh: 'zh-CN',
 });
 
 const CALENDAR_DATE_FORMAT_BY_APP_LANGUAGE = Object.freeze({
@@ -12,6 +13,9 @@ const CALENDAR_DATE_FORMAT_BY_APP_LANGUAGE = Object.freeze({
     fr: '%d %b %Y',
     es: '%d %b %Y',
     it: '%d %b %Y',
+    // Year-first, as Chinese dates are written; Plotly's zh-CN short months are
+    // bare numerals (一, 二 …), so %b would lose the 月, hence the numeric month.
+    zh: '%Y年%m月%d日',
 });
 
 export function normalizeAppLanguage(language = DEFAULT_APP_LANGUAGE) {

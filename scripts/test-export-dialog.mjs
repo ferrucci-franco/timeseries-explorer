@@ -97,12 +97,12 @@ const translationKeys = [
     'exportFileName', 'exportAction', 'exportCsvUnavailableProfile', 'exportCsvUnavailableStale',
     'exportFailedTitle', 'exportFailedBody', 'exportFailedDetails',
 ];
-for (const locale of ['en', 'fr', 'es', 'it']) {
+for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     for (const key of translationKeys) {
         assert.ok(translations[locale]?.[key], `${locale}.${key} is translated`);
     }
 }
-for (const locale of ['en', 'fr', 'es', 'it']) {
+for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     const hint = translations[locale].exportQualityHint;
     assert.ok(hint.includes('{w}') && hint.includes('{h}'), `${locale} reports the exported pixel size`);
 }

@@ -11442,8 +11442,8 @@ const translations = {
             runtimeNoticeDesktopDownload: '如需使用实时更新的文件、超大文件，或更好地访问计算机上的文件，请使用桌面版。您可以从“菜单”按钮下载。',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
-            runtimeBadgeWebTooltip: '轻量网页版：完全在浏览器中运行，无需安装。',
-            runtimeBadgeDesktopTooltip: '完整桌面版：已安装的应用，可完整访问计算机上的文件。',
+            runtimeBadgeWebTooltip: 'Light Web：完全在浏览器中运行，无需安装。',
+            runtimeBadgeDesktopTooltip: 'Full Desktop：已安装的应用，可完整访问计算机上的文件。',
 
             // Top bar
             variables: '变量',

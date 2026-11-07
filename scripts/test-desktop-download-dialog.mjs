@@ -28,7 +28,7 @@ const translationKeys = [
     'extraOnlineVersion',
     'extraOnlineVersionTooltip',
 ];
-for (const locale of ['en', 'fr', 'es', 'it']) {
+for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     for (const key of translationKeys) {
         assert.ok(translations[locale]?.[key], `${locale}.${key} should be translated`);
     }
