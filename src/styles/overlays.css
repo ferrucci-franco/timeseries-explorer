@@ -2246,6 +2246,31 @@ textarea.feedback-control {
     font-size: 0.78rem;
 }
 
+/* Decimal / thousands separator: a select, and beside it the one-character
+   box that "Custom…" opens. */
+.csv-preview-separator-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.csv-preview-separator-custom {
+    width: 2.2rem;
+    min-width: 2.2rem;
+    padding: 0.35rem 0.3rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-family: var(--font-mono, monospace);
+    text-align: center;
+}
+
+.csv-preview-separator-custom[hidden] {
+    display: none;
+}
+
 .csv-preview-custom-lines-ok {
     padding: 0.4rem 0.65rem;
     border: 1px solid var(--border-color);

@@ -12,11 +12,35 @@
  * numeric files are also supported; column names are generated automatically.
  */
 import MatParser from './mat-parser.js';
-import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
+import { detectCsvTimeAxis, isMonthNameDateCell, looksLikeUnitText, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 import { columnSampleCounts, forcedColumnTypes, isMissingNumberCell, isMostlyNumericColumn } from './csv-column-types.js';
 import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
 import { buildCsvTree, resolveCsvGrouping } from './csv-tree-grouping.js';
 import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
+import {
+    csvNumberFormat,
+    decodeCsvBytes,
+    detectLineEnding,
+    trimmedTableWidth,
+    detectCsvNumberFormat,
+    fitCsvRowToWidth,
+    fitCsvTableRows,
+    minimumRowWidth,
+    normalizeRaggedRowPolicy,
+    sanitizeCsvText,
+} from './csv-text-normalize.js';
+
+// Delimiters tried when a file does not say. '|' is what database dumps and
+// several SCADA exports use; it never appears inside a number or a date.
+const DELIMITER_CANDIDATES = [',', ';', '\t', '|', 'whitespace'];
+// A quoted field longer than this, or spanning more lines, is not one: its
+// opening quote was a stray character (5" for inches, a PLC string field cut
+// short), and honouring it would swallow the rest of the file into one cell.
+const MAX_QUOTED_FIELD_CHARS = 65536;
+const MAX_QUOTED_FIELD_LINES = 100;
+// How much more consistent (CleverCSV's Q) another delimiter must read the
+// sample than the table reading's choice before it replaces it.
+const CONSISTENCY_OVERRIDE = 1.25;
 
 // "[m/s]" -> "m/s": a units row that writes its units in brackets would
 // otherwise become "[[m/s]]" in the description.
@@ -48,7 +72,7 @@ export function csvRowMatchesFilter(row, filter, options = {}) {
     if (!normalized) return true;
     const raw = String(row?.[normalized.columnIndex] ?? '').trim();
     if (normalized.operator === 'is_numeric') {
-        return Number.isFinite(parseCsvNumber(raw, options.delimiter || ',', options.decimalSeparator || 'auto'));
+        return Number.isFinite(parseCsvNumber(raw, options.delimiter || ',', options.decimalSeparator || 'auto', options.thousandsSeparator || 'auto'));
     }
     const matches = raw === normalized.value;
     return normalized.operator === '!=' ? !matches : matches;
@@ -66,9 +90,11 @@ export default class CsvParser {
     }
 
     async parse(buffer, options = {}) {
-        const text = this._decodeText(buffer, options.encoding || 'auto');
+        const decoded = this._decodeTextWithEncoding(buffer, options.encoding || 'auto');
+        const text = decoded.text;
         const delimiter = this._detectDelimiter(text);
-        const rows = this._parseRows(text, delimiter)
+        const quoting = this._detectQuoting(text, delimiter);
+        const rows = this._parseRows(text, delimiter, this._quoteOptions(quoting))
             .map(row => row.map(cell => cell.trim()));
 
         if (!rows.some(row => row.some(cell => cell !== ''))) {
@@ -78,17 +104,20 @@ export default class CsvParser {
         const table = this._detectTableRows(rows, delimiter);
         const hasHeader = table.hasHeader;
         const headerRow = rows[table.headerIndex] || [];
-        const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
+        let rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
         if (rawHeaders.length < 1) throw new Error('CSV must contain at least one column.');
 
-        const dataRows = rows.slice(table.dataStartIndex)
-            .filter(row => row.some(cell => cell !== '') && row.length === rawHeaders.length);
+        const fitted = fitCsvTableRows(rows, table.dataStartIndex, headerRow);
+        let dataRows = fitted.rows;
         if (dataRows.length < 1) {
             throw new Error('CSV must contain at least one data row.');
         }
+        ({ rawHeaders, dataRows } = this._withoutEmptyTrailingColumns(rawHeaders, dataRows));
         const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
         if (!timeSource.ok) throw new Error(timeSource.reason);
+        const detectedNumberFormat = this._detectNumberFormat(dataRows, delimiter, timeSource);
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat({ detectedNumberFormat });
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
             .filter(({ index }) => !timeSource.sourceIndexes.includes(index));
@@ -107,7 +136,7 @@ export default class CsvParser {
             const row = dataRows[r];
             if (!row.some(cell => cell !== '')) continue;
 
-            const timeValue = timeSource.parse(row, timeValues.length);
+            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator, thousandsSeparator });
             if (!Number.isFinite(timeValue)) {
                 invalidTimeRows++;
                 continue;
@@ -118,7 +147,7 @@ export default class CsvParser {
             for (let c = 0; c < variableHeaders.length; c++) {
                 const sourceIndex = variableHeaders[c].index;
                 const rawValue = String(row[sourceIndex] ?? '').trim();
-                const numericValue = parseCsvNumber(rawValue, delimiter);
+                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator, thousandsSeparator);
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
                 column.stringValues.push(rawValue);
@@ -215,6 +244,8 @@ export default class CsvParser {
             skippedRows: table.headerIndex,
             skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
             skippedInvalidTimeRows: invalidTimeRows,
+            skippedColumnCountRows: fitted.dropped,
+            repairedColumnCountRows: fitted.repaired,
             reorderedRows,
             timeName: timeVar.name,
             timeKind,
@@ -224,6 +255,9 @@ export default class CsvParser {
             datetimeRepeats,
             numericColumnIndexes,
             unitRowIndex: table.unitRowIndex ?? null,
+            encoding: decoded.encoding,
+            removedInvisibleChars: decoded.removedChars,
+            detectedNumberFormat,
         };
 
         this._attachTree(result, null);
@@ -266,7 +300,8 @@ export default class CsvParser {
         const text = decoded.text;
         const delimiter = options.delimiter || this._detectDelimiter(text);
         const maxRows = Math.max(20, Number(options.maxRows) || 700);
-        const rows = this._parseRows(text, delimiter, { maxRows: maxRows * 4 })
+        const quoting = options.quoting || this._detectQuoting(text, delimiter);
+        const rows = this._parseRows(text, delimiter, { maxRows: maxRows * 4, ...this._quoteOptions(quoting) })
             .map(row => row.map(cell => cell.trim()))
             .slice(0, maxRows);
 
@@ -277,24 +312,41 @@ export default class CsvParser {
         const table = this._detectTableRows(rows, delimiter);
         const hasHeader = table.hasHeader;
         const headerRow = rows[table.headerIndex] || [];
-        const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
+        let rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
         if (rawHeaders.length < 1) throw new Error('CSV sample must contain at least one column.');
 
-        const dataRows = rows
-            .slice(table.dataStartIndex)
-            .filter(row => row.some(cell => cell !== '') && row.length === rawHeaders.length);
+        const fitted = fitCsvTableRows(rows, table.dataStartIndex, headerRow);
+        let dataRows = fitted.rows;
         if (dataRows.length < 1) {
             throw new Error('CSV sample must contain at least one data row.');
         }
+        const fullWidth = rawHeaders.length;
+        ({ rawHeaders, dataRows } = this._withoutEmptyTrailingColumns(rawHeaders, dataRows));
+        // Cells the rows carry past the table's width, now counting the
+        // unnamed empty columns just dropped.
+        const trailingEmptyCells = Math.max(fitted.trailingEmpty, 0) + (fullWidth - rawHeaders.length);
 
         const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
         if (!timeSource.ok) throw new Error(timeSource.reason);
         const unitRowIndex = hasHeader && Number.isInteger(table.unitRowIndex) ? table.unitRowIndex : null;
+        const detectedNumberFormat = this._detectNumberFormat(dataRows, delimiter, timeSource);
 
         return {
             delimiter,
             encoding: decoded.encoding,
+            encodingDetection: decoded.detection,
+            // How fields are quoted: '' when nothing in the sample is.
+            quoteChar: quoting.quoteChar,
+            ...(quoting.escapeChar ? { escapeChar: quoting.escapeChar } : {}),
+            // What was cleaned and what the numbers look like. Facts about the
+            // sample, kept next to the reader's settings so every reader of
+            // the profile (worker, DuckDB, the converter) applies the same.
+            ...(decoded.removedChars ? { removedInvisibleChars: decoded.removedChars } : {}),
+            detectedNumberFormat,
+            ...(trailingEmptyCells ? { trailingEmptyCells } : {}),
+            lineEnding: detectLineEnding(text, table.dataStartIndex),
+            ...(fitted.dropped ? { sampleColumnCountMismatches: fitted.dropped } : {}),
             hasHeader,
             headerIndex: table.headerIndex,
             dataStartIndex: table.dataStartIndex,
@@ -316,16 +368,18 @@ export default class CsvParser {
         const maxRows = Math.max(1, Number(options.maxRows) || 50);
         const delimiter = options.delimiter || this._detectDelimiter(text);
         const warnings = [];
-        const allRows = this._parseRows(text, delimiter, { maxRows: Math.max(maxRows, Math.min(120, maxRows + 20)) })
+        const quoting = this._detectQuoting(text, delimiter);
+        const quoteOptions = this._quoteOptions(quoting);
+        const allRows = this._parseRows(text, delimiter, { maxRows: Math.max(maxRows, Math.min(120, maxRows + 20)), ...quoteOptions })
             .map(row => row.map(cell => String(cell ?? '').trim()));
-        const profileRows = this._parseRows(text, delimiter, { maxRows: Math.max(120, maxRows * 4) })
+        const profileRows = this._parseRows(text, delimiter, { maxRows: Math.max(120, maxRows * 4), ...quoteOptions })
             .map(row => row.map(cell => String(cell ?? '').trim()));
         const nonEmptyRows = profileRows.filter(row => row.some(cell => cell !== ''));
         const rows = allRows.slice(0, maxRows);
 
         let profile = null;
         try {
-            profile = this.inspectSample(buffer, { maxRows: Math.max(50, maxRows), delimiter, encoding: options.encoding || 'auto' });
+            profile = this.inspectSample(buffer, { maxRows: Math.max(50, maxRows), delimiter, encoding: options.encoding || 'auto', quoting });
         } catch (err) {
             warnings.push(err?.message || String(err));
             const headerIndex = nonEmptyRows.findIndex(row => row.length >= 2);
@@ -363,6 +417,8 @@ export default class CsvParser {
         return {
             delimiter,
             encoding: decoded.encoding,
+            encodingDetection: decoded.detection,
+            removedInvisibleChars: decoded.removedChars,
             rows,
             profile,
             warnings,
@@ -371,10 +427,10 @@ export default class CsvParser {
 
     async parseWithProfile(buffer, profile) {
         if (!profile) return this.parse(buffer);
-        const text = this._decodeText(buffer, profile.encoding || 'auto');
+        const decoded = this._decodeTextWithEncoding(buffer, profile.encoding || 'auto');
+        const text = decoded.text;
         const delimiter = profile.delimiter || ',';
-        const decimalSeparator = profile.decimalSeparator || 'auto';
-        const rows = this._parseRows(text, delimiter)
+        const rows = this._parseRows(text, delimiter, this._quoteOptions(profile))
             .map(row => row.map(cell => cell.trim()));
 
         if (!rows.some(row => row.some(cell => cell !== ''))) {
@@ -408,11 +464,18 @@ export default class CsvParser {
 
         const headers = this._normalizeProfileHeaders(profile.headers, rawHeaders, profile);
         const expectedColumns = rawHeaders.length;
-        const candidateRows = rows.slice(dataStartIndex);
-        const widthRows = candidateRows.filter(row => row.length === expectedColumns);
-        const discardedColumnCountRows = candidateRows.length - widthRows.length;
+        // The width rows are fitted to is the header's, with the empty cells a
+        // header row may end in: a renamed header list is the same width.
+        const widthTemplate = rawHeaders.map((header, index) =>
+            hasHeader ? String(headerRow[index] ?? header ?? '') : 'x');
+        const fitted = fitCsvTableRows(rows, dataStartIndex, widthTemplate, { policy: normalizeRaggedRowPolicy(profile.raggedRows) });
+        const widthRows = fitted.rows;
+        const discardedColumnCountRows = fitted.dropped;
+        const detectedNumberFormat = profile.detectedNumberFormat
+            || this._detectNumberFormat(widthRows, delimiter, timeSource);
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat({ ...profile, detectedNumberFormat });
         const rowFilter = normalizeCsvRowFilter(profile.rowFilter);
-        const dataRows = widthRows.filter(row => csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator }));
+        const dataRows = widthRows.filter(row => csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator, thousandsSeparator }));
         const filteredRowCount = widthRows.length - dataRows.length;
         if (dataRows.length < 1) {
             throw new Error(rowFilter ? 'CSV row filter excludes all data rows.' : 'CSV must contain at least one data row.');
@@ -438,7 +501,7 @@ export default class CsvParser {
             const row = dataRows[r];
             if (!row.some(cell => cell !== '')) continue;
 
-            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator });
+            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator, thousandsSeparator });
             if (!Number.isFinite(timeValue)) {
                 invalidTimeRows++;
                 continue;
@@ -449,7 +512,7 @@ export default class CsvParser {
             for (let c = 0; c < variableHeaders.length; c++) {
                 const sourceIndex = variableHeaders[c].index;
                 const rawValue = String(row[sourceIndex] ?? '').trim();
-                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator);
+                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator, thousandsSeparator);
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
                 column.stringValues.push(rawValue);
@@ -552,6 +615,10 @@ export default class CsvParser {
             skippedInvalidTimeRows: invalidTimeRows,
             reorderedRows,
             skippedColumnCountRows: discardedColumnCountRows,
+            repairedColumnCountRows: fitted.repaired,
+            encoding: decoded.encoding,
+            removedInvisibleChars: decoded.removedChars,
+            detectedNumberFormat,
             skippedFilteredRows: filteredRowCount,
             timeName: timeVar.name,
             timeKind,
@@ -569,20 +636,23 @@ export default class CsvParser {
 
     parseRowsWithProfile(text, profile, options = {}) {
         const delimiter = profile?.delimiter || ',';
-        const decimalSeparator = profile?.decimalSeparator || 'auto';
+        // The rows a live update appends are read exactly as the file was:
+        // same separators, quoting and row fitting.
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat(profile);
         const rawHeaders = profile?.rawHeaders || [];
         const headers = profile?.headers || this._makeUniqueHeaders(rawHeaders);
         const timeSource = profile?.timeSource || {};
         const expectedColumns = rawHeaders.length;
         const startRowIndex = Math.max(0, Number(options.startRowIndex) || 0);
-        const rows = this._parseRows(text, delimiter)
+        const rows = this._parseRows(text, delimiter, this._quoteOptions(profile))
             .map(row => row.map(cell => cell.trim()))
             .filter(row => row.some(cell => cell !== ''));
+        const fitOptions = { minWidth: expectedColumns, policy: normalizeRaggedRowPolicy(profile?.raggedRows) };
 
         const timeIndexes = new Set(timeSource.sourceIndexes || []);
         const ignoredIndexes = new Set(Array.isArray(profile?.ignoredColumns) ? profile.ignoredColumns : []);
         const rowFilter = normalizeCsvRowFilter(profile?.rowFilter);
-        const numericIndexes = this._numericColumnIndexSet(profile, { delimiter, decimalSeparator, expectedColumns, timeSource });
+        const numericIndexes = this._numericColumnIndexSet(profile, { delimiter, decimalSeparator, thousandsSeparator, expectedColumns, timeSource });
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
             .filter(({ index }) => !timeIndexes.has(index) && !ignoredIndexes.has(index));
@@ -591,9 +661,10 @@ export default class CsvParser {
         const rawRows = [];
 
         for (let r = 0; r < rows.length; r++) {
-            const row = rows[r];
-            if (expectedColumns && row.length !== expectedColumns) {
-                const err = new Error(`CSV row has ${row.length} columns; expected ${expectedColumns}.`);
+            const rawRow = rows[r];
+            const row = expectedColumns ? fitCsvRowToWidth(rawRow, expectedColumns, fitOptions) : rawRow;
+            if (!row) {
+                const err = new Error(`CSV row has ${rawRow.length} columns; expected ${expectedColumns}.`);
                 err.code = 'LIVE_UPDATE_COLUMN_COUNT';
                 throw err;
             }
@@ -602,9 +673,9 @@ export default class CsvParser {
                 err.code = 'LIVE_UPDATE_HEADER_REPEATED';
                 throw err;
             }
-            if (!csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator })) continue;
+            if (!csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator, thousandsSeparator })) continue;
 
-            const timeValue = parseCsvTimeValue(timeSource, row, startRowIndex + timeValues.length, delimiter, { decimalSeparator });
+            const timeValue = parseCsvTimeValue(timeSource, row, startRowIndex + timeValues.length, delimiter, { decimalSeparator, thousandsSeparator });
             if (!Number.isFinite(timeValue)) {
                 const err = new Error('CSV appended row has an invalid time value.');
                 err.code = 'LIVE_UPDATE_INVALID_TIME';
@@ -615,7 +686,7 @@ export default class CsvParser {
 
             for (const { header, index } of variableHeaders) {
                 const rawValue = String(row[index] ?? '').trim();
-                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator);
+                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator, thousandsSeparator);
                 variables.get(header.name).push(numericIndexes.has(index) ? numericValue : rawValue);
             }
         }
@@ -645,16 +716,18 @@ export default class CsvParser {
         if (!sampleRows.length || !expectedColumns) return withForced(new Set());
 
         const delimiter = options.delimiter || profile?.delimiter || ',';
-        const decimalSeparator = options.decimalSeparator || profile?.decimalSeparator || 'auto';
+        const format = csvNumberFormat(profile);
+        const decimalSeparator = options.decimalSeparator || format.decimalSeparator;
+        const thousandsSeparator = options.thousandsSeparator || format.thousandsSeparator;
         const timeSource = options.timeSource || profile?.timeSource || {};
         const rows = !timeSource?.ok || timeSource.strategy === 'generated-index'
             ? sampleRows
             : sampleRows.filter((row, index) =>
-                Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator }))
+                Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator, thousandsSeparator }))
             );
         const numericIndexes = new Set();
         for (let columnIndex = 0; columnIndex < expectedColumns; columnIndex++) {
-            const counts = columnSampleCounts(rows, columnIndex, delimiter, decimalSeparator);
+            const counts = columnSampleCounts(rows, columnIndex, delimiter, decimalSeparator, thousandsSeparator);
             if (isMostlyNumericColumn(counts)) numericIndexes.add(columnIndex);
         }
         return withForced(numericIndexes);
@@ -680,57 +753,177 @@ export default class CsvParser {
         return this._decodeTextWithEncoding(buffer, encoding).text;
     }
 
+    /**
+     * Bytes to clean text: decoded (decodeCsvBytes says how the encoding is
+     * chosen) and stripped of the invisible characters no value is made of.
+     *
+     * @returns {{ text: string, encoding: string, detection: string, removedChars: number }}
+     */
     _decodeTextWithEncoding(buffer, encoding = 'auto') {
-        const requested = String(encoding || 'auto').toLowerCase();
-        if (typeof buffer === 'string') return { text: buffer.replace(/^\uFEFF/, ''), encoding: requested === 'auto' ? 'utf-8' : requested };
-        if (requested !== 'auto') {
-            const label = requested === 'latin1' ? 'windows-1252' : requested;
-            if (typeof TextDecoder !== 'undefined') {
-                try {
-                    return { text: new TextDecoder(label, { fatal: false }).decode(buffer).replace(/^\uFEFF/, ''), encoding: requested };
-                } catch (_) {
-                    // Fall through to auto detection / byte-wise fallback.
-                }
-            }
-        }
-        if (this._utf8Decoder) {
-            try {
-                return { text: this._utf8Decoder.decode(buffer).replace(/^\uFEFF/, ''), encoding: 'utf-8' };
-            } catch (_) {
-                if (this._latin1Decoder) {
-                    return { text: this._latin1Decoder.decode(buffer).replace(/^\uFEFF/, ''), encoding: 'windows-1252' };
-                }
-            }
-        }
+        const decoded = decodeCsvBytes(buffer, String(encoding || 'auto').toLowerCase());
+        const sanitized = sanitizeCsvText(decoded.text);
+        return {
+            text: sanitized.text,
+            encoding: decoded.encoding,
+            detection: decoded.detection,
+            removedChars: sanitized.removed,
+        };
+    }
 
-        let text = '';
-        const bytes = new Uint8Array(buffer);
-        for (const b of bytes) text += String.fromCharCode(b);
-        return { text: text.replace(/^\uFEFF/, ''), encoding: 'latin1' };
+    // The row reader's quote options for a profile or a detected quoting.
+    // '' (no field was quoted in the sample) still reads "..." as quoted.
+    _quoteOptions(quoting) {
+        return {
+            quote: quoting?.quoteChar === "'" ? "'" : '"',
+            escape: quoting?.escapeChar === '\\' ? '\\' : '',
+        };
+    }
+
+    // A header ending in a delimiter, over columns that are empty: dropped.
+    _withoutEmptyTrailingColumns(rawHeaders, dataRows) {
+        const width = trimmedTableWidth(rawHeaders, dataRows);
+        if (width >= rawHeaders.length) return { rawHeaders, dataRows };
+        return {
+            rawHeaders: rawHeaders.slice(0, width),
+            dataRows: dataRows.map(row => row.slice(0, width)),
+        };
+    }
+
+    // How the numbers of a table are written, from its data rows. The time
+    // columns are left out: a date's dots and commas are not decimal marks.
+    _detectNumberFormat(dataRows, delimiter, timeSource = null) {
+        const { decimalSeparator, thousandsSeparator } = detectCsvNumberFormat((dataRows || []).slice(0, 2000), {
+            delimiter,
+            skipColumns: timeSource?.kind === 'datetime' ? (timeSource.sourceIndexes || []) : [],
+        });
+        return { decimalSeparator, thousandsSeparator };
     }
 
     _detectDelimiter(text) {
-        const candidates = [',', ';', '\t', 'whitespace'];
-        let best = { delimiter: ',', score: -Infinity };
-        const sampleText = String(text).slice(0, 262144);
+        return this._pickDelimiter(this._scoreDelimiterCandidates(text));
+    }
 
-        for (const delimiter of candidates) {
+    /**
+     * Every candidate delimiter, scored two ways.
+     *
+     * `score` is the table reading this parser was built on: a header over
+     * rows of numbers and dates, which is what a measurement file is. It is
+     * -Infinity when the candidate finds no such rows.
+     *
+     * `consistency` is the data-consistency measure of van den Burg, Nazabal
+     * and Sutton (2019), CleverCSV's: how regular the rows' lengths are
+     * (pattern score) times the share of cells of a known type (type score).
+     * It needs no numbers, so it decides files of words, codes and names,
+     * where the table reading finds nothing and used to fall back to a comma.
+     */
+    _scoreDelimiterCandidates(text) {
+        const sampleText = String(text).slice(0, 262144);
+        const out = [];
+        for (const delimiter of DELIMITER_CANDIDATES) {
+            if (delimiter !== 'whitespace' && delimiter !== ',' && !sampleText.includes(delimiter)) continue;
             const rows = this._parseRows(sampleText, delimiter, { maxRows: 700 })
                 .filter(row => row.some(cell => cell.trim() !== ''))
                 .slice(0, 500);
             if (!rows.length) continue;
+            let consistency = this._dialectConsistency(rows, delimiter);
+            if (delimiter === 'whitespace') {
+                // Spaces separate columns of numbers (loggers, simulators);
+                // between words or inside a date they are part of the value.
+                // Weighted by the share of rows with two numeric cells, a
+                // list of names or of "1958-03-06 00:00:00" stays one column.
+                const numericRows = rows.filter(row =>
+                    row.filter(cell => Number.isFinite(parseCsvNumber(cell, ' '))).length >= 2).length;
+                consistency *= numericRows / rows.length;
+            }
+            const candidate = { delimiter, score: -Infinity, consistency, width: 1 };
 
             const table = this._detectTableRows(rows, delimiter);
-            const headerWidth = rows[table.headerIndex]?.length || 0;
+            const header = rows[table.headerIndex] || [];
+            const headerWidth = header.length;
+            candidate.width = headerWidth;
+            const minWidth = minimumRowWidth(header);
             const dataRows = rows
                 .slice(table.dataStartIndex, Math.min(rows.length, table.dataStartIndex + 50))
-                .filter(row => row.length === headerWidth && this._isDataLikeRow(row, delimiter));
-            if (rows.length > table.dataStartIndex && dataRows.length === 0) continue;
-            const score = table.score + headerWidth * 25 + dataRows.length * 12 - table.headerIndex * 0.25;
-            if (headerWidth > 1 && score > best.score) best = { delimiter, score };
+                .map(row => fitCsvRowToWidth(row, headerWidth, { minWidth }))
+                .filter(row => row && this._isDataLikeRow(row, delimiter));
+            if (headerWidth > 1 && !(rows.length > table.dataStartIndex && dataRows.length === 0)) {
+                let score = table.score + headerWidth * 25 + dataRows.length * 12 - table.headerIndex * 0.25;
+                if (delimiter === 'whitespace' && dataRows.length) {
+                    // Splitting on spaces also splits dates ("1 janvier 2024
+                    // 13:05") into more columns, which the width bonus rewards.
+                    // A row whose "cells" still hold another delimiter
+                    // ("13:05:22;1.234,5;ok") was not split where the file is.
+                    const foreign = dataRows.filter(row => row.some(cell => /[;\t|]|,(?!\d)|(?<!\d),/.test(cell))).length;
+                    score -= 200 * (foreign / dataRows.length);
+                }
+                candidate.score = score;
+            }
+            out.push(candidate);
         }
+        return out;
+    }
 
-        return best.delimiter;
+    /**
+     * The table reading decides, unless the data consistency clearly
+     * prefers another candidate (by more than CONSISTENCY_OVERRIDE), or no
+     * candidate reads as a table of numbers at all.
+     *
+     * Measured on half of the CSV_Wrangling GitHub test set (files whose MD5
+     * starts with 0-7, bench/dialect): delimiter accuracy 88.2% with the
+     * table reading alone, 96.5% with this rule, and none of the 68 files in
+     * test-files reads differently. The other half is kept for evaluation.
+     */
+    _pickDelimiter(candidates) {
+        let table = null;
+        for (const candidate of candidates) {
+            if (candidate.width > 1 && candidate.score > (table?.score ?? -Infinity)) table = candidate;
+        }
+        let consistent = null;
+        for (const candidate of candidates) {
+            if (!consistent || candidate.consistency > consistent.consistency) consistent = candidate;
+        }
+        if (!table) return consistent?.delimiter || ',';
+        if (consistent && consistent.consistency > CONSISTENCY_OVERRIDE * table.consistency) return consistent.delimiter;
+        return table.delimiter;
+    }
+
+    /**
+     * Data consistency Q = P · T of a reading of the rows (van den Burg et
+     * al., 2019, eq. 1-3). P rewards rows that share a length and have more
+     * than one cell; T is the share of cells that are empty, a number, a
+     * date or time, a URL, an e-mail, or plain words.
+     */
+    _dialectConsistency(rows, delimiter) {
+        const lengths = new Map();
+        let cells = 0;
+        let known = 0;
+        for (const row of rows) {
+            lengths.set(row.length, (lengths.get(row.length) || 0) + 1);
+            for (const cell of row) {
+                cells++;
+                if (this._isKnownTypeCell(cell, delimiter)) known++;
+            }
+        }
+        let pattern = 0;
+        for (const [length, count] of lengths) pattern += count * (Math.max(1e-3, length - 1) / length);
+        pattern /= Math.max(1, lengths.size);
+        const type = cells ? Math.max(1e-10, known / cells) : 1e-10;
+        return pattern * type;
+    }
+
+    _isKnownTypeCell(value, delimiter = ',') {
+        const cell = String(value ?? '').trim();
+        if (!cell || isMissingNumberCell(cell) || /^(?:null|none|nil|n\/a|na|-)$/i.test(cell)) return true;
+        if (cell.length > 200) return false;
+        if (Number.isFinite(parseCsvNumber(cell, delimiter))) return true;
+        if (/^[-+]?[$€£¥]?\s?[-+]?\d[\d.,\s]*\s?[%$€£¥]?$/u.test(cell)) return true;
+        if (this._looksLikeDateTimeCell(cell) || /^\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:\s*[AaPp][Mm])?$/.test(cell)) return true;
+        if (/^(?:https?|ftp):\/\/\S+$|^www\.\S+$/i.test(cell)) return true;
+        if (/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(cell)) return true;
+        if (/^\/[\w.\-/]+$/.test(cell)) return true;
+        if (/^(?:\p{N}?\p{L}+[\p{N}\p{L} \-_.()?!¿¡]*|\p{L}?[\p{N}\p{L} \-_.()?!¿¡]+)$/u.test(cell)) return true;
+        if (/\p{L}{3}/u.test(cell) && isMonthNameDateCell(cell)) return true;
+        return false;
     }
 
     _parseRows(text, delimiter, options = {}) {
@@ -746,31 +939,66 @@ export default class CsvParser {
             return rows;
         }
 
+        // RFC 4180, read leniently. A quote opens a quoted field only at the
+        // start of a field, and only when a closing quote follows within
+        // reach (_quotedFieldCloses). Anywhere else it is an ordinary
+        // character: `5" pipe`, `Temp "A"`, or a string a PLC cut short. The
+        // old reader toggled quoting on every quote, so one stray quote made
+        // the rest of the file a single cell. Text after a closing quote,
+        // before the delimiter, is kept: `"abc"def` reads `abcdef`.
+        //
+        // The quote is `"` unless the file quotes with `'` (options.quote,
+        // from _detectQuoting), and inside a quoted field options.escape
+        // (a backslash, when the file writes \") makes the next quote literal.
+        const quote = options.quote === "'" ? "'" : options.quote === '' ? '' : '"';
+        const escape = options.escape || '';
+        const stats = options.stats || null;
         const rows = [];
         let row = [];
         let cell = '';
         let inQuotes = false;
+        const n = text.length;
 
-        for (let i = 0; i < text.length; i++) {
+        for (let i = 0; i < n; i++) {
             const ch = text[i];
 
-            if (ch === '"') {
-                if (inQuotes && text[i + 1] === '"') {
-                    cell += '"';
+            if (inQuotes) {
+                if (escape && ch === escape && (text[i + 1] === quote || text[i + 1] === escape)) {
+                    cell += text[i + 1];
                     i++;
+                    continue;
+                }
+                if (ch === quote) {
+                    if (text[i + 1] === quote) {
+                        cell += quote;
+                        i++;
+                    } else {
+                        inQuotes = false;
+                    }
+                    continue;
+                }
+                cell += ch;
+                continue;
+            }
+
+            if (quote && ch === quote) {
+                if (cell.trim() === '' && this._quotedFieldCloses(text, i + 1, quote, escape, delimiter)) {
+                    inQuotes = true;
+                    cell = '';
+                    if (stats) stats.quotedFields = (stats.quotedFields || 0) + 1;
                 } else {
-                    inQuotes = !inQuotes;
+                    cell += ch;
                 }
                 continue;
             }
 
-            if (!inQuotes && ch === delimiter) {
+            if (ch === delimiter) {
                 row.push(cell);
                 cell = '';
                 continue;
             }
 
-            if (!inQuotes && (ch === '\n' || ch === '\r')) {
+            if (ch === '\n' || ch === '\r') {
                 row.push(cell);
                 rows.push(row);
                 if (maxRows && rows.length >= maxRows) return rows;
@@ -786,6 +1014,68 @@ export default class CsvParser {
         row.push(cell);
         rows.push(row);
         return rows;
+    }
+
+    // Does the quoted field starting at `from` close, within the size a real
+    // quoted cell has? A doubled quote is an escaped one, not the end. A
+    // single quote must close where the field ends (before the delimiter or
+    // the line end): it is also an apostrophe, and "l'eau" opens nothing.
+    _quotedFieldCloses(text, from, quote = '"', escape = '', delimiter = ',') {
+        const limit = Math.min(text.length, from + MAX_QUOTED_FIELD_CHARS);
+        const q = quote.charCodeAt(0);
+        const e = escape ? escape.charCodeAt(0) : -1;
+        let lines = 0;
+        for (let j = from; j < limit; j++) {
+            const ch = text.charCodeAt(j);
+            if (ch === e && (text.charCodeAt(j + 1) === q || text.charCodeAt(j + 1) === e)) { j++; continue; }
+            if (ch === q) {
+                if (text.charCodeAt(j + 1) === q) { j++; continue; }
+                if (quote !== "'") return true;
+                let k = j + 1;
+                while (text[k] === ' ' || text[k] === '\t') k++;
+                const next = text[k];
+                return next === undefined || next === delimiter || next === '\n' || next === '\r';
+            }
+            if (ch === 10 && ++lines > MAX_QUOTED_FIELD_LINES) return false;
+        }
+        return false;
+    }
+
+    /**
+     * How a file quotes, once its delimiter is known: `"` or `'` (whichever
+     * opens more fields that close), or none, and whether a backslash escapes
+     * quotes inside them (\" rather than RFC 4180's "").
+     *
+     * @returns {{ quoteChar: string, escapeChar: string, quotedFields: number }}
+     */
+    _detectQuoting(text, delimiter) {
+        const sample = String(text).slice(0, 262144);
+        // Columns split on spaces are never quoted (the reader does not look).
+        if (delimiter === 'whitespace') return { quoteChar: '', escapeChar: '', quotedFields: 0 };
+        const counts = {};
+        for (const quote of ['"', "'"]) {
+            if (!sample.includes(quote)) { counts[quote] = 0; continue; }
+            const stats = {};
+            this._parseRows(sample, delimiter, { maxRows: 2000, quote, stats });
+            counts[quote] = stats.quotedFields || 0;
+        }
+        // A single quote wins only clearly: it is also an apostrophe.
+        const quoteChar = counts["'"] >= 3 && counts["'"] > 2 * counts['"'] ? "'" : '"';
+        let escapeChar = '';
+        if (counts[quoteChar] > 0) {
+            const q = quoteChar === '"' ? '"' : "'";
+            const d = delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // \" inside a field (not \ closing it before the delimiter), and
+            // "" inside a field (not an empty field).
+            const escaped = (sample.match(new RegExp(`\\\\${q}(?![${d}\\r\\n])`, 'g')) || []).length;
+            const doubled = (sample.match(new RegExp(`[^${d}\\r\\n]${q}${q}[^${d}\\r\\n]`, 'g')) || []).length;
+            if (escaped > 0 && escaped >= doubled) escapeChar = '\\';
+        }
+        return {
+            quoteChar: counts[quoteChar] > 0 ? quoteChar : '',
+            escapeChar,
+            quotedFields: counts[quoteChar] || 0,
+        };
     }
 
     // Put the rows in chronological order, and report how many had to move.
@@ -868,6 +1158,9 @@ export default class CsvParser {
             // therefore arrived as column_1..column_N with the names and the
             // units both thrown away.
             if (!header.some(cell => String(cell ?? '').trim() !== '')) continue;
+            // Rows may end in empty cells the header does not have (a trailing
+            // delimiter), or stop before header cells that are empty.
+            const minWidth = minimumRowWidth(header);
 
             let dataStartIndex = -1;
             let dataCount = 0;
@@ -896,8 +1189,8 @@ export default class CsvParser {
                     ? headerLookaheadEnd
                     : Math.min(rows.length, dataStartIndex + 30);
                 if (i >= end) break;
-                const row = rows[i] || [];
-                if (row.length !== width) {
+                const row = fitCsvRowToWidth(rows[i] || [], width, { minWidth });
+                if (!row) {
                     if (dataCount === 0) skippedAfterHeader++;
                     continue;
                 }
@@ -993,10 +1286,14 @@ export default class CsvParser {
 
     _looksLikeDateTimeCell(value) {
         const text = String(value ?? '').trim();
-        return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+\-]\d{2}:?\d{2})?)?$/.test(text)
-            || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text)
-            || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)
-            || /^(?:\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})|\d{4}\.\d{1,2}\.\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text);
+        return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s?(?:Z|[+\-]\d{2}(?::?\d{2})?)?)?$/.test(text)
+            || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?$/.test(text)
+            || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?$/.test(text)
+            || /^(?:\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})|\d{4}\.\d{1,2}\.\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?$/.test(text)
+            // "09-Janvier-2024 07:05:08", "Mon, 15 Jan 2024": without this a
+            // file dated with month names had no data-like row, and the
+            // delimiter was chosen as if it had no dates at all.
+            || (/\p{L}{3}/u.test(text) && /\d/.test(text) && isMonthNameDateCell(text));
     }
 
     _isUnitLikeRow(row, delimiter = ',') {
@@ -1132,6 +1429,8 @@ export default class CsvParser {
             if (!match) continue;
             const name = this._sanitizeHeaderName(match[1], fallback);
             const unit = String(match[2] || '').trim();
+            // As in the parsing dialog: on Auto, a phrase is part of the name.
+            if (format === 'auto' && !looksLikeUnitText(unit)) continue;
             // `unit` travels alongside the description so the caller can ask
             // whether a unit was taken at all (inlineUnitSplitCollides).
             if (unit) return { name, description: `[${unit}]`, unit };
@@ -1145,7 +1444,7 @@ export default class CsvParser {
         if (!raw) return { name: fallback, description: '', unit: '' };
 
         const bracketUnit = raw.match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
-        if (bracketUnit) {
+        if (bracketUnit && looksLikeUnitText(bracketUnit[2])) {
             return {
                 name: this._sanitizeHeaderName(bracketUnit[1], fallback),
                 description: `[${bracketUnit[2].trim()}]`,
@@ -1154,7 +1453,7 @@ export default class CsvParser {
         }
 
         const parenUnit = raw.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
-        if (parenUnit) {
+        if (parenUnit && looksLikeUnitText(parenUnit[2])) {
             return {
                 name: this._sanitizeHeaderName(parenUnit[1], fallback),
                 description: `[${parenUnit[2].trim()}]`,
