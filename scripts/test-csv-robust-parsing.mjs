@@ -163,8 +163,13 @@ const values = (data, name) => Array.from(data.variables[name].data);
     assert.equal(parseCsvNumber('1.234', ';', ',', '.'), 1234);
     assert.equal(parseCsvNumber('1.234.567', ';', 'auto', '.'), 1234567);
     assert.equal(parseCsvNumber('2·5', ';', '·'), 2.5, 'a custom decimal mark');
-    assert.equal(parseCsvNumber('1,5', ','), parseCsvNumber('1,5', ','), 'still NaN with a comma delimiter');
-    assert.ok(Number.isNaN(parseCsvNumber('1,5', ',')));
+    // With a comma delimiter a comma inside a cell was quoted ("2,0825" in
+    // German and French exports): a decimal comma, unless it reads as a
+    // thousand ("1,234"), which only the file's number format can settle.
+    assert.equal(parseCsvNumber('1,5', ','), 1.5, 'a quoted decimal comma');
+    assert.equal(parseCsvNumber('-0,087', ','), -0.087, 'a leading zero is never a thousands group');
+    assert.ok(Number.isNaN(parseCsvNumber('1,234', ',')), '"1,234" stays unread on auto');
+    assert.equal(parseCsvNumber('1,234', ',', ','), 1.234, 'and follows the file once it is known');
     assert.equal(parseCsvNumber('12.5'), 12.5);
     assert.equal(parseCsvNumber('1,5', ';'), 1.5);
 
@@ -479,4 +484,119 @@ console.log('CSV robust parsing tests passed.');
     // DuckDB is told.
     assert.deepEqual(csvReadRepairOptions({ quoteChar: "'", escapeChar: '\\' }), ["quote=''''", "escape='\\'"]);
     console.log('Dialect detection tests passed.');
+}
+
+// ─── Real-world corpus fixes (bench/real-world) ────────────────────────────
+// Each block pins one rule added after measuring test-files/csv-real-world.
+{
+    const bytes = hex => {
+        const b = Buffer.from(hex, 'hex');
+        return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+    };
+    const latin = text => {
+        const b = Buffer.from(text, 'latin1');
+        return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+    };
+
+    // Legacy code pages, decided by what each decoding produces.
+    const legacy = {
+        shift_jis: '8e9e8d8f2c89b793782c8ebc93782c83528381839383670a323032342f30312f30312030303a30302c31322e352c34302c8365835883670a323032342f30312f30312030303a31302c31322e372c34312c8366815b835e0a',
+        gbk: 'cab1bce42ccec2b6c82ccaaab6c82cb1e4b5e7d5bec3fbb3c60a323031392f312f3120303a30302c32372e332c37302cd2bbbac5b1e4b5e7d5be0a323031392f312f3120303a31302c32372e322c36392cd2bbbac5b1e4b5e7d5be0a',
+        'euc-kr': 'bdc3b0a32cb9dfc0fcb7ae2cc7b3bcd32cbbf3c5c20a323032342d30312d30312030303a30302c31322e352c342e322cc1a4bbf3bfeec0fc0a323032342d30312d30312030303a30312c31322e372c342e332cc1a4bbf3bfeec0fc0a',
+        'windows-1251': 'c2f0e5ecff3bd2e5ecefe5f0e0f2f3f0e03bc4e0e2ebe5ede8e53bcff0e8ece5f7e0ede8e50a30312e30312e323032342030303a30303b31322c353b313031333bedeef0ece00a30312e30312e323032342030303a31303b31322c373b313031323bedeef0ece00a',
+        'koi8-r': 'f7d2c5cdd13bf4c5cdd0c5d2c1d4d5d2c13be4c1d7ccc5cec9c53bf0d2c9cdc5dec1cec9c50a30312e30312e323032342030303a30303b31322c353b313031333bcecfd2cdc10a',
+        ibm866: '82e0a5acef3b92a5acafa5e0a0e2e3e0a03b84a0a2aba5ada8a53b8fe0a8aca5e7a0ada8a50a30312e30312e323032342030303a30303b31322c353b313031333badaee0aca00a30312e30312e323032342030303a31303b31322c373b313031323badaee0aca00a',
+    };
+    for (const [encoding, hex] of Object.entries(legacy)) {
+        assert.equal(decodeCsvBytes(bytes(hex)).encoding, encoding, `${encoding} is recognised`);
+    }
+    assert.equal(decodeCsvBytes(bytes(legacy.shift_jis)).text.slice(0, 2), '時刻');
+    assert.equal(decodeCsvBytes(bytes(legacy['windows-1251'])).text.slice(0, 5), 'Время');
+    // Slovak in 1250: the ý of every other word is the evidence.
+    const slovak = latin('D\xe1tum\t\xc8as\tV\xfdkon \xe8inn\xfd\tV\xfdkon jalov\xfd\n05.11.2023\t00:00\t1,5\t2,5\n');
+    assert.equal(decodeCsvBytes(slovak).encoding, 'windows-1250');
+    assert.ok(decodeCsvBytes(slovak).text.startsWith('Dátum\tČas'));
+    // Western text stays Western: "AÑO" also decodes as GBK, to one ideograph
+    // between Latin letters, and Italian accents are letters in 1250 too.
+    assert.equal(decodeCsvBytes(latin('A\xd1O;MES;D\xcdA;Temperatura (\xbaC)\n2020;1;1;12,5\n2020;1;2;13,1\n')).encoding, 'windows-1252');
+    assert.equal(decodeCsvBytes(latin('Perch\xe9 per\xf2 pi\xf9 cos\xec;valore\n1;2\n')).encoding, 'windows-1252');
+
+    // A comma delimiter with quoted decimal commas (German and French exports).
+    const quoted = 'Zeit,Strom,Spannung,Torque\n'
+        + '2025-09-23 15:55:38.510,"2,0825","231,52","-0,087"\n'
+        + '2025-09-23 15:55:52.660,"2,0125","231,82","-0,394"\n'
+        + '2025-09-23 15:55:54.857,"2,7125",231,"-0,461"\n';
+    const quotedProfile = parser.inspectSample(utf8(quoted));
+    assert.equal(quotedProfile.delimiter, ',');
+    assert.equal(quotedProfile.headerIndex, 0);
+    assert.equal(quotedProfile.detectedNumberFormat.decimalSeparator, ',');
+    const quotedData = await parser.parse(utf8(quoted));
+    assert.deepEqual(values(quotedData, 'Torque'), [-0.087, -0.394, -0.461], '"-0,087" is not minus 87');
+    assert.deepEqual(values(quotedData, 'Spannung'), [231.52, 231.82, 231]);
+    // Four digits before the separator rule out a thousands group.
+    assert.equal(detectCsvNumberFormat([['46622,538'], ['46622,541']], { delimiter: ';' }).decimalSeparator, ',');
+
+    // A date that carries its own clock is the time axis; the hour column
+    // beside it repeats it (Environment Canada).
+    const eccc = 'Station,Date/Heure,Annee,Heure,Temp\n'
+        + 'Q,2022-02-01 00:00,2022,00:00,-19.9\nQ,2022-02-01 01:00,2022,01:00,-24.3\nQ,2022-02-01 02:00,2022,02:00,-25.1\n';
+    const ecccData = await parser.parse(utf8(eccc));
+    assert.equal(ecccData.metadata.timeKind, 'datetime');
+    assert.equal(ecccData.timeValues?.length ?? ecccData.metadata.numTimesteps, 3);
+
+    // Missing readings written NULL, ---, N/A do not end the table.
+    const nulls = 'time,a,b,c\n2019/1/1 0:00,1,2,3\n2019/1/1 0:10,NULL,NULL,NULL\n2019/1/1 0:20,---,N/A,4\n2019/1/1 0:30,5,6,7\n';
+    const nullsProfile = parser.inspectSample(utf8(nulls));
+    assert.deepEqual([nullsProfile.headerIndex, nullsProfile.dataStartIndex], [0, 1]);
+    assert.deepEqual(values(await parser.parse(utf8(nulls)), 'a').map(v => (Number.isNaN(v) ? null : v)), [1, null, null, 5]);
+
+    // 12-hour clocks count as dates: event rows between readings (HOBO).
+    const hobo = '"Plot Title: t529"\n"#","Date Time","Temp"\n'
+        + '1,10/13/23 01:45:00 PM,236.1\n2,10/13/23 01:50:39 PM,\n3,10/13/23 02:00:00 PM,196.7\n4,10/13/23 02:15:00 PM,15.7\n';
+    const hoboProfile = parser.inspectSample(utf8(hobo));
+    assert.deepEqual([hoboProfile.headerIndex, hoboProfile.dataStartIndex], [1, 2]);
+
+    // Rows with a time and no reading yet are the table's first rows (a solar
+    // logger before sunrise), and such a row is never taken for a header.
+    const night = ['DD.MM.YYYY HH:mm;kWh']
+        .concat(Array.from({ length: 40 }, (_, i) => `05.11.2023 ${String(Math.floor(i / 6)).padStart(2, '0')}:${String((i % 6) * 10).padStart(2, '0')};`))
+        .concat(Array.from({ length: 10 }, (_, i) => `05.11.2023 08:${String(i).padStart(2, '0')};46622,${538 + i}`));
+    const nightProfile = parser.inspectSample(utf8(night.join('\n') + '\n'));
+    assert.deepEqual([nightProfile.headerIndex, nightProfile.dataStartIndex, nightProfile.hasHeader], [0, 1, true]);
+    const gaps = 'timestamp,power_kW\n' + Array.from({ length: 30 }, (_, i) => `2024-06-01T00:${String(i).padStart(2, '0')}:00,${i}`).join('\n')
+        + '\n' + Array.from({ length: 30 }, (_, i) => `2024-06-01T01:${String(i).padStart(2, '0')}:00,`).join('\n') + '\n';
+    assert.deepEqual([parser.inspectSample(utf8(gaps)).headerIndex, parser.inspectSample(utf8(gaps)).hasHeader], [0, true],
+        'a run of missing readings does not move the header');
+
+    // One value per line under a key/value preamble (a chromatograph).
+    const single = 'Version:,3\nSampling Rate:,20.0,20.0,Hz\nX Axis Multiplier:,0.016667,0.016667\nY Axis Multiplier:,0.00013,0.00013\n'
+        + Array.from({ length: 40 }, (_, i) => String(72000 + i * 7)).join('\n') + '\n';
+    const singleProfile = parser.inspectSample(utf8(single));
+    assert.deepEqual([singleProfile.dataStartIndex, singleProfile.hasHeader], [4, false]);
+    assert.equal((await parser.parse(utf8(single))).metadata.numTimesteps, 40);
+
+    // A few lines of settings, a blank line, then the table (TwinCAT Scope).
+    const scope = 'Name;x;y\nSampleTime[ms];10;10\nPort;851;851\n\n0;1401.1;1001.0\n10;1401.2;1001.1\n20;1401.3;1001.2\n';
+    assert.equal(parser.inspectSample(utf8(scope)).dataStartIndex, 4);
+    // ... but a short block of real data before a blank line is kept.
+    const blank = 'time;x;y\n0;1;2\n1;2;3\n\n2;3;4\n3;4;5\n4;5;6\n';
+    assert.equal(parser.inspectSample(utf8(blank)).dataStartIndex, 1);
+
+    // A table that logs a single record under its names and units (TOA5).
+    const toa5 = '"TOA5","CR1000","Status"\n"TIMESTAMP","RECORD","Battery","PanelTemp"\n"TS","RN","Volts","DegC"\n'
+        + '"1990-09-26 13:58:44.85",2,14.82,-16.80\n';
+    const toa5Profile = parser.inspectSample(utf8(toa5));
+    assert.deepEqual([toa5Profile.headerIndex, toa5Profile.dataStartIndex], [1, 3]);
+
+    // Spaces inside a number are thousands groups only; a fixed-width row
+    // with decimal commas is split on spaces, not on the comma.
+    assert.ok(Number.isNaN(parseCsvNumber('0        299', ',')));
+    assert.equal(parseCsvNumber('1 234 567,5', ';'), 1234567.5);
+    assert.equal(parseCsvNumber('- 5', ';'), -5);
+    const fixed = 'Curve Values:\n     Index        Ts       Value\n             [s]       [mW]\n'
+        + Array.from({ length: 20 }, (_, i) => `${String(i).padStart(10)}${('299,' + String(990 - i * 7).padStart(3, '0')).padStart(12)}${('0,' + String(212982 + i)).padStart(14)}`).join('\n') + '\n';
+    const fixedProfile = parser.inspectSample(utf8(fixed));
+    assert.equal(fixedProfile.delimiter, 'whitespace');
+    assert.equal(fixedProfile.detectedNumberFormat.decimalSeparator, ',');
+    console.log('Real-world corpus rule tests passed.');
 }

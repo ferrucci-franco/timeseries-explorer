@@ -24,10 +24,18 @@ export const NUMERIC_COLUMN_MIN_RATIO = 0.5;
 // "NaN" (any case, optionally signed, as C/Python/LabVIEW print it) is a missing
 // number, not text: a logger that writes NaN for an absent sensor must not turn
 // its first data row into a header, nor a column of mostly-missing values into a
-// string column.
-const MISSING_NUMBER_CELL = /^[+-]?nan$/i;
+// string column. So are the other ways exports write a missing reading: NULL
+// (SCADA databases), None, N/A and #N/A (spreadsheets), and a run of dashes
+// (weather stations). "NA" is left out: it is also sodium's column.
+const MISSING_NUMBER_CELL = /^(?:[+-]?nan|null|none|nil|n\/a|#n\/a|-{1,3})$/i;
 export function isMissingNumberCell(cell) {
-    return MISSING_NUMBER_CELL.test(String(cell ?? '').trim());
+    const text = typeof cell === 'string' ? cell : String(cell ?? '');
+    // Every marker is at most four characters and none starts with a digit:
+    // the cells of a numeric file leave here without a regular expression.
+    if (!text || text.length > 12) return false;
+    const first = text.charCodeAt(0);
+    if (first >= 48 && first <= 57) return false;
+    return MISSING_NUMBER_CELL.test(text.trim());
 }
 
 // Numbers unless the non-empty cells say otherwise. A column with nothing in it

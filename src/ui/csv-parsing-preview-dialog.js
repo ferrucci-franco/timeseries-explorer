@@ -343,13 +343,11 @@ function decimalSeparatorOptions(delimiter, detected = 'auto') {
                     ? { ...option, label: `Auto (${separatorSymbol(detected)})` }
                     : option;
             }
+            // With a comma delimiter a decimal comma can only be quoted
+            // ("2,5"), as German and French exports write it; DuckDB and the
+            // in-memory reader both read that.
             if (option.value !== ',' || delimiter !== ',') return option;
-            return {
-                ...option,
-                disabled: true,
-                label: i18n.t('csvPreviewDecimalCommaUnavailable'),
-                title: i18n.t('csvPreviewDecimalCommaUnavailableTooltip'),
-            };
+            return { ...option, title: i18n.t('csvPreviewDecimalCommaQuotedTooltip') };
         }),
         { value: CUSTOM_SEPARATOR_VALUE, label: i18n.t('csvPreviewSeparatorCustom') },
     ];
@@ -980,7 +978,6 @@ export default class CsvParsingPreviewDialog {
         this.lineLimitSelect = this._select(this._lineLimitOptions(), this._selectedLineLimitValue());
         this.sampleRegionSelect = this._select(this._sampleRegionOptions(), this.state.sampleRegion);
         this.delimiterSelect = this._select(DELIMITERS, this.state.delimiter);
-        if (this.state.delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
         this.decimalSelect = this._select(
             decimalSeparatorOptions(this.state.delimiter, this._detectedNumberFormat().decimalSeparator),
             separatorSelectValue(this.state.decimalSeparator, DECIMAL_SEPARATORS),
@@ -1031,7 +1028,6 @@ export default class CsvParsingPreviewDialog {
         this._syncCustomLineLimitControls();
         this.delimiterSelect.addEventListener('change', () => {
             this.state.delimiter = this.delimiterSelect.value;
-            if (this.state.delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
             this._updateNumberFormatControls();
             this._refreshPreview({ redetectStructure: true });
         });
@@ -1533,7 +1529,7 @@ export default class CsvParsingPreviewDialog {
                 separatorSelectValue(this.state.decimalSeparator, DECIMAL_SEPARATORS),
             );
             this.decimalSelect.title = this.state.delimiter === ','
-                ? i18n.t('csvPreviewDecimalCommaUnavailableTooltip')
+                ? i18n.t('csvPreviewDecimalCommaQuotedTooltip')
                 : i18n.t('csvPreviewDecimalSeparator');
         }
         if (this.thousandsSelect) {
@@ -1560,7 +1556,7 @@ export default class CsvParsingPreviewDialog {
      */
     _setDecimalSeparator(value) {
         const next = normalizeDecimalSeparator(value);
-        if (next !== 'auto' && next === this.state.delimiter) {
+        if (next !== 'auto' && next !== ',' && next === this.state.delimiter) {
             this._updateNumberFormatControls();
             return false;
         }
@@ -1936,7 +1932,6 @@ export default class CsvParsingPreviewDialog {
             if (options.resetDecimal) this.state.decimalSeparator = profile.decimalSeparator || 'auto';
             this._applyDetectedProfileToState(profile, options);
         }
-        if (this.state.delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
         this._rebuildProfile();
         this._updateNumberFormatControls();
         this._updateEncodingSelect();
@@ -1988,7 +1983,6 @@ export default class CsvParsingPreviewDialog {
             warnings.push(i18n.t('csvPreviewSamplePartialWarning'));
         }
         const delimiter = this.state.delimiter;
-        if (delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
         if (this.headerlessProfileLocked) this.state.hasHeader = false;
         const hasHeader = !!this.state.hasHeader;
         const headerIndex = Math.max(0, this.state.headerIndex);
