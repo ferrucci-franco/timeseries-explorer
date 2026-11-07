@@ -51,6 +51,7 @@ import {
 } from './pair-regression-sql.js';
 import { linearFromMoments, quadraticFromMoments, powerFromMoments } from '../utils/regression.js';
 import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } from './missing-buckets-sql.js';
+import { buildStateChangesSql, buildStateColumnsSql, buildStateValuesSql } from './state-runs-sql.js';
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
@@ -759,8 +760,12 @@ export default class DuckDbSource {
         const tableName = this._fromSql(legacyData, requested.map(item => item.variable));
         const lit = (v) => this._numericLiteral(v);
         const tExpr = this.timeValueSql(legacyData);
+        // A text column (a state band, exported) is read as the text it is;
+        // as a DOUBLE every value of it would be NULL.
         const valueSelect = requested
-            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
+            .map(({ variable, varName }, index) => (variable?.dataType === 'string'
+                ? `CAST((${this._valueExpressionSql(variable, varName)}) AS VARCHAR) AS v${index}`
+                : `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`))
             .join(',\n                               ');
         const valueNames = requested.map((_, index) => `v${index}`).join(', ');
         const ranged = Number.isFinite(lo) && Number.isFinite(hi);
@@ -960,7 +965,9 @@ export default class DuckDbSource {
         const column = (idx) => this._joinedColumn(batches, idx);
         const x = column(0);
         const yByVar = new Map();
-        requested.forEach(({ varName }, index) => yByVar.set(varName, column(index + 1)));
+        requested.forEach(({ varName, variable }, index) => yByVar.set(varName, variable?.dataType === 'string'
+            ? batches.flatMap(batch => this._extractColumnAsStrings(batch, index + 1))
+            : column(index + 1)));
         return { x, yByVar, rowStart };
     }
 
@@ -1578,6 +1585,68 @@ export default class DuckDbSource {
             gaps: this._extractColumnAsFloat64(result, 0, 'DOUBLE')[0] || 0,
             missing: this._extractColumnAsFloat64(result, 1, 'DOUBLE')[0] || 0,
         };
+    }
+
+    /**
+     * What a state band draws for [t0, t1] (source time units; see
+     * state-runs-sql.js). Up to `maxRuns` changes: `{ mode: 'changes', t,
+     * values }`, the first row being the one holding at t0. More: `{ mode:
+     * 'columns', rows: [{ b, value, changes }] }`, one per screen column.
+     */
+    async getStateRuns(legacyData, varName, t0, t1, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getStateRuns: data is not DuckDB-backed (eager mode)');
+        const variable = legacyData.variables?.[varName];
+        if (!variable) return { mode: 'changes', t: new Float64Array(0), values: [] };
+        let lo = Number(t0);
+        let hi = Number(t1);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { mode: 'changes', t: new Float64Array(0), values: [] };
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const maxRuns = Math.max(1, Math.floor(options.maxRuns || 4000));
+        const columns = Math.max(1, Math.floor(options.columns || 500));
+        const timeExpr = this._timeExpressionSql(legacyData, meta);
+        const valueExpr = this._valueExpressionSql(variable, varName);
+        const from = this._fromSql(legacyData, [variable]);
+        const lit = (v) => this._numericLiteral(v);
+        const changes = await this._interactiveQuery(
+            buildStateChangesSql(timeExpr, valueExpr, from, lit, lo, hi, maxRuns + 1),
+            { signal: options.signal });
+        if (changes.numRows <= maxRuns) {
+            return {
+                mode: 'changes',
+                t: this._extractColumnAsFloat64(changes, 0, 'DOUBLE'),
+                values: this._extractColumnAsStrings(changes, 1),
+            };
+        }
+        const result = await this._interactiveQuery(
+            buildStateColumnsSql(timeExpr, valueExpr, from, lit, lo, hi, columns),
+            { signal: options.signal });
+        const b = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        const values = this._extractColumnAsStrings(result, 1);
+        const counts = this._extractColumnAsFloat64(result, 2, 'DOUBLE');
+        const rows = [];
+        for (let i = 0; i < b.length; i++) rows.push({ b: b[i], value: values[i], changes: counts[i] });
+        return { mode: 'columns', rows, columns };
+    }
+
+    /**
+     * The distinct values of a text column in order of first appearance, at
+     * most `limit` + 1 of them (one more than the band colours tells it to
+     * stop colouring by value). Cached on the data object: the colours of a
+     * band must not depend on the view.
+     */
+    async getStateValues(legacyData, varName, limit = 16, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getStateValues: data is not DuckDB-backed (eager mode)');
+        const variable = legacyData.variables?.[varName];
+        if (!variable) return [];
+        const sql = buildStateValuesSql(
+            this._timeExpressionSql(legacyData, meta),
+            this._valueExpressionSql(variable, varName),
+            this._fromSql(legacyData, [variable]),
+            limit + 1);
+        const result = await this._interactiveQuery(sql, { signal: options.signal });
+        return this._extractColumnAsStrings(result, 0);
     }
 
     // The time expression used by the diagnostics queries — identical to the one

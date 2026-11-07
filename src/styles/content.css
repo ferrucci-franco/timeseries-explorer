@@ -3456,6 +3456,71 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     top: 130px;
 }
 
+/* State bands (docs/state-band-design.md): a notice of their own, which can
+   be a sentence long, below whichever pill is already showing. */
+.state-band-notice .lazy-detail-text {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.3;
+    padding: 6px 0;
+}
+.state-band-notice {
+    max-width: min(520px, calc(100% - 32px));
+}
+.layout-panel:has(.lazy-data-detail-indicator.active) .state-band-notice.active,
+.layout-panel:has(.samples-zoom-indicator.active) .state-band-notice.active,
+.layout-panel:has(.missing-dense-indicator.active) .state-band-notice.active {
+    top: 88px;
+}
+
+/* The values a panel's state bands colour, one chip each, in the space the
+   layout reserves under the time axis. */
+.state-band-legend {
+    position: absolute;
+    bottom: 2px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: 11px;
+    pointer-events: auto;
+    z-index: 2;
+}
+.state-band-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 18ch;
+}
+.state-band-chip > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.state-band-swatch {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 10px;
+    border-radius: 2px;
+}
+.state-band-swatch.hatched {
+    background-image: repeating-linear-gradient(45deg, rgba(0,0,0,0.45) 0 1.5px, transparent 1.5px 4px);
+}
+.state-band-swatch.striped {
+    background: repeating-linear-gradient(90deg, #9e9e9e 0 4px, #cfcfcf 4px 8px);
+}
+.state-band-chip-many {
+    max-width: 30ch;
+    font-style: italic;
+}
+.cursor-state-row {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 @keyframes lazy-detail-spin {
     to { transform: rotate(360deg); }
 }
