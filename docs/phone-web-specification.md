@@ -360,7 +360,7 @@ In compact mode it behaves the same from all four.
   - In landscape, the preview and the options sit side by side.
 - **Options are grouped in collapsible sections**, each with a one-line summary when
   collapsed:
-  - **File**: delimiter, decimal separator, encoding, sample, and lines shown.
+  - **File**: delimiter, decimal and thousands separators, encoding, sample, and lines shown.
   - **Structure**: header row, units, first data row, and row filter.
   - **Time axis**: mode, columns, format or pattern, and date order.
   - **Columns**: a list with a checkbox, an editable name and an editable unit per

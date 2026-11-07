@@ -24,6 +24,13 @@ import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { csvNumberFormat } from '../parsers/csv-text-normalize.js';
+import {
+    csvNumericCastSql,
+    csvProfileUsesDecimalComma,
+    csvReadRepairOptions,
+    csvRepairProjectionSql,
+} from './csv-sql-normalize.js';
 import { columnIndexSet, columnSampleVerdict, forcedColumnTypes, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
 import { buildCsvTree, resolveCsvGrouping } from '../parsers/csv-tree-grouping.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
@@ -4022,12 +4029,17 @@ export default class DuckDbSource {
             `skip=${skip}`,
             `columns=${this._duckDbColumnsStruct(specs)}`,
             `ignore_errors=true`,
+            ...csvReadRepairOptions(csvProfile),
         ];
         if (csvProfile.delimiter && csvProfile.delimiter !== 'whitespace') {
             options.push(`delim='${this._escapeSqlString(csvProfile.delimiter)}'`);
         }
         if (this._csvUsesDecimalComma(csvProfile)) options.push(`decimal_separator=','`);
-        return `read_csv('${escapedHandle}', ${options.join(', ')})`;
+        const readSql = `read_csv('${escapedHandle}', ${options.join(', ')})`;
+        // Invisible characters, and a time column's decimal comma or weekday:
+        // repaired here, once, so every query on the file reads the same
+        // clean columns.
+        return csvRepairProjectionSql(readSql, csvProfile, specs.map(spec => spec.name)) || readSql;
     }
 
     _csvRowFilterSql(csvProfile = null) {
@@ -4081,8 +4093,9 @@ export default class DuckDbSource {
             }
             return validTimeRows;
         };
+        const numberFormat = csvNumberFormat(csvProfile);
         const verdictOf = (index) => columnSampleVerdict(
-            sampleRowsOnce(), index, csvProfile?.delimiter, csvProfile?.decimalSeparator,
+            sampleRowsOnce(), index, csvProfile?.delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator,
         );
         return rawHeaders.map((raw, index) => {
             const header = headers[index] || {};
@@ -4106,7 +4119,8 @@ export default class DuckDbSource {
                     sampleRowsOnce(),
                     index,
                     csvProfile.delimiter,
-                    csvProfile.decimalSeparator,
+                    numberFormat.decimalSeparator,
+                    numberFormat.thousandsSeparator,
                 );
             const spec = {
                 name,
@@ -4130,17 +4144,17 @@ export default class DuckDbSource {
         const timeSource = csvProfile?.timeSource;
         if (!timeSource?.ok || timeSource.strategy === 'generated-index') return sampleRows || [];
         const delimiter = csvProfile?.delimiter || ',';
-        const decimalSeparator = csvProfile?.decimalSeparator || 'auto';
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat(csvProfile);
         return (sampleRows || []).filter((row, index) =>
-            Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator }))
+            Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator, thousandsSeparator }))
         );
     }
 
     // Text only when the sample says so. A column the sample held no value for
     // is read as numbers — the scan below corrects it if the file disagrees, and
     // until it answers, numbers are the better guess for a column of a log.
-    _inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto') {
-        const verdict = columnSampleVerdict(sampleRows, index, delimiter, decimalSeparator);
+    _inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
+        const verdict = columnSampleVerdict(sampleRows, index, delimiter, decimalSeparator, thousandsSeparator);
         return verdict === 'text'
             ? { type: 'VARCHAR', readType: 'VARCHAR' }
             : { type: 'DOUBLE', readType: 'VARCHAR' };
@@ -4215,16 +4229,7 @@ export default class DuckDbSource {
     }
 
     _csvUsesDecimalComma(csvProfile) {
-        if (csvProfile?.decimalSeparator === ',') return true;
-        if (csvProfile?.decimalSeparator === '.') return false;
-        if (!csvProfile || csvProfile.delimiter === ',') return false;
-        for (const row of csvProfile.sampleRows || []) {
-            for (const cell of row || []) {
-                const raw = String(cell ?? '').trim();
-                if (/^[+-]?\d+,\d+(?:[eEdD][+-]?\d+)?$/.test(raw)) return true;
-            }
-        }
-        return false;
+        return csvProfileUsesDecimalComma(csvProfile);
     }
 
     async _parquetRowCountFromMetadata(escapedHandle) {
@@ -4483,6 +4488,7 @@ export default class DuckDbSource {
         const info = customDatetimePatternInfo(pattern);
         if (!info?.format) return null;
         let valueExpr = `CAST(${expr} AS VARCHAR)`;
+        if (info.hasWeekday) valueExpr = `regexp_replace(trim(${valueExpr}), '^[\\p{L}-]{2,14}\\.?,?\\s+', '')`;
         if (info.valuePrefix) valueExpr = `'${this._escapeSqlString(info.valuePrefix)}' || ${valueExpr}`;
         if (info.valueSuffix) valueExpr = `${valueExpr} || '${this._escapeSqlString(info.valueSuffix)}'`;
         if (info.hasMonthName) valueExpr = this._normalizedMonthNameSql(valueExpr);
@@ -4490,7 +4496,7 @@ export default class DuckDbSource {
     }
 
     _normalizedMonthNameSql(expr) {
-        let sql = `lower(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g'))`;
+        let sql = `lower(strip_accents(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g')))`;
         const replacements = [
             ['january', 'jan'], ['janvier', 'jan'], ['enero', 'jan'],
             ['february', 'feb'], ['février', 'feb'], ['fevrier', 'feb'], ['févr', 'feb'], ['fevr', 'feb'], ['febrero', 'feb'],
@@ -4559,10 +4565,7 @@ export default class DuckDbSource {
     }
 
     _numericCastSql(expr, csvProfile = null) {
-        const value = this._csvUsesDecimalComma(csvProfile)
-            ? `replace(CAST(${expr} AS VARCHAR), ',', '.')`
-            : expr;
-        return `try_cast(${value} AS DOUBLE)`;
+        return csvNumericCastSql(expr, csvProfile);
     }
 
     _quoteIdent(name) {

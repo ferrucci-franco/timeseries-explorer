@@ -5,16 +5,37 @@ import { csvRowMatchesFilter, normalizeCsvRowFilter, stripUnitBrackets } from '.
 // same as every other path (#311): the preview shows a handful of rows, and an
 // empty one is no evidence of text.
 import { columnSampleVerdict, csvProfileWithoutScan, inferNumericColumnIndexes } from '../parsers/csv-column-types.js';
-import { customDatetimePatternInfo, dateSeparatorForStrategy, detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import {
+    customDatetimePatternInfo,
+    dateSeparatorForStrategy,
+    describeTimeSourcePattern,
+    detectCsvTimeAxis,
+    parseCsvNumber,
+    parseCsvTimeValue,
+} from '../parsers/csv-time-detection.js';
+import {
+    CSV_ENCODINGS,
+    detectCsvNumberFormat,
+    fitCsvRowToWidth,
+    minimumRowWidth,
+    normalizeDecimalSeparator,
+    normalizeRaggedRowPolicy,
+    normalizeThousandsSeparator,
+} from '../parsers/csv-text-normalize.js';
 import {
     normalizeCsvGrouping,
     resolveCsvGrouping,
     summarizeCsvGrouping,
 } from '../parsers/csv-tree-grouping.js';
 
-const LINE_LIMITS = [10, 25, 50, 100, 150, 200];
-const MAX_PREVIEW_LINES = 5000;
+const LINE_LIMITS = [10, 25, 50, 100, 150, 200, 1000];
+// The most rows the grid shows, "All" included: past this a browser table is
+// too slow to scroll, and the reader is told the rest are not shown.
+const MAX_PREVIEW_LINES = 10000;
+// "All" reads at most this much of the file into the preview.
+const ALL_LINES_MAX_BYTES = 32 * 1024 * 1024;
 const CUSTOM_LINE_LIMIT_VALUE = 'custom';
+const ALL_LINE_LIMIT_VALUE = 'all';
 const DEFAULT_SAMPLE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_SIDE_PANEL_WIDTH = 416;
 const MIN_SIDE_PANEL_WIDTH = 338;
@@ -24,6 +45,7 @@ const DELIMITERS = [
     { value: ',', label: ', comma' },
     { value: ';', label: '; semicolon' },
     { value: '\t', label: 'tab' },
+    { value: '|', label: '| pipe' },
     { value: 'whitespace', label: 'whitespace' },
 ];
 const INLINE_UNIT_FORMATS = [
@@ -34,17 +56,48 @@ const INLINE_UNIT_FORMATS = [
     { value: 'angle', label: '<...>' },
     { value: 'slash', label: 'name / unit' },
 ];
-const ENCODINGS = [
-    { value: 'auto', label: 'UTF-8 auto' },
-    { value: 'utf-8', label: 'UTF-8' },
-    { value: 'windows-1252', label: 'Windows-1252' },
-    { value: 'latin1', label: 'Latin-1' },
-];
+const ENCODING_LABELS = {
+    'utf-8': 'UTF-8',
+    'utf-16le': 'UTF-16 LE',
+    'utf-16be': 'UTF-16 BE',
+    'windows-1252': 'Windows-1252 (Western)',
+    'iso-8859-15': 'ISO-8859-15 (Latin-9)',
+    'windows-1250': 'Windows-1250 (Central European)',
+    'windows-1251': 'Windows-1251 (Cyrillic)',
+    'windows-1253': 'Windows-1253 (Greek)',
+    'windows-1254': 'Windows-1254 (Turkish)',
+    macintosh: 'Mac Roman',
+    ibm866: 'DOS 866 (Cyrillic)',
+    'koi8-r': 'KOI8-R',
+    shift_jis: 'Shift_JIS (Japanese)',
+    'euc-jp': 'EUC-JP (Japanese)',
+    gbk: 'GBK (Chinese)',
+    big5: 'Big5 (Chinese)',
+    'euc-kr': 'EUC-KR (Korean)',
+    latin1: 'Latin-1',
+};
+function encodingLabel(value) {
+    return ENCODING_LABELS[value] || String(value || '').toUpperCase();
+}
+const CUSTOM_SEPARATOR_VALUE = 'custom';
 const DECIMAL_SEPARATORS = [
     { value: 'auto', label: 'Auto' },
     { value: '.', label: '. dot' },
     { value: ',', label: ', comma' },
 ];
+const THOUSANDS_SEPARATORS = [
+    { value: 'auto', label: 'Auto' },
+    { value: 'none', labelKey: 'csvPreviewThousandsNone' },
+    { value: ',', label: ', comma' },
+    { value: '.', label: '. dot' },
+    { value: ' ', labelKey: 'csvPreviewThousandsSpace' },
+    { value: "'", label: "' apostrophe" },
+];
+function separatorSymbol(value) {
+    if (value === ' ') return '␣';
+    if (value === 'none') return '–';
+    return value;
+}
 const TIME_FORMATS = [
     { value: 'auto', label: 'Auto' },
     { value: 'elapsed', label: 'Numeric elapsed (seconds)' },
@@ -61,7 +114,7 @@ const SETTINGS_FILE_VERSION = 1;
 // is in it. Column choices are positions, so they fit any file laid out the
 // same way.
 const PORTABLE_SETTING_KEYS = [
-    'delimiter', 'encoding', 'decimalSeparator',
+    'delimiter', 'encoding', 'decimalSeparator', 'thousandsSeparator', 'raggedRows',
     'hasHeader', 'headerIndex', 'dataStartIndex',
     'unitsMode', 'unitRowIndex', 'inlineUnitFormat',
     'ignoredColumns', 'columnOverrides', 'rowFilter',
@@ -104,10 +157,10 @@ function isEmptyPreviewRow(row) {
     return !(row || []).some(cell => String(cell ?? '').trim() !== '');
 }
 
-function rowHasInvalidNumericCell(row, numericIndexes, delimiter, decimalSeparator = 'auto') {
+function rowHasInvalidNumericCell(row, numericIndexes, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
     for (const index of numericIndexes || []) {
         const raw = String(row?.[index] ?? '').trim();
-        if (raw && !Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator))) return true;
+        if (raw && !Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator, thousandsSeparator))) return true;
     }
     return false;
 }
@@ -150,10 +203,27 @@ function dateOrderPattern(order, separator, hasTime, hasMeridiem = false) {
     return hasMeridiem ? `${date} hh:mm AM/PM` : `${date} HH:mm:ss`;
 }
 
-function customPatternFromTimeSource(timeSource) {
+// The language a date's month names are in, said in the reader's language.
+function dateLanguageName(code) {
+    if (!code) return '';
+    const key = `csvPreviewDateLanguage_${code}`;
+    const text = i18n.t(key);
+    return text && text !== key ? text : code;
+}
+
+function describedPatternText(described) {
+    if (!described?.pattern) return '';
+    const language = dateLanguageName(described.language);
+    return language ? `${described.pattern} (${language})` : described.pattern;
+}
+
+function customPatternFromTimeSource(timeSource, described = null) {
     const strategy = timeSource?.strategy || '';
     const format = timeSource?.format || {};
     if (!timeSource?.ok) return '';
+    // The pattern read from the column itself, when it is one pattern: the
+    // Custom box then starts from exactly what Auto was doing.
+    if (described?.pattern && !described.pattern.includes(' + ') && timeSource.mode !== 'split') return described.pattern;
     if (strategy === 'custom-format') return format.pattern || '';
     if (strategy === 'excel-serial') return 'Excel';
     if (strategy === 'matlab-datenum') return 'Matlab';
@@ -174,10 +244,15 @@ function customPatternFromTimeSource(timeSource) {
     return '';
 }
 
-function autoDetectedFormatText(timeSource) {
+function autoDetectedFormatText(timeSource, described = null) {
     const strategy = timeSource?.strategy || '';
     const format = timeSource?.format || {};
     if (!timeSource?.ok) return i18n.t('csvPreviewAutoTimeFormatHelp');
+    // A text date: the exact pattern the column is written in, as read from
+    // its cells ("d MMMM yyyy HH:mm:ss (French)"), instead of a family name.
+    if (timeSource.kind === 'datetime' && described?.pattern) {
+        return i18n.t('csvPreviewAutoDetectedDatePattern').replace('{pattern}', describedPatternText(described));
+    }
     if (timeSource.kind === 'numeric' || strategy === 'numeric') {
         return i18n.t('csvPreviewAutoDetectedFormat')
             .replace('{format}', i18n.t('csvPreviewAutoDetectedNumeric'));
@@ -258,16 +333,45 @@ function fromRowNumber(value, fallback = 0) {
     return Number.isFinite(n) && n > 0 ? n - 1 : fallback;
 }
 
-function decimalSeparatorOptions(delimiter) {
-    return DECIMAL_SEPARATORS.map(option => {
-        if (option.value !== ',' || delimiter !== ',') return option;
-        return {
-            ...option,
-            disabled: true,
-            label: i18n.t('csvPreviewDecimalCommaUnavailable'),
-            title: i18n.t('csvPreviewDecimalCommaUnavailableTooltip'),
-        };
-    });
+function decimalSeparatorOptions(delimiter, detected = 'auto') {
+    return [
+        ...DECIMAL_SEPARATORS.map(option => {
+            if (option.value === 'auto') {
+                return detected && detected !== 'auto'
+                    ? { ...option, label: `Auto (${separatorSymbol(detected)})` }
+                    : option;
+            }
+            if (option.value !== ',' || delimiter !== ',') return option;
+            return {
+                ...option,
+                disabled: true,
+                label: i18n.t('csvPreviewDecimalCommaUnavailable'),
+                title: i18n.t('csvPreviewDecimalCommaUnavailableTooltip'),
+            };
+        }),
+        { value: CUSTOM_SEPARATOR_VALUE, label: i18n.t('csvPreviewSeparatorCustom') },
+    ];
+}
+
+function thousandsSeparatorOptions(delimiter, detected = 'auto') {
+    return [
+        ...THOUSANDS_SEPARATORS.map(option => {
+            const label = option.labelKey ? i18n.t(option.labelKey) : option.label;
+            if (option.value === 'auto') {
+                return detected && detected !== 'auto'
+                    ? { ...option, label: `Auto (${separatorSymbol(detected)})` }
+                    : { ...option, label };
+            }
+            // A grouping character that splits columns cannot group digits
+            // in an unquoted cell; offered anyway, for quoted ones.
+            return { ...option, label };
+        }),
+        { value: CUSTOM_SEPARATOR_VALUE, label: i18n.t('csvPreviewSeparatorCustom') },
+    ];
+}
+
+function separatorSelectValue(value, presets) {
+    return presets.some(option => option.value === value) ? value : CUSTOM_SEPARATOR_VALUE;
 }
 
 function makeIndexTimeSource() {
@@ -497,7 +601,7 @@ function buildManualTimeSource(parser, rawHeaders, dataRows, delimiter, columnIn
         };
     }
 
-    const isoRatio = values.filter(value => /^\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?/.test(value)).length / values.length;
+    const isoRatio = values.filter(value => /^\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?/.test(value)).length / values.length;
     if (isoRatio >= 0.8) {
         return {
             ok: true,
@@ -514,7 +618,7 @@ function buildManualTimeSource(parser, rawHeaders, dataRows, delimiter, columnIn
         };
     }
 
-    const slashRatio = values.filter(value => /^\d{1,4}\/\d{1,2}\/\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i.test(value)).length / values.length;
+    const slashRatio = values.filter(value => /^\d{1,4}\/\d{1,2}\/\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i.test(value)).length / values.length;
     if (slashRatio >= 0.8) {
         const meridiemRatio = values.filter(value => /[AP]M\s*$/i.test(value)).length / values.length;
         return {
@@ -532,7 +636,7 @@ function buildManualTimeSource(parser, rawHeaders, dataRows, delimiter, columnIn
         };
     }
 
-    const dashRatio = values.filter(value => /^\d{1,4}-\d{1,2}-\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i.test(value)).length / values.length;
+    const dashRatio = values.filter(value => /^\d{1,4}-\d{1,2}-\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i.test(value)).length / values.length;
     if (dashRatio >= 0.8) {
         const meridiemRatio = values.filter(value => /[AP]M\s*$/i.test(value)).length / values.length;
         return {
@@ -550,7 +654,7 @@ function buildManualTimeSource(parser, rawHeaders, dataRows, delimiter, columnIn
         };
     }
 
-    const dotRatio = values.filter(value => /^\d{1,4}\.\d{1,2}\.\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i.test(value)).length / values.length;
+    const dotRatio = values.filter(value => /^\d{1,4}\.\d{1,2}\.\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i.test(value)).length / values.length;
     if (dotRatio >= 0.8) {
         const meridiemRatio = values.filter(value => /[AP]M\s*$/i.test(value)).length / values.length;
         return {
@@ -600,7 +704,7 @@ function buildSplitTimeSource(parser, rawHeaders, dataRows, delimiter, dateColum
         || /^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(value)
     ).length / dateValues.length;
     const timeRatio = timeValues.filter(value =>
-        /^\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*(?:am|pm))?$/i.test(value)
+        /^\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:\s*(?:am|pm))?$/i.test(value)
     ).length / timeValues.length;
     if (dateRatio < 0.8 || timeRatio < 0.8) {
         return { ok: false, reason: 'Selected columns do not look like separate date and time columns.' };
@@ -739,8 +843,15 @@ export default class CsvParsingPreviewDialog {
             hidePreambleRows: true,
             hideInvalidLines: false,
             delimiter: this.autoProfile?.delimiter || ',',
-            encoding: this.autoProfile?.encoding || 'auto',
-            decimalSeparator: this.autoProfile?.decimalSeparator || 'auto',
+            // What the reader chose, which is Auto until they choose: the
+            // profile's `encoding` is what Auto decoded the file as, and the
+            // select names it ("Auto (UTF-16 LE)").
+            encoding: this.autoProfile?.encodingSetting
+                || (this.autoProfile?.profileSource === 'user' ? this.autoProfile?.encoding : null)
+                || 'auto',
+            decimalSeparator: normalizeDecimalSeparator(this.autoProfile?.decimalSeparator || 'auto'),
+            thousandsSeparator: normalizeThousandsSeparator(this.autoProfile?.thousandsSeparator || 'auto'),
+            raggedRows: normalizeRaggedRowPolicy(this.autoProfile?.raggedRows),
             hasHeader: this.autoProfile?.hasHeader !== false,
             headerIndex: Math.max(0, Number(this.autoProfile?.headerIndex) || 0),
             unitsMode: this.autoProfile?.unitsMode
@@ -865,8 +976,21 @@ export default class CsvParsingPreviewDialog {
         this.sampleRegionSelect = this._select(this._sampleRegionOptions(), this.state.sampleRegion);
         this.delimiterSelect = this._select(DELIMITERS, this.state.delimiter);
         if (this.state.delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
-        this.decimalSelect = this._select(decimalSeparatorOptions(this.state.delimiter), this.state.decimalSeparator);
-        this.encodingSelect = this._select(ENCODINGS, this.state.encoding);
+        this.decimalSelect = this._select(
+            decimalSeparatorOptions(this.state.delimiter, this._detectedNumberFormat().decimalSeparator),
+            separatorSelectValue(this.state.decimalSeparator, DECIMAL_SEPARATORS),
+        );
+        this.decimalCustomInput = this._separatorInput(
+            this.state.decimalSeparator, DECIMAL_SEPARATORS, i18n.t('csvPreviewDecimalCustomTooltip'),
+        );
+        this.thousandsSelect = this._select(
+            thousandsSeparatorOptions(this.state.delimiter, this._detectedNumberFormat().thousandsSeparator),
+            separatorSelectValue(this.state.thousandsSeparator, THOUSANDS_SEPARATORS),
+        );
+        this.thousandsCustomInput = this._separatorInput(
+            this.state.thousandsSeparator, THOUSANDS_SEPARATORS, i18n.t('csvPreviewThousandsCustomTooltip'),
+        );
+        this.encodingSelect = this._select(this._encodingOptions(), this.state.encoding);
         this.customLineLimitWrap = document.createElement('div');
         this.customLineLimitWrap.className = 'csv-preview-custom-lines';
         this.customLineLimitInput = document.createElement('input');
@@ -889,11 +1013,7 @@ export default class CsvParsingPreviewDialog {
                 this.customLineLimitInput?.select();
                 return;
             }
-            this.state.lineLimit = Number(this.lineLimitSelect.value) || 10;
-            if (this.customLineLimitInput) this.customLineLimitInput.value = String(this.state.lineLimit);
-            this._syncCustomLineLimitControls();
-            await this._ensurePreviewSampleForLineLimit(this.state.lineLimit);
-            this._refreshPreview({ preserveStructure: true });
+            await this._setLineLimit(this.lineLimitSelect.value);
         });
         this.sampleRegionSelect.addEventListener('change', () => {
             this.state.sampleRegion = this.sampleRegionSelect.value;
@@ -907,23 +1027,44 @@ export default class CsvParsingPreviewDialog {
         this.delimiterSelect.addEventListener('change', () => {
             this.state.delimiter = this.delimiterSelect.value;
             if (this.state.delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
-            this._updateDecimalSeparatorSelect();
+            this._updateNumberFormatControls();
             this._refreshPreview({ redetectStructure: true });
         });
         this.decimalSelect.addEventListener('change', () => {
-            this.state.decimalSeparator = this.decimalSelect.value;
-            this._rebuildAndRender();
+            if (this.decimalSelect.value === CUSTOM_SEPARATOR_VALUE) {
+                this._syncSeparatorInputs();
+                this.decimalCustomInput.focus();
+                if (this.decimalCustomInput.value) this._setDecimalSeparator(this.decimalCustomInput.value);
+                return;
+            }
+            this._setDecimalSeparator(this.decimalSelect.value);
         });
-        this.encodingSelect.addEventListener('change', () => {
-            this.state.encoding = this.encodingSelect.value;
-            this._refreshPreview({ redetectStructure: true });
+        this.decimalCustomInput.addEventListener('change', () => this._setDecimalSeparator(this.decimalCustomInput.value));
+        this.thousandsSelect.addEventListener('change', () => {
+            if (this.thousandsSelect.value === CUSTOM_SEPARATOR_VALUE) {
+                this._syncSeparatorInputs();
+                this.thousandsCustomInput.focus();
+                if (this.thousandsCustomInput.value) this._setThousandsSeparator(this.thousandsCustomInput.value);
+                return;
+            }
+            this._setThousandsSeparator(this.thousandsSelect.value);
         });
+        this.thousandsCustomInput.addEventListener('change', () => this._setThousandsSeparator(this.thousandsCustomInput.value));
+        this.encodingSelect.addEventListener('change', () => this._setEncoding(this.encodingSelect.value));
+        const decimalWrap = document.createElement('div');
+        decimalWrap.className = 'csv-preview-separator-control';
+        decimalWrap.append(this.decimalSelect, this.decimalCustomInput);
+        const thousandsWrap = document.createElement('div');
+        thousandsWrap.className = 'csv-preview-separator-control';
+        thousandsWrap.append(this.thousandsSelect, this.thousandsCustomInput);
+        this._syncSeparatorInputs();
         toolbar.append(
             this.sampleSegments.length > 1 ? this._field(i18n.t('csvPreviewSample'), this.sampleRegionSelect) : document.createDocumentFragment(),
             this._field(i18n.t('csvPreviewLinesShown'), this.lineLimitSelect),
             this.customLineLimitWrap,
             this._field(i18n.t('csvPreviewDelimiter'), this.delimiterSelect),
-            this._field(i18n.t('csvPreviewDecimalSeparator'), this.decimalSelect),
+            this._field(i18n.t('csvPreviewDecimalSeparator'), decimalWrap),
+            this._field(i18n.t('csvPreviewThousandsSeparator'), thousandsWrap),
             this._field(i18n.t('csvPreviewEncoding'), this.encodingSelect),
         );
 
@@ -1248,14 +1389,34 @@ export default class CsvParsingPreviewDialog {
     _lineLimitOptions() {
         return [
             ...LINE_LIMITS.map(value => ({ value, label: String(value) })),
+            { value: ALL_LINE_LIMIT_VALUE, label: i18n.t('csvPreviewLinesAll') },
             { value: CUSTOM_LINE_LIMIT_VALUE, label: i18n.t('csvPreviewLinesCustom') },
         ];
     }
 
     _selectedLineLimitValue() {
+        if (this.state.lineLimit === ALL_LINE_LIMIT_VALUE) return ALL_LINE_LIMIT_VALUE;
         return LINE_LIMITS.includes(Number(this.state.lineLimit))
             ? Number(this.state.lineLimit)
             : CUSTOM_LINE_LIMIT_VALUE;
+    }
+
+    // The number of rows the preview reads: "All" is as many as the grid can
+    // show (MAX_PREVIEW_LINES), and the reader is told when the file has more.
+    _effectiveLineLimit() {
+        if (this.state.lineLimit === ALL_LINE_LIMIT_VALUE) return MAX_PREVIEW_LINES;
+        const n = Math.trunc(Number(this.state.lineLimit));
+        return Number.isFinite(n) && n > 0 ? Math.min(MAX_PREVIEW_LINES, n) : 10;
+    }
+
+    async _setLineLimit(value) {
+        this.state.lineLimit = value === ALL_LINE_LIMIT_VALUE
+            ? ALL_LINE_LIMIT_VALUE
+            : (Number(value) || 10);
+        if (this.customLineLimitInput) this.customLineLimitInput.value = String(this._effectiveLineLimit());
+        this._syncCustomLineLimitControls();
+        await this._ensurePreviewSampleForLineLimit(this.state.lineLimit);
+        this._refreshPreview({ preserveStructure: true });
     }
 
     _syncCustomLineLimitControls() {
@@ -1263,14 +1424,40 @@ export default class CsvParsingPreviewDialog {
         const isCustom = this.lineLimitSelect.value === CUSTOM_LINE_LIMIT_VALUE;
         this.customLineLimitWrap.hidden = !isCustom;
         if (isCustom && this.customLineLimitInput) {
-            this.customLineLimitInput.value = String(this.state.lineLimit);
+            this.customLineLimitInput.value = String(this._effectiveLineLimit());
         }
+    }
+
+    /**
+     * How many lines the preview shows and how many the file has, when "All"
+     * could not show them all: the file is larger than the preview reads, or
+     * has more rows than the grid shows. Null when everything is shown.
+     */
+    _allLinesTruncation() {
+        if (this.state.lineLimit !== ALL_LINE_LIMIT_VALUE) return null;
+        const segment = this._selectedSegment();
+        const buffer = segment?.buffer;
+        const shown = this.preview?.rows?.length || 0;
+        const loadedBytes = buffer?.byteLength || 0;
+        const totalBytes = Math.max(loadedBytes, Number(segment?.totalSize) || 0);
+        const fileCut = totalBytes > loadedBytes;
+        const rowsCut = shown >= MAX_PREVIEW_LINES;
+        if (!fileCut && !rowsCut) return null;
+        let lines = 0;
+        if (buffer) {
+            const bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.length; i++) if (bytes[i] === 10) lines++;
+        }
+        const total = loadedBytes > 0 && lines > 0
+            ? Math.round(lines * (totalBytes / loadedBytes))
+            : null;
+        return { shown, total };
     }
 
     async _applyCustomLineLimit() {
         if (!this.customLineLimitInput) return;
         const parsed = Math.trunc(Number(this.customLineLimitInput.value));
-        const nextLineLimit = Math.max(1, Math.min(MAX_PREVIEW_LINES, Number.isFinite(parsed) ? parsed : this.state.lineLimit));
+        const nextLineLimit = Math.max(1, Math.min(MAX_PREVIEW_LINES, Number.isFinite(parsed) ? parsed : this._effectiveLineLimit()));
         this.state.lineLimit = nextLineLimit;
         this.customLineLimitInput.value = String(nextLineLimit);
         this.customLineLimitInput.disabled = true;
@@ -1284,22 +1471,146 @@ export default class CsvParsingPreviewDialog {
         }
     }
 
-    _updateDecimalSeparatorSelect() {
-        if (!this.decimalSelect) return;
-        this.decimalSelect.replaceChildren();
-        for (const option of decimalSeparatorOptions(this.state.delimiter)) {
+    // What the preview's rows say about how numbers are written, for the
+    // "Auto (…)" labels. The sample is the one on screen, so a new delimiter
+    // or encoding is reflected.
+    _detectedNumberFormat() {
+        return this.resultProfile?.detectedNumberFormat
+            || this.preview?.profile?.detectedNumberFormat
+            || this.autoProfile?.detectedNumberFormat
+            || { decimalSeparator: 'auto', thousandsSeparator: 'auto' };
+    }
+
+    _replaceSelectOptions(select, options, value) {
+        if (!select) return;
+        select.replaceChildren();
+        for (const option of options) {
             const el = document.createElement('option');
             el.value = option.value;
             el.textContent = option.label;
-            el.selected = String(option.value) === String(this.state.decimalSeparator);
             el.disabled = !!option.disabled;
             if (option.title) el.title = option.title;
-            this.decimalSelect.appendChild(el);
+            select.appendChild(el);
         }
-        this.decimalSelect.value = this.state.decimalSeparator;
-        this.decimalSelect.title = this.state.delimiter === ','
-            ? i18n.t('csvPreviewDecimalCommaUnavailableTooltip')
-            : i18n.t('csvPreviewDecimalSeparator');
+        select.value = String(value);
+    }
+
+    _separatorInput(value, presets, title) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'csv-preview-separator-custom';
+        input.maxLength = 1;
+        input.size = 2;
+        input.title = title;
+        input.setAttribute('aria-label', title);
+        input.value = separatorSelectValue(value, presets) === CUSTOM_SEPARATOR_VALUE ? value : '';
+        input.addEventListener('keydown', event => {
+            if (event.key === 'Enter') input.blur();
+        });
+        return input;
+    }
+
+    _syncSeparatorInputs() {
+        if (this.decimalCustomInput && this.decimalSelect) {
+            this.decimalCustomInput.hidden = this.decimalSelect.value !== CUSTOM_SEPARATOR_VALUE;
+        }
+        if (this.thousandsCustomInput && this.thousandsSelect) {
+            this.thousandsCustomInput.hidden = this.thousandsSelect.value !== CUSTOM_SEPARATOR_VALUE;
+        }
+    }
+
+    _updateNumberFormatControls() {
+        const detected = this._detectedNumberFormat();
+        if (this.decimalSelect) {
+            this._replaceSelectOptions(
+                this.decimalSelect,
+                decimalSeparatorOptions(this.state.delimiter, detected.decimalSeparator),
+                separatorSelectValue(this.state.decimalSeparator, DECIMAL_SEPARATORS),
+            );
+            this.decimalSelect.title = this.state.delimiter === ','
+                ? i18n.t('csvPreviewDecimalCommaUnavailableTooltip')
+                : i18n.t('csvPreviewDecimalSeparator');
+        }
+        if (this.thousandsSelect) {
+            this._replaceSelectOptions(
+                this.thousandsSelect,
+                thousandsSeparatorOptions(this.state.delimiter, detected.thousandsSeparator),
+                separatorSelectValue(this.state.thousandsSeparator, THOUSANDS_SEPARATORS),
+            );
+            this.thousandsSelect.title = i18n.t('csvPreviewThousandsSeparatorTooltip');
+        }
+        if (this.decimalCustomInput && separatorSelectValue(this.state.decimalSeparator, DECIMAL_SEPARATORS) === CUSTOM_SEPARATOR_VALUE) {
+            this.decimalCustomInput.value = this.state.decimalSeparator;
+        }
+        if (this.thousandsCustomInput && separatorSelectValue(this.state.thousandsSeparator, THOUSANDS_SEPARATORS) === CUSTOM_SEPARATOR_VALUE) {
+            this.thousandsCustomInput.value = this.state.thousandsSeparator;
+        }
+        this._syncSeparatorInputs();
+    }
+
+    /**
+     * Set the decimal separator: 'auto', '.', ',' or any one character. A
+     * separator that is the column delimiter cannot be one, and is refused.
+     * @returns {boolean} whether it was taken
+     */
+    _setDecimalSeparator(value) {
+        const next = normalizeDecimalSeparator(value);
+        if (next !== 'auto' && next === this.state.delimiter) {
+            this._updateNumberFormatControls();
+            return false;
+        }
+        if (value && value !== 'auto' && next === 'auto') {
+            // Not a separator (a digit, a sign): nothing changes.
+            this._updateNumberFormatControls();
+            return false;
+        }
+        this.state.decimalSeparator = next;
+        if (next !== 'auto' && this.state.thousandsSeparator === next) this.state.thousandsSeparator = 'auto';
+        this._rebuildAndRender();
+        return true;
+    }
+
+    _setThousandsSeparator(value) {
+        const next = normalizeThousandsSeparator(value);
+        if (value && !['auto', 'none'].includes(value) && next === 'none' && value !== 'none') {
+            this._updateNumberFormatControls();
+            return false;
+        }
+        this.state.thousandsSeparator = next;
+        if (!['auto', 'none'].includes(next) && this.state.decimalSeparator === next) this.state.decimalSeparator = 'auto';
+        this._rebuildAndRender();
+        return true;
+    }
+
+    // The encoding the bytes were decoded with when the reader left it on
+    // Auto: what the "Auto (…)" entry names.
+    _detectedEncoding() {
+        return this.detectedEncoding
+            || (this.state.encoding === 'auto' ? this.preview?.encoding : null)
+            || this.autoProfile?.encoding
+            || 'utf-8';
+    }
+
+    _encodingOptions() {
+        return [
+            { value: 'auto', label: `Auto (${encodingLabel(this._detectedEncoding())})` },
+            ...CSV_ENCODINGS.map(value => ({ value, label: encodingLabel(value) })),
+        ];
+    }
+
+    _updateEncodingSelect() {
+        this._replaceSelectOptions(this.encodingSelect, this._encodingOptions(), this.state.encoding);
+    }
+
+    /**
+     * A new encoding re-reads the same bytes; it does not change the table.
+     * Everything set so far — header row, time axis, columns, filters — is
+     * kept, and the header names are read again from the newly decoded row.
+     * It used to re-detect the whole structure and lose all of it.
+     */
+    _setEncoding(value) {
+        this.state.encoding = value || 'auto';
+        this._refreshPreview({ preserveStructure: true });
     }
 
     _blankDisabledSelect() {
@@ -1352,7 +1663,7 @@ export default class CsvParsingPreviewDialog {
         const previousFormat = this.state.timeFormat;
         this.state.timeFormat = nextFormat;
         if (previousFormat !== 'custom' && nextFormat === 'custom') {
-            const detectedPattern = customPatternFromTimeSource(this.resultProfile?.timeSource);
+            const detectedPattern = customPatternFromTimeSource(this.resultProfile?.timeSource, this._detectedTimePattern());
             if (detectedPattern) this.state.customDatetimePattern = detectedPattern;
         }
         if (options.render !== false) this._rebuildAndRender();
@@ -1435,18 +1746,19 @@ export default class CsvParsingPreviewDialog {
         const dataStart = isStartSample ? this.state.dataStartIndex : 0;
         const expectedColumns = this.resultProfile?.rawHeaders?.length || 0;
         const delimiter = this.resultProfile?.delimiter || this.state.delimiter || ',';
-        const decimalSeparator = this.resultProfile?.decimalSeparator || this.state.decimalSeparator || 'auto';
+        const { decimalSeparator, thousandsSeparator } = this._numberFormat();
         const rowFilter = normalizeCsvRowFilter(this.resultProfile?.rowFilter);
         const structureStart = this.state.hasHeader
             ? Math.max(0, Number(this.state.headerIndex) || 0)
             : dataStart;
         entry.isPreamble = isStartSample && !entry.isEmpty && entry.logicalIndex < structureStart;
         entry.isDataRow = !entry.isEmpty && entry.logicalIndex >= dataStart;
-        entry.rowPassesFilter = !entry.isDataRow || csvRowMatchesFilter(entry.row, rowFilter, { delimiter, decimalSeparator });
-        entry.hasValidWidth = !entry.isDataRow || !expectedColumns || entry.row.length === expectedColumns;
+        entry.rowPassesFilter = !entry.isDataRow || csvRowMatchesFilter(entry.row, rowFilter, { delimiter, decimalSeparator, thousandsSeparator });
+        entry.hasValidWidth = !entry.isDataRow || !expectedColumns
+            || !!fitCsvRowToWidth(entry.row, expectedColumns, this._rowFitOptions());
         entry.hasValidTime = true;
         if (entry.isDataRow && entry.rowPassesFilter && entry.hasValidWidth && this.resultProfile?.timeSource) {
-            const parsed = parseCsvTimeValue(this.resultProfile.timeSource, entry.row, parsedDataIndex, delimiter, { decimalSeparator });
+            const parsed = parseCsvTimeValue(this.resultProfile.timeSource, entry.row, parsedDataIndex, delimiter, { decimalSeparator, thousandsSeparator });
             entry.hasValidTime = Number.isFinite(parsed);
         }
         const timeIndexes = new Set(this.resultProfile?.timeSource?.sourceIndexes || []);
@@ -1455,8 +1767,46 @@ export default class CsvParsingPreviewDialog {
             && entry.rowPassesFilter
             && entry.hasValidWidth
             && entry.hasValidTime
-            && rowHasInvalidNumericCell(entry.row, numericIndexes, delimiter, decimalSeparator);
+            && rowHasInvalidNumericCell(entry.row, numericIndexes, delimiter, decimalSeparator, thousandsSeparator);
         entry.isInvalid = entry.isDataRow && (!entry.rowPassesFilter || !entry.hasValidWidth || !entry.hasValidTime);
+    }
+
+    // The separators numbers are read with: the reader's choice, or on Auto
+    // what the rows on screen show.
+    _numberFormat() {
+        const detected = this.resultProfile?.detectedNumberFormat || this._detectedNumberFormat();
+        const decimal = normalizeDecimalSeparator(this.state.decimalSeparator);
+        const thousands = normalizeThousandsSeparator(this.state.thousandsSeparator);
+        return {
+            decimalSeparator: decimal === 'auto' ? (detected.decimalSeparator || 'auto') : decimal,
+            thousandsSeparator: thousands === 'auto' ? (detected.thousandsSeparator || 'auto') : thousands,
+        };
+    }
+
+    // How a row is fitted to the header's width: the header row's own empty
+    // trailing cells, and the reader's choice for short rows.
+    _rowFitOptions() {
+        // Straight from the preview rows (a row's logical index is its
+        // position): going through _rowForLogicalIndex would annotate every
+        // row again, and annotating is what asks for these options.
+        const headerRow = this.state.hasHeader && this._isStartSample()
+            ? (this.preview?.rows?.[Math.max(0, Number(this.state.headerIndex) || 0)] || null)
+            : null;
+        return {
+            minWidth: headerRow ? minimumRowWidth(headerRow) : (this.resultProfile?.rawHeaders?.length || 1),
+            policy: normalizeRaggedRowPolicy(this.state.raggedRows),
+        };
+    }
+
+    // The pattern the time column is written in, read from the rows shown.
+    _detectedTimePattern() {
+        const profile = this.resultProfile;
+        if (!profile?.timeSource?.ok) return null;
+        const key = `${JSON.stringify(profile.timeSource.sourceIndexes)}|${profile.timeSource.strategy}|${profile.timeSource.format?.dateOrder}|${profile.sampleRows?.length}|${profile.sampleRows?.[0]?.join('\u0001')}`;
+        if (this._timePatternCache?.key !== key) {
+            this._timePatternCache = { key, value: describeTimeSourcePattern(profile.timeSource, profile.sampleRows || []) };
+        }
+        return this._timePatternCache.value;
     }
 
     _nonEmptyPreviewRows() {
@@ -1563,12 +1913,13 @@ export default class CsvParsingPreviewDialog {
         const selectedSegment = this._selectedSegment();
         const buffer = selectedSegment?.buffer;
         const previewOptions = {
-            maxRows: this.state.lineLimit,
+            maxRows: this._effectiveLineLimit(),
             encoding: options.detectEncoding ? 'auto' : this.state.encoding,
         };
         if (!options.detectDelimiter) previewOptions.delimiter = this.state.delimiter;
         const preview = this.parser.inspectPreview(buffer, previewOptions);
         this.preview = preview;
+        if (previewOptions.encoding === 'auto' && preview?.encoding) this.detectedEncoding = preview.encoding;
         const shouldApplyDetected = !options.preserveStructure
             && (options.redetectStructure || !this.resultProfile);
         if (shouldApplyDetected) {
@@ -1581,8 +1932,10 @@ export default class CsvParsingPreviewDialog {
             this._applyDetectedProfileToState(profile, options);
         }
         if (this.state.delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
-        this._updateDecimalSeparatorSelect();
         this._rebuildProfile();
+        this._updateNumberFormatControls();
+        this._updateEncodingSelect();
+        if (this.delimiterSelect) this.delimiterSelect.value = this.state.delimiter;
         this._renderControls();
         this._renderGrid();
         this._renderValidation();
@@ -1591,11 +1944,20 @@ export default class CsvParsingPreviewDialog {
     async _ensurePreviewSampleForLineLimit(lineLimit) {
         const selectedSegment = this._selectedSegment();
         if (!this.loadPreviewSegment || !selectedSegment) return;
-        const currentRows = this.preview?.rows?.length || 0;
-        if (currentRows >= lineLimit) return;
         const currentBytes = Number(selectedSegment.bytes || selectedSegment.buffer?.byteLength || DEFAULT_SAMPLE_BYTES);
         const totalSize = Number(selectedSegment.totalSize || 0);
         if (totalSize > 0 && currentBytes >= totalSize) return;
+        if (lineLimit === ALL_LINE_LIMIT_VALUE) {
+            // The whole file, up to what a preview can hold; the reader is
+            // told when that is not all of it (_allLinesTruncation).
+            const wanted = totalSize > 0 ? Math.min(totalSize, ALL_LINES_MAX_BYTES) : ALL_LINES_MAX_BYTES;
+            if (currentBytes >= wanted) return;
+            const refreshed = await this.loadPreviewSegment(selectedSegment.id, wanted);
+            if (refreshed?.buffer) this._replaceSelectedSegment(refreshed);
+            return;
+        }
+        const currentRows = this.preview?.rows?.length || 0;
+        if (currentRows >= lineLimit) return;
         const ratio = Math.max(1.5, (lineLimit / Math.max(1, currentRows)) * 1.25);
         let requestedBytes = Math.max(currentBytes + DEFAULT_SAMPLE_BYTES, Math.ceil(currentBytes * Math.min(ratio, 8)));
         if (totalSize > 0) requestedBytes = Math.min(totalSize, requestedBytes);
@@ -1622,7 +1984,6 @@ export default class CsvParsingPreviewDialog {
         }
         const delimiter = this.state.delimiter;
         if (delimiter === ',' && this.state.decimalSeparator === ',') this.state.decimalSeparator = 'auto';
-        const decimalSeparator = this.state.decimalSeparator || 'auto';
         if (this.headerlessProfileLocked) this.state.hasHeader = false;
         const hasHeader = !!this.state.hasHeader;
         const headerIndex = Math.max(0, this.state.headerIndex);
@@ -1688,13 +2049,53 @@ export default class CsvParsingPreviewDialog {
                 .map(entry => entry.row)
             : rows)
             .filter(row => row.some(cell => String(cell ?? '').trim() !== ''));
-        const widthRows = candidateRows.filter(row => row.length === expectedColumns);
+        // Rows fitted to the header's width: a trailing delimiter's empty
+        // cells are dropped, and short rows padded when the reader asked.
+        const raggedRows = normalizeRaggedRowPolicy(this.state.raggedRows);
+        const fitOptions = {
+            minWidth: hasHeader && isStartSample ? minimumRowWidth(sourceHeaderRow || []) : expectedColumns,
+            policy: raggedRows,
+        };
+        const widthRows = [];
+        let trailingEmptyCells = 0;
+        let paddedRows = 0;
+        for (const row of candidateRows) {
+            const fitted = fitCsvRowToWidth(row, expectedColumns, fitOptions);
+            if (!fitted) continue;
+            if (row.length > expectedColumns) trailingEmptyCells = Math.max(trailingEmptyCells, row.length - expectedColumns);
+            else if (row.length < expectedColumns) paddedRows++;
+            widthRows.push(fitted);
+        }
         const discardedRows = candidateRows.length - widthRows.length;
         if (discardedRows > 0) {
-            const message = `${discardedRows} visible data row(s) have a different column count.`;
-            if (isStartSample) messages.push(message);
-            else warnings.push(message);
+            // A warning, not a reason to refuse the file: those rows are left
+            // out (they are red in the grid), and the rest load.
+            warnings.push(i18n.t(raggedRows === 'pad' ? 'csvPreviewRowsWrongWidthLong' : 'csvPreviewRowsWrongWidth')
+                .replace('{count}', String(discardedRows)));
         }
+        if (paddedRows > 0 && raggedRows === 'pad') {
+            warnings.push(i18n.t('csvPreviewRowsPadded').replace('{count}', String(paddedRows)));
+        }
+        const removedInvisibleChars = Number(this.preview?.removedInvisibleChars ?? this.preview?.profile?.removedInvisibleChars) || 0;
+        if (removedInvisibleChars > 0) {
+            warnings.push(i18n.t('csvPreviewInvisibleCharsRemoved').replace('{count}', String(removedInvisibleChars)));
+        }
+        const truncation = this._allLinesTruncation();
+        if (truncation) {
+            warnings.unshift(i18n.t(truncation.total ? 'csvPreviewAllLinesTruncated' : 'csvPreviewAllLinesTruncatedUnknown')
+                .replace('{shown}', String(truncation.shown))
+                .replace('{total}', String(truncation.total ?? '')));
+        }
+        // How the numbers on screen are written, and so what Auto means here.
+        const detected = detectCsvNumberFormat(widthRows.slice(0, 2000), { delimiter });
+        const detectedNumberFormat = {
+            decimalSeparator: detected.decimalSeparator,
+            thousandsSeparator: detected.thousandsSeparator,
+        };
+        const chosenDecimal = normalizeDecimalSeparator(this.state.decimalSeparator);
+        const chosenThousands = normalizeThousandsSeparator(this.state.thousandsSeparator);
+        const decimalSeparator = chosenDecimal === 'auto' ? detectedNumberFormat.decimalSeparator : chosenDecimal;
+        const thousandsSeparator = chosenThousands === 'auto' ? detectedNumberFormat.thousandsSeparator : chosenThousands;
         const normalizedFilter = normalizeCsvRowFilter({
             ...(this.state.rowFilter || {}),
             columnIndex: Math.max(0, Math.min(Math.max(0, expectedColumns - 1), Number(this.state.rowFilter?.columnIndex) || 0)),
@@ -1708,7 +2109,7 @@ export default class CsvParsingPreviewDialog {
                 value: String(this.state.rowFilter?.value ?? ''),
             };
         const sampleRows = normalizedFilter
-            ? widthRows.filter(row => csvRowMatchesFilter(row, normalizedFilter, { delimiter, decimalSeparator }))
+            ? widthRows.filter(row => csvRowMatchesFilter(row, normalizedFilter, { delimiter, decimalSeparator, thousandsSeparator }))
             : widthRows;
         const filteredRows = widthRows.length - sampleRows.length;
         if (normalizedFilter && filteredRows > 0) {
@@ -1783,7 +2184,7 @@ export default class CsvParsingPreviewDialog {
         this.state.ignoredColumns = ignoredColumns;
 
         const validTimeSampleRows = sampleRows.filter((row, index) =>
-            Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator }))
+            Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator, thousandsSeparator }))
         );
         const validTimeRows = validTimeSampleRows.length;
         // What the reader chose by hand, as positions the readers understand.
@@ -1799,7 +2200,7 @@ export default class CsvParsingPreviewDialog {
         const previewEmptyColumns = [];
         for (let index = 0; index < expectedColumns; index++) {
             if (timeIndexes.has(index)) continue;
-            if (columnSampleVerdict(validTimeSampleRows, index, delimiter, decimalSeparator) === 'unknown') {
+            if (columnSampleVerdict(validTimeSampleRows, index, delimiter, decimalSeparator, thousandsSeparator) === 'unknown') {
                 previewEmptyColumns.push(index);
             }
             const chosen = this.state.columnOverrides?.[index]?.type;
@@ -1809,7 +2210,7 @@ export default class CsvParsingPreviewDialog {
         const forcedText = new Set(forcedTextColumns);
         const numericColumnIndexes = [
             ...new Set([
-                ...inferNumericColumnIndexes(validTimeSampleRows, expectedColumns, delimiter, decimalSeparator)
+                ...inferNumericColumnIndexes(validTimeSampleRows, expectedColumns, delimiter, decimalSeparator, thousandsSeparator)
                     .filter(index => !forcedText.has(index)),
                 ...forcedNumericColumns,
             ]),
@@ -1825,6 +2226,7 @@ export default class CsvParsingPreviewDialog {
             encoding: this.state.encoding === 'auto'
                 ? (this.preview?.encoding || this.autoProfile?.encoding || 'utf-8')
                 : this.state.encoding,
+            encodingSetting: this.state.encoding,
             hasHeader,
             headerIndex,
             dataStartIndex,
@@ -1842,7 +2244,18 @@ export default class CsvParsingPreviewDialog {
             unitsMode,
             unitRowIndex,
             inlineUnitFormat: this.state.inlineUnitFormat,
-            decimalSeparator,
+            // The reader's settings, and beside them what the rows showed:
+            // csvNumberFormat() puts the two together for every reader.
+            decimalSeparator: chosenDecimal,
+            thousandsSeparator: chosenThousands,
+            detectedNumberFormat,
+            raggedRows,
+            // Facts about the sample on screen. Undefined drops the opening
+            // profile's own (from another delimiter or encoding, perhaps).
+            removedInvisibleChars: removedInvisibleChars || undefined,
+            trailingEmptyCells: trailingEmptyCells || undefined,
+            sampleColumnCountMismatches: undefined,
+            encodingDetection: this.preview?.encodingDetection || this.preview?.profile?.encodingDetection,
             rowFilter: normalizedFilter,
             ignoredColumns,
             columnOverrides: cloneProfile(this.state.columnOverrides || {}),
@@ -1931,6 +2344,22 @@ export default class CsvParsingPreviewDialog {
         });
         hideInvalid.append(hideInvalidInput, document.createTextNode(i18n.t('csvPreviewHideInvalidLines')));
 
+        // Rows with fewer cells than the header: left out (the default), or
+        // kept with their missing cells empty — for a logger that skips a
+        // value, or a last line cut off mid-write.
+        const padRows = document.createElement('label');
+        padRows.className = 'csv-preview-check';
+        padRows.title = i18n.t('csvPreviewPadShortRowsTooltip');
+        const padRowsInput = document.createElement('input');
+        padRowsInput.type = 'checkbox';
+        padRowsInput.checked = normalizeRaggedRowPolicy(this.state.raggedRows) === 'pad';
+        padRowsInput.title = padRows.title;
+        padRowsInput.addEventListener('change', () => {
+            this.state.raggedRows = padRowsInput.checked ? 'pad' : 'drop';
+            this._rebuildAndRender();
+        });
+        padRows.append(padRowsInput, document.createTextNode(i18n.t('csvPreviewPadShortRows')));
+
         const headerInput = this._numberInput(toRowNumber(this.state.headerIndex), value => {
             this.state.headerIndex = fromRowNumber(value, this.state.headerIndex);
             this._rebuildAndRender();
@@ -2003,7 +2432,7 @@ export default class CsvParsingPreviewDialog {
         });
         const autoFormatNote = document.createElement('div');
         autoFormatNote.className = 'csv-preview-side-note';
-        autoFormatNote.textContent = autoDetectedFormatText(this.resultProfile?.timeSource);
+        autoFormatNote.textContent = autoDetectedFormatText(this.resultProfile?.timeSource, this._detectedTimePattern());
         autoFormatNote.title = autoFormatNote.textContent;
 
         const columns = (this.resultProfile?.rawHeaders || []).map((header, index) => ({
@@ -2161,6 +2590,7 @@ export default class CsvParsingPreviewDialog {
                 this._dateOrderField(i18n.t('csvPreviewDateOrder'), dateOrder),
                 this._field(i18n.t('csvPreviewTimeColumn'), clockColumn),
             );
+            if (this._detectedTimePattern()?.pattern) timeFields.push(autoFormatNote);
         } else if (this.state.timeMode === 'parts') {
             timeFields.push(
                 this._field(i18n.t('csvPreviewYearColumn'), yearColumn),
@@ -2191,6 +2621,7 @@ export default class CsvParsingPreviewDialog {
             hideEmpty,
             hidePreamble,
             hideInvalid,
+            padRows,
             this._field(i18n.t('csvPreviewHeaderRow'), headerInput),
             this._field(i18n.t('csvPreviewUnitsSource'), unitsSelect),
             this._field(i18n.t('csvPreviewUnitsRowLabel'), unitsInput),
@@ -2385,7 +2816,7 @@ export default class CsvParsingPreviewDialog {
         if (!this.sidePanel) {
             // Not on screen (tests): the profile is all there is to update.
             this.preview = this.parser.inspectPreview(this._selectedSegment()?.buffer, {
-                maxRows: this.state.lineLimit,
+                maxRows: this._effectiveLineLimit(),
                 delimiter: this.state.delimiter,
                 encoding: this.state.encoding,
             });
@@ -2394,6 +2825,7 @@ export default class CsvParsingPreviewDialog {
         }
         this.delimiterSelect.value = this.state.delimiter;
         this.encodingSelect.value = this.state.encoding;
+        this.lineLimitSelect.value = String(this._selectedLineLimitValue());
         this._refreshPreview({ preserveStructure: true });
         if (this.statusBox && name) {
             const loaded = document.createElement('div');
@@ -2646,7 +3078,18 @@ export default class CsvParsingPreviewDialog {
         const rowEntries = this._previewRowEntries();
         const allEntries = this._allPreviewRowEntries();
         const isStartSample = this._isStartSample();
-        const maxColumns = Math.max(1, ...(rowEntries.length ? rowEntries : allEntries).map(entry => entry.row.length));
+        // Cells past the header's width that are all empty (a trailing
+        // delimiter) are not a column: they would show as an extra column of
+        // nothing, labelled as text.
+        const expectedColumns = this.resultProfile?.rawHeaders?.length || 0;
+        const shownWidth = row => {
+            if (!expectedColumns || row.length <= expectedColumns) return row.length;
+            for (let i = row.length - 1; i >= expectedColumns; i--) {
+                if (String(row[i] ?? '').trim() !== '') return i + 1;
+            }
+            return expectedColumns;
+        };
+        const maxColumns = Math.max(1, ...(rowEntries.length ? rowEntries : allEntries).map(entry => shownWidth(entry.row)));
         const table = document.createElement('table');
         table.className = 'csv-preview-grid';
         const thead = document.createElement('thead');
@@ -2675,6 +3118,7 @@ export default class CsvParsingPreviewDialog {
         const tbody = document.createElement('tbody');
         const timeIndexes = new Set(this.resultProfile?.timeSource?.sourceIndexes || []);
         const delimiter = this.resultProfile?.delimiter || ',';
+        const numberFormat = this._numberFormat();
         const onlyPreambleMessage = this._onlyPreambleLoadedMessageInfo(allEntries, rowEntries);
         let renderedValidDataRows = 0;
         if (!rowEntries.length) {
@@ -2707,9 +3151,7 @@ export default class CsvParsingPreviewDialog {
             parsedCell.className = 'csv-preview-parsed-cell';
             const rowIndex = renderedValidDataRows;
             if (isDataRow && rowPassesFilter) {
-                const parsed = parseCsvTimeValue(this.resultProfile.timeSource, row, rowIndex, delimiter, {
-                    decimalSeparator: this.resultProfile.decimalSeparator || 'auto',
-                });
+                const parsed = parseCsvTimeValue(this.resultProfile.timeSource, row, rowIndex, delimiter, numberFormat);
                 parsedCell.textContent = formatParsedTimeValue(this.resultProfile?.timeSource, parsed);
                 parsedCell.title = parsedCell.textContent;
                 if (!Number.isFinite(parsed)) parsedCell.classList.add('is-invalid-cell');
@@ -2725,14 +3167,12 @@ export default class CsvParsingPreviewDialog {
                     && (this.resultProfile?.numericColumnIndexes || []).includes(c)
                     && !timeIndexes.has(c)
                     && String(row[c] ?? '').trim()
-                    && !Number.isFinite(parseCsvNumber(row[c], delimiter, this.resultProfile.decimalSeparator || 'auto'))) {
+                    && !Number.isFinite(parseCsvNumber(row[c], delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator))) {
                     td.classList.add('is-invalid-cell');
                     td.title = `${td.textContent} (${i18n.t('csvPreviewInvalidNumericCell')})`;
                 }
                 if (isDataRow && rowPassesFilter && timeIndexes.has(c)) {
-                    const parsed = parseCsvTimeValue(this.resultProfile.timeSource, row, rowIndex, delimiter, {
-                        decimalSeparator: this.resultProfile.decimalSeparator || 'auto',
-                    });
+                    const parsed = parseCsvTimeValue(this.resultProfile.timeSource, row, rowIndex, delimiter, numberFormat);
                     if (!Number.isFinite(parsed)) td.classList.add('is-invalid-cell');
                 }
                 tr.appendChild(td);

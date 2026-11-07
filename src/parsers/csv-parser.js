@@ -12,11 +12,30 @@
  * numeric files are also supported; column names are generated automatically.
  */
 import MatParser from './mat-parser.js';
-import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
+import { detectCsvTimeAxis, isMonthNameDateCell, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 import { columnSampleCounts, forcedColumnTypes, isMissingNumberCell, isMostlyNumericColumn } from './csv-column-types.js';
 import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
 import { buildCsvTree, resolveCsvGrouping } from './csv-tree-grouping.js';
 import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
+import {
+    csvNumberFormat,
+    decodeCsvBytes,
+    detectCsvNumberFormat,
+    fitCsvRowToWidth,
+    fitCsvTableRows,
+    minimumRowWidth,
+    normalizeRaggedRowPolicy,
+    sanitizeCsvText,
+} from './csv-text-normalize.js';
+
+// Delimiters tried when a file does not say. '|' is what database dumps and
+// several SCADA exports use; it never appears inside a number or a date.
+const DELIMITER_CANDIDATES = [',', ';', '\t', '|', 'whitespace'];
+// A quoted field longer than this, or spanning more lines, is not one: its
+// opening quote was a stray character (5" for inches, a PLC string field cut
+// short), and honouring it would swallow the rest of the file into one cell.
+const MAX_QUOTED_FIELD_CHARS = 65536;
+const MAX_QUOTED_FIELD_LINES = 100;
 
 // "[m/s]" -> "m/s": a units row that writes its units in brackets would
 // otherwise become "[[m/s]]" in the description.
@@ -48,7 +67,7 @@ export function csvRowMatchesFilter(row, filter, options = {}) {
     if (!normalized) return true;
     const raw = String(row?.[normalized.columnIndex] ?? '').trim();
     if (normalized.operator === 'is_numeric') {
-        return Number.isFinite(parseCsvNumber(raw, options.delimiter || ',', options.decimalSeparator || 'auto'));
+        return Number.isFinite(parseCsvNumber(raw, options.delimiter || ',', options.decimalSeparator || 'auto', options.thousandsSeparator || 'auto'));
     }
     const matches = raw === normalized.value;
     return normalized.operator === '!=' ? !matches : matches;
@@ -66,7 +85,8 @@ export default class CsvParser {
     }
 
     async parse(buffer, options = {}) {
-        const text = this._decodeText(buffer, options.encoding || 'auto');
+        const decoded = this._decodeTextWithEncoding(buffer, options.encoding || 'auto');
+        const text = decoded.text;
         const delimiter = this._detectDelimiter(text);
         const rows = this._parseRows(text, delimiter)
             .map(row => row.map(cell => cell.trim()));
@@ -81,14 +101,16 @@ export default class CsvParser {
         const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
         if (rawHeaders.length < 1) throw new Error('CSV must contain at least one column.');
 
-        const dataRows = rows.slice(table.dataStartIndex)
-            .filter(row => row.some(cell => cell !== '') && row.length === rawHeaders.length);
+        const fitted = fitCsvTableRows(rows, table.dataStartIndex, headerRow);
+        const dataRows = fitted.rows;
         if (dataRows.length < 1) {
             throw new Error('CSV must contain at least one data row.');
         }
         const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
         if (!timeSource.ok) throw new Error(timeSource.reason);
+        const detectedNumberFormat = this._detectNumberFormat(dataRows, delimiter, timeSource);
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat({ detectedNumberFormat });
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
             .filter(({ index }) => !timeSource.sourceIndexes.includes(index));
@@ -107,7 +129,7 @@ export default class CsvParser {
             const row = dataRows[r];
             if (!row.some(cell => cell !== '')) continue;
 
-            const timeValue = timeSource.parse(row, timeValues.length);
+            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator, thousandsSeparator });
             if (!Number.isFinite(timeValue)) {
                 invalidTimeRows++;
                 continue;
@@ -118,7 +140,7 @@ export default class CsvParser {
             for (let c = 0; c < variableHeaders.length; c++) {
                 const sourceIndex = variableHeaders[c].index;
                 const rawValue = String(row[sourceIndex] ?? '').trim();
-                const numericValue = parseCsvNumber(rawValue, delimiter);
+                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator, thousandsSeparator);
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
                 column.stringValues.push(rawValue);
@@ -215,6 +237,8 @@ export default class CsvParser {
             skippedRows: table.headerIndex,
             skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
             skippedInvalidTimeRows: invalidTimeRows,
+            skippedColumnCountRows: fitted.dropped,
+            repairedColumnCountRows: fitted.repaired,
             reorderedRows,
             timeName: timeVar.name,
             timeKind,
@@ -224,6 +248,9 @@ export default class CsvParser {
             datetimeRepeats,
             numericColumnIndexes,
             unitRowIndex: table.unitRowIndex ?? null,
+            encoding: decoded.encoding,
+            removedInvisibleChars: decoded.removedChars,
+            detectedNumberFormat,
         };
 
         this._attachTree(result, null);
@@ -280,9 +307,8 @@ export default class CsvParser {
         const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
         if (rawHeaders.length < 1) throw new Error('CSV sample must contain at least one column.');
 
-        const dataRows = rows
-            .slice(table.dataStartIndex)
-            .filter(row => row.some(cell => cell !== '') && row.length === rawHeaders.length);
+        const fitted = fitCsvTableRows(rows, table.dataStartIndex, headerRow);
+        const dataRows = fitted.rows;
         if (dataRows.length < 1) {
             throw new Error('CSV sample must contain at least one data row.');
         }
@@ -291,10 +317,19 @@ export default class CsvParser {
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
         if (!timeSource.ok) throw new Error(timeSource.reason);
         const unitRowIndex = hasHeader && Number.isInteger(table.unitRowIndex) ? table.unitRowIndex : null;
+        const detectedNumberFormat = this._detectNumberFormat(dataRows, delimiter, timeSource);
 
         return {
             delimiter,
             encoding: decoded.encoding,
+            encodingDetection: decoded.detection,
+            // What was cleaned and what the numbers look like. Facts about the
+            // sample, kept next to the reader's settings so every reader of
+            // the profile (worker, DuckDB, the converter) applies the same.
+            ...(decoded.removedChars ? { removedInvisibleChars: decoded.removedChars } : {}),
+            detectedNumberFormat,
+            ...(fitted.trailingEmpty ? { trailingEmptyCells: fitted.trailingEmpty } : {}),
+            ...(fitted.dropped ? { sampleColumnCountMismatches: fitted.dropped } : {}),
             hasHeader,
             headerIndex: table.headerIndex,
             dataStartIndex: table.dataStartIndex,
@@ -363,6 +398,8 @@ export default class CsvParser {
         return {
             delimiter,
             encoding: decoded.encoding,
+            encodingDetection: decoded.detection,
+            removedInvisibleChars: decoded.removedChars,
             rows,
             profile,
             warnings,
@@ -371,9 +408,9 @@ export default class CsvParser {
 
     async parseWithProfile(buffer, profile) {
         if (!profile) return this.parse(buffer);
-        const text = this._decodeText(buffer, profile.encoding || 'auto');
+        const decoded = this._decodeTextWithEncoding(buffer, profile.encoding || 'auto');
+        const text = decoded.text;
         const delimiter = profile.delimiter || ',';
-        const decimalSeparator = profile.decimalSeparator || 'auto';
         const rows = this._parseRows(text, delimiter)
             .map(row => row.map(cell => cell.trim()));
 
@@ -408,11 +445,18 @@ export default class CsvParser {
 
         const headers = this._normalizeProfileHeaders(profile.headers, rawHeaders, profile);
         const expectedColumns = rawHeaders.length;
-        const candidateRows = rows.slice(dataStartIndex);
-        const widthRows = candidateRows.filter(row => row.length === expectedColumns);
-        const discardedColumnCountRows = candidateRows.length - widthRows.length;
+        // The width rows are fitted to is the header's, with the empty cells a
+        // header row may end in: a renamed header list is the same width.
+        const widthTemplate = rawHeaders.map((header, index) =>
+            hasHeader ? String(headerRow[index] ?? header ?? '') : 'x');
+        const fitted = fitCsvTableRows(rows, dataStartIndex, widthTemplate, { policy: normalizeRaggedRowPolicy(profile.raggedRows) });
+        const widthRows = fitted.rows;
+        const discardedColumnCountRows = fitted.dropped;
+        const detectedNumberFormat = profile.detectedNumberFormat
+            || this._detectNumberFormat(widthRows, delimiter, timeSource);
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat({ ...profile, detectedNumberFormat });
         const rowFilter = normalizeCsvRowFilter(profile.rowFilter);
-        const dataRows = widthRows.filter(row => csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator }));
+        const dataRows = widthRows.filter(row => csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator, thousandsSeparator }));
         const filteredRowCount = widthRows.length - dataRows.length;
         if (dataRows.length < 1) {
             throw new Error(rowFilter ? 'CSV row filter excludes all data rows.' : 'CSV must contain at least one data row.');
@@ -438,7 +482,7 @@ export default class CsvParser {
             const row = dataRows[r];
             if (!row.some(cell => cell !== '')) continue;
 
-            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator });
+            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator, thousandsSeparator });
             if (!Number.isFinite(timeValue)) {
                 invalidTimeRows++;
                 continue;
@@ -449,7 +493,7 @@ export default class CsvParser {
             for (let c = 0; c < variableHeaders.length; c++) {
                 const sourceIndex = variableHeaders[c].index;
                 const rawValue = String(row[sourceIndex] ?? '').trim();
-                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator);
+                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator, thousandsSeparator);
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
                 column.stringValues.push(rawValue);
@@ -552,6 +596,10 @@ export default class CsvParser {
             skippedInvalidTimeRows: invalidTimeRows,
             reorderedRows,
             skippedColumnCountRows: discardedColumnCountRows,
+            repairedColumnCountRows: fitted.repaired,
+            encoding: decoded.encoding,
+            removedInvisibleChars: decoded.removedChars,
+            detectedNumberFormat,
             skippedFilteredRows: filteredRowCount,
             timeName: timeVar.name,
             timeKind,
@@ -680,53 +728,64 @@ export default class CsvParser {
         return this._decodeTextWithEncoding(buffer, encoding).text;
     }
 
+    /**
+     * Bytes to clean text: decoded (decodeCsvBytes says how the encoding is
+     * chosen) and stripped of the invisible characters no value is made of.
+     *
+     * @returns {{ text: string, encoding: string, detection: string, removedChars: number }}
+     */
     _decodeTextWithEncoding(buffer, encoding = 'auto') {
-        const requested = String(encoding || 'auto').toLowerCase();
-        if (typeof buffer === 'string') return { text: buffer.replace(/^\uFEFF/, ''), encoding: requested === 'auto' ? 'utf-8' : requested };
-        if (requested !== 'auto') {
-            const label = requested === 'latin1' ? 'windows-1252' : requested;
-            if (typeof TextDecoder !== 'undefined') {
-                try {
-                    return { text: new TextDecoder(label, { fatal: false }).decode(buffer).replace(/^\uFEFF/, ''), encoding: requested };
-                } catch (_) {
-                    // Fall through to auto detection / byte-wise fallback.
-                }
-            }
-        }
-        if (this._utf8Decoder) {
-            try {
-                return { text: this._utf8Decoder.decode(buffer).replace(/^\uFEFF/, ''), encoding: 'utf-8' };
-            } catch (_) {
-                if (this._latin1Decoder) {
-                    return { text: this._latin1Decoder.decode(buffer).replace(/^\uFEFF/, ''), encoding: 'windows-1252' };
-                }
-            }
-        }
+        const decoded = decodeCsvBytes(buffer, String(encoding || 'auto').toLowerCase());
+        const sanitized = sanitizeCsvText(decoded.text);
+        return {
+            text: sanitized.text,
+            encoding: decoded.encoding,
+            detection: decoded.detection,
+            removedChars: sanitized.removed,
+        };
+    }
 
-        let text = '';
-        const bytes = new Uint8Array(buffer);
-        for (const b of bytes) text += String.fromCharCode(b);
-        return { text: text.replace(/^\uFEFF/, ''), encoding: 'latin1' };
+    // How the numbers of a table are written, from its data rows. The time
+    // columns are left out: a date's dots and commas are not decimal marks.
+    _detectNumberFormat(dataRows, delimiter, timeSource = null) {
+        const { decimalSeparator, thousandsSeparator } = detectCsvNumberFormat((dataRows || []).slice(0, 2000), {
+            delimiter,
+            skipColumns: timeSource?.kind === 'datetime' ? (timeSource.sourceIndexes || []) : [],
+        });
+        return { decimalSeparator, thousandsSeparator };
     }
 
     _detectDelimiter(text) {
-        const candidates = [',', ';', '\t', 'whitespace'];
         let best = { delimiter: ',', score: -Infinity };
         const sampleText = String(text).slice(0, 262144);
 
-        for (const delimiter of candidates) {
+        for (const delimiter of DELIMITER_CANDIDATES) {
+            // A delimiter that never occurs cannot split anything; skipping it
+            // saves a full parse of the sample.
+            if (delimiter !== 'whitespace' && delimiter !== ',' && !sampleText.includes(delimiter)) continue;
             const rows = this._parseRows(sampleText, delimiter, { maxRows: 700 })
                 .filter(row => row.some(cell => cell.trim() !== ''))
                 .slice(0, 500);
             if (!rows.length) continue;
 
             const table = this._detectTableRows(rows, delimiter);
-            const headerWidth = rows[table.headerIndex]?.length || 0;
+            const header = rows[table.headerIndex] || [];
+            const headerWidth = header.length;
+            const minWidth = minimumRowWidth(header);
             const dataRows = rows
                 .slice(table.dataStartIndex, Math.min(rows.length, table.dataStartIndex + 50))
-                .filter(row => row.length === headerWidth && this._isDataLikeRow(row, delimiter));
+                .map(row => fitCsvRowToWidth(row, headerWidth, { minWidth }))
+                .filter(row => row && this._isDataLikeRow(row, delimiter));
             if (rows.length > table.dataStartIndex && dataRows.length === 0) continue;
-            const score = table.score + headerWidth * 25 + dataRows.length * 12 - table.headerIndex * 0.25;
+            let score = table.score + headerWidth * 25 + dataRows.length * 12 - table.headerIndex * 0.25;
+            if (delimiter === 'whitespace' && dataRows.length) {
+                // Splitting on spaces also splits dates ("1 janvier 2024
+                // 13:05") into more columns, which the width bonus rewards.
+                // A row whose "cells" still hold another delimiter
+                // ("13:05:22;1.234,5;ok") was not split where the file is.
+                const foreign = dataRows.filter(row => row.some(cell => /[;\t|]|,(?!\d)|(?<!\d),/.test(cell))).length;
+                score -= 200 * (foreign / dataRows.length);
+            }
             if (headerWidth > 1 && score > best.score) best = { delimiter, score };
         }
 
@@ -746,31 +805,53 @@ export default class CsvParser {
             return rows;
         }
 
+        // RFC 4180, read leniently. A quote opens a quoted field only at the
+        // start of a field, and only when a closing quote follows within
+        // reach (_quotedFieldCloses). Anywhere else it is an ordinary
+        // character: `5" pipe`, `Temp "A"`, or a string a PLC cut short. The
+        // old reader toggled quoting on every quote, so one stray quote made
+        // the rest of the file a single cell. Text after a closing quote,
+        // before the delimiter, is kept: `"abc"def` reads `abcdef`.
         const rows = [];
         let row = [];
         let cell = '';
         let inQuotes = false;
+        const n = text.length;
 
-        for (let i = 0; i < text.length; i++) {
+        for (let i = 0; i < n; i++) {
             const ch = text[i];
 
+            if (inQuotes) {
+                if (ch === '"') {
+                    if (text[i + 1] === '"') {
+                        cell += '"';
+                        i++;
+                    } else {
+                        inQuotes = false;
+                    }
+                    continue;
+                }
+                cell += ch;
+                continue;
+            }
+
             if (ch === '"') {
-                if (inQuotes && text[i + 1] === '"') {
-                    cell += '"';
-                    i++;
+                if (cell.trim() === '' && this._quotedFieldCloses(text, i + 1)) {
+                    inQuotes = true;
+                    cell = '';
                 } else {
-                    inQuotes = !inQuotes;
+                    cell += ch;
                 }
                 continue;
             }
 
-            if (!inQuotes && ch === delimiter) {
+            if (ch === delimiter) {
                 row.push(cell);
                 cell = '';
                 continue;
             }
 
-            if (!inQuotes && (ch === '\n' || ch === '\r')) {
+            if (ch === '\n' || ch === '\r') {
                 row.push(cell);
                 rows.push(row);
                 if (maxRows && rows.length >= maxRows) return rows;
@@ -786,6 +867,22 @@ export default class CsvParser {
         row.push(cell);
         rows.push(row);
         return rows;
+    }
+
+    // Does the quoted field starting at `from` close, within the size a real
+    // quoted cell has? A doubled quote is an escaped one, not the end.
+    _quotedFieldCloses(text, from) {
+        const limit = Math.min(text.length, from + MAX_QUOTED_FIELD_CHARS);
+        let lines = 0;
+        for (let j = from; j < limit; j++) {
+            const ch = text.charCodeAt(j);
+            if (ch === 34) { // "
+                if (text.charCodeAt(j + 1) === 34) { j++; continue; }
+                return true;
+            }
+            if (ch === 10 && ++lines > MAX_QUOTED_FIELD_LINES) return false;
+        }
+        return false;
     }
 
     // Put the rows in chronological order, and report how many had to move.
@@ -868,6 +965,9 @@ export default class CsvParser {
             // therefore arrived as column_1..column_N with the names and the
             // units both thrown away.
             if (!header.some(cell => String(cell ?? '').trim() !== '')) continue;
+            // Rows may end in empty cells the header does not have (a trailing
+            // delimiter), or stop before header cells that are empty.
+            const minWidth = minimumRowWidth(header);
 
             let dataStartIndex = -1;
             let dataCount = 0;
@@ -896,8 +996,8 @@ export default class CsvParser {
                     ? headerLookaheadEnd
                     : Math.min(rows.length, dataStartIndex + 30);
                 if (i >= end) break;
-                const row = rows[i] || [];
-                if (row.length !== width) {
+                const row = fitCsvRowToWidth(rows[i] || [], width, { minWidth });
+                if (!row) {
                     if (dataCount === 0) skippedAfterHeader++;
                     continue;
                 }
@@ -993,10 +1093,14 @@ export default class CsvParser {
 
     _looksLikeDateTimeCell(value) {
         const text = String(value ?? '').trim();
-        return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+\-]\d{2}:?\d{2})?)?$/.test(text)
-            || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text)
-            || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)
-            || /^(?:\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})|\d{4}\.\d{1,2}\.\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text);
+        return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s?(?:Z|[+\-]\d{2}(?::?\d{2})?)?)?$/.test(text)
+            || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?$/.test(text)
+            || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?$/.test(text)
+            || /^(?:\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})|\d{4}\.\d{1,2}\.\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?$/.test(text)
+            // "09-Janvier-2024 07:05:08", "Mon, 15 Jan 2024": without this a
+            // file dated with month names had no data-like row, and the
+            // delimiter was chosen as if it had no dates at all.
+            || (/\p{L}{3}/u.test(text) && /\d/.test(text) && isMonthNameDateCell(text));
     }
 
     _isUnitLikeRow(row, delimiter = ',') {
