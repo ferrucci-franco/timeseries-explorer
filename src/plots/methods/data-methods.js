@@ -2103,12 +2103,18 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // Per-trace line shape overrides the default, set from the legend context
     // menu for discrete-looking real variables.
     const isStep = t.lineShape ? t.lineShape === 'hv' : this._variableDefaultsToStairs(variable);
+    // A series of events (the interarrival time between edges, a Data tool) is
+    // NaN everywhere but at the events: each of them is a lone sample that a
+    // line never draws, so it is drawn as dots, reduced like the markers-only
+    // trace below.
+    const eventSamples = !t.markersOnly && !!variable.eventSamples;
+    const sparse = !!t.markersOnly || eventSamples;
     // A markers-only trace (the data-tool preview of the samples a fill would add)
     // is mostly NaN by construction, and min/max bucket decimation would throw
     // away the few points that ARE there — losing exactly the positions the trace
     // exists to show. It gets its own reduction, over the present samples only.
     const fullVisualCacheable = !visibleRange
-        && !t.markersOnly
+        && !sparse
         && !plot?.timeseriesStacked;
     const cachedFullVisual = fullVisualCacheable
         && t._fullVisualCache?.timeData === timeData
@@ -2116,7 +2122,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         && t._fullVisualCache?.target === this.timeseriesVisualMaxPoints
         ? t._fullVisualCache.visual
         : null;
-    const baseVisual = t.markersOnly
+    const baseVisual = sparse
         ? this._buildSparseVisualData(timeData, values)
         : (cachedFullVisual || this._buildTimeseriesVisualData(timeData, values, visibleRange));
     if (fullVisualCacheable && !cachedFullVisual) {
@@ -2186,6 +2192,18 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
         };
     }
+    if (eventSamples) {
+        return {
+            x: plotX, y: visual.y,
+            name, type: useGL ? 'scattergl' : 'scatter', mode: 'markers',
+            visible: t.visible ?? true,
+            yaxis,
+            marker: { color: t.color, size: 5 },
+            ...stackAttrs,
+            ...(customdata ? { customdata } : {}),
+            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
+        };
+    }
     return {
         x: plotX, y: visual.y,
         name, type: plot?.timeseriesStacked ? 'scatter' : (useGL ? 'scattergl' : 'scatter'),
@@ -2224,7 +2242,10 @@ proto._timeseriesSampleMarkersEligible = function(plot, t) {
     if (!this._timeseriesSamplesEnabled(plot) || !t || t.markersOnly) return false;
     const data = this.files.get(t.fileId)?.data;
     if (!data || data._duckdb) return false;
-    return data.variables?.[t.varName]?.kind !== 'parameter';
+    const variable = data.variables?.[t.varName];
+    // A series of events is drawn as dots already.
+    if (variable?.eventSamples) return false;
+    return variable?.kind !== 'parameter';
 };
 
 // Decide, and remember, whether `t` shows dots for the window `visual` was
