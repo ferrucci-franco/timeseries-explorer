@@ -498,6 +498,68 @@
     display: none;
 }
 
+/* A workbook with several sheets: one row for the workbook, its sheets under it.
+   The header is a container, not a dataset — it never takes the active blue;
+   it only says, with an accent bar, that the active dataset is one of its sheets. */
+.file-workbook-header {
+    cursor: default;
+    font-weight: 600;
+    color: var(--text-primary);
+    border-left: 3px solid transparent;
+}
+
+.file-workbook-header .file-entry-name {
+    cursor: pointer;
+}
+
+.file-workbook-header.contains-active {
+    border-left-color: var(--primary-color);
+}
+
+.file-workbook-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: #1d7a45;
+}
+
+.file-workbook-icon svg {
+    width: 0.95rem;
+    height: 0.95rem;
+    stroke: currentColor;
+}
+
+.file-workbook-sheet-count {
+    font-weight: 500;
+}
+
+/* A sheet listed but not read yet: quieter than an open one, opens on click. */
+.file-entry-sheet-unopened {
+    opacity: 0.72;
+    font-style: italic;
+}
+
+.file-entry-sheet-unopened:hover,
+.file-entry-sheet-unopened:focus-visible {
+    opacity: 1;
+}
+
+.file-entry-sheet-open {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-style: normal;
+    font-weight: 700;
+    color: var(--primary-color);
+    padding: 0 4px;
+}
+
+.file-entry-sheet-hidden {
+    font-style: normal;
+}
+
+.file-entry-sheet-hidden[hidden] {
+    display: none;
+}
+
 .file-entry-derived {
     border-color: color-mix(in srgb, var(--derived-color, var(--primary-color)) 45%, var(--border-color));
     color: color-mix(in srgb, var(--derived-color, var(--primary-color)) 80%, var(--text-primary));

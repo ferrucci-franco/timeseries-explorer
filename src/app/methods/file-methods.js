@@ -331,7 +331,7 @@ proto.loadFile = async function(file, options = {}) {
             name: baseName,
             extension,
             transform,
-            excel: data?.metadata?.excel ? { ...data.metadata.excel } : null,
+            excel: data?.metadata?.excel ? { ...data.metadata.excel, ...(options.excelWorkbook || {}) } : null,
             matlab: data?.metadata?.matlab ? { ...data.metadata.matlab } : null,
         });
         this._adoptExcelCsvCache(this.files.get(fileId), data);
@@ -445,6 +445,7 @@ proto.loadFiles = async function(items = []) {
                 excelCsvBuffer: item?.excelCsvBuffer || null,
                 excelSheetNames: item?.excelSheetNames || null,
                 excelAppendSheetName: item?.excelAppendSheetName === true,
+                excelWorkbook: item?.excelWorkbook || null,
                 matBuffer: item?.matBuffer || null,
                 matInspection: item?.matInspection || null,
                 matSelection: item?.matSelection || null,
@@ -567,29 +568,28 @@ proto._expandExcelEntries = async function(entries) {
                 );
                 continue;
             }
-            let selected = [converted.sheetName || nonEmpty[0].name];
-            if (nonEmpty.length > 1) {
-                hideBusy();
-                const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
-                const picked = await ExcelSheetPickerDialog.open({ fileName: file.name, sheets });
-                if (!picked || !picked.length) continue;
-                selected = picked;
-            }
-            for (const sheetName of selected) {
-                expanded.push({
-                    file,
-                    fileHandle,
-                    localPath: item?.localPath || '',
-                    excelSheetName: sheetName,
-                    // The sheet that came back with the inventory is already
-                    // serialized; carrying it forward is what keeps the usual
-                    // workbook down to one decode. Any other sheet the user
-                    // picks is decoded again, in the worker.
-                    excelCsvBuffer: sheetName === converted.sheetName ? converted.csvBuffer : null,
-                    excelSheetNames: sheets.map(sheet => sheet.name),
-                    excelAppendSheetName: selected.length > 1,
-                });
-            }
+            // One sheet is opened; a workbook with more than one sheet of data
+            // stays one item in the files list, with its sheets listed under it
+            // so the reader switches between them there (and the ones not yet
+            // read are read when picked). Opening every sheet up front as its
+            // own file was what made one workbook look like several files.
+            const sheetName = converted.sheetName || nonEmpty[0].name;
+            const workbook = nonEmpty.length > 1
+                ? { workbookKey: this._newExcelWorkbookKey(), sheets: this._excelSheetInventory(sheets) }
+                : null;
+            expanded.push({
+                file,
+                fileHandle,
+                localPath: item?.localPath || '',
+                excelSheetName: sheetName,
+                // The sheet that came back with the inventory is already
+                // serialized; carrying it forward is what keeps the usual
+                // workbook down to one decode.
+                excelCsvBuffer: sheetName === converted.sheetName ? converted.csvBuffer : null,
+                excelSheetNames: sheets.map(sheet => sheet.name),
+                excelAppendSheetName: !!workbook,
+                excelWorkbook: workbook,
+            });
         } catch (err) {
             hideBusy();
             console.error('Error preparing Excel file:', err);
@@ -1227,7 +1227,7 @@ proto.reloadActiveFile = async function() {
             excelSheetName: entry.excel?.sheetName || null,
             matSelection: entry.matlab || null,
         });
-        if (data?.metadata?.excel) entry.excel = { ...data.metadata.excel };
+        if (data?.metadata?.excel) entry.excel = { ...entry.excel, ...data.metadata.excel };
         if (data?.metadata?.matlab) entry.matlab = { ...data.metadata.matlab };
         this._reapplyDerivedVariables(id, data);
         this._reapplyDataToolVariables?.(id, data);
@@ -1397,7 +1397,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
             name,
             extension: source.extension || '.mat',
             transform: this._normalizeFileTransform(source.transform),
-            excel: data?.metadata?.excel ? { ...data.metadata.excel } : (source.excel ? { ...source.excel } : null),
+            excel: data?.metadata?.excel ? { ...source.excel, ...data.metadata.excel } : (source.excel ? { ...source.excel } : null),
             matlab: data?.metadata?.matlab ? { ...data.metadata.matlab } : (source.matlab ? { ...source.matlab } : null),
         });
         this._adoptExcelCsvCache(this.files.get(fileId), data);
@@ -4390,17 +4390,27 @@ proto._renderFilesList = function() {
     // A derived dataset is drawn under its source, indented; only an orphan
     // (its source closed out from under it) stands on its own.
     const rendered = new Set();
-    const renderWithDatasets = (fileId, entryData, depth) => {
+    const renderWithDatasets = (fileId, entryData, depth, options = {}) => {
         if (rendered.has(fileId)) return;
         rendered.add(fileId);
-        list.appendChild(this._renderFileListItem(fileId, entryData, depth));
+        list.appendChild(this._renderFileListItem(fileId, entryData, depth, options));
         for (const [childId, childEntry] of this._derivedDatasetsOf?.(fileId) || []) {
             renderWithDatasets(childId, childEntry, depth + 1);
         }
     };
+    // The sheets of one workbook are one item: the workbook, with its sheets
+    // under it. Drawn where its first open sheet would have been.
+    const renderedWorkbooks = new Set();
     for (const [fileId, entryData] of this.files) {
         const recipe = this._derivedDatasetRecipe?.(entryData);
         if (recipe && this.files.has(recipe.sourceFileId)) continue;
+        const workbookKey = recipe ? null : this._excelWorkbookKeyOf(entryData);
+        if (workbookKey) {
+            if (renderedWorkbooks.has(workbookKey)) continue;
+            renderedWorkbooks.add(workbookKey);
+            this._renderExcelWorkbookGroup(list, workbookKey, renderWithDatasets);
+            continue;
+        }
         renderWithDatasets(fileId, entryData, 0);
     }
     // On a phone the time-axis panel is a page of its own, outside the list.
@@ -4408,7 +4418,246 @@ proto._renderFilesList = function() {
     this._griddedSyncReturnButton?.();
 };
 
-proto._renderFileListItem = function(fileId, entryData, depth = 0) {
+// ── Workbooks with several sheets ───────────────────────────────────────────
+//
+// Each open sheet is still a dataset of its own (its plots, transforms and
+// parsing profile belong to it), but the list shows the workbook once with
+// its sheets under it. Every sheet with data is listed, open or not; picking
+// one that is not open yet reads it then.
+
+proto._newExcelWorkbookKey = function() {
+    const random = globalThis.crypto?.randomUUID?.()
+        || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    return `wb-${random}`;
+};
+
+proto._excelSheetInventory = function(sheets = []) {
+    return (sheets || []).map(sheet => ({
+        name: String(sheet?.name ?? ''),
+        empty: !!sheet?.empty,
+        hidden: !!sheet?.hidden,
+        rowCount: Number.isFinite(sheet?.rowCount) ? sheet.rowCount : null,
+        colCount: Number.isFinite(sheet?.colCount) ? sheet.colCount : null,
+    }));
+};
+
+proto._excelWorkbookKeyOf = function(entry) {
+    const excel = entry?.excel;
+    return excel?.workbookKey && Array.isArray(excel.sheets) ? excel.workbookKey : null;
+};
+
+/** The open sheets of a workbook, in the order they were opened. */
+proto._excelWorkbookMembers = function(workbookKey) {
+    const members = [];
+    if (!workbookKey) return members;
+    for (const [fileId, entry] of this.files) {
+        if (this._derivedDatasetRecipe?.(entry)) continue;
+        if (this._excelWorkbookKeyOf(entry) === workbookKey) members.push([fileId, entry]);
+    }
+    return members;
+};
+
+proto._excelWorkbookBaseName = function(entry) {
+    return this._fileBaseName(entry?.file?.name || '') || entry?.name || '';
+};
+
+// The sheet's own name in the list: the workbook's is on the row above. A
+// second version of a sheet keeps whatever its name adds after the sheet.
+proto._excelSheetRowLabel = function(entry) {
+    const prefix = `${this._excelWorkbookBaseName(entry)} — `;
+    const name = String(entry?.name || '');
+    if (name.startsWith(prefix) && name.length > prefix.length) return name.slice(prefix.length);
+    return entry?.excel?.sheetName || this._fileDisplayName(entry);
+};
+
+proto._renderExcelWorkbookGroup = function(list, workbookKey, renderWithDatasets) {
+    const members = this._excelWorkbookMembers(workbookKey);
+    if (!members.length) return;
+    const [firstId, firstEntry] = members[0];
+    // Every member carries the inventory taken when the workbook was opened;
+    // the longest one wins should a reload have changed it.
+    const inventory = members
+        .map(([, entry]) => entry.excel.sheets)
+        .reduce((best, sheets) => (sheets.length > best.length ? sheets : best), []);
+    const memberIds = members.map(([id]) => id);
+    const containsActive = memberIds.includes(this.activeFileId);
+    const workbookName = `${this._excelWorkbookBaseName(firstEntry)}${firstEntry.extension || ''}`;
+
+    // Header: the workbook itself.
+    const headerItem = document.createElement('div');
+    headerItem.className = 'file-list-item file-workbook-group';
+    const header = document.createElement('div');
+    header.className = 'file-entry file-workbook-header' + (containsActive ? ' contains-active' : '');
+    header.dataset.workbookKey = workbookKey;
+
+    const icon = document.createElement('span');
+    icon.className = 'file-workbook-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox="0 0 24 24" focusable="false"><rect x="3.5" y="3.5" width="17" height="17" rx="2" fill="none" stroke-width="1.8"/><path d="M3.5 9h17M3.5 14.5h17M9.5 3.5v17" fill="none" stroke-width="1.6"/></svg>';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-entry-name';
+    nameSpan.textContent = workbookName;
+    nameSpan.title = this._fileEntryTooltip(firstEntry).replace(this._fileDisplayName(firstEntry), workbookName);
+    nameSpan.addEventListener('click', () => {
+        if (!containsActive) this.setActiveFile(firstId);
+    });
+
+    const sheetCount = inventory.filter(sheet => !sheet.empty).length;
+    const countBadge = document.createElement('span');
+    countBadge.className = 'file-entry-type file-workbook-sheet-count';
+    countBadge.textContent = i18n.t('excelWorkbookSheetCount').replace('{count}', String(sheetCount));
+    countBadge.title = i18n.t('excelWorkbookSheetCountTooltip')
+        .replace('{open}', String(members.length))
+        .replace('{count}', String(sheetCount));
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'file-entry-close';
+    closeBtn.textContent = 'x';
+    closeBtn.title = i18n.t('excelWorkbookClose');
+    closeBtn.setAttribute('aria-label', i18n.t('excelWorkbookClose'));
+    closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.closeExcelWorkbook(workbookKey);
+    });
+
+    header.append(icon, nameSpan, countBadge, closeBtn);
+    headerItem.appendChild(header);
+    list.appendChild(headerItem);
+
+    // Sheets: open ones as full file rows, the others as a row that opens them.
+    const bySheet = new Map();
+    for (const [fileId, entry] of members) {
+        const name = entry.excel?.sheetName || '';
+        if (!bySheet.has(name)) bySheet.set(name, []);
+        bySheet.get(name).push([fileId, entry]);
+    }
+    for (const sheet of inventory) {
+        if (sheet.empty) continue;
+        const open = bySheet.get(sheet.name);
+        bySheet.delete(sheet.name);
+        if (open?.length) {
+            for (const [fileId, entry] of open) {
+                renderWithDatasets(fileId, entry, 1, { label: this._excelSheetRowLabel(entry), sheet: true });
+            }
+        } else {
+            list.appendChild(this._renderExcelUnopenedSheetRow(firstId, sheet));
+        }
+    }
+    // A sheet the inventory does not know about (renamed in the file since,
+    // say) is still open, and still listed.
+    for (const open of bySheet.values()) {
+        for (const [fileId, entry] of open) {
+            renderWithDatasets(fileId, entry, 1, { label: this._excelSheetRowLabel(entry), sheet: true });
+        }
+    }
+};
+
+proto._renderExcelUnopenedSheetRow = function(anchorFileId, sheet) {
+    const item = document.createElement('div');
+    item.className = 'file-list-item file-list-item-derived file-list-item-sheet';
+    item.style.setProperty('--file-depth', '1');
+
+    const row = document.createElement('div');
+    row.className = 'file-entry file-entry-sheet-unopened';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    const tooltip = [i18n.t('excelSheetOpenTooltip').replace('{sheet}', sheet.name)];
+    if (Number.isFinite(sheet.rowCount) && Number.isFinite(sheet.colCount)) {
+        tooltip.push(`${sheet.rowCount} × ${sheet.colCount}`);
+    }
+    row.title = tooltip.join('\n');
+
+    const mark = document.createElement('span');
+    mark.className = 'file-entry-derived-mark';
+    mark.textContent = '↳';
+    mark.setAttribute('aria-hidden', 'true');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-entry-name';
+    nameSpan.textContent = sheet.name;
+
+    const hiddenBadge = document.createElement('span');
+    hiddenBadge.className = 'file-entry-type file-entry-sheet-hidden';
+    hiddenBadge.textContent = i18n.t('excelSheetHidden');
+    hiddenBadge.hidden = !sheet.hidden;
+
+    const openMark = document.createElement('span');
+    openMark.className = 'file-entry-sheet-open';
+    openMark.textContent = '+';
+    openMark.setAttribute('aria-hidden', 'true');
+
+    row.append(mark, nameSpan, hiddenBadge, openMark);
+    const open = () => this.openExcelSheet(anchorFileId, sheet.name);
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            open();
+        }
+    });
+    item.appendChild(row);
+    return item;
+};
+
+/**
+ * Open another sheet of a workbook that is already in the list, and make it
+ * the active dataset. A sheet already open is just made active.
+ */
+proto.openExcelSheet = async function(anchorFileId, sheetName) {
+    const anchor = this.files.get(anchorFileId);
+    const workbookKey = this._excelWorkbookKeyOf(anchor);
+    if (!workbookKey || !sheetName) return null;
+    const existing = this._excelWorkbookMembers(workbookKey)
+        .find(([, entry]) => entry.excel?.sheetName === sheetName);
+    if (existing) {
+        this.setActiveFile(existing[0]);
+        return { fileId: existing[0] };
+    }
+    if (this._excelSheetOpening) return null;
+    this._excelSheetOpening = true;
+    const loadToken = createLoadToken();
+    const workbookName = `${this._excelWorkbookBaseName(anchor)}${anchor.extension || ''}`;
+    try {
+        this._showFileLoadingOverlay(1, loadToken);
+        this._updateFileLoadingOverlay(1, 1, `${workbookName} — ${sheetName}`, anchor.file?.size);
+        await this._waitForNextPaint();
+        const result = await this.loadFile(anchor.file || null, {
+            fileHandle: anchor.fileHandle || null,
+            localPath: anchor.localPath || '',
+            excelSheetName: sheetName,
+            excelSheetNames: anchor.excel.sheetNames || null,
+            excelAppendSheetName: true,
+            excelWorkbook: { workbookKey, sheets: anchor.excel.sheets },
+            // The workbook was let through the size check when it was opened.
+            allowOversized: true,
+            deferUi: true,
+            loadToken,
+        });
+        if (!result?.fileId) return null;
+        this.setActiveFile(result.fileId);
+        this._hideFileLoadingOverlay(loadToken);
+        await this._showDatetimeAxisWarningIfNeeded(result.fileId, result.data);
+        return result;
+    } finally {
+        this._hideFileLoadingOverlay(loadToken);
+        this._excelSheetOpening = false;
+    }
+};
+
+/** Close every open sheet of a workbook, with one question for all of them. */
+proto.closeExcelWorkbook = async function(workbookKey) {
+    const ids = this._excelWorkbookMembers(workbookKey).map(([id]) => id);
+    if (!ids.length) return;
+    const plotted = ids.some(id => this.plotManager.hasTracesForFile(id));
+    if (plotted && !(await Modal.confirm(i18n.t('closeFileWarning'), { icon: '⚠️' }))) return;
+    for (const id of ids) {
+        await this.removeFile(id, { confirmed: true });
+    }
+};
+
+proto._renderFileListItem = function(fileId, entryData, depth = 0, options = {}) {
     {
         const item = document.createElement('div');
         item.className = 'file-list-item' + (depth > 0 ? ' file-list-item-derived' : '');
@@ -4423,9 +4672,10 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'file-entry-name';
-        nameSpan.textContent = this._fileDisplayName(entryData);
+        nameSpan.textContent = options.label || this._fileDisplayName(entryData);
         nameSpan.title = this._fileEntryTooltip(entryData);
         nameSpan.addEventListener('click', () => this.setActiveFile(fileId));
+        if (options.sheet) item.classList.add('file-list-item-sheet');
 
         // The mark that says "built from the file above": drawn ahead of the
         // name so the indentation reads as a relationship, not as a stray gap.
@@ -4764,7 +5014,7 @@ proto.adjustCsvParsing = async function(fileId) {
             const { csvBuffer, sheetName, sheetNames } = await this._convertExcelEntryToCsvBuffer(entry);
             data = await this._parseCsvResultBuffer(displayName, csvBuffer, null, { csvProfile: reviewedProfile });
             data.metadata.excel = { sheetName, sheetNames: sheetNames || entry.excel?.sheetNames || null };
-            entry.excel = { ...data.metadata.excel };
+            entry.excel = { ...entry.excel, ...data.metadata.excel };
             this._reapplyDerivedVariables(fileId, data);
             this._reapplyDataToolVariables?.(fileId, data);
             this.plotManager.updateFileData(fileId, data);

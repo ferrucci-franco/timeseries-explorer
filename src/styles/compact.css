@@ -1356,6 +1356,17 @@ html.compact .file-entry-close {
     display: none !important;
 }
 
+/* The workbook row has no ⋯ page of its own: its close stays on the row. */
+html.compact .file-workbook-header .file-entry-close {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 36px;
+    margin-left: auto;
+    font-size: 0.9rem;
+}
+
 html.compact .file-entry-more {
     display: inline-flex;
     align-items: center;
