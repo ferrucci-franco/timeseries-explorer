@@ -16,6 +16,11 @@
 //   · the page reloaded and the same file opened again: the moving average
 //     is adopted from the disk, not run, with the same values;
 //   · a second tab of the app takes slot 1, the first holding slot 0;
+//   · storage held in memory (Playwright's contexts are private, like an
+//     incognito window: ~1 GB here, while the quota reported is 3.2 GB) is
+//     measured for what it really holds, and a job that would not fit is
+//     refused with the disk's message instead of stalling the engine; a
+//     persistent profile is told to be a disk;
 //   · Settings shows where the results are and what is kept, and the
 //     choice "in memory" takes effect at the next start: the database in
 //     memory, and the same moving average refused by the 1 MB limit;
@@ -183,6 +188,39 @@ try {
     assert.equal(ffCheck.rows, ROWS + appended.length, 'over every row, the appended ones too');
     assert.equal(ffCheck.mismatches, 0, `bit for bit the kernel over the grown column (${JSON.stringify(ffCheck)})`);
 
+    // ── Storage held in memory: measured, and a job past it refused ──
+    const room = await page.evaluate(async () => {
+        const source = window.app._duckdbSource;
+        await source.refreshDiskBudget();
+        return { budget: source._diskBudgetBytes, quota: source._diskQuota?.quota, room: source._diskQuota?.room, onDisk: !!source._opfsOnDisk };
+    });
+    assert.equal(room.onDisk, false, `a private context is not taken for a disk (${JSON.stringify(room)})`);
+    assert.ok(room.room < room.quota && room.budget < 1.2e9, `its room is measured below the quota it reports (${JSON.stringify(room)})`);
+    // Fill it to a few MB of what it holds, then a job that needs more.
+    const filled = await page.evaluate(async (leave) => {
+        const code = `onmessage = async (e) => {
+            const root = await navigator.storage.getDirectory();
+            const h = await root.getFileHandle('e2e-filler', { create: true });
+            const a = await h.createSyncAccessHandle();
+            a.truncate(e.data); a.write(new Uint8Array([1]), { at: e.data - 1 }); a.flush(); a.close();
+            postMessage(true);
+        };`;
+        const w = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+        const source = window.app._duckdbSource;
+        // Narrowed to 1 MB for the test (16 MB by default).
+        source.opfsProbePrecisionBytes = 1 << 20;
+        await source.refreshDiskBudget();
+        await new Promise(r => { w.onmessage = r; w.postMessage(Math.max(1, Math.floor(source._diskQuota.room - leave))); });
+        w.terminate();
+        await source.refreshDiskBudget();
+        return source._diskBudgetBytes;
+    }, 4e6);
+    assert.ok(filled < 4e6, `nearly full (${filled} bytes left for results)`);
+    const tooBig = await createTool(page, fileId, 'movingAverage', 'mbig', { window: 51 });
+    assert.ok(!tooBig.ok, 'a job past the room is refused');
+    assert.match(tooBig.error || '', /disk/i, `with the disk's message, not a stall (${tooBig.error})`);
+    await page.evaluate(async () => { const root = await navigator.storage.getDirectory(); await root.removeEntry('e2e-filler'); });
+
     // ── A second tab takes the next slot ──
     const second = await openApp(context);
     const secondStorage = await second.evaluate(async () => {
@@ -233,8 +271,29 @@ try {
     assert.ok(!refused.ok, 'in memory, the 1 MB limit refuses it');
     assert.match(refused.error || '', /1 MB|memory/i, `with the budget's message (${refused.error})`);
 
+    // ── A persistent profile: the probe finds a disk ──
+    {
+        const profileDir = await mkdtemp(path.join(tmpdir(), 'omv-profile-'));
+        const persistent = await chromium.launchPersistentContext(profileDir);
+        try {
+            const p = await persistent.newPage();
+            watch(p);
+            await p.goto(baseUrl);
+            await p.waitForFunction(() => window.app?.plotManager, null, { timeout: 60000 });
+            const disk = await p.evaluate(async () => {
+                const source = await window.app._getDuckDbSource();
+                await source.init();
+                await source.refreshDiskBudget();
+                return { kind: source.storage.kind, onDisk: !!source._opfsOnDisk, budget: source._diskBudgetBytes };
+            });
+            assert.deepEqual([disk.kind, disk.onDisk], ['opfs', true], `a persistent profile is a disk (${JSON.stringify(disk)})`);
+        } finally {
+            await persistent.close();
+        }
+    }
+
     assert.deepEqual(errors, [], 'no page error');
-    console.log(`e2e lazy disk results: a moving average of ${ROWS} rows on disk past a 1 MB memory limit, continued live, adopted after a reload, slot 1 for a second tab, and refused in memory`);
+    console.log(`e2e lazy disk results: a moving average of ${ROWS} rows on disk past a 1 MB memory limit, continued live, adopted after a reload, slot 1 for a second tab, refused in memory; private storage measured (${Math.round(room.room / 1e6)} MB of ${Math.round(room.quota / 1e6)} MB reported) and a job past it refused; a persistent profile is a disk`);
 } finally {
     await browser.close();
     await server.close();

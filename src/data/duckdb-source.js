@@ -114,6 +114,12 @@ export const OPFS_MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024;
 // Of the space the browser grants the origin and is not used, the share the
 // results may take: the rest is left to everything else the origin keeps.
 const OPFS_BUDGET_SHARE = 0.8;
+// A probe file of this size that holds tells a disk from storage held in
+// memory (a private window; see src/workers/opfs-probe-worker.js).
+const OPFS_DISK_PROBE_BYTES = 2 * 1024 * 1024 * 1024;
+// How closely the probe narrows the room of storage held in memory: each step
+// grows a file that size in that memory, so not finer than it needs to be.
+const OPFS_PROBE_PRECISION_BYTES = 16 * 1024 * 1024;
 
 // The results kept from one session to the next (keepResult): their catalog,
 // in the database, and what they may take of the disk together.
@@ -534,13 +540,48 @@ export default class DuckDbSource {
         try {
             const { quota, usage } = await navigator.storage.estimate();
             if (Number.isFinite(quota) && Number.isFinite(usage)) {
-                this._diskBudgetBytes = Math.max(0, (quota - usage) * OPFS_BUDGET_SHARE);
-                this._diskQuota = { quota, usage };
+                // What the storage really takes, which a private window
+                // holds in memory, below the quota it reports (_opfsRoom).
+                const free = Math.max(0, quota - usage);
+                const room = await this._opfsRoom(free);
+                this._diskBudgetBytes = Math.min(free, room) * OPFS_BUDGET_SHARE;
+                this._diskQuota = { quota, usage, room };
             }
         } catch (_) {
             this._diskBudgetBytes = null;
         }
         return this._diskBudgetBytes;
+    }
+
+    // The room the origin's storage really has, up to `free` bytes, asked of
+    // a worker that grows a probe file (src/workers/opfs-probe-worker.js).
+    // Storage that held OPFS_DISK_PROBE_BYTES once is a disk: it is not asked
+    // again, and the quota is what it gives. Anything that cannot be asked
+    // (no worker, a probe that fails or takes too long) leaves the quota.
+    async _opfsRoom(free) {
+        if (this._opfsOnDisk || !(free > 0)) return free;
+        if (typeof Worker === 'undefined') return free;
+        const max = Math.min(free, OPFS_DISK_PROBE_BYTES);
+        let worker = null;
+        try {
+            worker = new Worker(new URL('../workers/opfs-probe-worker.js', import.meta.url), { type: 'module' });
+            const answer = await new Promise((resolve) => {
+                const timer = setTimeout(() => resolve(null), 30000);
+                worker.onmessage = (event) => { clearTimeout(timer); resolve(event.data); };
+                worker.onerror = () => { clearTimeout(timer); resolve(null); };
+                worker.postMessage({ max, precision: this.opfsProbePrecisionBytes || OPFS_PROBE_PRECISION_BYTES });
+            });
+            if (!answer || !Number.isFinite(answer.room)) return free;
+            if (answer.room >= max && max >= OPFS_DISK_PROBE_BYTES) {
+                this._opfsOnDisk = true;
+                return free;
+            }
+            return answer.room >= max ? free : answer.room;
+        } catch (_) {
+            return free;
+        } finally {
+            try { worker?.terminate(); } catch (_) { /* gone */ }
+        }
     }
 
     // What the app shows of where the results are kept (Settings).

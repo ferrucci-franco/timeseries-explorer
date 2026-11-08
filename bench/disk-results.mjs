@@ -4,7 +4,11 @@
 //
 //   node bench/disk-results.mjs [--rows 20000000] [--sinks 8] [--limit 512MB]
 //
-// Runs Chromium (Playwright) against the Vite dev server. A CSV `t,a` of
+// Runs Chromium (Playwright) against the Vite dev server, each configuration in
+// a persistent profile of its own: a browser's ordinary storage, on disk. (A
+// Playwright context is private, like an incognito window, and holds the
+// origin's storage in memory — ~1 GB here — which the app measures and holds
+// the results to; see src/workers/opfs-probe-worker.js.) A CSV `t,a` of
 // `rows` rows on disk is opened lazily, with the app's own budget for
 // results switched off (lazyResultsMb 0) so that the engine alone decides,
 // and moving averages of every row are created one after another — each a
@@ -62,7 +66,6 @@ console.log(`CSV: ${ROWS} rows, ${Math.round((await stat(csvPath)).size / 1e6)} 
 const server = await createServer({ root: process.cwd(), logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
 await server.listen();
 const baseUrl = `http://127.0.0.1:${server.httpServer.address().port}/`;
-const browser = await chromium.launch();
 const show = (label, value) => console.log(`  ${label}`, typeof value === 'string' ? value : JSON.stringify(value));
 
 async function openApp(page, settings) {
@@ -116,7 +119,7 @@ const createAverage = (page, fileId, k) => page.evaluate(async ({ fileId, k }) =
 try {
     for (const { storage, limit } of CONFIGS) {
         console.log(`\n--- results ${storage === 'disk' ? 'on disk (OPFS)' : 'in memory'}, memory_limit ${limit || "the app's"}`);
-        const context = await browser.newContext();
+        const context = await chromium.launchPersistentContext(await mkdtemp(path.join(tmpdir(), 'omv-disk-profile-')));
         const page = await context.newPage();
         page.on('pageerror', e => console.log('  PAGEERROR', e.message));
         await openApp(page, { lazyResultsStorage: storage });
@@ -160,6 +163,5 @@ try {
         await context.close();
     }
 } finally {
-    await browser.close();
     await server.close();
 }
