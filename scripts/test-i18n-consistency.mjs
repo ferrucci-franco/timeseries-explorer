@@ -94,4 +94,19 @@ for (const lang of langs) {
     }
 }
 
+// Every language is reachable from both pickers: the top-bar menu and the
+// phone layout's segmented control. A language present only in the data is
+// one nobody can choose.
+{
+    const { readFileSync } = await import('node:fs');
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const menuLangs = [...html.matchAll(/class="[^"]*\blang-btn\b[^"]*"[^>]*data-lang="([a-z]+)"/g)].map(m => m[1]);
+    assert.deepEqual([...menuLangs].sort(), [...langs].sort(), 'the top-bar language menu offers every language');
+    const compact = readFileSync(new URL('../src/app/methods/compact-methods.js', import.meta.url), 'utf8');
+    const compactList = compact.match(/for \(const lang of (\[[^\]]*\])\)/)?.[1];
+    assert.ok(compactList, 'the compact language picker lists its languages');
+    assert.deepEqual(JSON.parse(compactList.replace(/'/g, '"')).sort(), [...langs].sort(),
+        'the compact language picker offers every language');
+}
+
 console.log(`i18n consistency tests passed (${reference.size} keys × ${langs.length} languages).`);

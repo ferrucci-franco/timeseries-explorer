@@ -60,6 +60,11 @@ assert.equal(resolveSpellcheckLanguage({ stored: 'it', uiLanguage: 'es', appLoca
 // With no choice made, the app's own language is the best guess about what is
 // about to be typed — better than the OS locale, which is the reported bug.
 assert.equal(resolveSpellcheckLanguage({ uiLanguage: 'es', appLocale: 'fr-FR' }), 'es');
+// Chinese is a UI language with no Chromium dictionary: it is not offered,
+// and a Chinese UI falls through to the OS locale rather than to nothing.
+assert.equal(normalizeSpellcheckLanguage('zh'), null, 'Chinese has no spellcheck dictionary');
+assert.equal(resolveSpellcheckLanguage({ uiLanguage: 'zh', appLocale: 'fr-FR' }), 'fr');
+assert.equal(resolveSpellcheckLanguage({ uiLanguage: 'zh' }), 'en');
 assert.equal(resolveSpellcheckLanguage({ appLocale: 'fr-FR' }), 'fr', 'then the OS');
 assert.equal(resolveSpellcheckLanguage({}), DEFAULT_SPELLCHECK_LANGUAGE, 'then English');
 // Junk at any level falls through rather than winning.
@@ -252,7 +257,7 @@ assert.match(preload, /setSpellcheck: payload => ipcRenderer\.send\('omv:set-spe
 const app = read('src/app/viewer-app.js');
 assert.match(app, /setLanguage\(lang\)[\s\S]*?_syncSpellcheckLanguage\(\)/,
     'switching the app language re-syncs the spellchecker');
-assert.match(app, /_syncSpellcheckLanguage\(\)\s*\{[\s\S]*?document\.documentElement\.lang = i18n\.currentLang;/,
+assert.match(app, /_syncSpellcheckLanguage\(\)\s*\{[\s\S]*?document\.documentElement\.lang = i18n\.currentLang\b/,
     'the document says which language it is in — the web build has no other signal');
 assert.match(app, /_syncSpellcheckLanguage\(\)\s*\{[\s\S]*?window\.omvDesktop\?\.setSpellcheck\?\./,
     'and the desktop is told, when there is one');

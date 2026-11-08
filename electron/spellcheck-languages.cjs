@@ -13,8 +13,10 @@
 // lookup here is tolerant: an exact code wins, otherwise any installed code
 // with the same base language does.
 
-// The app's four UI languages, in the order the menu lists them, each with the
-// dictionary we ask for first. Autonyms: a language menu that names languages
+// The app's UI languages that have a spellcheck dictionary, in the order the
+// menu lists them, each with the dictionary we ask for first. Chinese (zh) is
+// a UI language but is left out: Chromium ships no Chinese dictionary, so with
+// the UI in Chinese the resolver falls through to the OS locale, then English. Autonyms: a language menu that names languages
 // in some OTHER language is a menu you have to already be able to read.
 const SPELLCHECK_LANGUAGES = [
     { code: 'en', label: 'English', preferred: 'en-US' },
@@ -30,7 +32,7 @@ function baseLanguage(tag) {
     return String(tag || '').trim().toLowerCase().split(/[-_]/)[0];
 }
 
-/** One of the app's four languages, or null for anything else. */
+/** One of the spellcheck languages, or null for anything else. */
 function normalizeSpellcheckLanguage(value) {
     const base = baseLanguage(value);
     return SPELLCHECK_LANGUAGES.some(item => item.code === base) ? base : null;
