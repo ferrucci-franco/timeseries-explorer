@@ -35,7 +35,14 @@ export {
     quoteIdent,
     sampleRowsWithValidTime,
 };
-export { csvRowFilterSql as rowFilterSql, csvTimeOutputSql as timeOutputSql };
+
+export function rowFilterSql(profile) {
+    return csvRowFilterSql(profile);
+}
+
+export function timeOutputSql(timeInfo, expression = '"__omv_time"') {
+    return csvTimeOutputSql(timeInfo, expression);
+}
 
 const require = createRequire(import.meta.url);
 const duckDbModulePath = (() => {
