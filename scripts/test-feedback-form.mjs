@@ -75,15 +75,15 @@ assert.match(feedbackForm, /navigator\.clipboard\.read\(\)/, 'and a button exist
 assert.doesNotMatch(finishBody, /attachedFiles\.forEach\(releasePreview\)/, 'Feedback close should not discard attachment previews');
 assert.doesNotMatch(feedbackForm, /overlay\.addEventListener\('click'[\s\S]*?finish\(\)/, 'Feedback form should not close on backdrop clicks');
 assert.doesNotMatch(feedbackForm, /key === 'Escape'[\s\S]*?finish\(\)/, 'Feedback form should not discard input through Escape');
-assert.equal([...translations.matchAll(/feedbackDraftNote:/g)].length, 4, 'Feedback draft note should be translated in every supported language');
-assert.equal([...translations.matchAll(/feedbackClearForm:/g)].length, 4, 'Feedback clear button should be translated in every supported language');
-assert.equal([...translations.matchAll(/feedbackMinimize:/g)].length, 4, 'Feedback minimize button should be translated in every supported language');
+assert.equal([...translations.matchAll(/feedbackDraftNote:/g)].length, 5, 'Feedback draft note should be translated in every supported language');
+assert.equal([...translations.matchAll(/feedbackClearForm:/g)].length, 5, 'Feedback clear button should be translated in every supported language');
+assert.equal([...translations.matchAll(/feedbackMinimize:/g)].length, 5, 'Feedback minimize button should be translated in every supported language');
 for (const key of ['feedbackSend', 'feedbackSending', 'feedbackSentBody', 'feedbackSentLink', 'feedbackClose',
     'feedbackSendNote', 'feedbackPasteButton', 'feedbackErrorOffline', 'feedbackErrorRejected',
     'feedbackErrorServer', 'feedbackErrorTimeout', 'feedbackErrorNotConfigured', 'feedbackFallbackIntro',
     'feedbackErrorRateLimited', 'feedbackErrorTooLarge', 'feedbackErrorInvalid', 'feedbackErrorTypeRejected',
     'feedbackDesktopTitle', 'feedbackDesktopBody', 'feedbackDesktopOpen', 'feedbackDesktopOpened']) {
-    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 4, `${key} should exist in all four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 5, `${key} should exist in all five languages`);
 }
 // The keys of the paths that are gone must be gone too, or the next reader
 // has to work out which of two explanations the form actually follows.

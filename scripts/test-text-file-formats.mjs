@@ -116,7 +116,7 @@ check(() => {
     // The user-facing wording should no longer claim the feature is CSV-only.
     const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
     const titles = [...translations.matchAll(/largeCsvPreflightTitle:\s*'([^']*)'/g)].map(m => m[1]);
-    assert.equal(titles.length, 4, 'all locales define the preflight title');
+    assert.equal(titles.length, 5, 'all locales define the preflight title');
     assert.ok(titles.every(t => !/\bCSV\b/.test(t)), `titles still say CSV: ${titles.join(' | ')}`);
 });
 

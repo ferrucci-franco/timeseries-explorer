@@ -20,17 +20,17 @@ assert.equal(new Set(topicSections.map(match => match[2])).size, 15, 'Each Help 
 for (const section of topicSections.map(match => match[1])) {
     assert.equal(
         [...translationsSource.matchAll(new RegExp(`\\bhelpSec${section}Title:`, 'g'))].length,
-        4,
-        `Help topic ${section} should have a title in all four languages`,
+        5,
+        `Help topic ${section} should have a title in all five languages`,
     );
     assert.equal(
         [...translationsSource.matchAll(new RegExp(`\\bhelpSec${section}Body:`, 'g'))].length,
-        4,
-        `Help topic ${section} should have content in all four languages`,
+        5,
+        `Help topic ${section} should have content in all five languages`,
     );
 }
 
-for (const locale of ['en', 'fr', 'es', 'it']) {
+for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     const guide = topicSections.map(match => match[1]).map(section =>
         `${translations[locale][`helpSec${section}Title`]} ${translations[locale][`helpSec${section}Body`]}`
     ).join(' ');
@@ -43,8 +43,8 @@ for (const locale of ['en', 'fr', 'es', 'it']) {
         /XLSX/i,
         /FFT/i,
         /Pearson/i,
-        /Phase|Fase/i,
-        /Live Update/i,
+        /Phase|Fase|相图/i,
+        /Live Update|实时更新/i,
         /\.json/i,
         /\.zip/i,
     ]) {
@@ -59,8 +59,8 @@ for (const locale of ['en', 'fr', 'es', 'it']) {
     assert.match(translations[locale].helpSec7Body, /dx\/dt/i, `${locale} state animation should explain the state derivative`);
     assert.match(translations[locale].helpSec10Body, /IQR/i, `${locale} data tools should explain outlier processing`);
     assert.match(translations[locale].helpSec10Body, /NaN/i, `${locale} data tools should explain replacement behavior`);
-    assert.doesNotMatch(translations[locale].helpSec11Body, /Live Update/i, `${locale} large-file guidance should not mix in live monitoring`);
-    assert.match(translations[locale].helpSec12Body, /Live Update/i, `${locale} reload guidance should cover Live Update`);
+    assert.doesNotMatch(translations[locale].helpSec11Body, /Live Update|实时更新/i, `${locale} large-file guidance should not mix in live monitoring`);
+    assert.match(translations[locale].helpSec12Body, /Live Update|实时更新/i, `${locale} reload guidance should cover Live Update`);
     assert.match(translations[locale].helpSec13Body, /\.json[\s\S]*\.zip/i, `${locale} save guidance should distinguish view and project files`);
     assert.match(translations[locale].helpSec14Body, /Franco Ferrucci/i, `${locale} About section should identify the creator`);
     assert.match(translations[locale].helpSec14Body, /github\.com\/ferrucci-franco\/timeseries-explorer/i, `${locale} About section should link to the source repository`);

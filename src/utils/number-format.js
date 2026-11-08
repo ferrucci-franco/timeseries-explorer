@@ -79,7 +79,7 @@ function languageConventions(language) {
 /**
  * The language's conventions with the user's overrides applied.
  *
- * @param {string} language the app language ('en' | 'es' | 'fr' | 'it')
+ * @param {string} language the app language ('en' | 'es' | 'fr' | 'it' | 'zh')
  * @param {{decimalSeparator?: string, thousandsSeparator?: string}} settings
  * @returns {{decimal: string, group: string, groupFrom: number}} `group` is ''
  *   when thousands are not separated, and `groupFrom` is the integer length at

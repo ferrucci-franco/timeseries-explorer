@@ -131,7 +131,7 @@ assert.match(exportMethods, /plot\.mode === 'fft' && !plot\._fftSpectraFull\?\.l
     'and with no spectrum yet the dialog says so instead of writing an empty file');
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-assert.equal([...translations.matchAll(/exportCsvUnavailableSpectrum:/g)].length, 4,
-    'that message exists in all four languages');
+assert.equal([...translations.matchAll(/exportCsvUnavailableSpectrum:/g)].length, 5,
+    'that message exists in all five languages');
 
 console.log('FFT CSV export checks passed.');

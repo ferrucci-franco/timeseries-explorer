@@ -18,7 +18,7 @@ import translations from '../src/i18n/translations.js';
 const require = createRequire(import.meta.url);
 const zoom = require('../electron/zoom-levels.cjs');
 
-const LANGS = ['en', 'fr', 'es', 'it'];
+const LANGS = ['en', 'fr', 'es', 'it', 'zh'];
 let checks = 0;
 const check = (fn) => { fn(); checks++; };
 

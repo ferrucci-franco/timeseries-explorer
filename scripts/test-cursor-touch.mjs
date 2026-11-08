@@ -85,7 +85,7 @@ assert.match(content, /body\.cursor-pair-dragging \.cursor-overlay-line \{\s+bor
 assert.match(source, /globalThis\.matchMedia\?\.\('\(pointer: coarse\)'\)\?\.matches \? 'cursorSlideBothHintTouch' : 'cursorSlideBothHint',/,
     'Ctrl is not a thing a finger has');
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-assert.equal([...translations.matchAll(/cursorSlideBothHintTouch:/g)].length, 4, 'in four languages');
+assert.equal([...translations.matchAll(/cursorSlideBothHintTouch:/g)].length, 5, 'in five languages');
 
 // ── Every analysis mode's range band takes a finger too ────────────────────
 // The seven modes each own a selection band on their time pane and drag it the

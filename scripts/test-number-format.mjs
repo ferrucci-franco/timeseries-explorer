@@ -76,6 +76,12 @@ const NARROW_SPACE = ' ';
     eq(formatNumber(1311, resolveNumberFormat('es', {})), '1311',
         'while automatic leaves it alone, as Spanish does');
 
+    // Chinese punctuates numbers like English: dot decimal, comma thousands.
+    eq(formatNumber(1234567.25, resolveNumberFormat('zh', {})), '1,234,567.25',
+        'Chinese follows the dot-decimal, comma-thousands convention');
+    eq(formatNumber(1311, resolveNumberFormat('zh', {})), '1,311',
+        'and groups a four-digit number, unlike Spanish');
+
     const none = resolveNumberFormat('en', { thousandsSeparator: 'none' });
     eq(formatNumber(1234567.25, none), '1234567.25', 'thousands can be turned off entirely');
     eq(none.group, '', 'which is what an empty group character means');

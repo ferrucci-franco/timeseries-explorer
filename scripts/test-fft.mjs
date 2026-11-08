@@ -307,12 +307,12 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
 
     // The inverse-spacing helper exists in every language and explains the
     // beat-period interpretation.
-    for (const lang of ['en', 'fr', 'es', 'it']) {
+    for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
         const strings = translations[lang];
         assert.ok(strings?.fftCursorInverseSpacing, `${lang}: inverse-spacing label present`);
         const help = strings?.fftCursorInverseSpacingHelp || '';
         assert.ok(help.length > 120, `${lang}: inverse-spacing help present`);
-        assert.ok(/batt|beat|batido/i.test(help), `${lang}: help mentions the beat interpretation`);
+        assert.ok(/batt|beat|batido|拍/i.test(help), `${lang}: help mentions the beat interpretation`);
         assert.ok(help.includes('1/|f2 - f1|'), `${lang}: help states the 1/|f2 - f1| relation`);
     }
 }
@@ -346,7 +346,7 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     assert.equal(formatSpectrumPeriod(Infinity, ''), '∞', 'infinite unitless period has no dangling space');
     assert.equal(formatSpectrumPeriod(NaN), '—', 'invalid period is presented consistently');
 
-    for (const lang of ['en', 'fr', 'es', 'it']) {
+    for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
         assert.ok(translations[lang]?.fftPeriod, `${lang}: spectrum period label present`);
         assert.ok(translations[lang]?.fftSampleUnit, `${lang}: sample-period unit present`);
     }

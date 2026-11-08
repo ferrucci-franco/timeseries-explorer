@@ -96,9 +96,9 @@ assert.match(download, /const downloadPackage = async \(feedback\) => \{[\s\S]*?
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['feedbackPasteZone', 'feedbackSafetyNote']) {
     const values = [...translations.matchAll(new RegExp(`${key}: '(.*?)',\\n`, 'g'))].map(m => m[1]);
-    assert.equal(values.length, 4, `${key} is defined in all four languages`);
+    assert.equal(values.length, 5, `${key} is defined in all five languages`);
     for (const value of values) {
-        assert.ok(/screenshot|capture|captura/i.test(value), `${key} mentions the screenshots: ${value.slice(0, 60)}…`);
+        assert.ok(/screenshot|capture|captura|截图/i.test(value), `${key} mentions the screenshots: ${value.slice(0, 60)}…`);
     }
 }
 

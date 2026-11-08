@@ -2254,7 +2254,7 @@ export function installCompactMethods(ViewerClass) {
 
         const language = section(i18n.t('compactLanguage'));
         const languageRow = el('div', 'compact-segmented');
-        for (const lang of ['en', 'fr', 'es', 'it']) {
+        for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
             const selected = i18n.currentLang === lang;
             const btn = button(`compact-segment${selected ? ' is-active' : ''}`, lang.toUpperCase(), () => this.setLanguage(lang));
             btn.setAttribute('aria-pressed', String(selected));

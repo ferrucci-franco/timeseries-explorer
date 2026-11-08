@@ -130,8 +130,8 @@ check(() => {
 
 check(() => {
     const translations = read('src/i18n/translations.js');
-    assert.equal([...translations.matchAll(/sliderWheel:/g)].length, 4, 'label in all locales');
-    assert.equal([...translations.matchAll(/sliderWheelTooltip:/g)].length, 4, 'tooltip in all locales');
+    assert.equal([...translations.matchAll(/sliderWheel:/g)].length, 5, 'label in all locales');
+    assert.equal([...translations.matchAll(/sliderWheelTooltip:/g)].length, 5, 'tooltip in all locales');
 });
 
 console.log(`slider wheel: ${checks} checks passed`);

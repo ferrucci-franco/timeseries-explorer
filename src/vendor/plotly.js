@@ -2,6 +2,7 @@ import '../../node_modules/plotly.js-dist-min/plotly.min.js';
 import spanishLocale from 'plotly.js-locales/es.js';
 import frenchLocale from 'plotly.js-locales/fr.js';
 import italianLocale from 'plotly.js-locales/it.js';
+import chineseLocale from 'plotly.js-locales/zh-cn.js';
 import { installTouchPlotGestures } from '../ui/plot-touch-gestures.js';
 import { install3DSceneGestures } from '../ui/plot-3d-gestures.js';
 import { compactPlotLayout, compactPlotRelayout } from '../utils/compact-plot-layout.js';
@@ -9,7 +10,7 @@ import { keepOverlayLegendsFromPushing } from '../utils/overlay-legend-margins.j
 
 const Plotly = globalThis.Plotly;
 
-for (const locale of [spanishLocale, frenchLocale, italianLocale]) {
+for (const locale of [spanishLocale, frenchLocale, italianLocale, chineseLocale]) {
     Plotly.register(locale);
 }
 

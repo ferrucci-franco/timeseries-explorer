@@ -77,10 +77,10 @@ assert.match(files, /const hint = dialog\.querySelector\('#file-loading-cancel-h
 assert.match(css, /\.example-loading-cancel \+ #file-loading-cancel-hint \{/,
     'and is styled as one thing with it');
 for (const match of translations.matchAll(/loadingFilesCancelHint: '([^']*)'/g)) {
-    assert.ok(/^(or|ou|o) /i.test(match[1]),
+    assert.ok(/^(or|ou|o) |^或/i.test(match[1]),
         `the hint now reads as a footnote to the button, not as the only way out: "${match[1]}"`);
 }
-assert.equal((translations.match(/loadingFilesCancelHint:/g) || []).length, 4,
-    'in all four languages');
+assert.equal((translations.match(/loadingFilesCancelHint:/g) || []).length, 5,
+    'in all five languages');
 
 console.log('Loading cancel-button checks passed.');

@@ -97,7 +97,7 @@ assert.match(session, /setHoverRunParameters\(settings\.hoverRunParameters !== f
     'and restored, defaulting on for a view saved before it existed');
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-assert.equal((translations.match(/\bhoverRunParameters:/g) || []).length, 4, 'translated in all four languages');
+assert.equal((translations.match(/\bhoverRunParameters:/g) || []).length, 5, 'translated in all five languages');
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 assert.match(html, /id="hover-run-parameters" checked/, 'the option is there, and on');
 

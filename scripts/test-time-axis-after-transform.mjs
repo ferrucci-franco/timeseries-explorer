@@ -155,8 +155,8 @@ assert.match(css, /\.file-transform-wide-action:focus-visible/, 'a button takes 
 const translations = read('i18n/translations.js');
 for (const key of ['timeAxisDiagHeadingStored', 'timeAxisDiagHeadingPlotted', 'timeAxisDiagPlottedNote',
     'timeAxisSummaryStoredPrefix', 'timeAxisSummaryPlottedPrefix']) {
-    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 4,
-        `${key} must exist in all four languages`);
+    assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 5,
+        `${key} must exist in all five languages`);
 }
 assert.match(translations, /timeAxisSummaryStoredPrefix: '[^']*\{summary\}/,
     'the stored prefix must interpolate the summary');

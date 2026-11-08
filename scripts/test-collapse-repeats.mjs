@@ -104,7 +104,7 @@ const translations = readFileSync(new URL('../src/i18n/translations.js', import.
 for (const key of ['dataToolCollapse', 'dataToolCollapseAggregate', 'dataToolCollapseSummary',
     'dataToolCollapseCreated', 'dataToolCollapseNothing', 'dataToolCollapseNoTimeAxis',
     'dataToolCollapseFileSuffix', ...COLLAPSE_AGGREGATES.map(a => `dataToolCollapse${a[0].toUpperCase()}${a.slice(1)}`)]) {
-    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} in four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 5, `${key} in five languages`);
 }
 
 // ── The Variable picker, and where "Create and plot" draws ─────────────────

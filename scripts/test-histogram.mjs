@@ -103,9 +103,9 @@ const close = (actual, expected, tolerance, label) => {
     );
 };
 
-for (const language of ['en', 'fr', 'es', 'it']) {
+for (const language of ['en', 'fr', 'es', 'it', 'zh']) {
     const strings = translations[language];
-    assert.equal(strings.histogramBinAuto, 'Auto', `${language}: automatic bin mode keeps its compact label`);
+    assert.equal(strings.histogramBinAuto, language === 'zh' ? '自动' : 'Auto', `${language}: automatic bin mode keeps its compact label`);
     assert.notEqual(strings.histogramRangeAuto, 'Auto', `${language}: full value range is not confused with automatic bins`);
     assert.notEqual(strings.histogramRangeManual, 'Manual', `${language}: custom value range uses a clearer label`);
 }

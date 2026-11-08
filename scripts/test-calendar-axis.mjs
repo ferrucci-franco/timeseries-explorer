@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import spanishLocale from 'plotly.js-locales/es.js';
 import frenchLocale from 'plotly.js-locales/fr.js';
 import italianLocale from 'plotly.js-locales/it.js';
+import chineseLocale from 'plotly.js-locales/zh-cn.js';
 import { installFileMethods } from '../src/app/methods/file-methods.js';
 import {
     getCalendarTimeFormats,
@@ -174,8 +175,8 @@ assert.deepEqual(getCalendarTimeFormats('calendar-24h'), {
 });
 
 assert.deepEqual(
-    ['en', 'fr', 'es', 'it'].map(language => getPlotlyLocale(language)),
-    ['en-US', 'fr', 'es', 'it'],
+    ['en', 'fr', 'es', 'it', 'zh'].map(language => getPlotlyLocale(language)),
+    ['en-US', 'fr', 'es', 'it', 'zh-CN'],
     'each app language maps to an explicit Plotly locale',
 );
 assert.equal(normalizeAppLanguage('unknown'), 'en', 'unknown app languages fall back to English');
@@ -194,11 +195,23 @@ for (const language of ['fr', 'es', 'it']) {
         `${language} keeps 24-hour time independent from the date language`,
     );
 }
+assert.equal(getCalendarDateTickFormat('zh'), '%Y年%m月%d日', 'Chinese uses year-first dates');
+assert.equal(
+    getCalendarTimeFormats('calendar-24h', 'zh').tickformatWithDate,
+    '%H:%M\n%Y年%m月%d日',
+    'zh keeps 24-hour time independent from the date language',
+);
+assert.equal(
+    getCalendarTimeFormats('calendar-ampm', 'zh').tickformatWithDate,
+    '%-I:%M %p\n%Y年%m月%d日',
+    'zh keeps AM/PM independent from the date language',
+);
 
 for (const [locale, name, monthIndex, shortMonth] of [
     [spanishLocale, 'es', 0, 'Ene'],
     [frenchLocale, 'fr', 1, 'Fév'],
     [italianLocale, 'it', 0, 'Gen'],
+    [chineseLocale, 'zh-CN', 0, '一'],
 ]) {
     assert.equal(locale.moduleType, 'locale', `${name} payload is a Plotly locale`);
     assert.equal(locale.name, name, `${name} payload has the expected locale name`);
@@ -242,9 +255,9 @@ assert.ok(
     'every central Plotly config carries the selected app locale',
 );
 assert.ok(
-    ['es.js', 'fr.js', 'it.js'].every(file => vendorPlotlySource.includes(`plotly.js-locales/${file}`))
+    ['es.js', 'fr.js', 'it.js', 'zh-cn.js'].every(file => vendorPlotlySource.includes(`plotly.js-locales/${file}`))
         && vendorPlotlySource.includes('Plotly.register(locale)'),
-    'the three non-default locales are bundled and registered locally',
+    'the four non-default locales are bundled and registered locally',
 );
 const setLanguageStart = viewerAppSource.indexOf('    setLanguage(lang) {');
 const setLanguageEnd = viewerAppSource.indexOf('\n    toggleTheme()', setLanguageStart);
@@ -303,6 +316,14 @@ for (const language of ['fr', 'es', 'it']) {
         localizedHarness._calendarAxisConfig(FILE_ID, localizedHarness._getTimeVar(FILE_ID), TIMES),
         `${language} standard calendar axis`,
         '%d %b %Y',
+    );
+}
+{
+    const zhHarness = new Harness('ampm', null, 'zh');
+    assertAmPmAxis(
+        zhHarness._calendarAxisConfig(FILE_ID, zhHarness._getTimeVar(FILE_ID), TIMES),
+        'zh standard calendar axis',
+        '%Y年%m月%d日',
     );
 }
 const ampmLayout = harness._buildTimeLayout(plot);
