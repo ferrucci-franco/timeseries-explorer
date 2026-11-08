@@ -26,7 +26,8 @@ They copy the layouts that broke the viewer, at a few KB each:
                               `x`/`y` whose own coordinates carry no units, the
                               longitude and latitude in auxiliary `lon(x)` and
                               `lat(y)` without units either, `time(time)` in
-                              hours, data laid out (time, y, x).
+                              hours, data laid out (time, y, x); and an
+                              undeclared `glon(x)` decoy in degrees_east.
 
 Regenerate with:  python3 scripts/generate-gridded-netcdf-fixtures.py
 (needs numpy and netCDF4)
@@ -234,6 +235,11 @@ def atlite_cutout(path):
     t[:] = np.arange(nt)
     ds.createVariable('lon', 'f8', ('x',))[:] = x
     ds.createVariable('lat', 'f8', ('y',))[:] = y
+    # A decoy that sorts before `lon` and looks like a longitude, but which
+    # no variable declares in `coordinates`: the declared `lon` must win.
+    decoy = ds.createVariable('glon', 'f8', ('x',))
+    decoy.units = 'degrees_east'
+    decoy[:] = x + 1.0
     v = ds.createVariable('wnd100m', 'f4', ('time', 'y', 'x'))
     v.units = 'm s**-1'
     v.long_name = '100 metre wind speed'

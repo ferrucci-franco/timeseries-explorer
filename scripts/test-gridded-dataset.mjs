@@ -299,7 +299,7 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
     assert(!model.variables.some(item => /^\/(lat|lon|x|y)$/.test(item.key)), 'the coordinates are not offered as variables');
     const map = dataset.readMap('/wnd100m', { time: 1 });
     assert.deepEqual(Array.from(map.lat), [55, 55.25, 55.5, 55.75]);
-    assert.deepEqual(Array.from(map.lon), [10, 10.25, 10.5]);
+    assert.deepEqual(Array.from(map.lon), [10, 10.25, 10.5], 'the `lon` declared in `coordinates`, not the `glon` decoy');
     close(map.values[displayIndex(map, 55.5, 10.25)], field(55.5, 10.25, 1, -280), 'wnd100m at 55.5N 10.25E');
     const point = await dataset.pointSeries('/wnd100m', {}, 55.7, 10.45);
     assert.deepEqual(point.cell, { lat: 55.75, lon: 10.5 }, 'nearest cell');

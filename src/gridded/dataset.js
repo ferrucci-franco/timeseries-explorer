@@ -155,11 +155,21 @@ function describeMember(member) {
         const name = basename(dimension);
         return member.descriptors.find(item => item.shape.length === 1 && item.name === name && item.dimensions[0] && basename(item.dimensions[0]) === name) || null;
     };
+    // The names the data variables declare in their CF `coordinates`
+    // attribute: the auxiliary coordinates the file itself points to.
+    const declaredCoordinates = new Set();
+    for (const descriptor of member.descriptors) {
+        const declared = attrValue(descriptor.userAttrs, ['coordinates']);
+        if (declared) for (const name of String(declared).split(/\s+/)) if (name) declaredCoordinates.add(basename(name));
+    }
     const auxiliaryFor = dimension => {
         const name = basename(dimension);
-        for (const item of member.descriptors) {
-            if (item.shape.length !== 1 || !item.dimensions[0] || basename(item.dimensions[0]) !== name) continue;
-            if (item.name === name || item.numeric === false || item.textual) continue;
+        const candidates = member.descriptors.filter(item => item.shape.length === 1 && item.dimensions[0]
+            && basename(item.dimensions[0]) === name && item.name !== name && item.numeric !== false && !item.textual);
+        // Declared ones first; then any recognised as a latitude or a
+        // longitude by its name, units or standard_name.
+        candidates.sort((a, b) => declaredCoordinates.has(b.name) - declaredCoordinates.has(a.name));
+        for (const item of candidates) {
             const role = coordinateRole(item);
             if (role === 'x' || role === 'y') return { descriptor: item, role };
         }
