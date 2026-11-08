@@ -3641,6 +3641,8 @@ proto._resetDataToolPicker = function() {
 // _clearDataToolPreview also does this, but it tears the trace down and rebuilds
 // the panel with it, which is the wrong thing to do mid-commit.
 proto._cancelPendingDataToolPreview = function() {
+    // A run already in flight answers a draft the commit is replacing.
+    this._dataToolPreviewRun = (this._dataToolPreviewRun || 0) + 1;
     if (!this._dataToolPreviewTimer) return;
     clearTimeout(this._dataToolPreviewTimer);
     this._dataToolPreviewTimer = null;
@@ -3660,6 +3662,7 @@ proto._handleDataToolPreviewChange = function(options = {}) {
 // abandoning it has to put those values back or the plot keeps showing a curve
 // no setting in the panel produces any more.
 proto._abandonDataToolPreview = function() {
+    this._dataToolPreviewRun = (this._dataToolPreviewRun || 0) + 1;
     this._clearDataToolPreview();
     if (this._dataToolEditing) this._restoreEditedTraceValues();
 };
@@ -3701,19 +3704,26 @@ proto._runDataToolPreview = function() {
         this._abandonDataToolPreview();
         return;
     }
+    // Only the latest run may draw. The worker drops a superseded run by the
+    // output's name, but a name can change between two runs — the
+    // interarrival tool's suggested name follows its options — and then an
+    // earlier, slower run would land last and draw the settings the panel no
+    // longer shows.
+    const run = (this._dataToolPreviewRun = (this._dataToolPreviewRun || 0) + 1);
     this._buildDataToolResultOffThread(context.sourceVariable.data, context.sourceVariable, {
         ...config,
         sourceName: context.sourceName,
         targetName: editing ? editing.name : `${context.outputName} (preview)`,
         targetMode: 'create',
     }, context.data).then(result => {
+        if (run !== this._dataToolPreviewRun) return;
         if (editing) this._previewEditedVariable(context, editing, result);
         else this._drawDataToolPreviewTrace(context, result);
     }).catch(err => {
         // A superseded run is the normal outcome of dragging a slider: a newer
         // preview is already in flight and will report for it, and its trace is
         // the one that should stay up.
-        if (err?.cancelled) return;
+        if (err?.cancelled || run !== this._dataToolPreviewRun) return;
         // Anything else means this configuration produced nothing, so nothing is
         // what the plot should show for it.
         this._abandonDataToolPreview();
@@ -3729,12 +3739,24 @@ proto._previewEditedVariable = function(context, editing, result) {
     const variable = data.variables?.[editing.name];
     if (!variable) return;
     if (!this._dataToolEditBackup) {
-        this._dataToolEditBackup = { fileId, name: editing.name, data: variable.data, dataTool: variable.dataTool };
+        this._dataToolEditBackup = {
+            fileId, name: editing.name, data: variable.data, dataTool: variable.dataTool,
+            description: variable.description,
+            eventSamples: variable.eventSamples,
+            heldSteps: variable.heldSteps,
+        };
     }
+    // Dots or stairs, and the unit: an edit can change how the result is
+    // drawn, not only its values (the interarrival tool's placement and
+    // output). Then the panels drawing it are rebuilt, not restyled.
+    const lookBefore = this._dataToolTraceLook(variable);
     variable.data = result.variable.data;
     variable.dataType = result.variable.dataType;
     variable.isConstant = result.variable.isConstant;
     variable.dataTool = result.variable.dataTool;
+    variable.description = result.variable.description;
+    this._setDataToolDrawFlags(variable, result.variable);
+    const restyled = this._dataToolTraceLook(variable) !== lookBefore;
 
     const dependents = document.getElementById('data-tool-live-chain')?.checked === false
         ? []
@@ -3753,10 +3775,20 @@ proto._previewEditedVariable = function(context, editing, result) {
     // the rebuild would purge charts with the restyle's redraw still queued.
     const names = [editing.name, ...(dependents || [])]
         .filter(varName => this._isDataToolVariablePlotted(fileId, varName));
-    if (names.every(varName => this.plotManager.canRefreshTraceValues?.(fileId, varName))) {
+    if (!restyled && names.every(varName => this.plotManager.canRefreshTraceValues?.(fileId, varName))) {
         for (const varName of names) this.plotManager.refreshTraceValues(fileId, varName);
     } else {
         this.plotManager.updateFileData(fileId, data);
+    }
+};
+
+// Copy how `from` is drawn onto `to`: a series of events, a value held over
+// each interval, or neither.
+proto._setDataToolDrawFlags = function(to, from) {
+    if (!to) return;
+    for (const flag of ['eventSamples', 'heldSteps']) {
+        if (from?.[flag]) to[flag] = from[flag];
+        else delete to[flag];
     }
 };
 
@@ -3771,6 +3803,8 @@ proto._restoreEditedTraceValues = function() {
     variable.dataType = this.parser._detectDataType(backup.data, 'variable');
     variable.isConstant = this.parser._isConstantValues(backup.data);
     variable.dataTool = backup.dataTool;
+    if (backup.description !== undefined) variable.description = backup.description;
+    this._setDataToolDrawFlags(variable, backup);
     this._reapplyDataToolDependents(backup.fileId, data, backup.name);
     this.plotManager.updateFileData(backup.fileId, data);
 };
@@ -3797,7 +3831,7 @@ proto._drawDataToolPreviewTrace = function(context, result) {
     const previewValues = addedOnly
         ? this._addedSamplesOnly(context.sourceVariable.data, result.variable.data)
         : result.variable.data;
-    data.variables[name] = {
+    const preview = {
         ...result.variable,
         name,
         data: previewValues,
@@ -3807,6 +3841,17 @@ proto._drawDataToolPreviewTrace = function(context, result) {
         description: '',
         previewOnly: true,
     };
+    // How the trace is drawn, not what it holds: dots or stairs, its legend
+    // name, the added-samples markers. A restyle in place only moves the
+    // numbers, so a change here — "at each edge" to "held over the interval",
+    // say — takes the old trace down and draws a new one, or the preview would
+    // keep showing dots for a result that is stairs.
+    const look = JSON.stringify([addedOnly, this._dataToolTraceLook(preview)]);
+    if (this._dataToolPreview?.look && this._dataToolPreview.look !== look
+        && this._dataToolPreview.fileId === fileId && this._dataToolPreview.panelId === panelId) {
+        this._clearDataToolPreview();
+    }
+    data.variables[name] = preview;
 
     const plot = this.plotManager.plots.get(panelId);
     const existing = plot?.traces.find(trace => trace.fileId === fileId && trace.varName === name);
@@ -3835,7 +3880,19 @@ proto._drawDataToolPreviewTrace = function(context, result) {
             traceStyle: addedOnly ? { markersOnly: true } : { dash: 'dot' },
         });
     }
-    this._dataToolPreview = { fileId, panelId, addedOnly };
+    this._dataToolPreview = { fileId, panelId, addedOnly, look };
+};
+
+// What decides how a variable's trace is drawn, as opposed to its values: a
+// series of events is dots, a value held over an interval is stairs, and the
+// legend and Y axis read its name and the unit in its description.
+proto._dataToolTraceLook = function(variable) {
+    return JSON.stringify([
+        !!variable?.eventSamples,
+        !!variable?.heldSteps,
+        variable?.displayName || '',
+        variable?.description || '',
+    ]);
 };
 
 proto._interpolatePreviewShowsAddedOnly = function(context) {
