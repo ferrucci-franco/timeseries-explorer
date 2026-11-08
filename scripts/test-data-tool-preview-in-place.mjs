@@ -131,8 +131,14 @@ assert.match(tools, /if \(inPlace\) this\.plotManager\.invalidateTransformCache\
     'and taking the preview down needs no rebuild either when the curve came off in place');
 assert.match(tools, /const names = \[editing\.name, \.\.\.\(dependents \|\| \[\]\)\]\s*\n\s*\.filter\(varName => this\._isDataToolVariablePlotted\(fileId, varName\)\);/,
     'the edit preview covers the drawn variables that ride along with it');
-assert.match(tools, /if \(names\.every\(varName => this\.plotManager\.canRefreshTraceValues\?\.\(fileId, varName\)\)\) \{\s*\n\s*for \(const varName of names\) this\.plotManager\.refreshTraceValues\(fileId, varName\);\s*\n\s*\} else \{\s*\n\s*this\.plotManager\.updateFileData\(fileId, data\);/,
+assert.match(tools, /if \(!restyled && names\.every\(varName => this\.plotManager\.canRefreshTraceValues\?\.\(fileId, varName\)\)\) \{\s*\n\s*for \(const varName of names\) this\.plotManager\.refreshTraceValues\(fileId, varName\);\s*\n\s*\} else \{\s*\n\s*this\.plotManager\.updateFileData\(fileId, data\);/,
     'and restyles all of them or rebuilds once — never some of each');
+// A restyle moves numbers only: when the edit changes how the result is drawn
+// (dots or stairs, its unit), the panels are rebuilt instead.
+assert.match(tools, /const restyled = this\._dataToolTraceLook\(variable\) !== lookBefore;/,
+    'an edit that changes how the result is drawn rebuilds rather than restyles');
+assert.match(tools, /if \(this\._dataToolPreview\?\.look && this\._dataToolPreview\.look !== look[\s\S]{0,200}?this\._clearDataToolPreview\(\);/,
+    'and so does a draft preview, taking its old trace down first');
 
 // ── The manager's side ──────────────────────────────────────────────────────
 assert.match(manager, /removeTrace\(panelId, varName, fileId = null\) \{/,
