@@ -451,6 +451,10 @@ proto._loadProjectDataFromZip = async function(session, entries, options = {}) {
             // the recorded sheet directly so the sheet picker never re-appears.
             const result = await this.loadFile(file, {
                 excelSheetName: fileMeta.excel?.sheetName || null,
+                // Sheets of one workbook come back grouped under it, as saved.
+                excelWorkbook: fileMeta.excel?.workbookKey
+                    ? { workbookKey: fileMeta.excel.workbookKey, sheets: fileMeta.excel.sheets || [] }
+                    : null,
                 matSelection: fileMeta.matlab || null,
                 griddedFiles: members.length ? members : null,
                 griddedOptions: fileMeta.gridded?.options || null,
@@ -1024,7 +1028,7 @@ proto._applySessionFileMetadata = async function(session, fileMap, options = {})
                     csvProfile: meta.csvProfile,
                 });
                 data.metadata.excel = { sheetName, sheetNames: sheetNames || entry.excel?.sheetNames || null };
-                entry.excel = { ...data.metadata.excel };
+                entry.excel = { ...entry.excel, ...data.metadata.excel };
                 this.plotManager.updateFileData(fileId, data);
                 continue;
             }
