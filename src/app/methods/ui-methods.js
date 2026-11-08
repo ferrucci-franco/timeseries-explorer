@@ -1360,7 +1360,33 @@ proto.showDisplaySettings = function() {
     };
     panZoomControl.select.addEventListener('change', applyPanZoomSettings);
 
-    fileGrid.append(...fileLimitControls.map(control => control.field), compactControl.field);
+    // Where the results of the data tools on a lazy file are kept, and where
+    // they are now (the engine reads the choice when it starts).
+    const storageControl = makeSelect(
+        'lazy-results-storage',
+        'lazyResultsStorage',
+        'lazyResultsStorageHelp',
+        null,
+        [['disk', 'lazyResultsStorageDisk'], ['memory', 'lazyResultsStorageMemory']],
+    );
+    storageControl.select.value = this.advancedSettings?.lazyResultsStorage === 'memory' ? 'memory' : 'disk';
+    const storageNow = document.createElement('span');
+    storageNow.className = 'plot-settings-help lazy-results-storage-now';
+    storageControl.field.append(storageNow);
+    const syncStorageNow = () => {
+        const info = this._duckdbSource?.storageInfo?.();
+        if (!info || info.reason === 'notStarted') { storageNow.textContent = ''; return; }
+        storageNow.textContent = info.kind === 'opfs'
+            ? i18n.t('lazyResultsStorageNowDisk')
+            : i18n.t(info.reason === 'memoryChosen' ? 'lazyResultsStorageNowMemory' : 'lazyResultsStorageNowMemoryNoDisk');
+    };
+    syncStorageNow();
+    storageControl.select.addEventListener('change', () => {
+        this._saveAdvancedSettings({ ...(this.advancedSettings || {}), lazyResultsStorage: storageControl.select.value });
+        storageControl.select.value = this.advancedSettings.lazyResultsStorage;
+    });
+
+    fileGrid.append(...fileLimitControls.map(control => control.field), storageControl.field, compactControl.field);
     fileSection.append(fileGrid);
 
     const applySettings = () => {
@@ -1388,6 +1414,7 @@ proto.showDisplaySettings = function() {
         for (const control of [...fileLimitControls, compactControl]) {
             control.input.value = String(this.advancedSettings[control.key]);
         }
+        storageControl.select.value = this.advancedSettings.lazyResultsStorage;
         this._applyNumberFormat();
         syncNumberControls();
         this.plotManager.preserveViewsForNextRender();

@@ -951,8 +951,23 @@ proto._lazySinkBudgetBytes = function() {
  */
 proto._runLazySinkJob = async function(data, definition, { signal = null, overlayDelayMs = 0, resumable = false, resume = null } = {}) {
     const source = data._duckdb.source;
+    // The result of the same job over the same file, kept from an earlier
+    // session (the database on disk; DuckDbSource.keepResult): adopted, not
+    // run. A file that updates live keeps nothing: it is not what it was.
+    const keepKey = !resume && !resumable ? source.keptResultKey?.(data, this._lazySinkKeepPart(data, definition)) : null;
+    if (keepKey) {
+        const kept = await source.findKeptResult(data, keepKey);
+        if (kept) {
+            return {
+                sink: kept.sink, rows: kept.record.rows, fitPoints: kept.record.fitPoints ?? undefined,
+                report: kept.record.report ?? null, resume: null, axis: null, reused: true,
+            };
+        }
+    }
     const budgetBytes = this._lazySinkBudgetBytes();
     if (budgetBytes !== null) source.sinkBudgetBytes = budgetBytes;
+    // With the database on disk, what the browser still grants it.
+    await source.refreshDiskBudget?.();
     // Refused before reading anything when the size is known (Parquet, a
     // counted file); otherwise the writer stops at the budget.
     const totalRows = Number(data._duckdb.totalRows);
@@ -1024,7 +1039,7 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
             };
         }
         const kernel = this._lazySinkKernel(data, definition, { axis, stats });
-        const sink = await source.createSink(data);
+        const sink = await source.createSink(data, keepKey ? { table: source.keptResultTable(keepKey) } : {});
         const result = await runChunkedJob({
             data,
             sourceNames: [definition.sourceName],
@@ -1035,6 +1050,10 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
             onProgress: progress,
             resumable,
         });
+        if (keepKey) {
+            await source.keepResult(data, keepKey, sink, { rows: result.rows, fitPoints: result.used ?? null, report: result.report || null })
+                .catch(err => console.warn('[duckdb] could not keep a result:', err?.message || err));
+        }
         return { sink, rows: result.rows, fitPoints: result.used, report: result.report || null, resume: result.resume, axis };
     } catch (err) {
         if (controller.signal.aborted || err?.name === 'AbortError') return null;
@@ -1048,7 +1067,7 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
 proto._lazySinkErrorMessage = function(name, err) {
     if (err?.code === 'SINK_BUDGET') {
         const size = (bytes) => this._formatFileSize?.(bytes) || `${Math.round(bytes / 1048576)} MB`;
-        return i18n.t('dataToolSinkBudget')
+        return i18n.t(err.disk ? 'dataToolSinkDiskBudget' : 'dataToolSinkBudget')
             .replace('{name}', name)
             .replace('{limit}', size(err.limit))
             .replace('{used}', size(err.used));
@@ -1210,6 +1229,27 @@ proto._lazySinkContinuationKey = function(data, definition) {
     ]);
 };
 
+// What a sink job computed, for the key of a result kept between sessions
+// (DuckDbSource.keptResultKey adds the file and how it is read): the source's
+// SQL — which names the kept results it is built on, by their names — the
+// time axis and the tool's normalized settings.
+proto._lazySinkKeepPart = function(data, definition) {
+    const source = data?._duckdb?.source;
+    const variable = data?.variables?.[definition.sourceName];
+    if (!source || !variable || !source.hasSqlValue(variable)) return null;
+    const axis = this._lazyToolTimeAxis(data);
+    const settings = typeof this._normalizeDataToolDefinition === 'function'
+        ? this._normalizeDataToolDefinition(definition)
+        : definition;
+    return JSON.stringify([
+        'sink',
+        source._valueExpressionSql(variable, definition.sourceName, { castDouble: true }),
+        axis.kind,
+        axis.timeSql,
+        settings.tool, settings.method || null, settings.replacement || '', settings.params || {},
+    ]);
+};
+
 // A source whose values for the rows already read do not change when rows
 // are appended: a column of the file, or SQL over its columns row by row.
 proto._isAppendStableLazyVariable = function(data, name) {
@@ -1263,6 +1303,7 @@ proto._lazySinkContinuation = async function(fileId, data, definition) {
 // and null when the continuation failed and a run from the first row is due.
 proto._continueLazySinkTool = async function(fileId, data, name, definition, entry, signature, isCurrent) {
     const source = data._duckdb.source;
+    await source.forgetKeptResult?.(entry.sink.table);
     let run = null;
     try {
         run = await this._runLazySinkJob(data, definition, { overlayDelayMs: 1000, resume: entry });

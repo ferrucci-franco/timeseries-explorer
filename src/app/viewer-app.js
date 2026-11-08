@@ -314,6 +314,10 @@ class OpenModelicaViewer {
             // mode may hold together in the engine's memory (a moving
             // average is a copy of a column as long as the file).
             lazyResultsMb: 1024,
+            // Where those results are kept: on disk where the browser gives
+            // the app storage of its own (OPFS), so they are not held by the
+            // engine's memory; in memory otherwise, or when asked.
+            lazyResultsStorage: 'disk',
             panZoomRefreshMode: 'auto',
             // How numbers are punctuated on screen. `auto` is the convention of
             // the chosen language, which is what the app has always done; the
@@ -328,6 +332,7 @@ class OpenModelicaViewer {
     _advancedSettingChoices() {
         return {
             panZoomRefreshMode: ['auto', 'smooth', 'responsive'],
+            lazyResultsStorage: ['disk', 'memory'],
             decimalSeparator: Object.keys(NUMBER_DECIMAL_CHOICES),
             thousandsSeparator: Object.keys(NUMBER_GROUP_CHOICES),
         };

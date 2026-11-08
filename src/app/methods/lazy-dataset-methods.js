@@ -145,10 +145,21 @@ proto._lazyDatasetAxisFrom = function(data, steps) {
  * null when it was cancelled (the table is dropped then). Anything else that
  * stops it is thrown, with a message for the panel.
  */
-proto._runLazyDatasetJob = async function(data, { name, sourceNames, timeColumn, columns, estimatedRows, kernel }, { signal = null, overlayDelayMs = 0 } = {}) {
+proto._runLazyDatasetJob = async function(data, { name, sourceNames, timeColumn, columns, estimatedRows, kernel, keepPart = null }, { signal = null, overlayDelayMs = 0 } = {}) {
     const source = data._duckdb.source;
+    // The same dataset of the same file, kept from an earlier session (the
+    // database on disk; DuckDbSource.keepResult): adopted, not run again.
+    const keepKey = keepPart ? source.keptResultKey?.(data, keepPart) : null;
+    if (keepKey) {
+        const kept = await source.findKeptResult(data, keepKey);
+        if (kept?.sink?.dataset) {
+            return { dataset: kept.sink, rows: kept.record.rows, written: kept.record.written, report: kept.record.report ?? null, keepKey, reused: true };
+        }
+    }
     const budgetBytes = this._lazySinkBudgetBytes();
     if (budgetBytes !== null) source.sinkBudgetBytes = budgetBytes;
+    // With the database on disk, what the browser still grants it.
+    await source.refreshDiskBudget?.();
     // Refused before reading anything when the size of the result is known
     // (a resample's grid); otherwise the writer stops at the budget.
     if (Number.isFinite(estimatedRows) && estimatedRows > 0) {
@@ -178,10 +189,15 @@ proto._runLazyDatasetJob = async function(data, { name, sourceNames, timeColumn,
             : i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(done)));
     };
     try {
-        const dataset = await source.createDatasetTable(data, { timeColumn, columns });
+        const dataset = await source.createDatasetTable(data, { timeColumn, columns, ...(keepKey ? { table: source.keptResultTable(keepKey) } : {}) });
         const writer = source.openDatasetWriter(data, dataset);
         const { rows, written } = await runDatasetJob({ data, sourceNames, kernel, writer, signal: controller.signal, onProgress: progress });
-        return { dataset, rows, written };
+        const report = kernel.report?.() ?? null;
+        if (keepKey) {
+            await source.keepResult(data, keepKey, dataset, { rows, written, report })
+                .catch(err => console.warn('[duckdb] could not keep a dataset:', err?.message || err));
+        }
+        return { dataset, rows, written, report, keepKey };
     } catch (err) {
         if (controller.signal.aborted || err?.name === 'AbortError') return null;
         throw new Error(this._lazySinkErrorMessage(name, err));
@@ -234,15 +250,23 @@ proto._computeLazyResampleDataset = async function(sourceFileId, sourceData, rec
         kernel: {
             push: chunk => resampler.push(chunk.x, names.map(n => chunk.yByVar.get(n))),
             flush: () => resampler.flush(),
+            report: () => resampler.report(),
         },
+        keepPart: JSON.stringify(['resample', names.map(n => source._valueExpressionSql(sourceData.variables[n], n, { castDouble: true })), time.kind, timeName, gridParams, axis]),
     });
     if (!run) throw cancelledError();
-    const report = resampler.report();
+    const report = run.report || resampler.report();
     const adopted = await source.adoptDatasetTable(sourceData, run.dataset, {
         timeName,
         timeKind: time.kind === 'datetime' ? 'datetime' : 'numeric',
         overviewPoints: sourceData._duckdb.overviewPoints || 10000,
     });
+    // A kept dataset is told again by its key: what is computed over it can
+    // be kept in turn.
+    if (run.keepKey && adopted?._duckdb) {
+        adopted._duckdb.fingerprint = run.keepKey;
+        adopted._duckdb.readKey = '';
+    }
     const scale = this._resampleAxisScale(time.kind);
     const data = this._buildLazyDatasetData(sourceData, time, adopted, names, 'resample', {
         resample: {
@@ -294,15 +318,23 @@ proto._computeLazyCollapseDataset = async function(sourceFileId, sourceData, rec
         kernel: {
             push: chunk => collapser.push(chunk.x, names.map(n => chunk.yByVar.get(n))),
             flush: () => collapser.flush(),
+            report: () => collapser.report(),
         },
+        keepPart: JSON.stringify(['collapse', names.map(n => source._valueExpressionSql(sourceData.variables[n], n, { castDouble: true })), time.kind, timeName, aggregate]),
     });
     if (!run) throw cancelledError();
-    const report = collapser.report();
+    const report = run.report || collapser.report();
     const adopted = await source.adoptDatasetTable(sourceData, run.dataset, {
         timeName,
         timeKind: time.kind === 'datetime' ? 'datetime' : 'numeric',
         overviewPoints: sourceData._duckdb.overviewPoints || 10000,
     });
+    // A kept dataset is told again by its key: what is computed over it can
+    // be kept in turn.
+    if (run.keepKey && adopted?._duckdb) {
+        adopted._duckdb.fingerprint = run.keepKey;
+        adopted._duckdb.readKey = '';
+    }
     const groups = report.groups;
     const data = this._buildLazyDatasetData(sourceData, time, adopted, names, 'collapse', {
         // One row per instant is the point, so the copy has nothing left to

@@ -25,7 +25,7 @@ import {
 } from '../../parsers/audio-limits.js';
 
 import WorkerPool, { canUseWorkers, spawnWorker } from '../../core/worker-pool.js';
-import { GRIB_EXTENSIONS } from '../constants.js';
+import { APP_VERSION, BUILD_DATE, BUILD_SHA, GRIB_EXTENSIONS } from '../constants.js';
 import { checkDecodedAudioLimit, checkFullLoadLimit, checkLoadedNetcdfLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
 import {
@@ -4020,6 +4020,11 @@ proto._getDuckDbSource = async function() {
         if (!DuckDbSource) throw new Error('DuckDB source unavailable in this build.');
         this._duckdbSource = new DuckDbSource(this.parser);
     }
+    // Read when the engine starts: a change in Settings takes effect then.
+    this._duckdbSource.storagePreference = this.advancedSettings?.lazyResultsStorage === 'memory' ? 'memory' : 'disk';
+    // Results kept from one session to the next are this build's only: a
+    // kernel an update changed must not be served what the last one computed.
+    this._duckdbSource.keptResultsVersion = `${APP_VERSION}+${BUILD_SHA}+${BUILD_DATE}`;
     return this._duckdbSource;
 };
 

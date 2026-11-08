@@ -138,6 +138,7 @@
     "test:lazy-datasets": "node scripts/test-lazy-datasets.mjs",
     "test:lazy-histogram": "node scripts/test-lazy-histogram.mjs",
     "test:lazy-live-continuation": "node scripts/test-lazy-live-continuation.mjs",
+    "test:lazy-kept-results": "node scripts/test-lazy-kept-results.mjs",
     "test:lazy-heatmap-profile": "node scripts/test-lazy-heatmap-profile.mjs",
     "test:dropped-traces-batch": "node scripts/test-dropped-traces-batch.mjs",
     "test:loading-cancel-button": "node scripts/test-loading-cancel-button.mjs",
