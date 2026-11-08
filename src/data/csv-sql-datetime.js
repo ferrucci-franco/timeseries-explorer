@@ -21,6 +21,16 @@ function escapeSqlString(value) {
     return String(value ?? '').replace(/'/g, "''");
 }
 
+// A value computed once and named, for an expression that reads it many
+// times: a lambda over a one-element list. Written out instead, the text and
+// the regular expression ran once per mention, dozens of times per cell, and
+// the time axis of a lazy file took five times as long to read.
+let bindCount = 0;
+function bind(value, body) {
+    const name = `__omv_${(bindCount++).toString(36)}`;
+    return `list_transform([${value}], lambda ${name}: ${body(name)})[1]`;
+}
+
 function defaultQuoteIdent(name) {
     return `"${String(name ?? '').replace(/"/g, '""')}"`;
 }
@@ -28,9 +38,9 @@ function defaultQuoteIdent(name) {
 // The cell as text, trimmed, and without a pair of quotes around it (a line
 // that starts with a byte-order mark hides its quotes from the CSV reader).
 function textSql(expr) {
-    const t = `trim(CAST(${expr} AS VARCHAR))`;
     // No regular expression here: this runs on every row of every query.
-    return `(CASE WHEN left(${t}, 1) = '"' AND right(${t}, 1) = '"' AND length(${t}) > 1 THEN substr(${t}, 2, length(${t}) - 2) ELSE ${t} END)`;
+    return bind(`trim(CAST(${expr} AS VARCHAR))`, t =>
+        `(CASE WHEN left(${t}, 1) = '"' AND right(${t}, 1) = '"' AND length(${t}) > 1 THEN substr(${t}, 2, length(${t}) - 2) ELSE ${t} END)`);
 }
 
 // A strptime or cast result as the JS reader's milliseconds: rounded, as it
@@ -38,7 +48,9 @@ function textSql(expr) {
 // anything else (a two-digit year strptime reads as year 22) is left to the
 // part-by-part reading.
 function fastMsSql(timestamp) {
-    return `(CASE WHEN year(${timestamp}) >= 100 THEN round(epoch_us(${timestamp}) / 1000.0) END)`;
+    // NULLIF keeps it to one strptime per cell and no lambda: a year before
+    // 100 makes the CASE NULL.
+    return `round(epoch_us(CASE WHEN year(${timestamp}) >= 100 THEN ${timestamp} END) / 1000.0)`;
 }
 
 // The parts as SQL integers (NULL when absent), from a regexp_extract struct.
@@ -55,9 +67,9 @@ function fractionMsSql(struct, name) {
 // The hour on a 24-hour clock, from an hour and an optional meridiem letter;
 // -1, which no instant has, for "13 PM" or "0 AM".
 function hour24Sql(hour, meridiem) {
-    return `(CASE WHEN coalesce(${meridiem}, '') = '' THEN ${hour}`
-        + ` WHEN ${hour} BETWEEN 1 AND 12 THEN (${hour} % 12) + (CASE WHEN upper(${meridiem}) = 'P' THEN 12 ELSE 0 END)`
-        + ' ELSE -1 END)';
+    return bind(`{'h': ${hour}, 'ap': coalesce(${meridiem}, '')}`, v => `(CASE WHEN ${v}.ap = '' THEN ${v}.h`
+        + ` WHEN ${v}.h BETWEEN 1 AND 12 THEN (${v}.h % 12) + (CASE WHEN upper(${v}.ap) = 'P' THEN 12 ELSE 0 END)`
+        + ' ELSE -1 END)');
 }
 
 function fullYearSql(year, digits) {
@@ -71,14 +83,13 @@ function fullYearSql(year, digits) {
  * hour past 24, or 24 with minutes. 24:00 is midnight at the end of the day.
  */
 export function csvPartsToMsSql({ year, month, day, hour = '0', minute = '0', second = '0', ms = '0', offsetMinutes = '0' }) {
-    const date = `try_strptime(printf('%04d-%02d-%02d', ${year}, ${month}, ${day}), '%Y-%m-%d')`;
-    const h = `coalesce(${hour}, 0)`;
-    const mi = `coalesce(${minute}, 0)`;
-    const se = `coalesce(${second}, 0)`;
-    return `(CASE WHEN ${h} BETWEEN 0 AND 24 AND ${mi} BETWEEN 0 AND 59 AND ${se} BETWEEN 0 AND 59`
-        + ` AND (${h} < 24 OR (${mi} = 0 AND ${se} = 0 AND ${ms} = 0))`
-        + ` THEN epoch_ms(${date})::DOUBLE + ${h} * 3600000 + ${mi} * 60000 + ${se} * 1000 + ${ms} - coalesce(${offsetMinutes}, 0) * 60000`
-        + ' END)';
+    const parts = `{'y': ${year}, 'mo': ${month}, 'd': ${day}, 'h': coalesce(${hour}, 0), 'mi': coalesce(${minute}, 0),`
+        + ` 'se': coalesce(${second}, 0), 'ms': coalesce(${ms}, 0), 'tz': coalesce(${offsetMinutes}, 0)}`;
+    return bind(parts, p => `(CASE WHEN ${p}.h BETWEEN 0 AND 24 AND ${p}.mi BETWEEN 0 AND 59 AND ${p}.se BETWEEN 0 AND 59`
+        + ` AND (${p}.h < 24 OR (${p}.mi = 0 AND ${p}.se = 0 AND ${p}.ms = 0))`
+        + ` THEN epoch_ms(try_strptime(printf('%04d-%02d-%02d', ${p}.y, ${p}.mo, ${p}.d), '%Y-%m-%d'))::DOUBLE`
+        + ` + ${p}.h * 3600000 + ${p}.mi * 60000 + ${p}.se * 1000 + ${p}.ms - ${p}.tz * 60000`
+        + ' END)');
 }
 
 const MERIDIEM = '(?:\\s*(?P<ap>[AaPp])\\.?(?:[Mm]\\.?)?)?';
@@ -94,31 +105,40 @@ function extractSql(text, pattern) {
 
 // Minutes east of UTC of "Z", "+02", "+0200" or "-03:30", or NULL.
 function offsetMinutesSql(struct) {
-    const tz = `nullif(struct_extract(${struct}, 'tz'), '')`;
-    const digits = `replace(${tz}, ':', '')`;
-    return `(CASE WHEN ${tz} IS NULL OR upper(${tz}) = 'Z' THEN 0`
-        + ` ELSE (CASE WHEN left(${tz}, 1) = '-' THEN -1 ELSE 1 END)`
-        + ` * (TRY_CAST(substr(${digits}, 2, 2) AS BIGINT) * 60`
-        + ` + (CASE WHEN length(${digits}) >= 5 THEN TRY_CAST(substr(${digits}, 4, 2) AS BIGINT) ELSE 0 END))`
-        + ' END)';
+    return bind(`nullif(struct_extract(${struct}, 'tz'), '')`, tz => {
+        const digits = `replace(${tz}, ':', '')`;
+        return `(CASE WHEN ${tz} IS NULL OR upper(${tz}) = 'Z' THEN 0`
+            + ` ELSE (CASE WHEN left(${tz}, 1) = '-' THEN -1 ELSE 1 END)`
+            + ` * (TRY_CAST(substr(${digits}, 2, 2) AS BIGINT) * 60`
+            + ` + (CASE WHEN length(${digits}) >= 5 THEN TRY_CAST(substr(${digits}, 4, 2) AS BIGINT) ELSE 0 END))`
+            + ' END)';
+    });
 }
 
 /** "2024-01-05 07:05:22,123+01:00" and every shape parseIsoMs reads. */
-export function csvIsoDateTimeSql(expr) {
-    const text = textSql(expr);
-    const m = extractSql(text, '^(?P<y>\\d{4})-(?P<mo>\\d{1,2})-(?P<d>\\d{1,2})'
-        + '(?:[T ](?P<H>\\d{1,2}):(?P<Mi>\\d{2})(?::(?P<S>\\d{2})(?:[.,](?P<F>\\d+))?)?' + OFFSET + ')?$');
+export function csvIsoDateTimeSql(expr, format = {}) {
     // Most cells are "2024-01-05 07:05:22": DuckDB's own cast reads them,
-    // and only the others pay for the parts. Not a cell with an offset, which
-    // the cast would ignore, nor a comma before the fraction.
-    const offsetOrComma = `(${text} LIKE '%+%' OR ${text} LIKE '%:%-%' OR ${text} ILIKE '%z' OR ${text} LIKE '%,%')`;
-    const fast = `(CASE WHEN NOT ${offsetOrComma} THEN ${fastMsSql(`TRY_CAST(${text} AS TIMESTAMP)`)} END)`;
-    const slow = csvPartsToMsSql({
+    // straight from the column and with no lambda, and only the others pay
+    // for the parts. Not a cell with an offset, which the cast would ignore,
+    // nor a comma before the fraction: when the sample showed neither
+    // (timezone 'floating'), no cell is looked at for them, which halves the
+    // time of a query on a large file.
+    const raw = `CAST(${expr} AS VARCHAR)`;
+    const plain = format?.timezone === 'floating' && !format?.fractionComma;
+    const offsetOrComma = `(${raw} LIKE '%+%' OR ${raw} LIKE '%:%-%' OR ${raw} ILIKE '%z' OR ${raw} LIKE '%,%')`;
+    const cast = `round(epoch_us(TRY_CAST(${raw} AS TIMESTAMP)) / 1000.0)`;
+    const fast = plain ? cast : `(CASE WHEN NOT ${offsetOrComma} THEN ${cast} END)`;
+    return `coalesce(${fast}, ${bind(textSql(expr), text => isoFromTextSql(text))})`;
+}
+
+function isoFromTextSql(text) {
+    const pattern = '^(?P<y>\\d{4})-(?P<mo>\\d{1,2})-(?P<d>\\d{1,2})'
+        + '(?:[T ](?P<H>\\d{1,2}):(?P<Mi>\\d{2})(?::(?P<S>\\d{2})(?:[.,](?P<F>\\d+))?)?' + OFFSET + ')?$';
+    return bind(extractSql(text, pattern), m => csvPartsToMsSql({
         year: part(m, 'y'), month: part(m, 'mo'), day: part(m, 'd'),
         hour: part(m, 'H'), minute: part(m, 'Mi'), second: part(m, 'S'),
         ms: fractionMsSql(m, 'F'), offsetMinutes: offsetMinutesSql(m),
-    });
-    return `coalesce(${fast}, ${slow})`;
+    }));
 }
 
 // Which captured number is the year, the month and the day.
@@ -152,27 +172,31 @@ function commonFormats(order, sep) {
 
 export function csvNumericDateTimeSql(expr, order = 'YMD', sep = '/') {
     const s = separatorClass(sep);
-    const text = textSql(expr);
-    const fast = fastMsSql(tryStrptimeTimestampSql(text, commonFormats(order, sep)));
-    const m = extractSql(text, `^(?P<a>\\d{1,4})${s}(?P<b>\\d{1,2})${s}(?P<c>\\d{1,4})${CLOCK}$`);
-    const { year, month, day } = ymdSql(m, order);
-    return `coalesce(${fast}, ` + csvPartsToMsSql({
-        year, month, day,
-        hour: hour24Sql(part(m, 'H'), `struct_extract(${m}, 'ap')`),
-        minute: part(m, 'Mi'), second: part(m, 'S'), ms: fractionMsSql(m, 'F'),
+    const fast = fastMsSql(tryStrptimeTimestampSql(`CAST(${expr} AS VARCHAR)`, commonFormats(order, sep)));
+    return `coalesce(${fast}, ` + bind(textSql(expr), text => {
+        return bind(extractSql(text, `^(?P<a>\\d{1,4})${s}(?P<b>\\d{1,2})${s}(?P<c>\\d{1,4})${CLOCK}$`), m => {
+            const { year, month, day } = ymdSql(m, order);
+            return csvPartsToMsSql({
+                year, month, day,
+                hour: hour24Sql(part(m, 'H'), `struct_extract(${m}, 'ap')`),
+                minute: part(m, 'Mi'), second: part(m, 'S'), ms: fractionMsSql(m, 'F'),
+            });
+        });
     }) + ')';
 }
 
 /** "01/31 13:45" with no year: parseYearlessDateTimeMs (2001). */
 export function csvYearlessDateTimeSql(expr, order = 'MDY') {
-    const m = extractSql(textSql(expr), '^(?P<a>\\d{1,2})[/-](?P<b>\\d{1,2})[T\\s]+(?P<H>\\d{1,2}):(?P<Mi>\\d{2})'
-        + '(?::(?P<S>\\d{2})(?:[.,](?P<F>\\d+))?)?' + MERIDIEM + '$');
-    const a = part(m, 'a');
-    const b = part(m, 'b');
-    return csvPartsToMsSql({
-        year: '2001', month: order === 'DMY' ? b : a, day: order === 'DMY' ? a : b,
-        hour: hour24Sql(part(m, 'H'), `struct_extract(${m}, 'ap')`),
-        minute: part(m, 'Mi'), second: part(m, 'S'), ms: fractionMsSql(m, 'F'),
+    const pattern = '^(?P<a>\\d{1,2})[/-](?P<b>\\d{1,2})[T\\s]+(?P<H>\\d{1,2}):(?P<Mi>\\d{2})'
+        + '(?::(?P<S>\\d{2})(?:[.,](?P<F>\\d+))?)?' + MERIDIEM + '$';
+    return bind(extractSql(textSql(expr), pattern), m => {
+        const a = part(m, 'a');
+        const b = part(m, 'b');
+        return csvPartsToMsSql({
+            year: '2001', month: order === 'DMY' ? b : a, day: order === 'DMY' ? a : b,
+            hour: hour24Sql(part(m, 'H'), `struct_extract(${m}, 'ap')`),
+            minute: part(m, 'Mi'), second: part(m, 'S'), ms: fractionMsSql(m, 'F'),
+        });
     });
 }
 
@@ -206,7 +230,7 @@ const MONTH_NAME_FORMATS = [
 // A strptime result whose year was written with two digits ("15-Jan-24"
 // reads as year 24) moved to the century the JS reader gives it.
 function centuryFixedSql(timestamp) {
-    return `(CASE WHEN year(${timestamp}) < 100 THEN ${timestamp} + to_years(CASE WHEN year(${timestamp}) >= 70 THEN 1900 ELSE 2000 END) ELSE ${timestamp} END)`;
+    return bind(timestamp, ts => `(CASE WHEN year(${ts}) < 100 THEN ${ts} + to_years(CASE WHEN year(${ts}) >= 70 THEN 1900 ELSE 2000 END) ELSE ${ts} END)`);
 }
 
 function tryStrptimeTimestampSql(expr, formats) {
@@ -215,51 +239,59 @@ function tryStrptimeTimestampSql(expr, formats) {
 
 /** "09-Janvier-2024 07:05:08", "Mon, 15 Jan 2024 10:00": parseMonthNameDateMs. */
 export function csvMonthNameDateSql(expr) {
-    let text = csvNormalizedMonthNameSql(textSql(expr));
-    // A weekday in front ("lundi 1 janvier", "Mon, 15 Jan") names nothing new.
     const months = 'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec';
-    text = `(CASE WHEN regexp_matches(${text}, '^(${months})\\b') THEN ${text}`
-        + ` ELSE regexp_replace(${text}, '^[a-z]{2,14},?\\s+([0-9]|${months})', '\\1') END)`;
-    // A trailing UTC offset ("+0100"), taken off and applied after.
-    const m = extractSql(text, '(?P<tz>[+-]\\d{2}:?\\d{2})$');
-    const bare = `trim(regexp_replace(${text}, '\\s*(?:[+-]\\d{2}:?\\d{2}|z|utc|gmt)$', ''))`;
-    const timestamp = tryStrptimeTimestampSql(bare, MONTH_NAME_FORMATS);
-    return `(epoch_ms(${centuryFixedSql(timestamp)})::DOUBLE - ${offsetMinutesSql(m)} * 60000)`;
+    return bind(csvNormalizedMonthNameSql(textSql(expr)), normalized =>
+        // A weekday in front ("lundi 1 janvier", "Mon, 15 Jan") names nothing new.
+        bind(`(CASE WHEN regexp_matches(${normalized}, '^(${months})\\b') THEN ${normalized}`
+            + ` ELSE regexp_replace(${normalized}, '^[a-z]{2,14},?\\s+([0-9]|${months})', '\\1') END)`, text => {
+            // A trailing UTC offset ("+0100"), taken off and applied after.
+            const m = extractSql(text, '(?P<tz>[+-]\\d{2}:?\\d{2})$');
+            const bare = `trim(regexp_replace(${text}, '\\s*(?:[+-]\\d{2}:?\\d{2}|z|utc|gmt)$', ''))`;
+            const timestamp = tryStrptimeTimestampSql(bare, MONTH_NAME_FORMATS);
+            return `(epoch_ms(${centuryFixedSql(timestamp)})::DOUBLE - ${offsetMinutesSql(m)} * 60000)`;
+        }));
 }
 
 /** A date column and a time-of-day column: combineDateAndTimeMs. */
 export function csvSplitDateTimeSql(dateExpr, timeExpr, format = {}) {
     const order = format?.dateOrder || 'YMD';
-    const dateText = textSql(dateExpr);
-    const t = extractSql(textSql(timeExpr), '^(?P<H>\\d{1,2}):(?P<Mi>\\d{2})(?::(?P<S>\\d{2})(?:[.,](?P<F>\\d+))?)?' + MERIDIEM + '$');
-    const timeText = textSql(timeExpr);
-    // An empty time is midnight; a time that does not read is no instant.
-    const clock = {
-        hour: `(CASE WHEN ${timeText} = '' THEN 0 ELSE coalesce(${hour24Sql(part(t, 'H'), `struct_extract(${t}, 'ap')`)}, -1) END)`,
-        minute: `(CASE WHEN ${timeText} = '' THEN 0 ELSE coalesce(${part(t, 'Mi')}, -1) END)`,
-        second: `coalesce(${part(t, 'S')}, 0)`,
-        ms: fractionMsSql(t, 'F'),
-    };
-    const monthName = `(epoch_ms(${centuryFixedSql(tryStrptimeTimestampSql(csvNormalizedMonthNameSql(dateText), MONTH_NAME_FORMATS))})::DOUBLE`
-        + ` + ${clock.hour} * 3600000 + ${clock.minute} * 60000 + ${clock.second} * 1000 + ${clock.ms})`;
-    // "31/01/2024", or a date without its year or day ("2024-01", "01/31").
-    const d = extractSql(dateText, '^(?P<a>\\d{1,4})[./-](?P<b>\\d{1,4})(?:[./-](?P<c>\\d{1,4}))?$');
-    const full = ymdSql(d, order);
-    const a = part(d, 'a');
-    const b = part(d, 'b');
-    const aDigits = `struct_extract(${d}, 'a')`;
-    const hasDay = `struct_extract(${d}, 'c') <> ''`;
-    const yearFirst = `(length(${aDigits}) = 4 OR ${order === 'YMD' ? 'TRUE' : 'FALSE'})`;
-    const numeric = csvPartsToMsSql({
-        year: `(CASE WHEN ${hasDay} THEN ${full.year} WHEN ${yearFirst} THEN ${a} ELSE 2001 END)`,
-        month: `(CASE WHEN ${hasDay} THEN ${full.month} WHEN ${yearFirst} THEN ${b} WHEN ${order === 'DMY' ? 'TRUE' : 'FALSE'} THEN ${b} ELSE ${a} END)`,
-        day: `(CASE WHEN ${hasDay} THEN ${full.day} WHEN ${yearFirst} THEN 1 WHEN ${order === 'DMY' ? 'TRUE' : 'FALSE'} THEN ${a} ELSE ${b} END)`,
-        ...clock,
-    });
-    if (format?.monthName) return `coalesce(${monthName}, ${numeric})`;
     const sep = format?.dotSeparator ? '.' : format?.dashSeparator ? '-' : '/';
-    const fast = fastMsSql(tryStrptimeTimestampSql(`${dateText} || ' ' || ${timeText}`, commonFormats(order, sep)));
-    return `coalesce(${fast}, ${numeric}, ${monthName})`;
+    const timePattern = '^(?P<H>\\d{1,2}):(?P<Mi>\\d{2})(?::(?P<S>\\d{2})(?:[.,](?P<F>\\d+))?)?' + MERIDIEM + '$';
+    const datePattern = '^(?P<a>\\d{1,4})[./-](?P<b>\\d{1,4})(?:[./-](?P<c>\\d{1,4}))?$';
+    const slow = bind(`{'date': ${textSql(dateExpr)}, 'time': ${textSql(timeExpr)}}`, cells => {
+        const dateText = `${cells}.date`;
+        const timeText = `${cells}.time`;
+        // An empty time is midnight; a time that does not read is no instant.
+        const clockOf = t => ({
+            hour: `(CASE WHEN ${timeText} = '' THEN 0 ELSE coalesce(${hour24Sql(part(t, 'H'), `struct_extract(${t}, 'ap')`)}, -1) END)`,
+            minute: `(CASE WHEN ${timeText} = '' THEN 0 ELSE coalesce(${part(t, 'Mi')}, -1) END)`,
+            second: `coalesce(${part(t, 'S')}, 0)`,
+            ms: fractionMsSql(t, 'F'),
+        });
+        return bind(`{'t': ${extractSql(timeText, timePattern)}, 'd': ${extractSql(dateText, datePattern)}}`, x => {
+            const clock = clockOf(`${x}.t`);
+            const d = `${x}.d`;
+            const monthName = `(epoch_ms(${centuryFixedSql(tryStrptimeTimestampSql(csvNormalizedMonthNameSql(dateText), MONTH_NAME_FORMATS))})::DOUBLE`
+                + ` + ${clock.hour} * 3600000 + ${clock.minute} * 60000 + ${clock.second} * 1000 + ${clock.ms})`;
+            // "31/01/2024", or a date without its year or day ("2024-01", "01/31").
+            const full = ymdSql(d, order);
+            const a = part(d, 'a');
+            const b = part(d, 'b');
+            const hasDay = `struct_extract(${d}, 'c') <> ''`;
+            const yearFirst = `(length(struct_extract(${d}, 'a')) = 4 OR ${order === 'YMD' ? 'TRUE' : 'FALSE'})`;
+            const dayFirst = order === 'DMY' ? 'TRUE' : 'FALSE';
+            const numeric = csvPartsToMsSql({
+                year: `(CASE WHEN ${hasDay} THEN ${full.year} WHEN ${yearFirst} THEN ${a} ELSE 2001 END)`,
+                month: `(CASE WHEN ${hasDay} THEN ${full.month} WHEN ${yearFirst} THEN ${b} WHEN ${dayFirst} THEN ${b} ELSE ${a} END)`,
+                day: `(CASE WHEN ${hasDay} THEN ${full.day} WHEN ${yearFirst} THEN 1 WHEN ${dayFirst} THEN ${a} ELSE ${b} END)`,
+                ...clock,
+            });
+            return format?.monthName ? `coalesce(${monthName}, ${numeric})` : `coalesce(${numeric}, ${monthName})`;
+        });
+    });
+    if (format?.monthName) return slow;
+    const fast = fastMsSql(tryStrptimeTimestampSql(`CAST(${dateExpr} AS VARCHAR) || ' ' || CAST(${timeExpr} AS VARCHAR)`, commonFormats(order, sep)));
+    return `coalesce(${fast}, ${slow})`;
 }
 
 /** Year, month, day, hour, minute and second each in a column of its own. */
@@ -331,7 +363,7 @@ export function csvDatetimeSql(timeSource, sourceNames, options = {}) {
         const m = extractSql(textSql(first), '^(?P<y>\\d{4})[/-](?P<mo>\\d{1,2})$');
         return csvPartsToMsSql({ year: part(m, 'y'), month: part(m, 'mo'), day: '1' });
     }
-    if (strategy === 'iso-datetime') return csvIsoDateTimeSql(first);
+    if (strategy === 'iso-datetime') return csvIsoDateTimeSql(first, timeSource.format || {});
     if (strategy === 'custom-format') return csvCustomFormatSql(first, timeSource.format?.pattern || '');
     if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
         return csvNumericDateTimeSql(first, order, dateSeparatorForStrategy(strategy));

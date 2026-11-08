@@ -100,8 +100,10 @@ export function csvProfileHasHexNumbers(profile) {
     if (typeof profile.hexNumbers === 'boolean') return profile.hexNumbers;
     if (hexNumbersByProfile.has(profile)) return hexNumbersByProfile.get(profile);
     let found = false;
-    for (const row of profile.sampleRows || []) {
-        if ((row || []).some(cell => HEX_CELL.test(String(cell ?? '').trim()))) { found = true; break; }
+    const rows = Array.isArray(profile.sampleRows) ? profile.sampleRows : [];
+    for (const row of rows) {
+        const cells = Array.isArray(row) ? row : (row && typeof row === 'object' ? Object.values(row) : []);
+        if (cells.some(cell => HEX_CELL.test(String(cell ?? '').trim()))) { found = true; break; }
     }
     hexNumbersByProfile.set(profile, found);
     return found;
