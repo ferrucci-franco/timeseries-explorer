@@ -1983,6 +1983,9 @@ proto._applyTimeseriesStackZeroPadding = function(plot, traceState, visual) {
 proto._variableDefaultsToStairs = function(variable) {
     if (!variable) return false;
     if (variable.dataType === 'boolean') return true;
+    // A rate held over the interval it was measured on (a Data tool): each
+    // value stands until the next, which is what stairs draw.
+    if (variable.heldSteps === true) return true;
     return variable.timeAxisIndex === true && (variable.timeAxisKind || 'index') === 'index';
 };
 
