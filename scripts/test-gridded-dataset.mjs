@@ -284,6 +284,28 @@ const displayIndex = (map, lat, lon) => map.lat.indexOf(lat) * map.nx + map.lon.
     joined.close();
 }
 
+// --- An atlite cutout (issue #298): dimensions `x`/`y` whose own coordinates
+// carry no units, the longitude and latitude in auxiliary `lon(x)`, `lat(y)`.
+{
+    const dataset = await open('atlite-cutout.nc');
+    const model = dataset.model();
+    assert.equal(model.gridded, true, 'an atlite cutout is a map');
+    assert.equal(model.primaryTimeDim, 'time');
+    assert.equal(model.axes.y.role, 'y');
+    assert.equal(model.axes.x.role, 'x');
+    const wind = model.variables.find(item => item.key === '/wnd100m');
+    assert(wind?.mapable, 'wnd100m is offered as a map');
+    assert.deepEqual(wind.roles, ['t', 'y', 'x']);
+    assert(!model.variables.some(item => /^\/(lat|lon|x|y)$/.test(item.key)), 'the coordinates are not offered as variables');
+    const map = dataset.readMap('/wnd100m', { time: 1 });
+    assert.deepEqual(Array.from(map.lat), [55, 55.25, 55.5, 55.75]);
+    assert.deepEqual(Array.from(map.lon), [10, 10.25, 10.5], 'the `lon` declared in `coordinates`, not the `glon` decoy');
+    close(map.values[displayIndex(map, 55.5, 10.25)], field(55.5, 10.25, 1, -280), 'wnd100m at 55.5N 10.25E');
+    const point = await dataset.pointSeries('/wnd100m', {}, 55.7, 10.45);
+    assert.deepEqual(point.cell, { lat: 55.75, lon: 10.5 }, 'nearest cell');
+    dataset.close();
+}
+
 // --- What a ".nc" really is, before anything tries to parse it.
 {
     const parser = new NetcdfParser();

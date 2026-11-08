@@ -22,6 +22,12 @@ They copy the layouts that broke the viewer, at a few KB each:
                               request: chunks of many steps along time (the
                               CDS writes 2920, four months of hours) by a part
                               of the grid, so one map spans several chunks.
+- atlite-cutout.nc            netCDF4 as atlite writes a cutout: dimensions
+                              `x`/`y` whose own coordinates carry no units, the
+                              longitude and latitude in auxiliary `lon(x)` and
+                              `lat(y)` without units either, `time(time)` in
+                              hours, data laid out (time, y, x); and an
+                              undeclared `glon(x)` decoy in degrees_east.
 
 Regenerate with:  python3 scripts/generate-gridded-netcdf-fixtures.py
 (needs numpy and netCDF4)
@@ -212,6 +218,36 @@ def time_chunked(path, nt=96, chunk=48):
     ds.close()
 
 
+def atlite_cutout(path):
+    # Copies the layout of an atlite cutout (github.com/PyPSA/atlite), issue #298.
+    x = np.array([10.0, 10.25, 10.5])
+    y = np.array([55.0, 55.25, 55.5, 55.75])
+    nt = 3
+    ds = nc.Dataset(path, 'w', format='NETCDF4')
+    ds.createDimension('x', len(x))
+    ds.createDimension('y', len(y))
+    ds.createDimension('time', nt)
+    ds.createVariable('x', 'f8', ('x',))[:] = x
+    ds.createVariable('y', 'f8', ('y',))[:] = y
+    t = ds.createVariable('time', 'i8', ('time',))
+    t.units = 'hours since 2019-01-01 00:00:00'
+    t.calendar = 'proleptic_gregorian'
+    t[:] = np.arange(nt)
+    ds.createVariable('lon', 'f8', ('x',))[:] = x
+    ds.createVariable('lat', 'f8', ('y',))[:] = y
+    # A decoy that sorts before `lon` and looks like a longitude, but which
+    # no variable declares in `coordinates`: the declared `lon` must win.
+    decoy = ds.createVariable('glon', 'f8', ('x',))
+    decoy.units = 'degrees_east'
+    decoy[:] = x + 1.0
+    v = ds.createVariable('wnd100m', 'f4', ('time', 'y', 'x'))
+    v.units = 'm s**-1'
+    v.long_name = '100 metre wind speed'
+    v.coordinates = 'lat lon'
+    v[:] = field(nt, y, x, offset=-280.0)
+    ds.close()
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     time_chunked(os.path.join(OUT, 'era5-like-time-chunked.nc'))
@@ -222,6 +258,7 @@ def main():
     legacy(os.path.join(OUT, 'era5-like-legacy-cds.nc'))
     noleap(os.path.join(OUT, 'cmip-noleap.nc'))
     cdf5(os.path.join(OUT, 'cdf5-grid.nc'))
+    atlite_cutout(os.path.join(OUT, 'atlite-cutout.nc'))
     with tempfile.TemporaryDirectory() as tmp:
         instant = os.path.join(tmp, 'data_stream-oper_stepType-instant.nc')
         accum = os.path.join(tmp, 'data_stream-oper_stepType-accum.nc')
