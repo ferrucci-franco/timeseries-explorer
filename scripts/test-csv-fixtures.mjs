@@ -663,9 +663,11 @@ async function testCsvProfilePreservesUnitsAfterColumnRename() {
     assert(specs.find(spec => spec.name === 'P')?.description === '[MW]', 'DuckDB CSV specs should preserve renamed column units');
     assert(specs.find(spec => spec.name === 'Voltage')?.description === '[kV]', 'DuckDB CSV specs should preserve detected column units');
 
+    // The column specs both DuckDB readers build live in csv-sql-schema.js.
+    const schemaSql = readFileSync('src/data/csv-sql-schema.js', 'utf8');
+    assert(/description:\s*String\(header\.description \|\| ''\)/.test(schemaSql),
+        'DuckDB CSV specs should carry profile descriptions');
     const duckDbSource = readFileSync('src/data/duckdb-source.js', 'utf8');
-    assert(/description:\s*String\(header\.description \|\| ''\)/.test(duckDbSource),
-        'DuckDBSource CSV specs should carry profile descriptions');
     assert(/csvDescriptionsByColumn[\s\S]*?description:\s*csvDescriptionsByColumn\.get\(columnNames\[i\]\) \|\| ''/.test(duckDbSource),
         'DuckDBSource legacy variables should receive CSV profile units');
 }

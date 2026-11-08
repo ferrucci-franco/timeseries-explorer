@@ -134,7 +134,7 @@ try {
     // recorded, and two that start at row 750. They used to be typed from no
     // evidence at all and written as text, which is how a column of numbers
     // became a string series in the app. The conversion asks the whole file
-    // instead (resolveUnknownCsvColumnTypes), so each one is written as what it
+    // instead (resolveUnknownCsvColumnTypes, every auto column), so each one is written as what it
     // holds — and the column that really is text keeps its words.
     const sparseCsv = join(dir, 'sparse.csv');
     const sparseParquet = join(dir, 'sparse.parquet');
@@ -155,7 +155,8 @@ try {
         overwrite: true,
     });
     // The scan's verdict is left on the profile for whoever reads it next.
-    assert.deepEqual(sparseProfile.scannedNumericColumns, [2, 3]);
+    // Every column left on auto is scanned, the one the sample typed included.
+    assert.deepEqual(sparseProfile.scannedNumericColumns, [1, 2, 3]);
     assert.deepEqual(sparseProfile.scannedTextColumns, [4]);
 
     const sparseDb = new Database(':memory:');
@@ -200,7 +201,7 @@ try {
         csvProfile: chosenProfile,
         overwrite: true,
     });
-    assert.deepEqual(chosenProfile.scannedNumericColumns, [2], 'the chosen column is not scanned');
+    assert.deepEqual(chosenProfile.scannedNumericColumns, [1, 2], 'the chosen column is not scanned');
     const chosenDb = new Database(':memory:');
     const chosenConn = chosenDb.connect();
     try {

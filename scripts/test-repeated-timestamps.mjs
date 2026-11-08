@@ -63,8 +63,13 @@ assert.match(sources['src/parsers/csv-parser.js'], /timeVariable\.timeDisplayMod
     'the CSV path keeps the calendar axis');
 assert.match(sources['src/data/duckdb-source.js'], /timeVar\.timeDisplayMode = 'calendar';/,
     'and so does the lazy one');
-assert.equal((sources['src/parsers/csv-parser.js'].match(/repeatedTimestampSummary\(timeValues\)/g) || []).length, 2,
-    'both CSV parse paths count');
+// parse() and parseWithProfile() read their rows through one method, so one
+// count serves both.
+assert.equal((sources['src/parsers/csv-parser.js'].match(/repeatedTimestampSummary\(timeValues\)/g) || []).length, 1,
+    'the CSV reader counts once, in the loop both parse paths share');
+assert.match(sources['src/parsers/csv-parser.js'], /this\._readTableColumns\(dataRows, variableHeaders, timeSource, delimiter/,
+    'and both paths read through it');
+assert.equal((sources['src/parsers/csv-parser.js'].match(/this\._readTableColumns\(dataRows, variableHeaders, timeSource, delimiter/g) || []).length, 2);
 
 // The count travels with the file, and the notice reads it.
 for (const [name, source] of Object.entries(sources)) {

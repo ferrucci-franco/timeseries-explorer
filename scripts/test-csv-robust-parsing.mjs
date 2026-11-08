@@ -274,10 +274,16 @@ const values = (data, name) => Array.from(data.variables[name].data);
 
 // ─── DuckDB SQL ────────────────────────────────────────────────────────────
 {
-    assert.equal(csvNumericCastSql('"v"', { delimiter: ',' }), 'try_cast("v" AS DOUBLE)', 'an ordinary file pays nothing');
+    // DuckDB's own cast reads the usual cell first; the per-cell reading of
+    // parseCsvNumber (csvNumberFallbackSql) only the cells it refuses, so an
+    // ordinary file evaluates the cast and nothing else.
+    const plain = csvNumericCastSql('"v"', { delimiter: ',' });
+    assert.match(plain, /^coalesce\(try_cast\("v" AS DOUBLE\), list_transform\(\[trim\(CAST\("v" AS VARCHAR\)\)\]/, 'an ordinary file pays the cast and nothing else');
+    assert.ok(plain.includes(`NOT regexp_full_match(__omv_`), 'with a comma delimiter "1,234" stays unread, as in parseCsvNumber');
     const eu = csvNumericCastSql('"v"', { delimiter: ';', detectedNumberFormat: { decimalSeparator: ',', thousandsSeparator: '.' } });
-    assert.equal(eu, `try_cast(replace(replace(CAST("v" AS VARCHAR), '.', ''), ',', '.') AS DOUBLE)`);
+    assert.match(eu, /^coalesce\(try_cast\(replace\(replace\(CAST\("v" AS VARCHAR\), '\.', ''\), ',', '\.'\) AS DOUBLE\), /);
     assert.match(csvNumericCastSql('"v"', { delimiter: ';', decimalSeparator: '·' }), /replace\(CAST\("v" AS VARCHAR\), '·', '\.'\)/);
+    assert.match(csvNumericCastSql('"v"', { delimiter: ';', sampleRows: [['1', '0x1F']] }), /try_cast\(trim\(CAST\("v" AS VARCHAR\)\) AS UBIGINT\)/, 'hexadecimal cells read through an integer cast');
     assert.equal(csvRepairProjectionSql('read_csv(x)', { delimiter: ',' }, ['a', 'b']), null);
     const repaired = csvRepairProjectionSql('read_csv(x)', { removedInvisibleChars: 3 }, ['a', 'b']);
     assert.match(repaired, /^\(SELECT regexp_replace\("a", '\[.*\]', '', 'g'\) AS "a", .* FROM read_csv\(x\)\)$/);

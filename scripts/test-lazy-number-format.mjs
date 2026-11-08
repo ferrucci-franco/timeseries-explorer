@@ -127,16 +127,34 @@ for (const [name, spec] of Object.entries(files)) {
     assert.equal(Number(count.n), ROWS - outside, `${name}: removed outliers`);
 }
 
-// A file DuckDB reads as it is pays nothing: no translation in its SQL.
+// A file DuckDB reads as it is pays nothing: no translation in its SQL, and
+// no per-cell reading either, because the scan of the file found no cell the
+// cast refused with a digit in it (scannedPerCellColumns is empty).
 {
     const text = 't,v\n' + Array.from({ length: 50 }, (_, i) => `${i},${i / 4}`).join('\n') + '\n';
     db.registerFileText('plain.csv', text);
     const profile = parser.inspectSample(new TextEncoder().encode(text).buffer);
     const data = await duck._loadIntoLegacy('plain.csv', `omv_numfmt_${tableId++}`, { lazy: true, overviewPoints: 400, format: 'csv', csvProfile: profile });
+    assert.deepEqual(profile.scannedPerCellColumns, []);
     assert.equal(data.variables.v._duckdbNumberFormat, undefined, 'a plain file carries no number format');
     assert.equal(duck._valueExpressionSql(data.variables.v, 'v', { castDouble: true }), 'try_cast(("v") AS DOUBLE)');
     // And the format is plain data: a variable is cloned with structuredClone.
     assert.doesNotThrow(() => structuredClone(data.variables));
+}
+
+// A thousands separator that first appears after the sample: the scan finds
+// the refused cells, the column is read cell by cell on every query, and the
+// format rides on the variable so that a zoom reads what the overview read.
+{
+    const text = 't,v\n' + Array.from({ length: 400 }, (_, i) => `${i},"${i < 200 ? (i / 4).toFixed(2) : `1,${String(i).padStart(3, '0')}.5`}"`).join('\n') + '\n';
+    db.registerFileText('late.csv', text);
+    const profile = parser.inspectSample(new TextEncoder().encode(text).buffer);
+    const data = await duck._loadIntoLegacy('late.csv', `omv_numfmt_${tableId++}`, { lazy: true, overviewPoints: 400, format: 'csv', csvProfile: profile });
+    assert.deepEqual(profile.scannedPerCellColumns, [1], 'the column with "1,203.5" is read cell by cell');
+    assert.equal(data.variables.v._duckdbNumberFormat?.perCell, true);
+    const zoomed = [];
+    for await (const chunk of streamColumns(data, ['v'], { t0: 300, t1: 310 })) zoomed.push(...chunk.yByVar.get('v'));
+    assert.deepEqual(zoomed.slice(0, 3), [1300.5, 1301.5, 1302.5], 'a zoom reads the grouped numbers');
 }
 
 console.log('Lazy CSV number format tests passed.');

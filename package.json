@@ -38,6 +38,7 @@
     "build:portable": "node scripts/build-portable.mjs",
     "build:all": "npm run build:portable && npm run build:web",
     "fetch:duckdb-extensions": "node scripts/fetch-duckdb-extensions.mjs",
+    "gen:csv-parity-fixtures": "node scripts/gen-csv-parity-fixtures.mjs",
     "test:csv": "node scripts/test-csv-fixtures.mjs",
     "test:csv-robust-parsing": "node scripts/test-csv-robust-parsing.mjs",
     "test:csv-robust-duckdb": "node scripts/test-csv-robust-duckdb.mjs",

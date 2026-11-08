@@ -95,19 +95,35 @@ byName = specs({ ...chosen, scannedNumericColumns: [2, 3], scannedTextColumns: [
 assert.equal(byName.get('ID').type, 'VARCHAR', 'the choice outranks a scan of every row');
 assert.equal(byName.get('BATT_I').type, 'DOUBLE');
 
-// And a chosen column is never scanned: there is nothing left to ask.
+// And a chosen column is never scanned: there is nothing left to ask. Every
+// column left on auto is, whatever the sample said about it — the first 100
+// rows do not speak for the rest of the file.
 let scannedSql = '';
-await source._resolveUnknownCsvColumnTypes(
+await source._scanCsvColumnTypes(
     'omv_t_1',
     { ...chosen },
     HEADER,
     'TRUE',
+    async (sql) => { scannedSql = sql; return { getChild: () => ({ get: () => 0n }) }; },
+);
+assert.ok(scannedSql.includes('"ELY_V"'), 'the column left on auto is scanned');
+assert.ok(!scannedSql.includes('"ID"'), 'a column chosen as text is not');
+assert.ok(!scannedSql.includes('"BATT_I"'), 'nor one chosen as a number');
+assert.ok(!scannedSql.includes('"time"'), 'nor the time axis');
+
+const allChosen = profileWithChoices({ 1: 'number', 2: 'text', 3: 'number' });
+scannedSql = '';
+await source._scanCsvColumnTypes(
+    'omv_t_1',
+    { ...allChosen },
+    HEADER,
+    'TRUE',
     async (sql) => { scannedSql = sql; return { getChild: () => null }; },
 );
-assert.equal(scannedSql, '', 'with every unknown column chosen by hand, no scan is sent');
+assert.equal(scannedSql, '', 'with every column chosen by hand, no scan is sent');
 
 const half = profileWithChoices({ 2: 'text' });
-await source._resolveUnknownCsvColumnTypes(
+await source._scanCsvColumnTypes(
     'omv_t_1',
     half,
     HEADER,
