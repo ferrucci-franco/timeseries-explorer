@@ -4164,3 +4164,15 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
 .tree-item {
     touch-action: pan-y;
 }
+
+/* A word used as an icon ("CSV"): a small badge, not a 3rem headline. */
+.modal-icon.modal-icon-text {
+    display: inline-block;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 0.3rem 0.7rem;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    color: var(--primary-color);
+}
