@@ -6,6 +6,9 @@
 //     edge (a slow drift counts, noise around a level does not); NaN samples
 //     and times skipped; seconds on a date/time axis, the axis's unit on a
 //     numeric one, samples on an index; the same output however it is cut;
+//   · the mean rate ΔY/Δt between edges, at the edge or held over
+//     [t_(k−1), t_k) as stairs that integrate back to the counter; per
+//     second, minute or hour; the cap on a held interval;
 //   · the panel's in-memory path: the variable, its unit, its counts, and a
 //     source that is itself an interarrival output;
 //   · a lazy file on a real DuckDB-WASM engine: the chunked executor writes the
@@ -96,9 +99,11 @@ const finite = (values) => [...values].map((v, i) => [i, v]).filter(([, v]) => N
     assert.equal(back.negativeDtCount, 1, 'a negative interval is counted');
 }
 {
-    assert.deepEqual(normalizeInterarrivalParams({}), { edge: 'both', deadband: 0 });
-    assert.deepEqual(normalizeInterarrivalParams({ edge: 'up', deadband: -3 }), { edge: 'both', deadband: 0 });
-    assert.deepEqual(normalizeInterarrivalParams({ edge: 'falling', deadband: '0.5' }), { edge: 'falling', deadband: 0.5 });
+    const defaults = { edge: 'both', deadband: 0, output: 'interval', placement: 'edge', rateUnit: 's' };
+    assert.deepEqual(normalizeInterarrivalParams({}), defaults, 'a definition from before the rate: the interval at the edge');
+    assert.deepEqual(normalizeInterarrivalParams({ edge: 'up', deadband: -3, output: 'x', placement: 'y', rateUnit: 'day' }), defaults);
+    assert.deepEqual(normalizeInterarrivalParams({ edge: 'falling', deadband: '0.5', output: 'rate', placement: 'hold', rateUnit: 'h' }),
+        { edge: 'falling', deadband: 0.5, output: 'rate', placement: 'hold', rateUnit: 'h' });
 }
 {
     // The same doubles whatever the chunking.
@@ -123,6 +128,94 @@ const finite = (values) => [...values].map((v, i) => [i, v]).filter(([, v]) => N
     }
 }
 console.log('interarrival: the kernel times rising, falling and both edges through a dead band that remembers the last edge');
+
+// ── The mean rate, at the edge and held ─────────────────────────────────────
+{
+    // Rising edges at rows 2 (t=20), 5 (t=50) and 9 (t=90).
+    const y = [0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3];
+    const t = { values: Float64Array.from(y, (_, i) => i * 10), kind: 'numeric' };
+    const atEdge = run(y, { edge: 'rising', output: 'rate' }, t);
+    assert.deepEqual(finite(atEdge.values), [[5, 1 / 30], [9, 1 / 40]], 'at the edge that closes each interval');
+    const held = run(y, { edge: 'rising', output: 'rate', placement: 'hold' }, t);
+    const expected = [NaN, NaN, 1 / 30, 1 / 30, 1 / 30, 1 / 40, 1 / 40, 1 / 40, 1 / 40, NaN, NaN];
+    assertBitwise(held.values, Float64Array.from(expected), 'held over [t_(k-1), t_k), NaN before the first edge and after the last');
+    // Stairs: each value until the next sample, so the rectangular sum gives
+    // the counter back between the first and the last edge.
+    let integral = 0;
+    for (let i = 0; i < y.length - 1; i++) if (Number.isFinite(held.values[i])) integral += held.values[i] * (t.values[i + 1] - t.values[i]);
+    assert.ok(Math.abs(integral - (3 - 1)) < 1e-12, `held, it integrates back to the counter (${integral})`);
+    assert.equal(held.meanRate, 2 / 70, 'the mean rate is the change over the time, weighted by time');
+    assert.equal(held.minRate, 1 / 40);
+    assert.equal(held.maxRate, 1 / 30);
+    // The interval, held: each row carries the length of the interval it is in.
+    const heldDt = run(y, { edge: 'rising', placement: 'hold' }, t);
+    assertBitwise(heldDt.values, Float64Array.from([NaN, NaN, 30, 30, 30, 40, 40, 40, 40, NaN, NaN]), 'the interval held');
+}
+{
+    // The real change, not the band: a counter that catches up three steps.
+    const out = run([0, 0, 3, 3, 4], { edge: 'rising', deadband: 1, output: 'rate' }, { values: Float64Array.from([0, 60, 120, 180, 240]), kind: 'numeric' });
+    assert.deepEqual(finite(out.values), [[4, 1 / 120]], 'ΔY is the change between the edges');
+    assert.equal(out.minJump, 1);
+    assert.equal(out.maxJump, 3, 'the catch-up jump is reported');
+    // Falls in between rising edges count in the net change.
+    const net = run([0, 2, 1, 3], { edge: 'rising', output: 'rate' });
+    assert.deepEqual(finite(net.values), [[3, 0.5]], 'net change over the interval, per sample on an index');
+    // Per hour on a date/time axis: 1 kWh every 90 minutes is 2/3 kW.
+    const minutes = Float64Array.from({ length: 400 }, (_, i) => i * 60000);
+    const meter = Float64Array.from(minutes, (_, i) => Math.floor(i / 90));
+    const kw = computeInterarrival(meter, { values: minutes, kind: 'datetime' }, { edge: 'rising', output: 'rate', placement: 'hold', rateUnit: 'h' });
+    assert.ok(finite(kw.values).every(([, v]) => Math.abs(v - 2 / 3) < 1e-12), 'kWh per hour reads in kW');
+    assert.equal(finite(kw.values).length, 270, 'three complete intervals of 90 rows');
+    assert.ok(Math.abs(kw.meanRate - 2 / 3) < 1e-12);
+    const perMinute = computeInterarrival(meter, { values: minutes, kind: 'datetime' }, { edge: 'rising', output: 'rate', rateUnit: 'min' });
+    assert.ok(Math.abs(finite(perMinute.values)[0][1] - 1 / 90) < 1e-15, 'per minute');
+    // An index has no second to scale.
+    const index = computeInterarrival(meter, null, { edge: 'rising', output: 'rate', rateUnit: 'h' });
+    assert.equal(finite(index.values)[0][1], 1 / 90, 'per sample on an index, whatever the unit asked');
+    // Two edges at one instant: no rate, and it is counted.
+    const same = run([0, 1, 2], { edge: 'rising', output: 'rate' }, { values: Float64Array.from([0, 5, 5]), kind: 'numeric' });
+    assert.equal(finite(same.values).length, 0, 'no rate over no time');
+    assert.equal(same.zeroDtCount, 1);
+    // A held interval longer than the cap is left empty, the same way in memory
+    // and in chunks.
+    const long = [0, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3];
+    const capped = computeInterarrival(long, null, { edge: 'rising', output: 'rate', placement: 'hold' }, { maxHoldRows: 3 });
+    assertBitwise(capped.values, Float64Array.from([NaN, NaN, NaN, NaN, NaN, NaN, NaN, 0.5, 0.5, NaN, NaN]), 'the long interval is dropped');
+    assert.equal(capped.droppedIntervals, 1);
+    for (const size of [1, 2, 4]) {
+        const kernel = createInterarrival({ edge: 'rising', output: 'rate', placement: 'hold' }, { kind: 'index', maxHoldRows: 3 });
+        const parts = [];
+        for (let at = 0; at < long.length; at += size) parts.push(...kernel.push(Float64Array.from(long.slice(at, at + size))));
+        parts.push(...kernel.flush());
+        assertBitwise(Float64Array.from(parts), capped.values, `capped, in chunks of ${size}`);
+    }
+}
+{
+    // Held outputs trail their inputs: the same doubles however it is cut.
+    let seed = 11;
+    const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const n = 4007;
+    const y = Float64Array.from({ length: n }, (_, i) => (i % 89 === 0 ? NaN : Math.floor(i / (20 + Math.floor(random() * 60))) + (i % 1500 === 1499 ? -5 : 0)));
+    const tv = Float64Array.from({ length: n }, (_, i) => i * 60000 + (i % 5) * 7);
+    for (const params of [
+        { edge: 'rising', output: 'rate', placement: 'hold', rateUnit: 'h' },
+        { edge: 'both', output: 'rate', placement: 'edge', deadband: 2 },
+        { edge: 'falling', output: 'interval', placement: 'hold' },
+    ]) {
+        const whole = computeInterarrival(y, { values: tv, kind: 'datetime' }, params).values;
+        assert.equal(whole.length, n, `${JSON.stringify(params)}: as long as the input`);
+        for (const size of [1, 13, 1000]) {
+            const kernel = createInterarrival(params, { kind: 'datetime' });
+            const parts = [];
+            for (let at = 0; at < n; at += size) parts.push(...kernel.push(y.subarray(at, at + size), tv.subarray(at, at + size)));
+            parts.push(...kernel.flush());
+            assertBitwise(Float64Array.from(parts), whole, `${JSON.stringify(params)} in chunks of ${size}`);
+        }
+        const piped = runDataToolPipeline(y, { values: tv, kind: 'datetime' }, [{ tool: 'interarrival', params }]);
+        assertBitwise(piped.values, whole, `${JSON.stringify(params)} through the pipeline`);
+    }
+}
+console.log('interarrival: the mean rate between edges, at the edge or held as stairs that integrate back to the counter');
 
 // ── The panel's in-memory path ──────────────────────────────────────────────
 const { installDataToolsMethods } = await import(new URL('../src/app/methods/data-tools-methods.js', import.meta.url));
@@ -167,7 +260,7 @@ Object.assign(Harness.prototype, {
     assert.equal(result.count, 5, 'six rises, five intervals');
     assert.deepEqual(finite(variable.data).map(([, v]) => v), [5400, 5400, 5400, 5400, 5400], 'every 90 minutes, in seconds');
     assert.equal(variable.eventSamples, true, 'drawn as dots');
-    assert.match(variable.description, /interarrival time of meter; rising edges; deadband 1 \[s\]$/, 'its unit is the second');
+    assert.match(variable.description, /interarrival time of meter; rising edges; deadband 1; at each edge \[s\]$/, 'its unit is the second');
     assert.equal(variable.dataTool.edge, 'rising');
     assert.equal(variable.dataTool.intervalCount, 5);
     assert.equal(variable.dataTool.meanDt, 5400);
@@ -183,7 +276,8 @@ Object.assign(Harness.prototype, {
     const smoothed = h._buildDataToolResult(variable.data, variable, { tool: 'movingAverage', params: { window: 3 }, sourceName: 'meter dt_up', targetName: 'avg', targetMode: 'create' }, data);
     assert.equal(smoothed.variable.eventSamples, undefined, 'a moving average of it is not drawn as events');
     // Its definition survives a session.
-    assert.deepEqual(h._normalizeDataToolParams('interarrival', { edge: 'rising', deadband: 1 }), { edge: 'rising', deadband: 1 });
+    assert.deepEqual(h._normalizeDataToolParams('interarrival', { edge: 'rising', deadband: 1 }),
+        { edge: 'rising', deadband: 1, output: 'interval', placement: 'edge', rateUnit: 's' });
     assert.equal(h._normalizeDataToolDefinition({ tool: 'interarrival', params: { edge: 'x' } }).params.edge, 'both');
     // The unit on other axes.
     assert.equal(h._interarrivalUnit({ metadata: { timeName: 't', timeKind: 'numeric' }, variables: { t: { kind: 'abscissa', description: 'Time [ms]' } } }), 'ms');
@@ -192,6 +286,43 @@ Object.assign(Harness.prototype, {
     assert.equal(h._interarrivalNameSuffix('rising'), 'dt_up');
     assert.equal(h._interarrivalNameSuffix('falling'), 'dt_down');
     assert.equal(h._interarrivalNameSuffix('both'), 'dt_edges');
+    assert.equal(h._interarrivalNameSuffix('rising', 'rate'), 'rate_up');
+
+    // The mean power of the meter, held over each interval: stairs, in kW.
+    const power = h._buildDataToolResult(meter, data.variables.meter, {
+        tool: 'interarrival', params: { edge: 'rising', deadband: 1, output: 'rate', placement: 'hold', rateUnit: 'h' },
+        sourceName: 'meter', targetName: 'meter rate_up', targetMode: 'create',
+    }, data);
+    const held = power.variable;
+    assert.ok(finite(held.data).every(([, v]) => Math.abs(v - 2 / 3) < 1e-12), '1 kWh every 90 minutes: 0.667 kW');
+    assert.equal(finite(held.data).length, 450, 'every row of the five complete intervals');
+    assert.ok(Number.isNaN(held.data[0]) && Number.isNaN(held.data[599]), 'NaN before the first edge and after the last');
+    assert.equal(held.heldSteps, true, 'drawn as stairs');
+    assert.equal(held.eventSamples, undefined, 'not as dots');
+    assert.match(held.description, /mean rate between edges of meter; rising edges; deadband 1; held over each interval \[kW\]$/, 'kWh per hour is kW');
+    assert.equal(held.dataTool.output, 'rate');
+    assert.equal(held.dataTool.placement, 'hold');
+    assert.ok(Math.abs(held.dataTool.meanRate - 2 / 3) < 1e-12);
+    assert.match(power.note(), /^6 edges; mean rate 0\.6667 kW over the whole span, weighted by time \(min 0\.6667 kW, max 0\.6667 kW\)\.$/, 'the summary');
+    // The app's own Integral (rectangular) of the held power gives the energy
+    // back: 5 kWh between the first and the last edge, in kW·s.
+    const energy = h._computeIntegralValues(held.data, data, { method: 'rectangular', gapPolicy: 'zero', initial: 0 }).values;
+    assert.ok(Math.abs(energy[energy.length - 1] / 3600 - 5) < 1e-9, `the Integral tool closes the energy balance (${energy[energy.length - 1] / 3600} kWh)`);
+    // A tool run on the stairs draws a curve of its own.
+    const smoothedStairs = h._buildDataToolResult(held.data, held, { tool: 'movingAverage', params: { window: 3 }, sourceName: 'meter rate_up', targetName: 'avg2', targetMode: 'create' }, data);
+    assert.equal(smoothedStairs.variable.heldSteps, undefined, 'a moving average of it is not stairs by default');
+    // The output's unit.
+    const axis = (timeKind, description) => ({ metadata: { timeName: 't', timeKind }, variables: { t: { kind: 'abscissa', description } } });
+    const rate = (rateUnit) => ({ output: 'rate', rateUnit });
+    assert.equal(h._interarrivalOutputUnit(axis('datetime'), rate('h'), { description: 'E [kW.h]' }), 'kW', 'kW.h per hour');
+    assert.equal(h._interarrivalOutputUnit(axis('datetime'), rate('h'), { description: 'E [MWh]' }), 'MW');
+    assert.equal(h._interarrivalOutputUnit(axis('datetime'), rate('min'), { description: 'E [kWh]' }), 'kWh/min');
+    assert.equal(h._interarrivalOutputUnit(axis('datetime'), rate('h'), { description: 'V [m3]' }), 'm3/h');
+    assert.equal(h._interarrivalOutputUnit(axis('numeric', 'Time [ms]'), rate('s'), { description: 'E [kWh]' }), 'kWh/ms', 'per the axis unit');
+    assert.equal(h._interarrivalOutputUnit(axis('index'), rate('h'), { description: 'n [pulses]' }), 'pulses/sample');
+    assert.equal(h._interarrivalOutputUnit(axis('datetime'), rate('h'), { description: 'no unit' }), '1/h');
+    assert.equal(h._interarrivalAxisInSeconds(axis('numeric', 'Time [ms]')), false, 'a millisecond axis cannot be scaled to hours');
+    assert.equal(h._interarrivalAxisInSeconds(axis('datetime')), true);
 }
 console.log('interarrival: the in-memory tool writes the intervals in seconds, drawn as events, with its counts');
 
@@ -287,24 +418,36 @@ for (const [label, handle, profile, expectKind] of [
     assert.equal(eh._getDataToolTimeContext(eager, ROWS).kind, expectKind, `${label}: the axis the in-memory kernel reads`);
     const sources = Object.keys(lazy.variables).filter(name => name !== lazy.metadata.timeName);
     for (const source of sources) {
-        for (const params of [{ edge: 'both', deadband: 0 }, { edge: 'rising', deadband: 2 }, { edge: 'falling', deadband: 0.5 }]) {
-            const name = `${source} ${params.edge} ${params.deadband}`;
+        for (const params of [
+            { edge: 'both', deadband: 0 },
+            { edge: 'rising', deadband: 2 },
+            { edge: 'falling', deadband: 0.5 },
+            { edge: 'rising', deadband: 1, output: 'rate', placement: 'hold', rateUnit: 'h' },
+            { edge: 'both', deadband: 0, output: 'rate', placement: 'edge' },
+            { edge: 'rising', deadband: 0, output: 'interval', placement: 'hold' },
+        ]) {
+            const name = `${source} ${params.edge} ${params.deadband} ${params.output || ''} ${params.placement || ''}`;
             const result = await create(h, source, name, { tool: 'interarrival', params });
             assert.equal(result?.name, name, `${label} ${name}: created`);
             const variable = lazy.variables[name];
             assert.ok(variable._duckdbExpr && variable._duckdbWindows?.[0]?.sink, `${label} ${name}: reads a sink`);
-            assert.equal(variable.eventSamples, true, `${label} ${name}: drawn as events`);
+            const heldOutput = params.placement === 'hold';
+            assert.equal(!!variable.eventSamples, !heldOutput, `${label} ${name}: dots at the edge`);
+            assert.equal(!!variable.heldSteps, heldOutput, `${label} ${name}: stairs when held`);
             const expected = eh._computeInterarrivalValues(eager.variables[source].data, eager, params);
             assertBitwise(await readAll(lazy, name), expected.values, `${label} ${name}`);
             assert.equal(result.count, expected.intervalCount, `${label} ${name}: the interval count`);
             assert.equal(variable.dataTool.edgeCount, expected.edgeCount, `${label} ${name}: the edge count`);
             assert.equal(variable.dataTool.meanDt, expected.meanDt, `${label} ${name}: the mean interval`);
+            assert.equal(variable.dataTool.meanRate, expected.meanRate, `${label} ${name}: the mean rate`);
+            assert.equal(variable.description, eh._buildDataToolResult(eager.variables[source].data, eager.variables[source],
+                { tool: 'interarrival', params, sourceName: source, targetName: name, targetMode: 'create' }, eager).variable.description,
+            `${label} ${name}: the same description, unit included`);
             assert.equal(h._interarrivalUnit(lazy), eh._interarrivalUnit(eager), `${label}: the same unit`);
         }
     }
-    // Through the executor in small chunks.
-    {
-        const params = { edge: 'rising', deadband: 1 };
+    // Through the executor in small chunks, held outputs trailing their rows.
+    for (const params of [{ edge: 'rising', deadband: 1 }, { edge: 'rising', deadband: 1, output: 'rate', placement: 'hold', rateUnit: 'h' }]) {
         const expected = eh._computeInterarrivalValues(eager.variables.meter.data, eager, params).values;
         for (const chunkRows of [1, 777]) {
             const sink = await duck.createSink(lazy);
@@ -312,7 +455,7 @@ for (const [label, handle, profile, expectKind] of [
             await runChunkedJob({ data: lazy, sourceNames: ['meter'], kernel, sink, withTime: !!kernel.withTime, chunkRows });
             lazy.variables.cut = { ...lazy.variables.meter, _duckdbExpr: `"${sink.columns[0].column}"`, _duckdbWindows: [sink.columns[0]] };
             delete lazy.variables.cut._duckdbCol;
-            assertBitwise(await readAll(lazy, 'cut'), expected, `${label}: chunks of ${chunkRows}`);
+            assertBitwise(await readAll(lazy, 'cut'), expected, `${label} ${params.placement || 'edge'}: chunks of ${chunkRows}`);
             delete lazy.variables.cut;
             await duck.dropSink(lazy, sink.table);
         }
@@ -322,7 +465,7 @@ for (const [label, handle, profile, expectKind] of [
         const params = { edge: 'rising', deadband: 1 };
         await create(h, 'meter', 'restored', { tool: 'interarrival', params });
         const saved = h._serializeDataToolDefinitions('f').find(item => item.name === 'restored');
-        assert.deepEqual(saved.params, params, 'the session keeps the parameters');
+        assert.deepEqual(saved.params, normalizeInterarrivalParams(params), 'the session keeps the parameters');
         const again = await loadLazy(handle, profile);
         const rh = app(again);
         rh.dataToolVariablesByFile.set('f', new Map([['restored', { ...saved, variable: null }]]));
@@ -334,4 +477,4 @@ for (const [label, handle, profile, expectKind] of [
     }
     await duck.release(lazy);
 }
-console.log('interarrival: a lazy file gets the kernel\'s own intervals on numeric, date/time and generated axes, and again from a session');
+console.log('interarrival: a lazy file gets the kernel\'s own intervals and rates, at the edge and held, on numeric, date/time and generated axes, and again from a session');

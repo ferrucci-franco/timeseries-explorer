@@ -866,6 +866,7 @@
 #filter-design-attenuation-wrap.collapsed,
 #detrend-order-wrap.collapsed,
 #detrend-window-wrap.collapsed,
+#interarrival-rate-unit-wrap.collapsed,
 .resample-grid-controls.collapsed,
 .outlier-method-controls.collapsed {
     display: none;
@@ -1200,7 +1201,8 @@
 #filter-design-ripple-wrap,
 #filter-design-attenuation-wrap,
 #detrend-order-wrap,
-#detrend-window-wrap {
+#detrend-window-wrap,
+#interarrival-rate-unit-wrap {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;

@@ -187,6 +187,31 @@ try {
         assert.equal(edges.events, true, 'its output is a series of events');
         assert.equal(edges.mode, 'markers', 'drawn as dots');
     }
+    // The mean rate between those edges, held over each interval: stairs.
+    await createAndPlot(page, 'interarrival', 'a', 'er', async () => {
+        await pick(page, 'interarrival-edge', 'rising');
+        await page.locator('#interarrival-deadband').fill('0.5');
+        await page.locator('#interarrival-deadband').dispatchEvent('change');
+        await pick(page, 'interarrival-output', 'rate');
+        await pick(page, 'interarrival-placement', 'hold');
+    });
+    {
+        const held = await page.evaluate(() => {
+            const variable = [...window.app.plotManager.files.values()][0].data.variables.er;
+            const traces = [...document.querySelectorAll('.js-plotly-plot')].flatMap(div => div.data || []);
+            const trace = traces.find(t => t.name?.startsWith('er'));
+            return {
+                intervals: variable.dataTool.intervalCount,
+                held: variable.heldSteps,
+                shape: trace?.line?.shape,
+                finite: Array.from(variable.data).filter(Number.isFinite).length,
+            };
+        });
+        assert.ok(held.intervals > 10, `the held rate finds intervals over the whole file (${held.intervals})`);
+        assert.equal(held.held, true, 'its output is held over each interval');
+        assert.equal(held.shape, 'hv', 'drawn as stairs');
+        assert.ok(held.finite > 100, `with values between the edges (${held.finite})`);
+    }
 
     // A designed filter: the sample rate is measured over the whole file
     // first (the overview in memory is a sample of the rows), then designed
