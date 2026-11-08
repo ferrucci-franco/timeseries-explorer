@@ -125,6 +125,7 @@
     "test:lazy-data-tools": "node scripts/test-lazy-data-tools.mjs",
     "test:lazy-number-format": "node scripts/test-lazy-number-format.mjs",
     "test:lazy-sink-tools": "node scripts/test-lazy-sink-tools.mjs",
+    "test:interarrival": "node scripts/test-interarrival.mjs",
     "test:moving-average-chunks": "node scripts/test-moving-average-chunks.mjs",
     "test:filter-chunks": "node scripts/test-filter-chunks.mjs",
     "test:lazy-filter": "node scripts/test-lazy-filter.mjs",

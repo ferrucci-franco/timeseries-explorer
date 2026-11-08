@@ -164,6 +164,29 @@ try {
         await page.locator('#detrend-window').fill('201');
         await page.locator('#detrend-window').dispatchEvent('change');
     });
+    // The time between edges: a dead band carried from row to row, so a job
+    // too; its output is NaN between the edges and is drawn as dots.
+    await createAndPlot(page, 'interarrival', 'a', 'ea', async () => {
+        await pick(page, 'interarrival-edge', 'rising');
+        await page.locator('#interarrival-deadband').fill('0.5');
+        await page.locator('#interarrival-deadband').dispatchEvent('change');
+    });
+    {
+        const edges = await page.evaluate(() => {
+            const variable = [...window.app.plotManager.files.values()][0].data.variables.ea;
+            const traces = [...document.querySelectorAll('.js-plotly-plot')].flatMap(div => div.data || []);
+            return {
+                intervals: variable.dataTool.intervalCount,
+                deadband: variable.dataTool.deadband,
+                events: variable.eventSamples,
+                mode: traces.find(trace => trace.name?.startsWith('ea'))?.mode,
+            };
+        });
+        assert.ok(edges.intervals > 10, `the time between edges finds intervals over the whole file (${edges.intervals})`);
+        assert.equal(edges.deadband, 0.5, 'with the dead band typed');
+        assert.equal(edges.events, true, 'its output is a series of events');
+        assert.equal(edges.mode, 'markers', 'drawn as dots');
+    }
 
     // A designed filter: the sample rate is measured over the whole file
     // first (the overview in memory is a sample of the rows), then designed

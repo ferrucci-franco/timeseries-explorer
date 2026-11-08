@@ -36,6 +36,7 @@ import {
     normalizeSos, resolveFilterAdvance,
 } from '../../compute/kernels/iir.js';
 import { normalizeFilterDesign } from '../../compute/kernels/filter-design.js';
+import { computeInterarrival, normalizeInterarrivalParams } from '../../compute/kernels/interarrival.js';
 import { FILTER_DESIGN_FIELD_IDS, formatCoefficientBox } from './filter-methods.js';
 import { XCORR_FIELD_IDS } from './xcorr-methods.js';
 import { COLLAPSE_FIELD_IDS } from './collapse-methods.js';
@@ -48,7 +49,7 @@ import { formatNaturalDuration } from '../../utils/fft.js';
 // axis, so it can be stored next to its source and edited in place.
 const DATA_TOOLS = new Set([
     'removeOutliers', 'derivative', 'integrate', 'movingAverage',
-    'interpolate', 'detrend', 'filter',
+    'interpolate', 'detrend', 'filter', 'interarrival',
 ]);
 // Tools whose result is a FILE. Resampling moves the samples onto a new time
 // axis, and a file owns exactly one of those, so the result cannot live inside
@@ -68,7 +69,7 @@ const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 // the file tools as lazy datasets of their own (lazy-dataset-methods.js).
 const LAZY_DATA_TOOLS = new Set([
     'removeOutliers', 'derivative', 'integrate', 'movingAverage', 'interpolate', 'detrend', 'filter',
-    'resample', 'xcorr', 'collapse',
+    'interarrival', 'resample', 'xcorr', 'collapse',
 ]);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
@@ -154,6 +155,14 @@ proto.initDataTools = function() {
     // Number inputs commit on blur/Enter; previewing every keystroke would run on
     // the "-" of "-1.5".
     document.getElementById('integral-initial')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    // The suggested name says which edges it times, so it follows the picker —
+    // unless the user has typed a name of their own.
+    document.getElementById('interarrival-edge')?.addEventListener('change', () => {
+        this._followInterarrivalSuggestedName();
+        this._handleDataToolOptionChange();
+    });
+    // A number: committed on blur/Enter, like the integral's initial value.
+    document.getElementById('interarrival-deadband')?.addEventListener('change', () => this._handleDataToolOptionChange());
 
     document.getElementById('moving-average-window-slider')?.addEventListener('input', (event) => {
         const numeric = document.getElementById('moving-average-window');
@@ -485,6 +494,9 @@ proto._syncDataTools = function() {
     document.getElementById('integral-initial')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
+    for (const id of ['interarrival-edge', 'interarrival-deadband']) {
+        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'interarrival');
+    }
     for (const id of ['interpolate-method', 'interpolate-edges', 'interpolate-max-gap-slider',
         'interpolate-max-gap', 'interpolate-window-slider', 'interpolate-window',
         'interpolate-show-added']) {
@@ -1002,8 +1014,31 @@ proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelected
         interpolate: 'filled',
         detrend: 'detrended',
         filter: 'filtered',
+        interarrival: this._interarrivalNameSuffix(),
     }[tool] || 'tool';
     return this._uniqueDataToolVariableName(`${sourceName} ${suffix}`);
+};
+
+// "dt_up", "dt_down" or "dt_edges": which edges the output times.
+proto._interarrivalNameSuffix = function(edge = null) {
+    const picked = edge || (typeof document !== 'undefined' ? document.getElementById('interarrival-edge')?.value : '') || 'both';
+    return { rising: 'dt_up', falling: 'dt_down' }[picked] || 'dt_edges';
+};
+
+// The edge picker changed: a name that is still one of the suggestions (with
+// or without the " 2" that makes it unique) becomes the suggestion for the new
+// choice. A name the user typed stays.
+proto._followInterarrivalSuggestedName = function() {
+    if (this._dataToolEditing || this._getSelectedDataTool() !== 'interarrival') return;
+    const output = document.getElementById('outlier-output-name');
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    if (!output || !sourceName) return;
+    const current = output.value.trim();
+    const suggested = ['rising', 'falling', 'both'].map(edge => `${sourceName} ${this._interarrivalNameSuffix(edge)}`);
+    const isSuggestion = suggested.some(base => current === base
+        || (current.startsWith(`${base} `) && /^\d+$/.test(current.slice(base.length + 1))));
+    if (current && !isSuggestion) return;
+    output.value = this._uniqueDataToolVariableName(`${sourceName} ${this._interarrivalNameSuffix()}`);
 };
 
 // The name of the file a resample lands in. Built from the source file, not from
@@ -1444,8 +1479,12 @@ proto._setDataToolApplyMessage = function(result, action, name, dependentCount =
         ? { created: 'outlierCreated', updated: 'outlierUpdated' }
         : tool === 'interpolate'
             ? { created: 'dataToolInterpolateCreated', updated: 'dataToolInterpolateUpdated' }
-            : { created: 'dataToolCreated', updated: 'dataToolUpdated' };
+            : tool === 'interarrival'
+                ? { created: 'dataToolInterarrivalCreated', updated: 'dataToolInterarrivalUpdated' }
+                : { created: 'dataToolCreated', updated: 'dataToolUpdated' };
     const warning = result?.warning;
+    // A plain note — numbers worth reading that are not a caveat.
+    const plainNote = result?.note;
     this._setOutlierMessage(() => {
         const base = i18n.t(keyByAction[action] || 'dataToolUpdated')
             .replace('{count}', String(result?.count ?? 0))
@@ -1455,7 +1494,8 @@ proto._setDataToolApplyMessage = function(result, action, name, dependentCount =
                 .replace('{count}', String(dependentCount))
             : '';
         const note = typeof warning === 'function' ? warning() : (warning || '');
-        return [base, chain, note].filter(Boolean).join(' ');
+        const extra = typeof plainNote === 'function' ? plainNote() : (plainNote || '');
+        return [base, chain, extra, note].filter(Boolean).join(' ');
     }, warning ? 'warn' : 'ok');
 };
 
@@ -1498,6 +1538,8 @@ const DATA_TOOL_PARAMETER_IDS = [
     'integral-initial',
     'moving-average-window',
     'moving-average-window-slider',
+    'interarrival-edge',
+    'interarrival-deadband',
     'interpolate-method',
     'interpolate-max-gap',
     'interpolate-max-gap-slider',
@@ -1644,6 +1686,9 @@ proto._writeDataToolForm = function(definition, name) {
     } else if (definition.tool === 'movingAverage') {
         set('moving-average-window', params.window);
         set('moving-average-window-slider', params.window);
+    } else if (definition.tool === 'interarrival') {
+        set('interarrival-edge', params.edge);
+        set('interarrival-deadband', params.deadband ?? 0);
     } else if (definition.tool === 'detrend') {
         set('detrend-method', params.method);
         set('detrend-order', params.order);
@@ -2042,6 +2087,7 @@ proto._dataToolLabel = function(tool) {
         interpolate: 'dataToolInterpolate',
         detrend: 'dataToolDetrend',
         filter: 'dataToolFilter',
+        interarrival: 'dataToolInterarrival',
         resample: 'dataToolResample',
         xcorr: 'dataToolXcorr',
         collapse: 'dataToolCollapse',
@@ -2173,6 +2219,7 @@ proto._buildSingleDataToolResult = function(sourceValues, sourceVariable, config
     if (config.tool === 'interpolate') return this._buildInterpolateResult(sourceValues, sourceVariable, config, data, pre);
     if (config.tool === 'detrend') return this._buildDetrendResult(sourceValues, sourceVariable, config, data, pre);
     if (config.tool === 'filter') return this._buildFilterResult(sourceValues, sourceVariable, config, data, pre);
+    if (config.tool === 'interarrival') return this._buildInterarrivalResult(sourceValues, sourceVariable, config, data, pre);
     return this._buildOutlierResult(sourceValues, sourceVariable, config, pre);
 };
 
@@ -2252,6 +2299,9 @@ proto._baseDataToolVariable = function(sourceValues, sourceVariable, config, val
         },
     };
     if (config.replacement) variable.dataTool.replacement = config.replacement;
+    // Copied from an interarrival source by the spread above: a smoothed or
+    // filled version of it is a curve again, not a series of events.
+    if (config.tool !== 'interarrival') delete variable.eventSamples;
     if (config.targetMode === 'create') {
         delete variable._duckdbCol;
         delete variable._duckdbNumberFormat;
@@ -2511,6 +2561,108 @@ proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config,
     return { variable, count: values.length, tool: 'movingAverage', name: config.targetName };
 };
 
+proto._buildInterarrivalResult = function(sourceValues, sourceVariable, config, data, pre = null) {
+    const result = pre ? { ...pre.meta, values: pre.values } : this._computeInterarrivalValues(sourceValues, data, config.params);
+    const { values, ...report } = result;
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: 'interarrival',
+        timeUnit: this._interarrivalUnit(data),
+    }, values, this._interarrivalDataTool(config.params, report));
+    this._markInterarrivalVariable(variable);
+    return {
+        variable,
+        count: report.intervalCount ?? 0,
+        tool: 'interarrival',
+        name: config.targetName,
+        report,
+        warning: this._interarrivalWarning(report),
+        note: () => this._interarrivalNote(report, data),
+    };
+};
+
+// What an interarrival output carries on `dataTool`, in memory and lazy alike.
+proto._interarrivalDataTool = function(params = {}, report = null) {
+    return {
+        edge: params.edge,
+        deadband: params.deadband,
+        risingCount: report?.risingCount ?? null,
+        fallingCount: report?.fallingCount ?? null,
+        edgeCount: report?.edgeCount ?? null,
+        intervalCount: report?.intervalCount ?? null,
+        negativeDtCount: report?.negativeDtCount ?? null,
+        meanDt: report?.meanDt ?? null,
+        minDt: report?.minDt ?? null,
+        maxDt: report?.maxDt ?? null,
+    };
+};
+
+// The output is NaN everywhere but at the edges: a line between those samples
+// would never be drawn, so the plot shows each of them as a dot.
+proto._markInterarrivalVariable = function(variable) {
+    variable.eventSamples = true;
+    variable.interpolation = 'linear';
+    return variable;
+};
+
+// The unit of an interval, as the description's trailing bracket (which is how
+// the Y axis learns it): seconds on a date/time axis, the axis's own unit on a
+// numeric one (seconds when it names none), none on a sample index.
+proto._interarrivalUnit = function(data) {
+    // The axis as the kernel reads it: a lazy file with no time column of its
+    // own counts rows.
+    const kind = this._isDataToolLazyData(data) && this._lazyToolTimeAxis
+        ? this._lazyToolTimeAxis(data).kind
+        : this._getDataToolTimeContext(data, NaN).kind;
+    if (kind === 'index') return '';
+    if (kind === 'datetime') return 's';
+    const timeName = data?.metadata?.timeName;
+    const description = (timeName && data?.variables?.[timeName]?.description) || '';
+    const match = String(description).match(/\[([^\]]+)\]/);
+    const unit = match ? match[1].split(':#')[0].split('|').pop().trim() : '';
+    return unit && !unit.startsWith('#') ? unit : 's';
+};
+
+proto._interarrivalEdgeLabel = function(edge) {
+    return i18n.t({ rising: 'dataToolInterarrivalRisingShort', falling: 'dataToolInterarrivalFallingShort' }[edge]
+        || 'dataToolInterarrivalBothShort');
+};
+
+// No interval at all: fewer than two edges of the kind asked for.
+proto._interarrivalWarning = function(report) {
+    if (!report || (report.intervalCount ?? 0) > 0) return '';
+    return () => i18n.t('dataToolInterarrivalNoInterval')
+        .replace('{edges}', this._interarrivalEdgeLabel(report.edge))
+        .replace('{count}', String(report.edgeCount ?? 0));
+};
+
+// The intervals in one line: how many, their mean and their range.
+proto._interarrivalNote = function(report, data) {
+    if (!report || !(report.intervalCount > 0)) return '';
+    const unit = this._interarrivalUnit(data);
+    const format = (value) => {
+        if (!Number.isFinite(value)) return '—';
+        if (unit === 's') return formatNaturalDuration(value);
+        const text = formatSignificant(value, 4);
+        return unit ? `${text} ${unit}` : text;
+    };
+    let note = i18n.t('dataToolInterarrivalSummary')
+        .replace('{edges}', String(report.edgeCount ?? 0))
+        .replace('{mean}', format(report.meanDt))
+        .replace('{min}', format(report.minDt))
+        .replace('{max}', format(report.maxDt));
+    if (report.negativeDtCount > 0) {
+        note += ` ${i18n.t('dataToolInterarrivalNegative').replace('{count}', String(report.negativeDtCount))}`;
+    }
+    return note;
+};
+
+proto._interarrivalDescription = function(params = {}, timeUnit = '') {
+    const edges = { rising: 'rising edges', falling: 'falling edges' }[params.edge] || 'edges';
+    const band = params.deadband > 0 ? `; deadband ${params.deadband}` : '';
+    return `${edges}${band}${timeUnit ? ` [${timeUnit}]` : ''}`;
+};
+
 proto._dataToolDescription = function(config) {
     if (Array.isArray(config.steps) && config.steps.length) {
         const labels = config.steps.map(step => this._dataToolStepLabel(step)).join(' -> ');
@@ -2540,6 +2692,9 @@ proto._dataToolDescription = function(config) {
     if (config.tool === 'filter') {
         return `Data tool: filter ${config.sourceName}; ${this._filterDescription(config.params)}`;
     }
+    if (config.tool === 'interarrival') {
+        return `Data tool: interarrival time of ${config.sourceName}; ${this._interarrivalDescription(config.params, config.timeUnit || '')}`;
+    }
     return `Data tool: remove outliers from ${config.sourceName}; ${this._outlierDetectorDescription(config)}; ${config.replacement}`;
 };
 
@@ -2566,6 +2721,7 @@ proto._dataToolStepLabel = function(step) {
     if (step.tool === 'interpolate') return `fill missing (${this._interpolateDescription(step.params)})`;
     if (step.tool === 'detrend') return `detrend (${this._detrendDescription(step.params)})`;
     if (step.tool === 'filter') return `filter (${this._filterDescription(step.params)})`;
+    if (step.tool === 'interarrival') return `interarrival time (${this._interarrivalDescription(step.params)})`;
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
 
@@ -2609,6 +2765,11 @@ proto._computeFilteredValues = function(sourceValues, data, params = {}) {
     } catch (err) {
         throw translateKernelError(err);
     }
+};
+
+proto._computeInterarrivalValues = function(sourceValues, data, params = {}) {
+    const time = this._getDataToolTimeContext(data, sourceValues?.length || 0);
+    return computeInterarrival(sourceValues, time, params);
 };
 
 proto._getDataToolTimeContext = function(data, expectedLength) {
@@ -2725,6 +2886,20 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
                 method: DETREND_METHODS.has(method) ? method : 'linear',
                 order: document.getElementById('detrend-order')?.value,
                 window: document.getElementById('detrend-window')?.value,
+            }),
+        };
+    }
+    if (tool === 'interarrival') {
+        const raw = document.getElementById('interarrival-deadband')?.value;
+        const deadband = raw === '' || raw === undefined || raw === null ? 0 : Number(raw);
+        // A negative or unreadable band is a typo, not "no band": refusing it
+        // says so, where clamping it to 0 would time every change silently.
+        if (!Number.isFinite(deadband) || deadband < 0) throw new Error(i18n.t('dataToolInterarrivalDeadbandInvalid'));
+        return {
+            tool,
+            params: normalizeInterarrivalParams({
+                edge: document.getElementById('interarrival-edge')?.value,
+                deadband,
             }),
         };
     }
@@ -3217,6 +3392,7 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
     }
     if (tool === 'interpolate') return normalizeInterpolateParams(params);
     if (tool === 'detrend') return normalizeDetrendParams(params);
+    if (tool === 'interarrival') return normalizeInterarrivalParams(params);
     if (tool === 'filter') {
         // Coefficients are stored already normalized, so a restored session keeps
         // whatever ran. A definition that carries none is the identity filter,

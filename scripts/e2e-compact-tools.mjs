@@ -125,7 +125,7 @@ try {
         desc: n.querySelector('.compact-tool-desc').textContent,
         h: n.getBoundingClientRect().height,
     })));
-    assert.equal(tiles.length, 10, 'ten tools');
+    assert.equal(tiles.length, 11, 'eleven tools');
     assert.ok(tiles.every(t => t.desc.length > 20 && t.h >= 100), 'each tile says what its tool does, at a finger\'s size');
     assert.deepEqual(await page.locator('.compact-page-tools .compact-section-title').allInnerTexts(),
         ['CLEAN', 'CALCULUS', 'SMOOTH AND FILTER', 'RESAMPLE AND COMPARE', 'TRANSFORMATIONS'], 'four families, then what was made');
