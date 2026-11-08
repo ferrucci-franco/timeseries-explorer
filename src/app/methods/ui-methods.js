@@ -1440,9 +1440,9 @@ proto.showDisplaySettings = function() {
         for (const control of [...fileLimitControls, compactControl]) {
             control.input.value = String(this.advancedSettings[control.key]);
         }
-        storageControl.select.value = this.advancedSettings.lazyResultsStorage;
         this._applyNumberFormat();
         syncNumberControls();
+        storageControl.select.value = this.advancedSettings.lazyResultsStorage;
         this.plotManager.preserveViewsForNextRender();
         this.layoutManager.render();
     });

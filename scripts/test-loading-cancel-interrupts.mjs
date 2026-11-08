@@ -54,7 +54,8 @@ assert.match(loadBody, /this\._interactiveQuery\(sql, \{ signal, keepSchema: tru
     'with a signal, statements go through the interruptible path');
 for (const [label, pattern] of [
     ['the lazy view', /await query\(`CREATE OR REPLACE VIEW \$\{tableName\} AS SELECT \* FROM \$\{sourceExpr\}`\);\s*viewMode = true;\s*\} else \{/],
-    ['the table that reads the whole file', /await query\(`CREATE TABLE \$\{tableName\} AS SELECT \* FROM \$\{sourceExpr\}`\)/],
+    // TEMP with the database on disk (OPFS), so a full load does not go through it.
+    ['the table that reads the whole file', /await query\(`CREATE \$\{temporary\}TABLE \$\{tableName\} AS SELECT \* FROM \$\{sourceExpr\}`\)/],
     ['the row count', /const countResult = await query\(/],
     ['the data itself', /const dataResult = await query\(dataSql\)/],
     ['the scan of the row count, the time range and the column types',
