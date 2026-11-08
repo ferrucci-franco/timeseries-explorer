@@ -32,3 +32,6 @@ netCDF4), asserted by `scripts/test-gridded-dataset.mjs` and
   long hourly request comes: 96 hourly steps in chunks of 48 steps by a
   quarter of the grid, so one map spans four chunks.
 
+- `atlite-cutout.nc`: the layout of an [atlite](https://github.com/PyPSA/atlite)
+  cutout. Its dimensions `x`/`y` have coordinates without units, and the
+  longitude and latitude sit in auxiliary `lon(x)` and `lat(y)` (issue #298).

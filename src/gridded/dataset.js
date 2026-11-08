@@ -155,6 +155,16 @@ function describeMember(member) {
         const name = basename(dimension);
         return member.descriptors.find(item => item.shape.length === 1 && item.name === name && item.dimensions[0] && basename(item.dimensions[0]) === name) || null;
     };
+    const auxiliaryFor = dimension => {
+        const name = basename(dimension);
+        for (const item of member.descriptors) {
+            if (item.shape.length !== 1 || !item.dimensions[0] || basename(item.dimensions[0]) !== name) continue;
+            if (item.name === name || item.numeric === false || item.textual) continue;
+            const role = coordinateRole(item);
+            if (role === 'x' || role === 'y') return { descriptor: item, role };
+        }
+        return null;
+    };
     const boundsPaths = new Set();
     for (const descriptor of member.descriptors) {
         const bounds = attrValue(descriptor.userAttrs, ['bounds']);
@@ -166,13 +176,25 @@ function describeMember(member) {
         descriptor.dimensions.forEach((dimension, axis) => {
             const name = basename(dimension) || `dim${axis}`;
             if (dims.has(name)) return;
-            const coordinate = coordinateFor(dimension);
+            let coordinate = coordinateFor(dimension);
+            let role = coordinate ? coordinateRole(coordinate) : 'other';
             if (coordinate) coordinatePaths.add(coordinate.path);
+            if (role === 'other') {
+                // A dimension whose own coordinate says nothing (atlite's
+                // `x`/`y`) can still be latitude or longitude through a 1-D
+                // auxiliary coordinate along it: `lon(x)`, `lat(y)`.
+                const auxiliary = auxiliaryFor(dimension);
+                if (auxiliary) {
+                    coordinate = auxiliary.descriptor;
+                    role = auxiliary.role;
+                    coordinatePaths.add(coordinate.path);
+                }
+            }
             dims.set(name, {
                 name,
                 size: descriptor.shape[axis],
                 coordinate,
-                role: coordinate ? coordinateRole(coordinate) : 'other',
+                role,
             });
         });
     }
