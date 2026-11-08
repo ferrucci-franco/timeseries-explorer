@@ -4,6 +4,13 @@ name: CI
 # Pages with no test execution at all and a pull request got no verification.
 # A breaking commit surfaced weeks later, at release time, with many commits to
 # bisect. The suite is offline and fixture-based, so it runs here as-is.
+#
+# Two jobs, side by side: the test suite and the build in one, the browser
+# checks in the other. In one job they ran one after the other, about 10 and
+# 15 minutes, and a green tree ran past the job's 30 minutes once the suite had
+# grown; a browser check that failed on the runner alone (a 15 s wait on a
+# mock server) also meant running the whole suite again. Apart they finish in
+# the time of the longer one, and each is re-run on its own.
 on:
   pull_request:
   push:
@@ -21,6 +28,38 @@ concurrency:
 jobs:
   test:
     name: Tests and build
+    # Pinned to the image the browser job uses, so the two jobs test the same
+    # Node and system libraries (see the note on that job).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run release test suite
+        run: npm run test:release
+
+      # The web bundle is what main deploys, so a build failure has to be caught
+      # here rather than by the Pages workflow after the merge.
+      - name: Build web bundle
+        env:
+          OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
+        run: npm run build
+
+  e2e:
+    name: Browser checks
     # Pinned, not `ubuntu-latest`: the hosted image rolled to Ubuntu 26.04 and
     # `playwright install --with-deps` refuses an OS its pinned version does not
     # know ("Playwright does not support chromium on ubuntu26.04-x64"), which
@@ -46,9 +85,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run release test suite
-        run: npm run test:release
-
       # The unit suite runs the code against hand-made stubs, in UTC. What only
       # a real browser shows -- Plotly's own behaviour, the browser clock in
       # another time zone (#176) -- is checked here.
@@ -67,10 +103,3 @@ jobs:
         env:
           OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
         run: npm run e2e
-
-      # The web bundle is what main deploys, so a build failure has to be caught
-      # here rather than by the Pages workflow after the merge.
-      - name: Build web bundle
-        env:
-          OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
-        run: npm run build
