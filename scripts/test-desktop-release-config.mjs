@@ -89,7 +89,7 @@ assert.match(workflow, /build_script: desktop:dist:macos:x64/);
 assert.match(workflow, /build_script: desktop:dist:macos:arm64/);
 assert.match(workflow, /build_script: desktop:dist:linux:x64/);
 assert.match(workflow, /runner: macos-15-intel/);
-assert.match(workflow, /runner: macos-14/);
+assert.match(workflow, /runner: macos-15\n/);
 assert.match(workflow, /runner: ubuntu-24\.04/);
 assert.match(workflow, /OMV_RELEASE_PLATFORM/);
 assert.match(workflow, /OMV_CHECKSUMS_FILE/);

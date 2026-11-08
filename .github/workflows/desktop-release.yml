@@ -77,7 +77,9 @@ jobs:
             build_script: desktop:dist:macos:x64
             artifact_suffix: macos-x64
           - label: macOS Apple silicon
-            runner: macos-14
+            # macos-14 was retired on 2026-11-02: a job on it is cancelled
+            # before it starts, which skipped the v0.7.0 publish.
+            runner: macos-15
             npm: npm
             platform: macos
             architecture: arm64
