@@ -311,12 +311,12 @@ assert.match(sessionSource, /matlab: entry\.matlab/, 'project sessions serialize
 assert.match(sessionSource, /matSelection: fileMeta\.matlab/, 'project sessions restore MATLAB import choices without reopening the picker');
 const translationsSource = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['matPickerTitle', 'matSelectArraysAction', 'matPickerBody', 'matPickerOverview', 'matPickerTime', 'matPickerTimeIndex', 'matPickerSampleDimension', 'matPickerTranspose', 'matPickerTransposeBlocked', 'matPickerIncompatibleLengths', 'matlabMatrixTranspose', 'matlabMatrixTransposeConfirm', 'matPickerImport', 'fileTypeMatlab', 'fileFormatMatlab', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp']) {
-    assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} is translated in all languages`);
+    assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 5, `${key} is translated in all languages`);
 }
 // The per-format refusal messages were replaced by one shared over-limit
 // warning, so the "no implementation jargon" rule follows it to its new home.
 const overLimitMessages = [...translationsSource.matchAll(/\bfileOverLimitBody:\s*"((?:[^"\\]|\\.)*)"/g)].map((match) => match[1]);
-assert.equal(overLimitMessages.length, 4, 'all locales define the over-limit warning');
+assert.equal(overLimitMessages.length, 5, 'all locales define the over-limit warning');
 assert.ok(overLimitMessages.every((message) => !/\beager\b/i.test(message)), 'over-limit warnings avoid implementation jargon');
 assert.ok(
     overLimitMessages.every((message) => message.includes('{format}') && message.includes('{setting}')),

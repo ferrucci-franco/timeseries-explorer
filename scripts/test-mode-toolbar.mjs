@@ -1126,7 +1126,7 @@ for (const [from, clicked, expected] of [
         'moving to the right Y axis activates its toolbar button');
 
     for (const key of ['legendMenuHideTrace', 'legendMenuSelectOnlyTrace', 'legendMenuRemoveTrace']) {
-        assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4,
+        assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 5,
             `${key} is translated in every supported language`);
     }
 }

@@ -104,7 +104,7 @@ assert.doesNotMatch(fft, /displayRange = liveXAxis\.range;/);
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['fftPeriodUnit', 'fftPeriodUnitSeconds', 'fftPeriodUnitCalendar', 'fftPeriodUnitTooltip']) {
-    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} in four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 5, `${key} in five languages`);
 }
 
 console.log('Period-unit checks passed.');

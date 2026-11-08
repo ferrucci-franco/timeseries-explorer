@@ -200,15 +200,15 @@ check(() => {
     const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
     for (const key of ['spreadsheetParquetHintTitle', 'spreadsheetParquetHintBody', 'spreadsheetParquetHintConvert']) {
         const count = [...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length;
-        assert.equal(count, 4, `${key} is translated in all four languages`);
+        assert.equal(count, 5, `${key} is translated in all five languages`);
     }
 });
 
 check(() => {
     // Both texts around the conversion threshold used to describe the feature
     // as CSV-only, so a reader had no way to learn spreadsheets are covered.
-    const spreadsheet = { en: /spreadsheet/i, fr: /feuilles de calcul/i, es: /hojas de calculo/i, it: /fogli di calcolo/i };
-    for (const lang of ['en', 'fr', 'es', 'it']) {
+    const spreadsheet = { en: /spreadsheet/i, fr: /feuilles de calcul/i, es: /hojas de calculo/i, it: /fogli di calcolo/i, zh: /电子表格/ };
+    for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
         assert.match(translations[lang].compactFormatHelpBody, spreadsheet[lang],
             `${lang}.compactFormatHelpBody says the conversion covers spreadsheets`);
         assert.match(translations[lang].csvCompactHintLimitHelp, spreadsheet[lang],
@@ -225,8 +225,9 @@ check(() => {
         fr: /n utilisent pas ce reglage/i,
         es: /no usan este ajuste/i,
         it: /non usano questa impostazione/i,
+        zh: /不使用此设置/,
     };
-    for (const lang of ['en', 'fr', 'es', 'it']) {
+    for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
         assert.match(translations[lang].csvCompactHintLimitHelp, notThisSetting[lang],
             `${lang} says the threshold does not apply to spreadsheets`);
     }
@@ -259,8 +260,9 @@ check(() => {
 check(() => {
     const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
     const labels = [...translations.matchAll(/convertToParquetAndLoad:\s*'([^']*)'/g)].map(m => m[1]);
-    assert.equal(labels.length, 4, 'the notice button is labelled in all four languages');
-    assert.ok(labels.every(l => l.length > 8), 'and the labels are real sentences');
+    assert.equal(labels.length, 5, 'the notice button is labelled in all five languages');
+    // Chinese packs a phrase into far fewer characters, so its floor is lower.
+    assert.ok(labels.every(l => l.length > (/[\u4e00-\u9fff]/.test(l) ? 4 : 8)), 'and the labels are real sentences');
 });
 
 

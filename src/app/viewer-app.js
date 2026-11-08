@@ -132,12 +132,14 @@ class OpenModelicaViewer {
     // The spellchecker follows the app's language until the user picks a
     // dictionary by hand from the desktop right-click menu (#41). The labels
     // travel with it because the main process has no i18n of its own, and the
-    // four translations belong in src/i18n where one guard covers them all.
+    // translations belong in src/i18n where one guard covers them all.
     _syncSpellcheckLanguage() {
         try {
             // Also the web build's business: it is what tells Chrome which
             // dictionary to use in a textarea, and what a screen reader reads.
-            document.documentElement.lang = i18n.currentLang;
+            // A bare 'zh' leaves the browser to guess the script; naming the
+            // Simplified-Chinese region picks the matching CJK fonts.
+            document.documentElement.lang = i18n.currentLang === 'zh' ? 'zh-CN' : i18n.currentLang;
         } catch (_) { /* no document: nothing to label */ }
         window.omvDesktop?.setSpellcheck?.({
             uiLanguage: i18n.currentLang,

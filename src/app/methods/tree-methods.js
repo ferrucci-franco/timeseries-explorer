@@ -565,7 +565,7 @@ proto._renderTreeNode = function(node, parentElement, level, filter, autoExpand)
     if (this.sortAlphabetical && paramEntries.length > 0) {
         const paramLabel = document.createElement('div');
         paramLabel.className = 'tree-param-label';
-        paramLabel.textContent = 'Parameters';
+        paramLabel.textContent = i18n.t('treeParametersLabel');
         parentElement.appendChild(paramLabel);
         this._renderVarLeaves(paramEntries, parentElement);
     }

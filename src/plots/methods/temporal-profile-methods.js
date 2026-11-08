@@ -198,16 +198,18 @@ function temporalProfileCategoryIds(state) {
 function localizedWeekdays() {
     if (i18n.currentLang === 'es') return ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
     if (i18n.currentLang === 'fr') return ['lun', 'mar', 'mer', 'jeu', 'ven', 'sam', 'dim'];
+    if (i18n.currentLang === 'zh') return ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     if (i18n.currentLang === 'it') return ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom'];
     return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 }
 
 function localizedMonths() {
-    const locale = i18n.currentLang === 'es' ? 'es' : i18n.currentLang === 'fr' ? 'fr' : i18n.currentLang === 'it' ? 'it' : 'en';
+    const locale = i18n.currentLang === 'es' ? 'es' : i18n.currentLang === 'fr' ? 'fr' : i18n.currentLang === 'it' ? 'it' : i18n.currentLang === 'zh' ? 'zh' : 'en';
     const labels = {
         en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
         es: ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'],
         fr: ['jan', 'fév', 'mar', 'avr', 'mai', 'juin', 'juil', 'aoû', 'sep', 'oct', 'nov', 'déc'],
+        zh: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
         it: ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'],
     };
     return labels[locale];

@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 
 import translations from '../src/i18n/translations.js';
 
-const LANGS = ['en', 'fr', 'es', 'it'];
+const LANGS = ['en', 'fr', 'es', 'it', 'zh'];
 let checks = 0;
 const check = (fn) => { fn(); checks++; };
 
@@ -30,7 +30,7 @@ check(() => {
 check(() => {
     // It has to open by saying what a limit IS. Starting from the table left
     // the reader to work out the concept from a list of settings.
-    const opener = { en: /why it exists/i, fr: /pourquoi elle existe/i, es: /por que existe/i, it: /perche esiste/i };
+    const opener = { en: /why it exists/i, fr: /pourquoi elle existe/i, es: /por que existe/i, it: /perche esiste/i, zh: /为什么存在/ };
     for (const lang of LANGS) {
         const firstHeading = bodies[lang].slice(bodies[lang].indexOf('<h4>'), bodies[lang].indexOf('</h4>'));
         assert.match(firstHeading, opener[lang], `${lang} opens by explaining what a limit is`);
@@ -39,7 +39,7 @@ check(() => {
 
 check(() => {
     // The single most important sentence: over the limit is not a refusal.
-    const notRefused = { en: /does not mean the file is rejected/i, fr: /ne veut pas dire que le fichier est refuse/i, es: /no significa que el archivo sea rechazado/i, it: /non significa che il file venga rifiutato/i };
+    const notRefused = { en: /does not mean the file is rejected/i, fr: /ne veut pas dire que le fichier est refuse/i, es: /no significa que el archivo sea rechazado/i, it: /non significa che il file venga rifiutato/i, zh: /超过限制并不意味着文件被拒绝/ };
     for (const lang of LANGS) {
         assert.match(bodies[lang], notRefused[lang], `${lang} states plainly that a limit is not a refusal`);
     }
@@ -71,9 +71,10 @@ check(() => {
     // The CSV limit is 300 MB in BOTH runtimes. The old text implied desktop
     // raises everything.
     for (const lang of LANGS) {
-        assert.match(bodies[lang], /<td>CSV and text files<\/td><td>300 MB<\/td><td>300 MB<\/td>/, `${lang} shows the CSV limit as equal in both runtimes`);
+        const csvRow = lang === 'zh' ? 'CSV 和文本文件' : 'CSV and text files';
+        assert.match(bodies[lang], new RegExp(`<td>${csvRow}</td><td>300 MB</td><td>300 MB</td>`), `${lang} shows the CSV limit as equal in both runtimes`);
         assert.match(bodies[lang], /300 MB/, `${lang} quotes it in the desktop section too`);
-        assert.doesNotMatch(bodies[lang], /<td>CSV and text files<\/td><td>150 MB/, `${lang} no longer quotes the old default`);
+        assert.doesNotMatch(bodies[lang], new RegExp(`<td>${csvRow}</td><td>150 MB`), `${lang} no longer quotes the old default`);
     }
 });
 
@@ -85,6 +86,7 @@ check(() => {
         fr: /valeurs aberrantes par bornes haute et basse/i,
         es: /valores atipicos por limites superior e inferior/i,
         it: /outlier per soglie superiore e inferiore/i,
+        zh: /按上下界移除离群值/,
     };
     for (const lang of LANGS) {
         assert.match(bodies[lang], expected[lang], `${lang} states the Data Tools restriction`);
@@ -95,8 +97,9 @@ check(() => {
         fr: /Derivee, integrale, moyenne glissante et les detecteurs automatiques de pics ont besoin/,
         es: /Derivada, integral, media movil y los detectores automaticos de picos necesitan/,
         it: /Derivata, integrale, media mobile e i rilevatori automatici di picchi hanno bisogno/,
+        zh: /导数、积分、移动平均以及自动尖峰检测器都需要/,
     };
-    const offered = { en: /Derivative, Integral, Detrend/, fr: /Derivee, Integrale, Detendancer/, es: /Derivada, Integral, Quitar tendencia/, it: /Derivata, Integrale, Rimuovere la tendenza/ };
+    const offered = { en: /Derivative, Integral, Detrend/, fr: /Derivee, Integrale, Detendancer/, es: /Derivada, Integral, Quitar tendencia/, it: /Derivata, Integrale, Rimuovere la tendenza/, zh: /导数、积分、去趋势/ };
     for (const lang of LANGS) {
         assert.doesNotMatch(bodies[lang], stale[lang], `${lang} drops the outdated list of missing tools`);
         assert.match(bodies[lang], offered[lang], `${lang} names the tools that do work`);
@@ -105,8 +108,8 @@ check(() => {
 
 check(() => {
     // Which limits are warnings and which are not, said in so many words.
-    const notWarning = { en: /the limit is not a warning/, fr: /la limite n est pas un avertissement/, es: /el limite no es un aviso/, it: /il limite non e un avviso/ };
-    const onlyWarning = { en: /the limit is only a warning/, fr: /la limite n est qu un avertissement/, es: /el limite es solo un aviso/, it: /il limite e solo un avviso/ };
+    const notWarning = { en: /the limit is not a warning/, fr: /la limite n est pas un avertissement/, es: /el limite no es un aviso/, it: /il limite non e un avviso/, zh: /该限制并非警告/ };
+    const onlyWarning = { en: /the limit is only a warning/, fr: /la limite n est qu un avertissement/, es: /el limite es solo un aviso/, it: /il limite e solo un avviso/, zh: /该限制只是一个警告/ };
     for (const lang of LANGS) {
         assert.match(bodies[lang], notWarning[lang], `${lang} says text and Parquet are not warned about`);
         assert.match(bodies[lang], onlyWarning[lang], `${lang} says the other formats' limit is only a warning`);
@@ -116,9 +119,9 @@ check(() => {
 check(() => {
     // Zero: no limit, for both kinds, with what each does when the file does
     // not fit — and the ceilings zero does not lift.
-    const zero = { en: /<b>0 means no limit<\/b>/, fr: /<b>0 veut dire aucune limite<\/b>/, es: /<b>0 significa sin limite<\/b>/, it: /<b>0 significa nessun limite<\/b>/ };
-    const fallsBack = { en: /if it does not fit, the app opens it a piece at a time/, fr: /s il ne tient pas, l app l ouvre d elle-meme morceau par morceau/, es: /si no entra, la app lo abre sola de a partes/, it: /se non entra, l app lo apre da sola un pezzo alla volta/ };
-    const onlyMemory = { en: /the only limit left is your computer's memory/, fr: /la seule limite restante est la memoire/, es: /el unico limite que queda es la memoria/, it: /l unico limite che resta e la memoria/ };
+    const zero = { en: /<b>0 means no limit<\/b>/, fr: /<b>0 veut dire aucune limite<\/b>/, es: /<b>0 significa sin limite<\/b>/, it: /<b>0 significa nessun limite<\/b>/, zh: /<b>0 表示无限制<\/b>/ };
+    const fallsBack = { en: /if it does not fit, the app opens it a piece at a time/, fr: /s il ne tient pas, l app l ouvre d elle-meme morceau par morceau/, es: /si no entra, la app lo abre sola de a partes/, it: /se non entra, l app lo apre da sola un pezzo alla volta/, zh: /如果放不下，应用会自动改为分块打开/ };
+    const onlyMemory = { en: /the only limit left is your computer's memory/, fr: /la seule limite restante est la memoire/, es: /el unico limite que queda es la memoria/, it: /l unico limite che resta e la memoria/, zh: /唯一剩下的限制是计算机的内存/ };
     for (const lang of LANGS) {
         assert.match(bodies[lang], zero[lang], `${lang} says what 0 means`);
         assert.match(bodies[lang], fallsBack[lang], `${lang} says text and Parquet fall back when they do not fit`);
@@ -139,7 +142,7 @@ check(() => {
 check(() => {
     // Reading a file in pieces is NOT desktop-only, which the old text left
     // ambiguous. The section answers the question a reader would actually ask.
-    const sameBoth = { en: /same in the browser and in the Full Desktop version/i, fr: /pareil dans le navigateur et dans la version Full Desktop/i, es: /igual en el navegador y en la version Full Desktop/i, it: /stesso modo nel browser e nella versione Full Desktop/i };
+    const sameBoth = { en: /same in the browser and in the Full Desktop version/i, fr: /pareil dans le navigateur et dans la version Full Desktop/i, es: /igual en el navegador y en la version Full Desktop/i, it: /stesso modo nel browser e nella versione Full Desktop/i, zh: /在浏览器和完整桌面版中的工作方式完全相同/ };
     for (const lang of LANGS) {
         assert.match(bodies[lang], sameBoth[lang], `${lang} says it behaves the same in both versions`);
     }
@@ -196,6 +199,7 @@ check(() => {
         fr: /Les feuilles de calcul peuvent etre converties dans les deux versions/i,
         es: /Las hojas de calculo se pueden convertir en cualquiera de las dos versiones/i,
         it: /I fogli di calcolo si possono convertire in entrambe le versioni/i,
+        zh: /两个版本都可以转换电子表格/,
     };
     // The old text said text files could only be converted in the Full Desktop
     // version. The browser converts them too, and had done for a while.
@@ -204,6 +208,7 @@ check(() => {
         fr: 'Les deux versions savent le faire',
         es: 'Las dos versiones pueden hacerlo',
         it: 'Entrambe le versioni possono farlo',
+        zh: '两个版本都可以做到',
     };
     // And converting a file without opening it, which the help never mentioned.
     const fromTheMenu = {
@@ -211,6 +216,7 @@ check(() => {
         fr: 'Convertir un fichier en Parquet',
         es: 'Convertir un archivo a Parquet',
         it: 'Converti un file in Parquet',
+        zh: '将文件转换为 Parquet',
     };
     for (const lang of LANGS) {
         assert.match(bodies[lang], spreadsheetsBoth[lang], `${lang} says spreadsheets convert in both versions`);
@@ -229,6 +235,7 @@ check(() => {
         fr: /<h4>Vous verifiez toujours l analyse d abord<\/h4>/,
         es: /<h4>Siempre revisas el parseo primero<\/h4>/,
         it: /<h4>Controlli sempre prima il parsing<\/h4>/,
+        zh: /<h4>您始终先检查解析结果<\/h4>/,
     };
     for (const lang of LANGS) {
         assert.match(bodies[lang], heading[lang], `${lang} gives the parsing check its own section`);
@@ -237,7 +244,7 @@ check(() => {
 
 check(() => {
     // And it must say WHAT you get to check, not just that you check something.
-    const decimal = { en: /decimal mark/i, fr: /marque decimale/i, es: /marca decimal/i, it: /segno decimale/i };
+    const decimal = { en: /decimal mark/i, fr: /marque decimale/i, es: /marca decimal/i, it: /segno decimale/i, zh: /小数点符号/ };
     for (const lang of LANGS) {
         assert.match(bodies[lang], decimal[lang], `${lang} names a concrete thing the preview lets you fix`);
     }
@@ -248,8 +255,8 @@ check(() => {
 check(() => {
     const switching = ['csvFullLoadLimitHelp', 'parquetFullLoadLimitHelp'];
     const warning = ['matlabFullLoadLimitHelp', 'excelFullLoadLimitHelp', 'pickleFullLoadLimitHelp', 'pypsaNetcdfFullLoadLimitHelp', 'audioFullLoadLimitHelp'];
-    const stillOpens = { en: /still open/i, fr: /s ouvrent quand meme/i, es: /se abren igual/i, it: /si aprono comunque/i };
-    const warns = { en: /warned/i, fr: /averti/i, es: /se te avisa/i, it: /avvisato/i };
+    const stillOpens = { en: /still open/i, fr: /s ouvrent quand meme/i, es: /se abren igual/i, it: /si aprono comunque/i, zh: /它们仍可打开|仍可打开/ };
+    const warns = { en: /warned/i, fr: /averti/i, es: /se te avisa/i, it: /avvisato/i, zh: /发出警告/ };
 
     for (const lang of LANGS) {
         for (const key of switching) {
@@ -260,7 +267,7 @@ check(() => {
             assert.match(translations[lang][key], /\b0\b/, `${lang}.${key} says what 0 does`);
         }
         for (const key of ['fileOverLimitBody', 'fileOverLimitAudioBody']) {
-            assert.match(translations[lang][key], /\{setting\}, [^"]*\b0\b/, `${lang}.${key} offers 0 at the moment of the warning`);
+            assert.match(translations[lang][key], lang === 'zh' ? /\{setting\}[^"]*\b0\b/ : /\{setting\}, [^"]*\b0\b/, `${lang}.${key} offers 0 at the moment of the warning`);
         }
         assert.match(translations[lang].lazyFileNoticeBodyMemory, /\{file\}/, `${lang} has the notice for a file that did not fit`);
         for (const key of warning) {

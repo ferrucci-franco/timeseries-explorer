@@ -8,8 +8,8 @@ const translations = readFileSync(new URL('../src/i18n/translations.js', import.
 for (const key of ['visualSettingsTitle', 'fileLoadingSettingsTitle']) {
     assert.equal(
         [...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length,
-        4,
-        `${key} should be translated in all four languages`,
+        5,
+        `${key} should be translated in all five languages`,
     );
 }
 

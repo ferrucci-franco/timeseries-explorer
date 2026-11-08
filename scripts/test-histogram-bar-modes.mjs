@@ -42,11 +42,11 @@ assert.match(chooser, /histogramStacked'\), value: 'stacked'/, 'and Stacked keep
 // ─── Nothing left in the strings ───────────────────────────────────
 const translations = read('src/i18n/translations.js');
 assert.equal([...translations.matchAll(/histogramGrouped/g)].length, 0,
-    'the label and the many-bars warning are gone from all four languages');
+    'the label and the many-bars warning are gone from all five languages');
 // The help section lists what the Histogram can do; it must not name a mode
 // that is not there.
 const helpSections = [...translations.matchAll(/helpSec6Body: "([\s\S]*?)",\s*$/gm)].map(m => m[1]);
-assert.equal(helpSections.length, 4, 'four help sections');
+assert.equal(helpSections.length, 5, 'five help sections');
 for (const section of helpSections) {
     assert.doesNotMatch(section, /grouped|group[ée]|agrupada|raggruppata/i,
         `the help no longer offers Grouped: ${section.slice(0, 80)}…`);

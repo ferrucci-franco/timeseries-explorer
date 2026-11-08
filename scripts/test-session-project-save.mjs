@@ -11,7 +11,7 @@ for (const key of [
     'sessionProjectReadFailedTitle',
     'sessionProjectReadFailedBody',
 ]) {
-    assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} is translated in all languages`);
+    assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 5, `${key} is translated in all languages`);
 }
 
 class SessionProjectHarness {

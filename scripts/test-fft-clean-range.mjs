@@ -201,8 +201,8 @@ assert.doesNotMatch(source.slice(start, end), /autoRangeLimited\s*=/,
     'and never claims to be the speed limiter');
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-assert.equal((translations.match(/\bfftMissingDataRangeWarning:/g) || []).length, 4,
-    'the warning is translated in all four languages');
+assert.equal((translations.match(/\bfftMissingDataRangeWarning:/g) || []).length, 5,
+    'the warning is translated in all five languages');
 for (const match of translations.matchAll(/fftMissingDataRangeWarning: '([^']*)'/g)) {
     assert.ok(match[1].includes('{samples}') && match[1].includes('{total}'),
         'every translation interpolates both counts');

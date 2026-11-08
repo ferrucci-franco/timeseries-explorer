@@ -213,8 +213,8 @@ assert.match(fft, /_clampFftRangeToLimit\(plot, state\)/,
 assert.match(fft, /'tooManyPointsClamped'/,
     'a clamped refusal must say the selection was reduced to the largest that fits');
 assert.equal(
-    (read('src/i18n/translations.js').match(/fftWarningTooManyClamped:/g) || []).length, 4,
-    'the clamped warning is translated in all four languages',
+    (read('src/i18n/translations.js').match(/fftWarningTooManyClamped:/g) || []).length, 5,
+    'the clamped warning is translated in all five languages',
 );
 
 // A revert helper the preflight never calls protects nothing.
@@ -235,8 +235,8 @@ assert.match(fft, /if \(fullEntries\.length\) this\._rememberAcceptedFftSettings
 // a message that does not mention the restore.
 const translations = read('src/i18n/translations.js');
 assert.equal(
-    (translations.match(/fftWarningTooManyReverted:/g) || []).length, 4,
-    'the reverted warning is translated in all four languages',
+    (translations.match(/fftWarningTooManyReverted:/g) || []).length, 5,
+    'the reverted warning is translated in all five languages',
 );
 
 
@@ -254,7 +254,7 @@ assert.equal(
     };
 
     const formatted = new Map();
-    for (const lang of ['en', 'fr', 'es', 'it']) {
+    for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
         withLanguage(lang, () => {
             const count = i18n.formatNumber(16777216);
             assert.match(count, /\d/, `${lang} formats digits`);

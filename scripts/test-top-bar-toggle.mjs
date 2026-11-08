@@ -21,7 +21,7 @@ assert.match(session, /_sessionTopBarHidden/, 'the top bar state is restored wit
 assert.match(css, /\.top-bar\.hidden\s*\{[^}]*margin-top:\s*-60px/, 'the hidden top bar slides out of the window');
 assert.match(css, /\.edge-toggle-rail-top\s*\{[^}]*z-index:\s*1310/, 'the pill sits above the top bar layer');
 for (const key of ['edgeHideTopBar', 'edgeShowTopBar']) {
-    assert.equal(translations.match(new RegExp(`\\b${key}:`, 'g'))?.length, 4, `${key} exists in all four languages`);
+    assert.equal(translations.match(new RegExp(`\\b${key}:`, 'g'))?.length, 5, `${key} exists in all five languages`);
 }
 
 console.log('Top bar toggle regression tests passed.');

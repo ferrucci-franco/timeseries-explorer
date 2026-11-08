@@ -1,11 +1,11 @@
-// Guards the four language blocks (en/fr/es/it) against drift: every key must
+// Guards the five language blocks (en/fr/es/it/zh) against drift: every key must
 // exist in every language with a non-empty value, and no language may carry an
 // extra key. Also spot-checks the time-axis keys added on this branch.
 import assert from 'node:assert/strict';
 import translations from '../src/i18n/translations.js';
 
 const langs = Object.keys(translations);
-assert.deepEqual(langs.sort(), ['en', 'es', 'fr', 'it'], 'exactly the four expected languages');
+assert.deepEqual(langs.sort(), ['en', 'es', 'fr', 'it', 'zh'], 'exactly the five expected languages');
 
 const keySets = Object.fromEntries(langs.map(l => [l, new Set(Object.keys(translations[l]))]));
 const reference = keySets.en;
@@ -92,6 +92,21 @@ for (const lang of langs) {
     for (const key of removedKeys) {
         assert.ok(!keySets[lang].has(key), `${lang} should no longer define orphan key ${key}`);
     }
+}
+
+// Every language is reachable from both pickers: the top-bar menu and the
+// phone layout's segmented control. A language present only in the data is
+// one nobody can choose.
+{
+    const { readFileSync } = await import('node:fs');
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const menuLangs = [...html.matchAll(/class="[^"]*\blang-btn\b[^"]*"[^>]*data-lang="([a-z]+)"/g)].map(m => m[1]);
+    assert.deepEqual([...menuLangs].sort(), [...langs].sort(), 'the top-bar language menu offers every language');
+    const compact = readFileSync(new URL('../src/app/methods/compact-methods.js', import.meta.url), 'utf8');
+    const compactList = compact.match(/for \(const lang of (\[[^\]]*\])\)/)?.[1];
+    assert.ok(compactList, 'the compact language picker lists its languages');
+    assert.deepEqual(JSON.parse(compactList.replace(/'/g, '"')).sort(), [...langs].sort(),
+        'the compact language picker offers every language');
 }
 
 console.log(`i18n consistency tests passed (${reference.size} keys × ${langs.length} languages).`);

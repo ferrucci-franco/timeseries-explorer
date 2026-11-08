@@ -70,7 +70,7 @@ assert.match(dataset, /const reason = datasetFailureText\(err, key => i18n\.t\(k
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['reloadDatasetsStaleBody', 'derivedDatasetRecomputeFailedNoReason']) {
-    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 4, `${key} in four languages`);
+    assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 5, `${key} in five languages`);
 }
 
 console.log('Reload report checks passed.');
