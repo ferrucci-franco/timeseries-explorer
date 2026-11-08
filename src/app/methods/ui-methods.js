@@ -1381,6 +1381,32 @@ proto.showDisplaySettings = function() {
             : i18n.t(info.reason === 'memoryChosen' ? 'lazyResultsStorageNowMemory' : 'lazyResultsStorageNowMemoryNoDisk');
     };
     syncStorageNow();
+    // What earlier sessions left on disk, and the way to let it go.
+    const keptRow = document.createElement('span');
+    keptRow.className = 'plot-settings-help lazy-results-kept';
+    const keptText = document.createElement('span');
+    const keptClear = document.createElement('button');
+    keptClear.type = 'button';
+    keptClear.className = 'modal-btn modal-btn-cancel lazy-results-kept-clear';
+    keptClear.textContent = i18n.t('lazyResultsKeptClear');
+    keptRow.append(keptText, ' ', keptClear);
+    const syncKept = async () => {
+        const source = this._duckdbSource;
+        if (source?.storage?.kind !== 'opfs') { keptRow.hidden = true; return; }
+        const { count, bytes } = await source.keptResultsSize();
+        keptRow.hidden = false;
+        keptClear.disabled = !count;
+        keptText.textContent = count
+            ? i18n.t('lazyResultsKeptSize').replace('{count}', i18n.formatNumber(count)).replace('{size}', this._formatFileSize?.(bytes) || `${Math.round(bytes / 1048576)} MB`)
+            : i18n.t('lazyResultsKeptNone');
+    };
+    keptClear.addEventListener('click', async () => {
+        keptClear.disabled = true;
+        try { await this._duckdbSource?.clearKeptResults(); } finally { await syncKept(); }
+    });
+    keptRow.hidden = true;
+    storageControl.field.append(keptRow);
+    syncKept().catch(() => { keptRow.hidden = true; });
     storageControl.select.addEventListener('change', () => {
         this._saveAdvancedSettings({ ...(this.advancedSettings || {}), lazyResultsStorage: storageControl.select.value });
         storageControl.select.value = this.advancedSettings.lazyResultsStorage;

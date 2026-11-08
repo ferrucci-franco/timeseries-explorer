@@ -165,13 +165,14 @@ export async function fileFingerprint(file) {
     }
 }
 
-// Whether this context can hold a DuckDB database in OPFS: the directory API,
-// and the synchronous access handles DuckDB's worker writes through.
+// Whether this context may hold a DuckDB database in OPFS: a secure context
+// with the directory API. The synchronous access handles DuckDB writes
+// through exist only in workers (its own), not here: whether they work is
+// told by opening the database (_openDatabase), which falls back to memory.
 export function opfsDatabaseAvailable() {
     return typeof navigator !== 'undefined'
-        && typeof navigator.storage?.getDirectory === 'function'
-        && typeof FileSystemFileHandle !== 'undefined'
-        && typeof FileSystemFileHandle.prototype?.createSyncAccessHandle === 'function';
+        && (typeof isSecureContext === 'undefined' || isSecureContext)
+        && typeof navigator.storage?.getDirectory === 'function';
 }
 
 export default class DuckDbSource {

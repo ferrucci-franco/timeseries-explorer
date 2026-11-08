@@ -247,10 +247,12 @@ proto._resampleRegularSampling = function(data, time = this._resampleTimeContext
     if (!values || time.kind === 'index') {
         return { ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason: 'noTimeAxis' };
     }
-    // Judged over an array in memory; a lazy file's overview is a sample of
-    // its rows, which says nothing about whether every step is a multiple.
+    // A lazy file's overview is a sample of its rows, which says nothing about
+    // whether every step is a multiple: judged over the file (SQL passes),
+    // and offered once they are in.
     if (this._isDataToolLazyData(data)) {
-        return { ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason: 'lazy' };
+        return this._lazyRegularSamplingNow?.(data)
+            || { ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason: 'measuring' };
     }
     return this._memoByArray('regularSampling', values, () => detectRegularSampling(values));
 };
@@ -292,7 +294,7 @@ proto._syncResampleCompleteOption = function(data, time) {
         nonMonotonic: 'dataToolResampleCompleteBackwards',
         irregularStep: 'dataToolResampleCompleteIrregular',
         noTimeAxis: 'dataToolResampleCompleteNoAxis',
-        lazy: 'dataToolResampleCompleteLazy',
+        measuring: 'dataToolResampleCompleteMeasuring',
     }[regular.reason] || 'dataToolResampleCompleteIrregular';
     note.textContent = i18n.t(key);
 };

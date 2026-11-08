@@ -4328,9 +4328,22 @@ proto.saveInMemoryFile = async function(fileId) {
     const filename = base.toLowerCase().endsWith(extension) ? base : `${base}${extension}`;
 
     try {
-        // A lazy dataset reads its table: a promise.
-        const bytes = await entry.syntheticBytes();
-        const blob = new Blob([bytes], { type: 'text/csv' });
+        // A lazy dataset reads its table a chunk at a time into a Blob (no
+        // limit but the disk's), behind the busy overlay with its row count;
+        // anything else gives its bytes.
+        let blob;
+        if (typeof entry.syntheticBlob === 'function') {
+            const overlay = this._showBusyOverlay?.({ title: i18n.t('csvExportBuilding') }) || null;
+            try {
+                blob = await entry.syntheticBlob({
+                    onRows: rows => overlay?.progress(i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(rows))),
+                });
+            } finally {
+                overlay?.close();
+            }
+        } else {
+            blob = new Blob([await entry.syntheticBytes()], { type: 'text/csv' });
+        }
         const picker = globalThis.showSaveFilePicker;
         if (typeof picker === 'function') {
             let handle;

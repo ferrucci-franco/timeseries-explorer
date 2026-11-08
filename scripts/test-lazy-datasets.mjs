@@ -356,6 +356,17 @@ async function checkResample(lh, lazyData, eagerData, recipeParams, sourceName, 
     const rowsOut = text.trim().split('\n');
     assert.equal(rowsOut[0], 't,a,b', 'the CSV header');
     assert.equal(rowsOut.length - 1, data.metadata.numTimesteps, 'and every row of the table');
+    // "Save as file" writes it a chunk at a time, into a Blob with no limit
+    // but the disk's: the same text, and the rows counted as they go.
+    assert.equal(typeof entry.syntheticBlob, 'function', 'a lazy dataset writes itself out by chunks');
+    const counted = [];
+    const blob = await entry.syntheticBlob({ onRows: rows => counted.push(rows) });
+    assert.equal(await blob.text(), text, 'the Blob holds the same CSV');
+    assert.equal(counted[counted.length - 1], data.metadata.numTimesteps, 'every row counted');
+    // Past the size an array of the whole text can take, the bytes refuse and
+    // the Blob does not: it was the cap that limited "Save as file".
+    const big = { ...data, _duckdb: { ...data._duckdb, totalRows: 1e9 } };
+    await assert.rejects(h._lazyDatasetCsvBytes(big), /too large/, 'the bytes are held to a size');
 
     // Zoomed: a narrow window returns its rows at full resolution.
     const zoom = await duck.getRawColumnsRange(data, ['a', 'b'], 10, 11, 1e6);
