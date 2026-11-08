@@ -419,7 +419,9 @@ proto._lazySqlToolVariable = function(data, name, definition) {
             ...definition,
             targetName: name,
             targetMode: 'create',
-            ...(definition.tool === 'interarrival' ? { timeUnit: this._interarrivalUnit(data) } : {}),
+            ...(definition.tool === 'interarrival'
+                ? { outputUnit: this._interarrivalOutputUnit(data, definition.params || {}, sourceVariable) }
+                : {}),
         }),
         kind: 'variable',
         isConstant: false,
@@ -468,7 +470,8 @@ proto._lazySqlToolVariable = function(data, name, definition) {
     // Drawn as dots only when it IS a series of events, not when it was built
     // from one.
     delete variable.eventSamples;
-    if (definition.tool === 'interarrival') this._markInterarrivalVariable(variable);
+    delete variable.heldSteps;
+    if (definition.tool === 'interarrival') this._markInterarrivalVariable(variable, definition.params || {});
     if (expr) {
         variable._duckdbExpr = expr;
         if (windows.length) variable._duckdbWindows = windows;
@@ -634,7 +637,7 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
     if (tool === 'interarrival') {
         result.report = report;
         result.warning = this._interarrivalWarning(report);
-        result.note = () => this._interarrivalNote(report, data);
+        result.note = () => this._interarrivalNote(report, data, sourceVariable);
     }
     if (!options.silent) {
         this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName, dependents.length);

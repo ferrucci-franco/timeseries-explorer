@@ -157,10 +157,15 @@ proto.initDataTools = function() {
     document.getElementById('integral-initial')?.addEventListener('change', () => this._handleDataToolOptionChange());
     // The suggested name says which edges it times, so it follows the picker —
     // unless the user has typed a name of their own.
-    document.getElementById('interarrival-edge')?.addEventListener('change', () => {
-        this._followInterarrivalSuggestedName();
-        this._handleDataToolOptionChange();
-    });
+    for (const id of ['interarrival-edge', 'interarrival-output']) {
+        document.getElementById(id)?.addEventListener('change', () => {
+            this._followInterarrivalSuggestedName();
+            this._handleDataToolOptionChange();
+        });
+    }
+    for (const id of ['interarrival-placement', 'interarrival-rate-unit']) {
+        document.getElementById(id)?.addEventListener('change', () => this._handleDataToolOptionChange());
+    }
     // A number: committed on blur/Enter, like the integral's initial value.
     document.getElementById('interarrival-deadband')?.addEventListener('change', () => this._handleDataToolOptionChange());
 
@@ -494,9 +499,10 @@ proto._syncDataTools = function() {
     document.getElementById('integral-initial')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
-    for (const id of ['interarrival-edge', 'interarrival-deadband']) {
+    for (const id of ['interarrival-edge', 'interarrival-deadband', 'interarrival-output', 'interarrival-placement']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'interarrival');
     }
+    this._syncInterarrivalControls(data, hasSource && tool === 'interarrival');
     for (const id of ['interpolate-method', 'interpolate-edges', 'interpolate-max-gap-slider',
         'interpolate-max-gap', 'interpolate-window-slider', 'interpolate-window',
         'interpolate-show-added']) {
@@ -1019,10 +1025,32 @@ proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelected
     return this._uniqueDataToolVariableName(`${sourceName} ${suffix}`);
 };
 
-// "dt_up", "dt_down" or "dt_edges": which edges the output times.
-proto._interarrivalNameSuffix = function(edge = null) {
-    const picked = edge || (typeof document !== 'undefined' ? document.getElementById('interarrival-edge')?.value : '') || 'both';
-    return { rising: 'dt_up', falling: 'dt_down' }[picked] || 'dt_edges';
+// "dt_up", "dt_down" or "dt_edges" for an interval, "rate_…" for a rate:
+// what the output is, and over which edges.
+proto._interarrivalNameSuffix = function(edge = null, output = null) {
+    const read = id => (typeof document !== 'undefined' ? document.getElementById(id)?.value : '') || '';
+    const pickedEdge = edge || read('interarrival-edge') || 'both';
+    const pickedOutput = output || read('interarrival-output') || 'interval';
+    const prefix = pickedOutput === 'rate' ? 'rate' : 'dt';
+    return `${prefix}_${{ rising: 'up', falling: 'down' }[pickedEdge] || 'edges'}`;
+};
+
+// The rate's unit picker shows only for a rate, and only scales an axis that
+// counts seconds: on any other it says what the rate is per, and is off.
+proto._syncInterarrivalControls = function(data, enabled) {
+    if (typeof document === 'undefined') return;
+    const rate = document.getElementById('interarrival-output')?.value === 'rate';
+    document.getElementById('interarrival-rate-unit-wrap')?.classList.toggle('collapsed', !rate);
+    const unitSelect = document.getElementById('interarrival-rate-unit');
+    const seconds = !!data && this._interarrivalAxisInSeconds(data);
+    unitSelect?.toggleAttribute('disabled', !enabled || !rate || !seconds);
+    const note = document.getElementById('interarrival-rate-unit-note');
+    if (note) {
+        const axisUnit = data ? this._interarrivalUnit(data) : 's';
+        note.hidden = !rate || seconds || !data;
+        note.textContent = !rate || seconds || !data ? ''
+            : i18n.t('dataToolInterarrivalRatePerAxis').replace('{unit}', axisUnit || i18n.t('dataToolInterarrivalSample'));
+    }
 };
 
 // The edge picker changed: a name that is still one of the suggestions (with
@@ -1034,7 +1062,8 @@ proto._followInterarrivalSuggestedName = function() {
     const sourceName = document.getElementById('outlier-variable')?.value || '';
     if (!output || !sourceName) return;
     const current = output.value.trim();
-    const suggested = ['rising', 'falling', 'both'].map(edge => `${sourceName} ${this._interarrivalNameSuffix(edge)}`);
+    const suggested = ['rising', 'falling', 'both'].flatMap(edge => ['interval', 'rate']
+        .map(output => `${sourceName} ${this._interarrivalNameSuffix(edge, output)}`));
     const isSuggestion = suggested.some(base => current === base
         || (current.startsWith(`${base} `) && /^\d+$/.test(current.slice(base.length + 1))));
     if (current && !isSuggestion) return;
@@ -1540,6 +1569,9 @@ const DATA_TOOL_PARAMETER_IDS = [
     'moving-average-window-slider',
     'interarrival-edge',
     'interarrival-deadband',
+    'interarrival-output',
+    'interarrival-placement',
+    'interarrival-rate-unit',
     'interpolate-method',
     'interpolate-max-gap',
     'interpolate-max-gap-slider',
@@ -1687,8 +1719,12 @@ proto._writeDataToolForm = function(definition, name) {
         set('moving-average-window', params.window);
         set('moving-average-window-slider', params.window);
     } else if (definition.tool === 'interarrival') {
-        set('interarrival-edge', params.edge);
-        set('interarrival-deadband', params.deadband ?? 0);
+        const normalized = normalizeInterarrivalParams(params);
+        set('interarrival-edge', normalized.edge);
+        set('interarrival-deadband', normalized.deadband);
+        set('interarrival-output', normalized.output);
+        set('interarrival-placement', normalized.placement);
+        set('interarrival-rate-unit', normalized.rateUnit);
     } else if (definition.tool === 'detrend') {
         set('detrend-method', params.method);
         set('detrend-order', params.order);
@@ -2301,7 +2337,10 @@ proto._baseDataToolVariable = function(sourceValues, sourceVariable, config, val
     if (config.replacement) variable.dataTool.replacement = config.replacement;
     // Copied from an interarrival source by the spread above: a smoothed or
     // filled version of it is a curve again, not a series of events.
-    if (config.tool !== 'interarrival') delete variable.eventSamples;
+    if (config.tool !== 'interarrival') {
+        delete variable.eventSamples;
+        delete variable.heldSteps;
+    }
     if (config.targetMode === 'create') {
         delete variable._duckdbCol;
         delete variable._duckdbNumberFormat;
@@ -2564,12 +2603,13 @@ proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config,
 proto._buildInterarrivalResult = function(sourceValues, sourceVariable, config, data, pre = null) {
     const result = pre ? { ...pre.meta, values: pre.values } : this._computeInterarrivalValues(sourceValues, data, config.params);
     const { values, ...report } = result;
+    const params = normalizeInterarrivalParams(config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
         ...config,
         tool: 'interarrival',
-        timeUnit: this._interarrivalUnit(data),
-    }, values, this._interarrivalDataTool(config.params, report));
-    this._markInterarrivalVariable(variable);
+        outputUnit: this._interarrivalOutputUnit(data, params, sourceVariable),
+    }, values, this._interarrivalDataTool(params, report));
+    this._markInterarrivalVariable(variable, params);
     return {
         variable,
         count: report.intervalCount ?? 0,
@@ -2577,15 +2617,15 @@ proto._buildInterarrivalResult = function(sourceValues, sourceVariable, config, 
         name: config.targetName,
         report,
         warning: this._interarrivalWarning(report),
-        note: () => this._interarrivalNote(report, data),
+        note: () => this._interarrivalNote(report, data, sourceVariable),
     };
 };
 
 // What an interarrival output carries on `dataTool`, in memory and lazy alike.
 proto._interarrivalDataTool = function(params = {}, report = null) {
+    const normalized = normalizeInterarrivalParams(params);
     return {
-        edge: params.edge,
-        deadband: params.deadband,
+        ...normalized,
         risingCount: report?.risingCount ?? null,
         fallingCount: report?.fallingCount ?? null,
         edgeCount: report?.edgeCount ?? null,
@@ -2594,20 +2634,32 @@ proto._interarrivalDataTool = function(params = {}, report = null) {
         meanDt: report?.meanDt ?? null,
         minDt: report?.minDt ?? null,
         maxDt: report?.maxDt ?? null,
+        meanRate: report?.meanRate ?? null,
+        minRate: report?.minRate ?? null,
+        maxRate: report?.maxRate ?? null,
+        minJump: report?.minJump ?? null,
+        maxJump: report?.maxJump ?? null,
+        droppedIntervals: report?.droppedIntervals ?? null,
     };
 };
 
-// The output is NaN everywhere but at the edges: a line between those samples
-// would never be drawn, so the plot shows each of them as a dot.
-proto._markInterarrivalVariable = function(variable) {
-    variable.eventSamples = true;
+// At the edge the output is NaN everywhere but there: a line between those
+// samples would never be drawn, so the plot shows each of them as a dot. Held,
+// it is a staircase: each value covers the interval it was measured over, so
+// it is drawn as stairs.
+proto._markInterarrivalVariable = function(variable, params = {}) {
+    const held = normalizeInterarrivalParams(params).placement === 'hold';
+    delete variable.eventSamples;
+    delete variable.heldSteps;
+    if (held) variable.heldSteps = true;
+    else variable.eventSamples = true;
     variable.interpolation = 'linear';
     return variable;
 };
 
-// The unit of an interval, as the description's trailing bracket (which is how
-// the Y axis learns it): seconds on a date/time axis, the axis's own unit on a
-// numeric one (seconds when it names none), none on a sample index.
+// The unit of the time axis as the kernel measures intervals on it: seconds
+// on a date/time axis, the axis's own unit on a numeric one (seconds when it
+// names none), none on a sample index.
 proto._interarrivalUnit = function(data) {
     // The axis as the kernel reads it: a lazy file with no time column of its
     // own counts rows.
@@ -2617,10 +2669,39 @@ proto._interarrivalUnit = function(data) {
     if (kind === 'index') return '';
     if (kind === 'datetime') return 's';
     const timeName = data?.metadata?.timeName;
-    const description = (timeName && data?.variables?.[timeName]?.description) || '';
-    const match = String(description).match(/\[([^\]]+)\]/);
+    const unit = this._bracketUnit((timeName && data?.variables?.[timeName]?.description) || '');
+    return unit || 's';
+};
+
+// The unit inside a description's first bracket — "Energy [kWh]" → "kWh" —
+// read the way the plot reads it (a Dymola "unit|displayUnit:#…" keeps its
+// display unit).
+proto._bracketUnit = function(description) {
+    const match = String(description || '').match(/\[([^\]]+)\]/);
     const unit = match ? match[1].split(':#')[0].split('|').pop().trim() : '';
-    return unit && !unit.startsWith('#') ? unit : 's';
+    return unit && !unit.startsWith('#') ? unit : '';
+};
+
+// Whether intervals on this axis are seconds, so a rate can be scaled to per
+// minute or per hour. On a numeric axis in another unit it stays per that unit.
+proto._interarrivalAxisInSeconds = function(data) {
+    return this._interarrivalUnit(data) === 's';
+};
+
+// The unit of the output: the axis's for an interval; for a rate, the
+// source's per the axis's — "kWh" per hour reads as "kW", the power a meter's
+// energy register stands for.
+proto._interarrivalOutputUnit = function(data, params = {}, sourceVariable = null) {
+    const normalized = normalizeInterarrivalParams(params);
+    const timeUnit = this._interarrivalUnit(data);
+    if (normalized.output !== 'rate') return timeUnit;
+    const source = this._bracketUnit(sourceVariable?.description || '');
+    const per = !timeUnit ? 'sample' : (timeUnit === 's' ? normalized.rateUnit : timeUnit);
+    if (per === 'h') {
+        const energy = source.match(/^([kMGT]?W)\s*[.·⋅*]?\s*h$/);
+        if (energy) return energy[1];
+    }
+    return source ? `${source}/${per}` : `1/${per}`;
 };
 
 proto._interarrivalEdgeLabel = function(edge) {
@@ -2636,31 +2717,59 @@ proto._interarrivalWarning = function(report) {
         .replace('{count}', String(report.edgeCount ?? 0));
 };
 
-// The intervals in one line: how many, their mean and their range.
-proto._interarrivalNote = function(report, data) {
+// The run in a line or two: how many edges, the intervals (or the rate: its
+// mean over the whole span, weighted by time, and its range), and what looks
+// wrong — jumps of very different sizes, time going backwards, intervals too
+// long to hold.
+proto._interarrivalNote = function(report, data, sourceVariable = null) {
     if (!report || !(report.intervalCount > 0)) return '';
-    const unit = this._interarrivalUnit(data);
-    const format = (value) => {
-        if (!Number.isFinite(value)) return '—';
-        if (unit === 's') return formatNaturalDuration(value);
-        const text = formatSignificant(value, 4);
-        return unit ? `${text} ${unit}` : text;
-    };
-    let note = i18n.t('dataToolInterarrivalSummary')
-        .replace('{edges}', String(report.edgeCount ?? 0))
-        .replace('{mean}', format(report.meanDt))
-        .replace('{min}', format(report.minDt))
-        .replace('{max}', format(report.maxDt));
-    if (report.negativeDtCount > 0) {
-        note += ` ${i18n.t('dataToolInterarrivalNegative').replace('{count}', String(report.negativeDtCount))}`;
+    const params = normalizeInterarrivalParams(report);
+    const parts = [];
+    if (params.output === 'rate') {
+        const unit = this._interarrivalOutputUnit(data, params, sourceVariable);
+        const format = (value) => (Number.isFinite(value) ? `${formatSignificant(value, 4)}${unit ? ` ${unit}` : ''}` : '—');
+        parts.push(i18n.t('dataToolInterarrivalRateSummary')
+            .replace('{edges}', String(report.edgeCount ?? 0))
+            .replace('{mean}', format(report.meanRate))
+            .replace('{min}', format(report.minRate))
+            .replace('{max}', format(report.maxRate)));
+    } else {
+        const unit = this._interarrivalUnit(data);
+        const format = (value) => {
+            if (!Number.isFinite(value)) return '—';
+            if (unit === 's') return formatNaturalDuration(value);
+            const text = formatSignificant(value, 4);
+            return unit ? `${text} ${unit}` : text;
+        };
+        parts.push(i18n.t('dataToolInterarrivalSummary')
+            .replace('{edges}', String(report.edgeCount ?? 0))
+            .replace('{mean}', format(report.meanDt))
+            .replace('{min}', format(report.minDt))
+            .replace('{max}', format(report.maxDt)));
     }
-    return note;
+    // A counter that always moves by one step and sometimes by several has
+    // missed updates and caught up: the rate stays right, the timing of the
+    // steps in between is lost.
+    if (report.minJump > 0 && report.maxJump >= 1.5 * report.minJump) {
+        parts.push(i18n.t('dataToolInterarrivalJumps')
+            .replace('{min}', formatSignificant(report.minJump, 4))
+            .replace('{max}', formatSignificant(report.maxJump, 4)));
+    }
+    if (report.negativeDtCount > 0) {
+        parts.push(i18n.t('dataToolInterarrivalNegative').replace('{count}', String(report.negativeDtCount)));
+    }
+    if (report.droppedIntervals > 0) {
+        parts.push(i18n.t('dataToolInterarrivalDropped').replace('{count}', String(report.droppedIntervals)));
+    }
+    return parts.join(' ');
 };
 
-proto._interarrivalDescription = function(params = {}, timeUnit = '') {
-    const edges = { rising: 'rising edges', falling: 'falling edges' }[params.edge] || 'edges';
-    const band = params.deadband > 0 ? `; deadband ${params.deadband}` : '';
-    return `${edges}${band}${timeUnit ? ` [${timeUnit}]` : ''}`;
+proto._interarrivalDescription = function(params = {}, outputUnit = '') {
+    const normalized = normalizeInterarrivalParams(params);
+    const edges = { rising: 'rising edges', falling: 'falling edges' }[normalized.edge] || 'edges';
+    const band = normalized.deadband > 0 ? `; deadband ${normalized.deadband}` : '';
+    const placed = normalized.placement === 'hold' ? '; held over each interval' : '; at each edge';
+    return `${edges}${band}${placed}${outputUnit ? ` [${outputUnit}]` : ''}`;
 };
 
 proto._dataToolDescription = function(config) {
@@ -2693,7 +2802,10 @@ proto._dataToolDescription = function(config) {
         return `Data tool: filter ${config.sourceName}; ${this._filterDescription(config.params)}`;
     }
     if (config.tool === 'interarrival') {
-        return `Data tool: interarrival time of ${config.sourceName}; ${this._interarrivalDescription(config.params, config.timeUnit || '')}`;
+        const what = normalizeInterarrivalParams(config.params).output === 'rate'
+            ? `mean rate between edges of ${config.sourceName}`
+            : `interarrival time of ${config.sourceName}`;
+        return `Data tool: ${what}; ${this._interarrivalDescription(config.params, config.outputUnit || '')}`;
     }
     return `Data tool: remove outliers from ${config.sourceName}; ${this._outlierDetectorDescription(config)}; ${config.replacement}`;
 };
@@ -2721,7 +2833,10 @@ proto._dataToolStepLabel = function(step) {
     if (step.tool === 'interpolate') return `fill missing (${this._interpolateDescription(step.params)})`;
     if (step.tool === 'detrend') return `detrend (${this._detrendDescription(step.params)})`;
     if (step.tool === 'filter') return `filter (${this._filterDescription(step.params)})`;
-    if (step.tool === 'interarrival') return `interarrival time (${this._interarrivalDescription(step.params)})`;
+    if (step.tool === 'interarrival') {
+        const what = normalizeInterarrivalParams(step.params).output === 'rate' ? 'mean rate between edges' : 'interarrival time';
+        return `${what} (${this._interarrivalDescription(step.params)})`;
+    }
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
 
@@ -2900,6 +3015,13 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
             params: normalizeInterarrivalParams({
                 edge: document.getElementById('interarrival-edge')?.value,
                 deadband,
+                output: document.getElementById('interarrival-output')?.value,
+                placement: document.getElementById('interarrival-placement')?.value,
+                // Per minute or per hour only means something when the axis
+                // counts seconds; on any other axis the rate is per its unit.
+                rateUnit: this._interarrivalAxisInSeconds(data)
+                    ? document.getElementById('interarrival-rate-unit')?.value
+                    : 's',
             }),
         };
     }

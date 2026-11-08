@@ -287,7 +287,7 @@
                         <option value="interpolate" data-i18n="dataToolInterpolate">Fill missing data</option>
                         <option value="detrend" data-i18n="dataToolDetrend">Detrend</option>
                         <option value="filter" data-i18n="dataToolFilter">Digital filter</option>
-                        <option value="interarrival" data-i18n="dataToolInterarrival">Time between edges</option>
+                        <option value="interarrival" data-i18n="dataToolInterarrival">Edge interval and rate</option>
                         <option value="resample" data-i18n="dataToolResample">Resample</option>
                         <option value="xcorr" data-i18n="dataToolXcorr">Cross-correlation</option>
                         <option value="collapse" data-i18n="dataToolCollapse">Collapse repeated timestamps</option>
@@ -405,7 +405,26 @@
                             </select>
                             <label class="options-subgroup-label" for="interarrival-deadband" data-i18n="dataToolInterarrivalDeadband">Minimum change |ΔY|</label>
                             <input id="interarrival-deadband" class="derived-input data-tool-number-input" type="number" min="0" step="any" value="0">
-                            <div class="data-tool-count" data-i18n="dataToolInterarrivalHint">An edge is a move of at least |ΔY| from the value at the last edge, so noise around a level makes none and a slow drift still counts once it has moved that far. 0 counts every change. The result is the time since the previous edge, at each edge, and empty in between.</div>
+                            <label class="options-subgroup-label" for="interarrival-output" data-i18n="dataToolInterarrivalOutput">Result</label>
+                            <select id="interarrival-output" class="data-tool-select">
+                                <option value="interval" selected data-i18n="dataToolInterarrivalOutputInterval">Time between edges Δt</option>
+                                <option value="rate" data-i18n="dataToolInterarrivalOutputRate">Mean rate ΔY/Δt</option>
+                            </select>
+                            <div id="interarrival-rate-unit-wrap" class="collapsed">
+                                <label class="options-subgroup-label" for="interarrival-rate-unit" data-i18n="dataToolInterarrivalRateUnit">Rate per</label>
+                                <select id="interarrival-rate-unit" class="data-tool-select">
+                                    <option value="s" selected data-i18n="dataToolInterarrivalPerSecond">Second</option>
+                                    <option value="min" data-i18n="dataToolInterarrivalPerMinute">Minute</option>
+                                    <option value="h" data-i18n="dataToolInterarrivalPerHour">Hour (kWh → kW)</option>
+                                </select>
+                                <div id="interarrival-rate-unit-note" class="data-tool-count" hidden></div>
+                            </div>
+                            <label class="options-subgroup-label" for="interarrival-placement" data-i18n="dataToolInterarrivalPlacement">Placed</label>
+                            <select id="interarrival-placement" class="data-tool-select">
+                                <option value="edge" selected data-i18n="dataToolInterarrivalPlacementEdge">At each edge (dots)</option>
+                                <option value="hold" data-i18n="dataToolInterarrivalPlacementHold">Held over the interval (stairs)</option>
+                            </select>
+                            <div class="data-tool-count" data-i18n="dataToolInterarrivalHint">An edge is a move of at least |ΔY| from the value at the last edge, so noise around a level makes none and a slow drift still counts once it has moved that far. 0 counts every change. Between two edges the tool gives the time Δt, or the mean rate ΔY/Δt — exact for a cumulative counter: the mean power of an energy meter. At each edge, the value sits on the edge that closes the interval; held, it covers the interval from one edge up to the next, and integrates back to the counter.</div>
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="interpolate">
