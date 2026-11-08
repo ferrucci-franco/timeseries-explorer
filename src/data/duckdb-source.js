@@ -62,7 +62,7 @@ import { buildStateChangesSql, buildStateColumnsSql, buildStateValuesSql } from 
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
-import { collectWindows, doubleLiteral, quoteIdent, rowIndexWindow, sinkColumn, windowedFromSql } from './lazy-tool-sql.js';
+import { collectWindows, doubleLiteral, hashText, quoteIdent, rowIndexWindow, sinkColumn, windowedFromSql } from './lazy-tool-sql.js';
 import {
     buildTemporalProfileFinalSql,
     buildTemporalProfileTimeStatsSql,
@@ -88,6 +88,99 @@ const STREAM_DEFAULT_CHUNK_ROWS = 262144;
 // the app sets another limit (the Advanced setting "Results in memory").
 export const DEFAULT_SINK_BUDGET_BYTES = 1024 * 1024 * 1024;
 
+// ─── Where the database lives ─────────────────────────────────────────────
+//
+// In memory, or — where the browser has an Origin Private File System — in a
+// file of it (docs/any-size-files.md §10): then DuckDB pages out to disk what
+// does not fit in `memory_limit`, so the results of the data tools on a file
+// too large to hold (sinks, dataset tables) are held by the disk the browser
+// grants instead of by the engine's memory. Everything else is as it was:
+// registered files, views and the scans over them do not touch the database
+// file.
+//
+// A file of OPFS is open in one tab at a time. Each tab takes the first of a
+// few fixed names it can open (a "slot": the first tab slot 0, a second one
+// slot 1, …); a fixed name is what lets a tab that reloads find its results
+// again (_prepareDiskDatabase). The objects a closed session left in it are
+// dropped when it is opened, but for the results kept for reuse.
+export const OPFS_DATABASE_PREFIX = 'omv-db-';
+export const OPFS_DATABASE_SLOTS = 6;
+// What the engine may hold in memory with its database on disk. Measured
+// (docs/any-size-files.md, 4b-1): from 256 MiB the scans and passes run as
+// with no limit; the CSV reader needs ~100 MiB. High enough that a full load
+// within the app's limits (a temporary table) fits, low enough to leave the
+// wasm heap room for what DuckDB does not account for.
+export const OPFS_MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024;
+// Of the space the browser grants the origin and is not used, the share the
+// results may take: the rest is left to everything else the origin keeps.
+const OPFS_BUDGET_SHARE = 0.8;
+// A probe file of this size that holds tells a disk from storage held in
+// memory (a private window; see src/workers/opfs-probe-worker.js).
+const OPFS_DISK_PROBE_BYTES = 2 * 1024 * 1024 * 1024;
+// How closely the probe narrows the room of storage held in memory: each step
+// grows a file that size in that memory, so not finer than it needs to be.
+const OPFS_PROBE_PRECISION_BYTES = 16 * 1024 * 1024;
+
+// The results kept from one session to the next (keepResult): their catalog,
+// in the database, and what they may take of the disk together.
+const KEPT_RESULTS_CATALOG = 'omv_kept_results';
+const KEPT_RESULT_PREFIX = 'omv_kept_';
+export const KEPT_RESULTS_MAX_BYTES = 4 * 1024 * 1024 * 1024;
+const KEPT_RESULTS_QUOTA_SHARE = 0.5;
+
+// The SQL the app writes names its lambda variables from a counter of the
+// session (__omv_0, …, __omv_a, … in base 36): the same reading of a file is
+// spelled with other names in the next one. Renamed in the order they
+// appear, which keeps every binding as it is. (A name with an underscore of
+// its own, __omv_w_…, is not one of them, and is left.)
+function canonicalLambdaNames(text) {
+    const names = new Map();
+    return text.replace(/\b__omv_[0-9a-z]+\b/g, (whole) => {
+        if (!names.has(whole)) names.set(whole, `__omv_L${names.size}`);
+        return names.get(whole);
+    });
+}
+
+// A SQL string literal: quotes doubled, nothing else touched (DuckDB reads a
+// backslash as itself).
+function sqlString(value) {
+    return `'${String(value ?? '').replace(/'/g, "''")}'`;
+}
+
+// What tells a file again from one session to the next: its name, size, date
+// and (on the desktop) path, and a digest of its first and last 64 KiB — a
+// file rewritten in place with the same size and date is still told apart by
+// what it holds. Null when it cannot be told (no digest in this context).
+export async function fileFingerprint(file) {
+    if (!file || !Number.isFinite(Number(file.size))) return null;
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle?.digest || typeof file.slice !== 'function') return null;
+    try {
+        const size = Number(file.size);
+        const span = 64 * 1024;
+        const head = await file.slice(0, Math.min(size, span)).arrayBuffer();
+        const tail = size > span ? await file.slice(Math.max(span, size - span), size).arrayBuffer() : new ArrayBuffer(0);
+        const bytes = new Uint8Array(head.byteLength + tail.byteLength);
+        bytes.set(new Uint8Array(head), 0);
+        bytes.set(new Uint8Array(tail), head.byteLength);
+        const digest = new Uint8Array(await subtle.digest('SHA-256', bytes));
+        const hex = Array.from(digest, b => b.toString(16).padStart(2, '0')).join('');
+        return JSON.stringify([file.name || '', size, Number(file.lastModified) || 0, file.localPath || '', hex]);
+    } catch (_) {
+        return null;
+    }
+}
+
+// Whether this context may hold a DuckDB database in OPFS: a secure context
+// with the directory API. The synchronous access handles DuckDB writes
+// through exist only in workers (its own), not here: whether they work is
+// told by opening the database (_openDatabase), which falls back to memory.
+export function opfsDatabaseAvailable() {
+    return typeof navigator !== 'undefined'
+        && (typeof isSecureContext === 'undefined' || isSecureContext)
+        && typeof navigator.storage?.getDirectory === 'function';
+}
+
 export default class DuckDbSource {
     constructor(structureParser = null) {
         this.structureParser = structureParser || null;
@@ -112,6 +205,21 @@ export default class DuckDbSource {
         this._nextSinkId = 0;
         this._liveSinks = new Map();
         this.sinkBudgetBytes = DEFAULT_SINK_BUDGET_BYTES;
+        // Where the database is to live: 'disk' (OPFS when the browser has
+        // it, memory otherwise) or 'memory'. Read when the engine starts (the
+        // Advanced setting "Results of the data tools").
+        this.storagePreference = 'disk';
+        // Where it lives: { kind: 'memory' | 'opfs', path, slot, reason }.
+        this.storage = { kind: 'memory', path: null, slot: null, reason: 'notStarted' };
+        // Free disk the results may still take, measured before a job
+        // (refreshDiskBudget); null until measured.
+        this._diskBudgetBytes = null;
+        // Whether results are kept from one session to the next (keepResult),
+        // with the database on disk (the Advanced setting); the tables that
+        // are, and the kept dataset tables a lazy dataset reads now.
+        this.keepResults = true;
+        this._keptTableNames = new Set();
+        this._keptTablesInUse = new Set();
     }
 
     static isAvailable() {
@@ -147,15 +255,7 @@ export default class DuckDbSource {
             const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
             const db = new duckdb.AsyncDuckDB(logger, worker);
             await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-            await db.open({
-                filesystem: {
-                    // Desktop local files are registered over HTTP Range. Avoid HEAD/full-read fallbacks:
-                    // they can trip DuckDB-WASM/XHR limits and accidentally fetch multi-GB files.
-                    reliableHeadRequests: false,
-                    allowFullHTTPReads: false,
-                    forceFullHTTPReads: false,
-                },
-            });
+            await this._openDatabase(db);
             this._db = db;
             this._conn = await db.connect();
         } catch (err) {
@@ -172,6 +272,327 @@ export default class DuckDbSource {
             await this._conn.query(`PRAGMA threads=${DUCKDB_DEFAULT_THREADS}`);
             await this._conn.query(`PRAGMA preserve_insertion_order=${DUCKDB_DEFAULT_PRESERVE_INSERTION_ORDER}`);
         } catch (_) { /* tuning is best-effort */ }
+        if (this.storage.kind === 'opfs') await this._prepareDiskDatabase();
+    }
+
+    // Open the database: in a slot of OPFS when that is wanted and possible,
+    // in memory otherwise. A slot another tab holds refuses to open; so does
+    // OPFS where the browser denies it. Then the next slot, then memory.
+    async _openDatabase(db) {
+        const filesystem = {
+            // Desktop local files are registered over HTTP Range. Avoid HEAD/full-read fallbacks:
+            // they can trip DuckDB-WASM/XHR limits and accidentally fetch multi-GB files.
+            reliableHeadRequests: false,
+            allowFullHTTPReads: false,
+            forceFullHTTPReads: false,
+        };
+        let reason = this.storagePreference === 'memory' ? 'memoryChosen' : 'noOpfs';
+        if (this.storagePreference !== 'memory' && opfsDatabaseAvailable()) {
+            for (let slot = 0; slot < OPFS_DATABASE_SLOTS; slot++) {
+                const path = `opfs://${OPFS_DATABASE_PREFIX}${slot}.db`;
+                try {
+                    await db.open({ path, accessMode: duckdb.DuckDBAccessMode.READ_WRITE, filesystem });
+                    this.storage = { kind: 'opfs', path, slot, reason: '' };
+                    return;
+                } catch (err) {
+                    reason = 'opfsRefused';
+                    this.storage.lastError = String(err?.message || err).split('\n')[0].slice(0, 200);
+                }
+            }
+        }
+        await db.open({ filesystem });
+        this.storage = { kind: 'memory', path: null, slot: null, reason, lastError: this.storage.lastError };
+    }
+
+    // A database file of OPFS opened again: the tables, views and macros a
+    // closed session left are dropped (their names would collide with this
+    // session's), but for the results kept for reuse; and the engine's memory
+    // is limited so that what does not fit is paged out to the file. Files of
+    // other slots no tab holds any more are removed.
+    async _prepareDiskDatabase() {
+        try {
+            await this._conn.query(`SET memory_limit='${Math.round(OPFS_MEMORY_LIMIT_BYTES / 1048576)}MB'`);
+        } catch (_) { /* best effort: the engine's default then */ }
+        const keep = await this._keptDiskTables();
+        const objects = this._arrowRowsToObjects(await this._conn.query(`
+            SELECT table_name AS name, table_type AS type FROM information_schema.tables
+            WHERE table_schema = 'main' AND table_catalog = current_database()`));
+        for (const { name, type } of objects) {
+            if (keep.has(name)) continue;
+            const kind = String(type).toUpperCase().includes('VIEW') ? 'VIEW' : 'TABLE';
+            try { await this._conn.query(`DROP ${kind} IF EXISTS ${quoteIdent(name)}`); } catch (_) { /* best effort */ }
+        }
+        try { await this._conn.query('CHECKPOINT'); } catch (_) { /* best effort */ }
+        await this._removeIdleDiskSlots();
+    }
+
+    // The tables of a database opened again that stay: the catalog of the
+    // results kept (keepResult) and the tables it lists that are there. A
+    // listed table that is gone (the session that wrote it stopped half-way)
+    // leaves the catalog.
+    async _keptDiskTables() {
+        const keep = new Set([KEPT_RESULTS_CATALOG]);
+        if (!this.keepResults) return keep;
+        try {
+            await this._ensureKeptCatalog();
+            const listed = this._arrowRowsToObjects(await this._conn.query(`SELECT key, table_name FROM ${KEPT_RESULTS_CATALOG}`));
+            const tables = new Set(this._arrowRowsToObjects(await this._conn.query(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' AND table_catalog = current_database()",
+            )).map(row => row.table_name));
+            for (const { key, table_name: table } of listed) {
+                if (tables.has(table)) {
+                    keep.add(table);
+                    this._keptTableNames.add(table);
+                }
+                else await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE key = ${sqlString(key)}`);
+            }
+        } catch (_) { /* a catalog that cannot be read keeps nothing */ }
+        return keep;
+    }
+
+    // ─── Results kept from one session to the next ───────────────────────
+    //
+    // With the database in OPFS a sink outlives the tab: a session restored,
+    // a page reloaded or a file opened again finds the result of a job it
+    // would otherwise run again. A result is kept under a name of its key —
+    // the source file's fingerprint (fileFingerprint), how the file is read,
+    // and what the job computed (the caller's part) — and listed in a catalog
+    // with what the app needs to adopt it (its rows, its counts). The kept
+    // results of every file may take, together, KEPT_RESULTS_MAX_BYTES and
+    // half of what the browser grants the origin; past that the ones used
+    // least recently go. A file that updates live is not kept for: it is
+    // not what it was.
+
+    async _ensureKeptCatalog() {
+        await this._conn.query(`CREATE TABLE IF NOT EXISTS ${KEPT_RESULTS_CATALOG} (
+            key VARCHAR PRIMARY KEY, table_name VARCHAR, shape VARCHAR,
+            record VARCHAR, rows BIGINT, bytes BIGINT, used_at DOUBLE)`);
+    }
+
+    // Whether a result of this file can be kept, or found kept.
+    canKeepResults(legacyData) {
+        const meta = legacyData?._duckdb;
+        return this.storage.kind === 'opfs' && this.keepResults !== false
+            && !!meta?.fingerprint && !(Number(meta.appendRows) > 0);
+    }
+
+    // The key of a result: the file and how it is read, and `part`, what the
+    // job computed. The app's version and build go in: a kernel changed by an
+    // update must not be served what its predecessor computed.
+    keptResultKey(legacyData, part) {
+        const meta = legacyData?._duckdb;
+        if (!this.canKeepResults(legacyData) || !part) return null;
+        return canonicalLambdaNames(JSON.stringify([this.keptResultsVersion || '', meta.fingerprint, meta.readKey || '', part]));
+    }
+
+    keptResultTable(key) {
+        return `${KEPT_RESULT_PREFIX}${hashText(key)}${hashText(`${key}\u0000`)}`;
+    }
+
+    /**
+     * The result kept under `key`, adopted as a sink of this file — or null.
+     * Returns `{ sink, record }`, `record` what keepResult was given.
+     */
+    async findKeptResult(legacyData, key) {
+        const meta = legacyData?._duckdb;
+        if (!key || !this.canKeepResults(legacyData)) return null;
+        await this.init();
+        return this._withConnectionLock(async () => {
+            await this._ensureKeptCatalog();
+            const rows = this._arrowRowsToObjects(await this._conn.query(
+                `SELECT * FROM ${KEPT_RESULTS_CATALOG} WHERE key = ${sqlString(key)}`));
+            const row = rows[0];
+            if (!row) return null;
+            const table = row.table_name;
+            const exists = this._arrowRowsToObjects(await this._conn.query(
+                `SELECT COUNT(*)::BIGINT AS n FROM information_schema.tables WHERE table_schema = 'main' AND table_name = ${sqlString(table)}`))[0];
+            if (!Number(exists?.n)) {
+                await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE key = ${sqlString(key)}`);
+                return null;
+            }
+            await this._conn.query(`UPDATE ${KEPT_RESULTS_CATALOG} SET used_at = ${Date.now()} WHERE key = ${sqlString(key)}`);
+            // A sink, or a dataset table about to be adopted (adoptDatasetTable):
+            // what its writer left, as it was when kept.
+            // Shared by every file that adopts it: counted, so that closing
+            // one does not take it from the others (dropSink).
+            const live = this._liveSinks.get(table);
+            const sink = live || {
+                ...JSON.parse(row.shape || '{}'),
+                table,
+                rows: Number(row.rows) || 0,
+                bytes: Number(row.bytes) || 0,
+                kept: true,
+                refs: 0,
+            };
+            if (!meta.sinks?.has(table)) sink.refs = (sink.refs || 0) + 1;
+            (meta.sinks ||= new Map()).set(table, sink);
+            this._liveSinks.set(table, sink);
+            this._keptTableNames.add(table);
+            return { sink, record: JSON.parse(row.record || '{}') };
+        });
+    }
+
+    /** List a finished sink as kept under `key`, with `record`; then hold the kept results to their room. */
+    async keepResult(legacyData, key, sink, record = {}) {
+        if (!key || !sink || !this.canKeepResults(legacyData)) return false;
+        await this._withConnectionLock(async () => {
+            await this._ensureKeptCatalog();
+            const text = sqlString;
+            const { table, rows, bytes, kept, refs, ...shape } = sink;
+            await this._conn.query(`INSERT OR REPLACE INTO ${KEPT_RESULTS_CATALOG} VALUES (
+                ${text(key)}, ${text(table)}, ${text(JSON.stringify(shape))},
+                ${text(JSON.stringify(record))}, ${Number(rows) || 0}, ${Number(bytes) || 0}, ${Date.now()})`);
+        });
+        sink.kept = true;
+        sink.refs ||= 1;
+        this._keptTableNames.add(sink.table);
+        await this._trimKeptResults();
+        return true;
+    }
+
+    // A kept result about to change (a job continued over it): no longer kept.
+    async forgetKeptResult(table) {
+        const sink = this._liveSinks.get(table);
+        this._keptTableNames.delete(table);
+        if (!sink?.kept) return;
+        sink.kept = false;
+        try {
+            await this._withConnectionLock(() => this._conn.query(
+                `DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE table_name = ${sqlString(table)}`));
+        } catch (_) { /* not listed */ }
+    }
+
+    // The kept results no file reads now go, least recently used first, until
+    // they all fit their room.
+    async _trimKeptResults() {
+        const quota = this._diskQuota?.quota;
+        const room = Math.min(KEPT_RESULTS_MAX_BYTES, Number.isFinite(quota) ? quota * KEPT_RESULTS_QUOTA_SHARE : KEPT_RESULTS_MAX_BYTES);
+        await this._withConnectionLock(async () => {
+            const rows = this._arrowRowsToObjects(await this._conn.query(
+                `SELECT key, table_name, bytes FROM ${KEPT_RESULTS_CATALOG} ORDER BY used_at ASC`));
+            let total = rows.reduce((sum, row) => sum + (Number(row.bytes) || 0), 0);
+            for (const row of rows) {
+                if (total <= room) break;
+                if (this._liveSinks.has(row.table_name) || this._keptTablesInUse?.has(row.table_name)) continue;
+                await this._conn.query(`DROP TABLE IF EXISTS ${quoteIdent(row.table_name)}`);
+                this._keptTableNames.delete(row.table_name);
+                await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE key = ${sqlString(row.key)}`);
+                total -= Number(row.bytes) || 0;
+            }
+        });
+    }
+
+    /** What the kept results take: `{ count, bytes }` (Settings). */
+    async keptResultsSize() {
+        if (this.storage.kind !== 'opfs') return { count: 0, bytes: 0 };
+        try {
+            return await this._withConnectionLock(async () => {
+                await this._ensureKeptCatalog();
+                const row = this._arrowRowsToObjects(await this._conn.query(
+                    `SELECT COUNT(*)::BIGINT AS n, COALESCE(SUM(bytes), 0)::BIGINT AS b FROM ${KEPT_RESULTS_CATALOG}`))[0];
+                return { count: Number(row?.n) || 0, bytes: Number(row?.b) || 0 };
+            });
+        } catch (_) {
+            return { count: 0, bytes: 0 };
+        }
+    }
+
+    /** Delete every kept result no file reads now; the ones read stop being kept. */
+    async clearKeptResults() {
+        if (this.storage.kind !== 'opfs') return;
+        await this._withConnectionLock(async () => {
+            await this._ensureKeptCatalog();
+            const rows = this._arrowRowsToObjects(await this._conn.query(`SELECT key, table_name FROM ${KEPT_RESULTS_CATALOG}`));
+            for (const row of rows) {
+                const live = this._liveSinks.get(row.table_name);
+                this._keptTableNames.delete(row.table_name);
+                if (live) live.kept = false;
+                else if (this._keptTablesInUse?.has(row.table_name)) this._keptTablesInUse.delete(row.table_name);
+                else await this._conn.query(`DROP TABLE IF EXISTS ${quoteIdent(row.table_name)}`);
+                await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE key = ${sqlString(row.key)}`);
+            }
+            try { await this._conn.query('CHECKPOINT'); } catch (_) { /* best effort */ }
+        });
+    }
+
+    async _removeIdleDiskSlots() {
+        try {
+            const root = await navigator.storage.getDirectory();
+            const own = this.storage.path?.replace(/^opfs:\/\//, '');
+            for (let slot = 0; slot < OPFS_DATABASE_SLOTS; slot++) {
+                const name = `${OPFS_DATABASE_PREFIX}${slot}.db`;
+                if (name === own) continue;
+                for (const file of [name, `${name}.wal`]) {
+                    // Refused while a live tab holds it: that is the tab's.
+                    try { await root.removeEntry(file); } catch (_) { /* held, or not there */ }
+                }
+            }
+        } catch (_) { /* best effort */ }
+    }
+
+    /**
+     * Measure what the results may still take on disk, with the database in
+     * OPFS: a share of what the browser grants the origin and is not used.
+     * Called before a job; sinkBudget() then holds the job to it.
+     */
+    async refreshDiskBudget() {
+        if (this.storage.kind !== 'opfs') return null;
+        try {
+            const { quota, usage } = await navigator.storage.estimate();
+            if (Number.isFinite(quota) && Number.isFinite(usage)) {
+                // What the storage really takes, which a private window
+                // holds in memory, below the quota it reports (_opfsRoom).
+                const free = Math.max(0, quota - usage);
+                const room = await this._opfsRoom(free);
+                this._diskBudgetBytes = Math.min(free, room) * OPFS_BUDGET_SHARE;
+                this._diskQuota = { quota, usage, room };
+            }
+        } catch (_) {
+            this._diskBudgetBytes = null;
+        }
+        return this._diskBudgetBytes;
+    }
+
+    // The room the origin's storage really has, up to `free` bytes, asked of
+    // a worker that grows a probe file (src/workers/opfs-probe-worker.js).
+    // Storage that held OPFS_DISK_PROBE_BYTES once is a disk: it is not asked
+    // again, and the quota is what it gives. Anything that cannot be asked
+    // (no worker, a probe that fails or takes too long) leaves the quota.
+    async _opfsRoom(free) {
+        if (this._opfsOnDisk || !(free > 0)) return free;
+        if (typeof Worker === 'undefined') return free;
+        const max = Math.min(free, OPFS_DISK_PROBE_BYTES);
+        let worker = null;
+        try {
+            worker = new Worker(new URL('../workers/opfs-probe-worker.js', import.meta.url), { type: 'module' });
+            const answer = await new Promise((resolve) => {
+                const timer = setTimeout(() => resolve(null), 30000);
+                worker.onmessage = (event) => { clearTimeout(timer); resolve(event.data); };
+                worker.onerror = () => { clearTimeout(timer); resolve(null); };
+                worker.postMessage({ max, precision: this.opfsProbePrecisionBytes || OPFS_PROBE_PRECISION_BYTES });
+            });
+            if (!answer || !Number.isFinite(answer.room)) return free;
+            if (answer.room >= max && max >= OPFS_DISK_PROBE_BYTES) {
+                this._opfsOnDisk = true;
+                return free;
+            }
+            return answer.room >= max ? free : answer.room;
+        } catch (_) {
+            return free;
+        } finally {
+            try { worker?.terminate(); } catch (_) { /* gone */ }
+        }
+    }
+
+    // What the app shows of where the results are kept (Settings).
+    storageInfo() {
+        return {
+            kind: this.storage.kind,
+            slot: this.storage.slot,
+            reason: this.storage.reason,
+            quota: this._diskQuota?.quota ?? null,
+            usage: this._diskQuota?.usage ?? null,
+        };
     }
 
     /**
@@ -488,6 +909,13 @@ export default class DuckDbSource {
         let result = null;
         try {
             result = await this._loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format, csvProfile, signal });
+            // What tells this file again in another session, for the results
+            // kept with the database on disk (keepResult).
+            if (lazy && result?._duckdb && this.storage.kind === 'opfs' && this.keepResults !== false) {
+                const meta = result._duckdb;
+                meta.fingerprint = await fileFingerprint(file);
+                meta.readKey = JSON.stringify([format, meta.csvProfile || null, meta.projectionSql || '', meta.readWhere || '', meta.timeExprSql || '', !!meta.generatedTime]);
+            }
         } catch (err) {
             try { await this._conn.query(`DROP TABLE IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
             try { await this._conn.query(`DROP VIEW IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
@@ -517,6 +945,11 @@ export default class DuckDbSource {
             meta.tableName,
         ].filter(Boolean);
         for (const name of [...new Set(objects)]) {
+            // A kept dataset table stays for the next session that asks.
+            if (this._keptTableNames.has(name)) {
+                this._keptTablesInUse.delete(name);
+                continue;
+            }
             try { await this._conn.query(`DROP TABLE IF EXISTS ${name}`); } catch (_) { /* ignore */ }
             try { await this._conn.query(`DROP VIEW IF EXISTS ${name}`); } catch (_) { /* ignore */ }
         }
@@ -876,6 +1309,13 @@ export default class DuckDbSource {
             sql = `SELECT __omv_raw_rn::DOUBLE AS rn, ${withTime ? `${tExpr}::DOUBLE` : 'CAST(NULL AS DOUBLE)'} AS t${values}`
                 + ` FROM ${from} WHERE ${tExpr} IS NOT NULL`;
         }
+        // From a file position on (a job continued over rows a live update
+        // appended): filtered outside, so a generated axis keeps numbering
+        // every row.
+        if (options.fromRow !== undefined && options.fromRow !== null) {
+            const fromRow = Math.max(0, Math.round(Number(options.fromRow) || 0));
+            sql = `SELECT * FROM (${sql}) WHERE rn >= ${fromRow}`;
+        }
         yield* this._streamSql(sql, (batches) => {
             const column = (idx) => this._joinedColumn(batches, idx);
             const yByVar = new Map();
@@ -980,16 +1420,27 @@ export default class DuckDbSource {
      * `{ table, columns }`, `columns` holding the sinkColumn of each value
      * column for the variables that read it.
      */
-    async createSink(legacyData, { columns = 1 } = {}) {
+    async createSink(legacyData, { columns = 1, table: name = null } = {}) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('createSink: data is not DuckDB-backed (eager mode)');
         await this.init();
         const id = ++this._nextSinkId;
-        const table = `${meta.baseTableName || meta.tableName}_sink_${id}`;
+        // A result to be kept is written under the name of its key
+        // (keptResultTable): whatever had that name is stale — unless a file
+        // still reads it (a run whose listing failed), when this one gets a
+        // name of its own.
+        if (name && this._liveSinks.has(name)) name = null;
+        const table = name || `${meta.baseTableName || meta.tableName}_sink_${id}`;
         const entries = Array.from({ length: Math.max(1, columns) }, (_, index) => sinkColumn(table, index));
-        const rnColumn = `__omv_sink_rn_${id}`;
+        const rnColumn = name ? '__omv_sink_rn' : `__omv_sink_rn_${id}`;
         const definition = [`${quoteIdent(rnColumn)} BIGINT`, ...entries.map(entry => `${quoteIdent(entry.column)} DOUBLE`)].join(', ');
-        await this._withConnectionLock(() => this._conn.query(`CREATE TABLE ${table} (${definition})`));
+        await this._withConnectionLock(async () => {
+            if (name) {
+                await this._conn.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
+                try { await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE table_name = ${sqlString(table)}`); } catch (_) { /* no catalog */ }
+            }
+            await this._conn.query(`CREATE TABLE ${table} (${definition})`);
+        });
         const sink = { table, rnColumn, columns: entries, rows: 0, bytes: 0 };
         (meta.sinks ||= new Map()).set(table, sink);
         this._liveSinks.set(table, sink);
@@ -1005,9 +1456,18 @@ export default class DuckDbSource {
     }
 
     // Bytes the live sinks of every file are counted for, and what is left.
+    // With the database in OPFS the limit is the disk the results may take
+    // (refreshDiskBudget, measured before the job: the sinks already written
+    // are in what the browser counts as used), not the memory setting.
     sinkBudget() {
         let used = 0;
         for (const sink of this._liveSinks.values()) used += sink.bytes;
+        if (this.storage.kind === 'opfs') {
+            // Not measured (no estimate in this context): no limit but the disk's.
+            const free = this._diskBudgetBytes == null ? NaN : Number(this._diskBudgetBytes);
+            const limit = Number.isFinite(free) ? used + free : Infinity;
+            return { limit, used, available: Math.max(0, limit - used), disk: true };
+        }
         const limit = Number(this.sinkBudgetBytes);
         return { limit, used, available: Math.max(0, limit - used) };
     }
@@ -1024,22 +1484,49 @@ export default class DuckDbSource {
      * writer's own (the shared one serves zooms meanwhile). Past the budget,
      * `write` throws an error with code SINK_BUDGET. `finish()` inserts the
      * rest and compacts the table; `abort()` drops it.
+     *
+     * With `fromRow` the writer rewrites an existing sink from that row on
+     * (a job continued over rows a live update appended,
+     * src/data/chunk-executor.js): the sink's rows from there are deleted and
+     * the new ones inserted in one transaction, so a query sees the sink
+     * before or after, never half of it; `abort()` rolls it back and leaves
+     * the sink as it was.
      */
-    openSinkWriter(legacyData, sink, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS } = {}) {
+    openSinkWriter(legacyData, sink, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS, fromRow = null } = {}) {
         const nColumns = sink.columns.length;
         const bufferRows = Math.max(1, Math.round(Number(chunkRows) || STREAM_DEFAULT_CHUNK_ROWS));
+        const rewrite = Number.isFinite(Number(fromRow)) && fromRow !== null;
         let conn = null;
         let rn = new Float64Array(bufferRows);
         let values = Array.from({ length: nColumns }, () => new Float64Array(bufferRows));
         let buffered = 0;
-        let nextRow = 0;
+        // A rewrite starts at `fromRow`: what is deleted, and the next row.
+        const startRow = rewrite ? Math.max(0, Math.round(Number(fromRow))) : 0;
+        let nextRow = startRow;
         let closed = false;
+        let transaction = false;
+        const rowsBefore = sink.rows;
+
+        // The connection, and for a rewrite the transaction that deletes the
+        // rows from `fromRow` on before the first insert.
+        const open = async () => {
+            if (conn) return conn;
+            conn = await this._openStreamConnection();
+            if (rewrite) {
+                await conn.query('BEGIN TRANSACTION');
+                transaction = true;
+                await conn.query(`DELETE FROM ${sink.table} WHERE ${quoteIdent(sink.rnColumn)} >= ${startRow}`);
+                sink.rows = Math.min(sink.rows, startRow);
+                sink.bytes = this.sinkBytesFor(sink.rows, nColumns);
+            }
+            return conn;
+        };
 
         const insert = async () => {
             if (!buffered) return;
             const budget = this.sinkBudget();
             if (budget.used + this.sinkBytesFor(buffered, nColumns) > budget.limit) throw sinkBudgetError(budget);
-            conn ||= await this._openStreamConnection();
+            await open();
             const table = this._sinkArrowTable(sink, rn, values, buffered);
             await conn.insertArrowTable(table, { name: sink.table, create: false });
             sink.rows += buffered;
@@ -1050,6 +1537,8 @@ export default class DuckDbSource {
         };
         return {
             sink,
+            // The next file position the sink gets a row for.
+            nextRow: () => nextRow,
             write: async (rows, columns) => {
                 if (closed) throw new Error('sink writer: write after close');
                 let i = 0;
@@ -1082,22 +1571,42 @@ export default class DuckDbSource {
                 if (closed) return sink;
                 closed = true;
                 try {
+                    // A rewrite that wrote nothing still deletes the old tail.
+                    if (rewrite) await open();
                     await insert();
+                    if (transaction) {
+                        await conn.query('COMMIT');
+                        transaction = false;
+                    }
                     // Compacts what was written while the table grew
                     // (measured: 369 → 221 MB for 20M rows of a sine).
                     try { await conn?.query('CHECKPOINT'); } catch (_) { /* best effort */ }
                 } finally {
+                    if (transaction) {
+                        try { await conn.query('ROLLBACK'); } catch (_) { /* gone with the connection */ }
+                        transaction = false;
+                        sink.rows = rowsBefore;
+                        sink.bytes = this.sinkBytesFor(sink.rows, nColumns);
+                    }
                     await this._closeStreamConnection(conn);
                     conn = null;
                 }
                 this._clearRangeCacheForTable(legacyData?._duckdb?.tableName);
+                this._clearRangeCacheForTable(legacyData?._duckdb?.combinedViewName);
                 return sink;
             },
             abort: async () => {
                 closed = true;
+                if (transaction) {
+                    try { await conn.query('ROLLBACK'); } catch (_) { /* gone with the connection */ }
+                    transaction = false;
+                    sink.rows = rowsBefore;
+                    sink.bytes = this.sinkBytesFor(sink.rows, nColumns);
+                }
                 await this._closeStreamConnection(conn);
                 conn = null;
-                await this.dropSink(legacyData, sink.table);
+                // A rewrite leaves the sink as it was; a new sink goes.
+                if (!rewrite) await this.dropSink(legacyData, sink.table);
             },
         };
     }
@@ -1128,17 +1637,27 @@ export default class DuckDbSource {
      *   the time first; all DOUBLE
      * @returns {Promise<{ table, timeColumn, columns, rows, bytes, dataset: true }>}
      */
-    async createDatasetTable(legacyData, { timeColumn, columns }) {
+    async createDatasetTable(legacyData, { timeColumn, columns, table: name = null }) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('createDatasetTable: data is not DuckDB-backed (eager mode)');
         if (!columns?.length) throw new Error('createDatasetTable: no columns');
         await this.init();
         const id = ++this._nextSinkId;
-        const table = `${meta.baseTableName || meta.tableName}_dataset_${id}`;
+        // A dataset to be kept is written under the name of its key (unless a
+        // file still reads a table of that name: then one of its own).
+        if (name && (this._liveSinks.has(name) || this._keptTablesInUse.has(name))) name = null;
+        const table = name || `${meta.baseTableName || meta.tableName}_dataset_${id}`;
         const names = [timeColumn, ...columns];
         if (new Set(names).size !== names.length) throw new Error('createDatasetTable: duplicate column names');
         const definition = names.map(name => `${this._quoteIdent(name)} DOUBLE`).join(', ');
-        await this._withConnectionLock(() => this._conn.query(`CREATE TABLE ${table} (${definition})`));
+        await this._withConnectionLock(async () => {
+            if (name) {
+                await this._conn.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
+                try { await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE table_name = ${sqlString(table)}`); } catch (_) { /* no catalog */ }
+                this._keptTableNames.delete(table);
+            }
+            await this._conn.query(`CREATE TABLE ${table} (${definition})`);
+        });
         const dataset = { table, timeColumn, columns: columns.slice(), rows: 0, bytes: 0, dataset: true };
         (meta.sinks ||= new Map()).set(table, dataset);
         this._liveSinks.set(table, dataset);
@@ -1455,7 +1974,17 @@ export default class DuckDbSource {
     // Drop a sink. Safe to call twice, and on a sink of a file already closed.
     async dropSink(legacyData, table) {
         if (!table) return;
+        const sink = this._liveSinks.get(table) || legacyData?._duckdb?.sinks?.get(table);
+        const owned = !!legacyData?._duckdb?.sinks?.has(table);
         legacyData?._duckdb?.sinks?.delete(table);
+        // A kept result stays for the next session that asks for it; only
+        // _trimKeptResults and clearKeptResults drop it. It is live while a
+        // file still reads it.
+        if (sink?.kept || this._keptTableNames.has(table)) {
+            if (sink && owned) sink.refs = Math.max(0, (sink.refs || 1) - 1);
+            if (!sink || !(sink.refs > 0)) this._liveSinks.delete(table);
+            return;
+        }
         this._liveSinks.delete(table);
         if (!this._conn) return;
         try {
@@ -2613,7 +3142,10 @@ export default class DuckDbSource {
             viewMode = true;
         } else {
             try {
-                await query(`CREATE TABLE ${tableName} AS SELECT * FROM ${sourceExpr}`);
+                // Temporary: with the database in OPFS a table written here
+                // would go through the disk, for rows read once and dropped.
+                const temporary = this.storage.kind === 'opfs' ? 'TEMP ' : '';
+                await query(`CREATE ${temporary}TABLE ${tableName} AS SELECT * FROM ${sourceExpr}`);
             } catch (err) {
                 if (err?.name === 'AbortError') throw err;
                 const msg = String(err?.message || err);
@@ -4727,6 +5259,9 @@ export default class DuckDbSource {
         this._initPromise = null;
         // Its tables went with the engine.
         this._liveSinks.clear();
+        this.storage = { kind: 'memory', path: null, slot: null, reason: 'notStarted' };
+        this._keptTableNames.clear();
+        this._keptTablesInUse.clear();
         // A new engine starts without the Parquet reader.
         this._parquetLoaded = false;
     }
@@ -4735,10 +5270,13 @@ export default class DuckDbSource {
 // A sink that would take the sinks past their budget. The app explains it
 // (code SINK_BUDGET) with the numbers it carries.
 function sinkBudgetError(budget) {
-    const err = new Error('The results of the data tools would exceed the memory set aside for them.');
+    const err = new Error(budget.disk
+        ? 'The results of the data tools would exceed the disk space the browser grants them.'
+        : 'The results of the data tools would exceed the memory set aside for them.');
     err.code = 'SINK_BUDGET';
     err.limit = budget.limit;
     err.used = budget.used;
+    err.disk = !!budget.disk;
     return err;
 }
 

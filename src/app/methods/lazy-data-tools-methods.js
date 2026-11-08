@@ -23,7 +23,7 @@
 // detector's chunks run in the compute worker pool, several at a time.
 
 import i18n from '../../i18n/index.js';
-import { runChunkedJob } from '../../data/chunk-executor.js';
+import { continueChunkedJob, runChunkedJob } from '../../data/chunk-executor.js';
 import { createMovingAverage } from '../../compute/kernels/moving-average.js';
 import { createForwardFilter, createZeroPhaseFilter } from '../../compute/kernels/iir.js';
 import { createCumulativeIntegral } from '../../compute/kernels/integral.js';
@@ -604,7 +604,7 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
         replacement: tool === 'removeOutliers' ? (config.replacement || 'nan') : '',
     };
     const signature = this._lazySinkSignature(data, definition);
-    const run = await this._runLazySinkJob(data, definition, options);
+    const run = await this._runLazySinkJob(data, definition, { ...options, resumable: this._lazySinkResumable(fileId, definition) });
     if (!run) {
         if (!options.silent) this._setOutlierMessage(() => i18n.t('dataToolSinkCancelled').replace('{name}', outputName), '');
         return null;
@@ -618,6 +618,7 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
     data.variables[outputName] = variable;
     // Replacing an earlier run drops its sink (_storeDataToolDefinition).
     this._storeDataToolDefinition(fileId, outputName, { ...definition, variable });
+    this._keepLazySinkResume(data, definition, run);
     // What is built on this output reads its sink: rebuild it.
     const dependents = existingDefinition ? this._reapplyDataToolDependents(fileId, data, outputName) : [];
     await this._refreshLazyDataToolOverview(data);
@@ -754,6 +755,8 @@ proto._lazySinkKernel = function(data, definition, { axis = null, stats = null }
             push: chunk => kernel.push(column(chunk), useTimeAxis ? chunk.x : null).values,
             flush: () => kernel.flush().values,
             report: () => filler.report(),
+            save: () => ({ kernel: kernel.save(), filler: filler.save() }),
+            load: (state) => { kernel.load(state.kernel); filler.load(state.filler); },
             withTime: useTimeAxis,
         };
     }
@@ -772,6 +775,8 @@ proto._lazySinkKernel = function(data, definition, { axis = null, stats = null }
             push: chunk => kernel.push(column(chunk), timed ? chunk.x : null).values,
             flush: () => kernel.flush().values,
             report: () => integral.report(),
+            save: () => ({ kernel: kernel.save(), integral: integral.save() }),
+            load: (state) => { kernel.load(state.kernel); integral.load(state.integral); },
             withTime: timed,
         };
     }
@@ -785,6 +790,8 @@ proto._lazySinkKernel = function(data, definition, { axis = null, stats = null }
             push: chunk => kernel.push(column(chunk), withTime ? chunk.x : null),
             flush: () => kernel.flush(),
             report: () => kernel.report(),
+            save: () => kernel.save(),
+            load: state => kernel.load(state),
             withTime,
         };
     }
@@ -806,6 +813,8 @@ proto._lazySinkKernel = function(data, definition, { axis = null, stats = null }
             push: chunk => kernel.push(column(chunk), timed ? chunk.x : null),
             flush: () => kernel.flush(),
             report: () => kernel.report(),
+            save: () => kernel.save(),
+            load: state => kernel.load(state),
             withTime: timed,
         };
     }
@@ -813,6 +822,8 @@ proto._lazySinkKernel = function(data, definition, { axis = null, stats = null }
     return {
         push: chunk => kernel.push(column(chunk)),
         flush: () => kernel.flush(),
+        save: () => kernel.save(),
+        load: state => kernel.load(state),
         get used() { return kernel.used; },
     };
 };
@@ -866,6 +877,17 @@ proto._lazyOutlierKernel = function(definition, { stats = null, column }) {
                 const { values, aux } = await stage1.flush();
                 return concat(replace(values, aux), finish());
             },
+            // The cores in flight, given before a save (chunk-executor.js).
+            settle: async () => {
+                const { values, aux } = await stage1.settle();
+                return replace(values, aux);
+            },
+            save: () => ({ stage1: stage1.save(), stage2: stage2 ? stage2.save() : null, outlierCount }),
+            load: (state) => {
+                stage1.load(state.stage1);
+                if (stage2) stage2.load(state.stage2);
+                outlierCount = state.outlierCount;
+            },
             report: () => ({ outlierCount }),
             withTime: false,
         };
@@ -898,6 +920,11 @@ proto._lazyOutlierKernel = function(definition, { stats = null, column }) {
             return replace(cleaned, aux);
         },
         flush: () => finish(),
+        save: () => ({ stage2: stage2 ? stage2.save() : null, outlierCount }),
+        load: (state) => {
+            if (stage2) stage2.load(state.stage2);
+            outlierCount = state.outlierCount;
+        },
         report: () => ({ outlierCount }),
         withTime: false,
     };
@@ -922,10 +949,25 @@ proto._lazySinkBudgetBytes = function() {
  * only if it lasts, so a file that updates live does not flash a dialog at
  * every append.
  */
-proto._runLazySinkJob = async function(data, definition, { signal = null, overlayDelayMs = 0 } = {}) {
+proto._runLazySinkJob = async function(data, definition, { signal = null, overlayDelayMs = 0, resumable = false, resume = null } = {}) {
     const source = data._duckdb.source;
+    // The result of the same job over the same file, kept from an earlier
+    // session (the database on disk; DuckDbSource.keepResult): adopted, not
+    // run. A file that updates live keeps nothing: it is not what it was.
+    const keepKey = !resume && !resumable ? source.keptResultKey?.(data, this._lazySinkKeepPart(data, definition)) : null;
+    if (keepKey) {
+        const kept = await source.findKeptResult(data, keepKey);
+        if (kept) {
+            return {
+                sink: kept.sink, rows: kept.record.rows, fitPoints: kept.record.fitPoints ?? undefined,
+                report: kept.record.report ?? null, resume: null, axis: null, reused: true,
+            };
+        }
+    }
     const budgetBytes = this._lazySinkBudgetBytes();
     if (budgetBytes !== null) source.sinkBudgetBytes = budgetBytes;
+    // With the database on disk, what the browser still grants it.
+    await source.refreshDiskBudget?.();
     // Refused before reading anything when the size is known (Parquet, a
     // counted file); otherwise the writer stops at the budget.
     const totalRows = Number(data._duckdb.totalRows);
@@ -971,17 +1013,34 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
         // axis first: a pass of its own, once per file. An IQR run needs its
         // fences: the exact quartiles of the whole file.
         let axis = null;
-        if (['filter', 'integrate', 'interpolate'].includes(definition.tool)) {
+        if (!resume && ['filter', 'integrate', 'interpolate'].includes(definition.tool)) {
             overlay?.progress(i18n.t('dataToolSinkMeasuringAxis'));
             axis = await this._lazyAxisSteps(data, { signal: controller.signal });
         }
         let stats = null;
-        if (definition.tool === 'removeOutliers' && definition.method === 'iqr') {
+        if (!resume && definition.tool === 'removeOutliers' && definition.method === 'iqr') {
             stats = await this._computeLazyToolStats(data, { ...definition, replacement: 'nan' });
         }
+        // A continuation (_continueLazySinkTool) goes on from the kernel the
+        // last run left and rewrites that run's sink from its tail.
+        if (resume) {
+            const result = await continueChunkedJob({
+                data,
+                sourceNames: [definition.sourceName],
+                sink: resume.sink,
+                resume: resume.resume,
+                withTime: !!resume.resume.kernel.withTime,
+                signal: controller.signal,
+                onProgress: progress,
+            });
+            return {
+                sink: resume.sink, rows: result.rows, fitPoints: result.used, report: result.report || null,
+                resume: result.resume, axis: resume.axis, continued: true,
+            };
+        }
         const kernel = this._lazySinkKernel(data, definition, { axis, stats });
-        const sink = await source.createSink(data);
-        const { rows } = await runChunkedJob({
+        const sink = await source.createSink(data, keepKey ? { table: source.keptResultTable(keepKey) } : {});
+        const result = await runChunkedJob({
             data,
             sourceNames: [definition.sourceName],
             kernel,
@@ -989,8 +1048,13 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
             withTime: !!kernel.withTime,
             signal: controller.signal,
             onProgress: progress,
+            resumable,
         });
-        return { sink, rows, fitPoints: kernel.used, report: kernel.report?.() || null };
+        if (keepKey) {
+            await source.keepResult(data, keepKey, sink, { rows: result.rows, fitPoints: result.used ?? null, report: result.report || null })
+                .catch(err => console.warn('[duckdb] could not keep a result:', err?.message || err));
+        }
+        return { sink, rows: result.rows, fitPoints: result.used, report: result.report || null, resume: result.resume, axis };
     } catch (err) {
         if (controller.signal.aborted || err?.name === 'AbortError') return null;
         throw new Error(this._lazySinkErrorMessage(definition.name, err));
@@ -1003,7 +1067,7 @@ proto._runLazySinkJob = async function(data, definition, { signal = null, overla
 proto._lazySinkErrorMessage = function(name, err) {
     if (err?.code === 'SINK_BUDGET') {
         const size = (bytes) => this._formatFileSize?.(bytes) || `${Math.round(bytes / 1048576)} MB`;
-        return i18n.t('dataToolSinkBudget')
+        return i18n.t(err.disk ? 'dataToolSinkDiskBudget' : 'dataToolSinkBudget')
             .replace('{name}', name)
             .replace('{limit}', size(err.limit))
             .replace('{used}', size(err.used));
@@ -1061,9 +1125,16 @@ proto._refreshLazySinkTool = async function(fileId, name, isCurrent = () => true
     const signature = this._lazySinkSignature(data, definition);
     if (!signature) return false;
     if (definition.lazySink?.signature === signature && source.hasSink(definition.lazySink.table)) return false;
+    // Rows appended to a file that updates live: the last run goes on from
+    // where it stopped when nothing it read can have changed.
+    const resume = await this._lazySinkContinuation(fileId, data, definition);
+    if (resume) {
+        const continued = await this._continueLazySinkTool(fileId, data, name, definition, resume, signature, isCurrent);
+        if (continued !== null) return continued;
+    }
     let run = null;
     try {
-        run = await this._runLazySinkJob(data, definition, { overlayDelayMs: 1000 });
+        run = await this._runLazySinkJob(data, definition, { overlayDelayMs: 1000, resumable: this._lazySinkResumable(fileId, definition) });
     } catch (err) {
         console.warn(`[duckdb] could not compute lazy data tool ${name}:`, err?.message || err);
         this._setOutlierMessage(err?.message || String(err), 'error');
@@ -1092,16 +1163,184 @@ proto._refreshLazySinkTool = async function(fileId, name, isCurrent = () => true
     }
     data.variables[name] = variable;
     definition.variable = variable;
+    this._keepLazySinkResume(data, definition, run);
     this._reapplyDataToolDependents(fileId, data, name);
     await this._refreshLazyDataToolOverview(data);
     this.plotManager.updateFileData(fileId, data);
     this._renderFilteredTree?.();
-    if (replaced && replaced !== run.sink.table) await source.dropSink(data, replaced);
+    if (replaced && replaced !== run.sink.table) {
+        this._lazySinkResumes?.delete(replaced);
+        await source.dropSink(data, replaced);
+    }
+    return true;
+};
+
+// ─── Live update: a job continued over the rows appended ───────────────────
+//
+// A file that updates live grows at its end. A sink tool's run kept, when it
+// was asked to (_lazySinkResumable), the state its kernel was in before its
+// flush (runChunkedJob, `resumable`): appended rows are pushed into that state
+// and the sink is rewritten from the rows the flush answered on — the same
+// doubles a run over the whole grown file gives, at the cost of the rows that
+// were added. That holds when nothing the kernel was built from or has read
+// can change with rows at the end:
+//
+//   · the same file as loaded, the same source SQL and the same settings;
+//   · a source whose values for the rows already read stay what they were: a
+//     column of the file, or SQL over its columns row by row — not a window
+//     over neighbouring rows (a derivative, diff()), whose last rows change,
+//     nor another tool's output, whose tail its own continuation rewrites;
+//   · the same statistics of the whole file: the step of the time axis, for
+//     the tools that read it (filter, integral, fill); an IQR run's fences,
+//     which every row moves, are not continued;
+//   · not the zero-phase filter, whose backward pass runs over everything.
+//
+// Anything else runs the job again from the first row, as before.
+
+// Whether a run of this tool should keep what a continuation needs: the
+// kernel's state is held in memory, so only for a file that updates live.
+proto._lazySinkResumable = function(fileId, definition) {
+    if (!this.files?.get?.(fileId)?.liveUpdate?.enabled) return false;
+    if (definition.tool === 'filter' && definition.params?.mode === 'zeroPhase') return false;
+    if (definition.tool === 'removeOutliers' && definition.method === 'iqr') return false;
+    return true;
+};
+
+// What a continuation must find unchanged, as text: the source's SQL and
+// axis, the file as loaded (not the rows it has now) and the tool's settings
+// — normalized, as the app stores them once it has re-applied a definition
+// (a detrend gains its method and order then), so that a definition made
+// moments before keys the same.
+proto._lazySinkContinuationKey = function(data, definition) {
+    const meta = data?._duckdb;
+    const source = meta?.source;
+    const variable = data?.variables?.[definition.sourceName];
+    if (!source || !variable || !source.hasSqlValue(variable)) return null;
+    const axis = this._lazyToolTimeAxis(data);
+    const settings = typeof this._normalizeDataToolDefinition === 'function'
+        ? this._normalizeDataToolDefinition(definition)
+        : definition;
+    return JSON.stringify([
+        source._valueExpressionSql(variable, definition.sourceName, { castDouble: true }),
+        axis.kind,
+        axis.timeSql,
+        meta.baseTableName || meta.tableName,
+        settings.tool, settings.method || null, settings.replacement || '', settings.params || {},
+    ]);
+};
+
+// What a sink job computed, for the key of a result kept between sessions
+// (DuckDbSource.keptResultKey adds the file and how it is read): the source's
+// SQL — which names the kept results it is built on, by their names — the
+// time axis and the tool's normalized settings.
+proto._lazySinkKeepPart = function(data, definition) {
+    const source = data?._duckdb?.source;
+    const variable = data?.variables?.[definition.sourceName];
+    if (!source || !variable || !source.hasSqlValue(variable)) return null;
+    const axis = this._lazyToolTimeAxis(data);
+    const settings = typeof this._normalizeDataToolDefinition === 'function'
+        ? this._normalizeDataToolDefinition(definition)
+        : definition;
+    return JSON.stringify([
+        'sink',
+        source._valueExpressionSql(variable, definition.sourceName, { castDouble: true }),
+        axis.kind,
+        axis.timeSql,
+        settings.tool, settings.method || null, settings.replacement || '', settings.params || {},
+    ]);
+};
+
+// A source whose values for the rows already read do not change when rows
+// are appended: a column of the file, or SQL over its columns row by row.
+proto._isAppendStableLazyVariable = function(data, name) {
+    const variable = data?.variables?.[name];
+    if (!variable || !data._duckdb?.source?.hasSqlValue(variable)) return false;
+    return !(variable._duckdbWindows?.length);
+};
+
+proto._keepLazySinkResume = function(data, definition, run) {
+    if (!this._lazySinkResumes) this._lazySinkResumes = new Map();
+    const table = run.sink?.table;
+    if (!table) return;
+    if (!run.resume) {
+        this._lazySinkResumes.delete(table);
+        return;
+    }
+    this._lazySinkResumes.set(table, {
+        data,
+        key: this._lazySinkContinuationKey(data, definition),
+        appendRows: Number(data._duckdb.appendRows) || 0,
+        axis: run.axis || null,
+        sink: run.sink,
+        resume: run.resume,
+    });
+};
+
+// The resume a definition's sink can go on from now, or null.
+proto._lazySinkContinuation = async function(fileId, data, definition) {
+    const table = definition.lazySink?.table;
+    const entry = table ? this._lazySinkResumes?.get(table) : null;
+    if (!entry) return null;
+    const source = data._duckdb.source;
+    const drop = () => { this._lazySinkResumes.delete(table); return null; };
+    if (entry.data !== data || !source.hasSink(table)) return drop();
+    if (!this._lazySinkResumable(fileId, definition)) return drop();
+    if (entry.key !== this._lazySinkContinuationKey(data, definition)) return drop();
+    if (!this._isAppendStableLazyVariable(data, definition.sourceName)) return drop();
+    if (!((Number(data._duckdb.appendRows) || 0) > entry.appendRows)) return null;
+    if (['filter', 'integrate', 'interpolate'].includes(definition.tool)) {
+        // The step of the whole axis, grown: one aggregate pass, cached.
+        const axis = await this._lazyAxisSteps(data);
+        const same = (a, b) => Object.is(a, b) || (Number.isNaN(a) && Number.isNaN(b));
+        const fields = ['timed', 'medianDt', 'hasNominalStep', 'usableAxis', 'reason'];
+        if (!entry.axis || !fields.every(field => same(entry.axis[field], axis[field]))) return drop();
+    }
+    return entry;
+};
+
+// Continue a sink over the appended rows. Returns true when the sink was
+// brought up to date, false when the run did not stand (edited meanwhile),
+// and null when the continuation failed and a run from the first row is due.
+proto._continueLazySinkTool = async function(fileId, data, name, definition, entry, signature, isCurrent) {
+    const source = data._duckdb.source;
+    await source.forgetKeptResult?.(entry.sink.table);
+    let run = null;
+    try {
+        run = await this._runLazySinkJob(data, definition, { overlayDelayMs: 1000, resume: entry });
+    } catch (err) {
+        console.warn(`[duckdb] could not continue lazy data tool ${name}; running it again:`, err?.message || err);
+        this._lazySinkResumes.delete(entry.sink.table);
+        return null;
+    }
+    if (!run) return null;
+    const stillCurrent = isCurrent()
+        && this.dataToolVariablesByFile?.get(fileId)?.get(name) === definition
+        && this.plotManager.files.get(fileId)?.data === data
+        && this._lazySinkSignature(data, definition) === signature;
+    entry.appendRows = Number(data._duckdb.appendRows) || 0;
+    entry.resume = run.resume;
+    if (!run.resume) this._lazySinkResumes.delete(entry.sink.table);
+    if (!stillCurrent) return false;
+    definition.lazySink = this._lazySinkRecord(run, signature);
+    const variable = this._lazySqlToolVariable(data, name, definition);
+    if (!variable) {
+        definition.lazySink = null;
+        this._lazySinkResumes.delete(entry.sink.table);
+        await source.dropSink(data, entry.sink.table);
+        return false;
+    }
+    data.variables[name] = variable;
+    definition.variable = variable;
+    this._reapplyDataToolDependents(fileId, data, name);
+    await this._refreshLazyDataToolOverview(data);
+    this.plotManager.updateFileData(fileId, data);
+    this._renderFilteredTree?.();
     return true;
 };
 
 // A deleted output's sink: nothing reads it any more.
 proto._dropLazySink = function(fileId, table) {
+    this._lazySinkResumes?.delete(table);
     const data = this.plotManager?.files?.get(fileId)?.data;
     const source = data?._duckdb?.source;
     if (!source || !table) return;

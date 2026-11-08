@@ -407,7 +407,13 @@ export function createMissingFiller(params = {}, { useTimeAxis = false } = {}) {
         };
     }
 
-    return { compute, report: () => ({ ...report }) };
+    return {
+        compute,
+        report: () => ({ ...report }),
+        // Its only state is the counts (see createMovingAverage on save/load).
+        save: () => ({ ...report }),
+        load: (saved) => { Object.assign(report, saved); },
+    };
 }
 
 function fillRun(out, values, xAt, start, end, left, right, settings, helpers) {

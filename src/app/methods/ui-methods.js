@@ -1360,7 +1360,59 @@ proto.showDisplaySettings = function() {
     };
     panZoomControl.select.addEventListener('change', applyPanZoomSettings);
 
-    fileGrid.append(...fileLimitControls.map(control => control.field), compactControl.field);
+    // Where the results of the data tools on a lazy file are kept, and where
+    // they are now (the engine reads the choice when it starts).
+    const storageControl = makeSelect(
+        'lazy-results-storage',
+        'lazyResultsStorage',
+        'lazyResultsStorageHelp',
+        null,
+        [['disk', 'lazyResultsStorageDisk'], ['memory', 'lazyResultsStorageMemory']],
+    );
+    storageControl.select.value = this.advancedSettings?.lazyResultsStorage === 'memory' ? 'memory' : 'disk';
+    const storageNow = document.createElement('span');
+    storageNow.className = 'plot-settings-help lazy-results-storage-now';
+    storageControl.field.append(storageNow);
+    const syncStorageNow = () => {
+        const info = this._duckdbSource?.storageInfo?.();
+        if (!info || info.reason === 'notStarted') { storageNow.textContent = ''; return; }
+        storageNow.textContent = info.kind === 'opfs'
+            ? i18n.t('lazyResultsStorageNowDisk')
+            : i18n.t(info.reason === 'memoryChosen' ? 'lazyResultsStorageNowMemory' : 'lazyResultsStorageNowMemoryNoDisk');
+    };
+    syncStorageNow();
+    // What earlier sessions left on disk, and the way to let it go.
+    const keptRow = document.createElement('span');
+    keptRow.className = 'plot-settings-help lazy-results-kept';
+    const keptText = document.createElement('span');
+    const keptClear = document.createElement('button');
+    keptClear.type = 'button';
+    keptClear.className = 'modal-btn modal-btn-cancel lazy-results-kept-clear';
+    keptClear.textContent = i18n.t('lazyResultsKeptClear');
+    keptRow.append(keptText, ' ', keptClear);
+    const syncKept = async () => {
+        const source = this._duckdbSource;
+        if (source?.storage?.kind !== 'opfs') { keptRow.hidden = true; return; }
+        const { count, bytes } = await source.keptResultsSize();
+        keptRow.hidden = false;
+        keptClear.disabled = !count;
+        keptText.textContent = count
+            ? i18n.t('lazyResultsKeptSize').replace('{count}', i18n.formatNumber(count)).replace('{size}', this._formatFileSize?.(bytes) || `${Math.round(bytes / 1048576)} MB`)
+            : i18n.t('lazyResultsKeptNone');
+    };
+    keptClear.addEventListener('click', async () => {
+        keptClear.disabled = true;
+        try { await this._duckdbSource?.clearKeptResults(); } finally { await syncKept(); }
+    });
+    keptRow.hidden = true;
+    storageControl.field.append(keptRow);
+    syncKept().catch(() => { keptRow.hidden = true; });
+    storageControl.select.addEventListener('change', () => {
+        this._saveAdvancedSettings({ ...(this.advancedSettings || {}), lazyResultsStorage: storageControl.select.value });
+        storageControl.select.value = this.advancedSettings.lazyResultsStorage;
+    });
+
+    fileGrid.append(...fileLimitControls.map(control => control.field), storageControl.field, compactControl.field);
     fileSection.append(fileGrid);
 
     const applySettings = () => {
@@ -1390,6 +1442,7 @@ proto.showDisplaySettings = function() {
         }
         this._applyNumberFormat();
         syncNumberControls();
+        storageControl.select.value = this.advancedSettings.lazyResultsStorage;
         this.plotManager.preserveViewsForNextRender();
         this.layoutManager.render();
     });

@@ -24,7 +24,8 @@
 import i18n from '../../i18n/index.js';
 import { runDatasetJob } from '../../data/chunk-executor.js';
 import { streamColumns } from '../../data/column-stream.js';
-import { createResampler, normalizeResampleParams, resampleGridLayout } from '../../compute/kernels/regrid.js';
+import { createResampler, GRID_MULTIPLE_TOLERANCE, normalizeResampleParams, resampleGridLayout } from '../../compute/kernels/regrid.js';
+import { doubleLiteral } from '../../data/lazy-tool-sql.js';
 import { createCollapser, normalizeCollapseAggregate } from '../../compute/kernels/collapse-repeats.js';
 import { DataToolError } from '../../compute/kernels/shared.js';
 import { treeForDerivedData } from '../../parsers/csv-tree-grouping.js';
@@ -57,6 +58,79 @@ proto._lazyRowCount = async function(data, { signal } = {}) {
     const { n } = await source.aggregateOver(source.passSql(data, [], 'TRUE'), 'COUNT(*)::BIGINT AS n', { signal });
     this._lazyAxisStepCache.set(key, { rows: n });
     return n;
+};
+
+/**
+ * detectRegularSampling over a lazy file's whole time axis: whether every step
+ * is a whole multiple of the median one, which "Complete missing timestamps"
+ * promises, with the gaps, the missing samples and the repeated stamps it
+ * would fill and collapse. The same verdict, step for step: the steps in the
+ * file's order (LAG), the first one that is not finite or goes back deciding
+ * which of the two is reported, the exact median of the positive finite
+ * steps, and each step's multiple rounded as Math.round rounds a non-negative
+ * number (DuckDB's round, half away from zero). Two passes and the median's;
+ * cached per file like the axis's other measurements.
+ */
+proto._lazyRegularSampling = async function(data, { signal } = {}) {
+    const blank = (reason) => ({ ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason });
+    const source = data._duckdb.source;
+    const timeSql = source.timeValueSql(data);
+    if (!timeSql) return blank('noTimeAxis');
+    if (!this._lazyAxisStepCache) this._lazyAxisStepCache = new Map();
+    const key = this._lazyRealAxisKey(data, 'regular');
+    const cached = this._lazyAxisStepCache.get(key);
+    if (cached) return cached;
+    const from = `(SELECT t, t - LAG(t) OVER () AS dt, ROW_NUMBER() OVER () AS i FROM (SELECT (${timeSql})::DOUBLE AS t FROM ${source._fromSql(data, [])} WHERE ${timeSql} IS NOT NULL))`;
+    const pass = (value = 'NULL') => ({ from, valid: 'TRUE', value });
+    const verdict = await (async () => {
+        const counts = await source.aggregateOver(pass(), [
+            'COUNT(*)::BIGINT AS n',
+            'MIN(i) FILTER (WHERE i > 1 AND NOT COALESCE(isfinite(dt), FALSE))::BIGINT AS first_bad',
+            'MIN(i) FILTER (WHERE dt < 0)::BIGINT AS first_back',
+            'COUNT(*) FILTER (WHERE dt > 0 AND isfinite(dt))::BIGINT AS pos',
+        ].join(', '), { signal });
+        if (!(counts.n >= 3)) return blank('tooFewSamples');
+        const bad = Number.isFinite(counts.first_bad) ? counts.first_bad : Infinity;
+        const back = Number.isFinite(counts.first_back) ? counts.first_back : Infinity;
+        if (bad < back) return blank('notNumeric');
+        if (back < Infinity) return blank('nonMonotonic');
+        if (!(counts.pos > 0)) return blank('noStep');
+        const mid = counts.pos >> 1;
+        const ranks = counts.pos % 2 ? [mid] : [mid - 1, mid];
+        const { values } = await source.exactOrderStatisticsOver(pass('CASE WHEN dt > 0 AND isfinite(dt) THEN dt END'), ranks, { signal });
+        const step = counts.pos % 2 ? values.get(mid) : (values.get(mid - 1) + values.get(mid)) / 2;
+        if (!Number.isFinite(step) || step <= 0) return blank('noStep');
+        const s = doubleLiteral(step);
+        const band = doubleLiteral(step * GRID_MULTIPLE_TOLERANCE);
+        const m = `round(dt / ${s})`;
+        const steps = await source.aggregateOver(pass(), [
+            `COUNT(*) FILTER (WHERE i > 1 AND abs(dt - ${m} * ${s}) > ${band})::BIGINT AS irregular`,
+            `COUNT(*) FILTER (WHERE i > 1 AND ${m} = 0)::BIGINT AS repeats`,
+            `COUNT(*) FILTER (WHERE i > 1 AND ${m} > 1)::BIGINT AS gaps`,
+            `COALESCE(SUM(${m} - 1) FILTER (WHERE i > 1 AND ${m} > 1), 0)::DOUBLE AS missing`,
+        ].join(', '), { signal });
+        if (steps.irregular > 0) return blank('irregularStep');
+        return { ok: true, step, gaps: steps.gaps, missing: steps.missing, repeats: steps.repeats, reason: null };
+    })();
+    this._lazyAxisStepCache.set(key, verdict);
+    return verdict;
+};
+
+// The same, for a panel that cannot wait: the verdict when there is one;
+// otherwise null, with the passes started and the panel synced again after.
+proto._lazyRegularSamplingNow = function(data) {
+    const key = this._lazyRealAxisKey(data, 'regular');
+    const cached = this._lazyAxisStepCache?.get(key);
+    if (cached) return cached;
+    if (!this._lazyAxisStepRuns) this._lazyAxisStepRuns = new Map();
+    if (!this._lazyAxisStepRuns.has(key)) {
+        const run = this._lazyRegularSampling(data)
+            .then(() => this._syncDataTools?.())
+            .catch(err => console.warn('[duckdb] could not judge the sampling:', err?.message || err))
+            .finally(() => this._lazyAxisStepRuns.delete(key));
+        this._lazyAxisStepRuns.set(key, run);
+    }
+    return null;
 };
 
 proto._lazyRealAxisKey = function(data, what) {
@@ -145,10 +219,21 @@ proto._lazyDatasetAxisFrom = function(data, steps) {
  * null when it was cancelled (the table is dropped then). Anything else that
  * stops it is thrown, with a message for the panel.
  */
-proto._runLazyDatasetJob = async function(data, { name, sourceNames, timeColumn, columns, estimatedRows, kernel }, { signal = null, overlayDelayMs = 0 } = {}) {
+proto._runLazyDatasetJob = async function(data, { name, sourceNames, timeColumn, columns, estimatedRows, kernel, keepPart = null }, { signal = null, overlayDelayMs = 0 } = {}) {
     const source = data._duckdb.source;
+    // The same dataset of the same file, kept from an earlier session (the
+    // database on disk; DuckDbSource.keepResult): adopted, not run again.
+    const keepKey = keepPart ? source.keptResultKey?.(data, keepPart) : null;
+    if (keepKey) {
+        const kept = await source.findKeptResult(data, keepKey);
+        if (kept?.sink?.dataset) {
+            return { dataset: kept.sink, rows: kept.record.rows, written: kept.record.written, report: kept.record.report ?? null, keepKey, reused: true };
+        }
+    }
     const budgetBytes = this._lazySinkBudgetBytes();
     if (budgetBytes !== null) source.sinkBudgetBytes = budgetBytes;
+    // With the database on disk, what the browser still grants it.
+    await source.refreshDiskBudget?.();
     // Refused before reading anything when the size of the result is known
     // (a resample's grid); otherwise the writer stops at the budget.
     if (Number.isFinite(estimatedRows) && estimatedRows > 0) {
@@ -178,10 +263,15 @@ proto._runLazyDatasetJob = async function(data, { name, sourceNames, timeColumn,
             : i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(done)));
     };
     try {
-        const dataset = await source.createDatasetTable(data, { timeColumn, columns });
+        const dataset = await source.createDatasetTable(data, { timeColumn, columns, ...(keepKey ? { table: source.keptResultTable(keepKey) } : {}) });
         const writer = source.openDatasetWriter(data, dataset);
         const { rows, written } = await runDatasetJob({ data, sourceNames, kernel, writer, signal: controller.signal, onProgress: progress });
-        return { dataset, rows, written };
+        const report = kernel.report?.() ?? null;
+        if (keepKey) {
+            await source.keepResult(data, keepKey, dataset, { rows, written, report })
+                .catch(err => console.warn('[duckdb] could not keep a dataset:', err?.message || err));
+        }
+        return { dataset, rows, written, report, keepKey };
     } catch (err) {
         if (controller.signal.aborted || err?.name === 'AbortError') return null;
         throw new Error(this._lazySinkErrorMessage(name, err));
@@ -234,15 +324,23 @@ proto._computeLazyResampleDataset = async function(sourceFileId, sourceData, rec
         kernel: {
             push: chunk => resampler.push(chunk.x, names.map(n => chunk.yByVar.get(n))),
             flush: () => resampler.flush(),
+            report: () => resampler.report(),
         },
+        keepPart: JSON.stringify(['resample', names.map(n => source._valueExpressionSql(sourceData.variables[n], n, { castDouble: true })), time.kind, timeName, gridParams, axis]),
     });
     if (!run) throw cancelledError();
-    const report = resampler.report();
+    const report = run.report || resampler.report();
     const adopted = await source.adoptDatasetTable(sourceData, run.dataset, {
         timeName,
         timeKind: time.kind === 'datetime' ? 'datetime' : 'numeric',
         overviewPoints: sourceData._duckdb.overviewPoints || 10000,
     });
+    // A kept dataset is told again by its key: what is computed over it can
+    // be kept in turn.
+    if (run.keepKey && adopted?._duckdb) {
+        adopted._duckdb.fingerprint = run.keepKey;
+        adopted._duckdb.readKey = '';
+    }
     const scale = this._resampleAxisScale(time.kind);
     const data = this._buildLazyDatasetData(sourceData, time, adopted, names, 'resample', {
         resample: {
@@ -294,15 +392,23 @@ proto._computeLazyCollapseDataset = async function(sourceFileId, sourceData, rec
         kernel: {
             push: chunk => collapser.push(chunk.x, names.map(n => chunk.yByVar.get(n))),
             flush: () => collapser.flush(),
+            report: () => collapser.report(),
         },
+        keepPart: JSON.stringify(['collapse', names.map(n => source._valueExpressionSql(sourceData.variables[n], n, { castDouble: true })), time.kind, timeName, aggregate]),
     });
     if (!run) throw cancelledError();
-    const report = collapser.report();
+    const report = run.report || collapser.report();
     const adopted = await source.adoptDatasetTable(sourceData, run.dataset, {
         timeName,
         timeKind: time.kind === 'datetime' ? 'datetime' : 'numeric',
         overviewPoints: sourceData._duckdb.overviewPoints || 10000,
     });
+    // A kept dataset is told again by its key: what is computed over it can
+    // be kept in turn.
+    if (run.keepKey && adopted?._duckdb) {
+        adopted._duckdb.fingerprint = run.keepKey;
+        adopted._duckdb.readKey = '';
+    }
     const groups = report.groups;
     const data = this._buildLazyDatasetData(sourceData, time, adopted, names, 'collapse', {
         // One row per instant is the point, so the copy has nothing left to
@@ -383,7 +489,12 @@ proto._buildLazyDatasetData = function(sourceData, time, adopted, names, tool, e
 };
 
 // The CSV a lazy dataset writes to disk: every row, read from its table.
-proto._lazyDatasetCsvBytes = async function(data) {
+// The same CSV as a Blob, built as the exact CSV export builds its own: read a
+// chunk at a time, the text gathered into parts that go to a Blob every 32 MB —
+// a Blob's bytes live with the browser, outside the JavaScript heap, and can go
+// to disk — so a dataset of any length is written out ("Save as file") with no
+// more than a few chunks of text held at once. `onRows` is told the rows so far.
+proto._lazyDatasetCsvBlob = async function(data, { onRows = null, signal = null } = {}) {
     const timeName = data?.metadata?.timeName;
     const abscissa = data?.variables?.[timeName];
     const names = Object.entries(data?.variables || {})
@@ -391,7 +502,6 @@ proto._lazyDatasetCsvBytes = async function(data) {
         .map(([name]) => name);
     const rows = Number(data?._duckdb?.totalRows) || 0;
     if (!abscissa || !rows) throw new Error('Dataset is empty');
-    if (rows * (names.length + 1) > LAZY_DATASET_CSV_MAX_CELLS) throw new Error('Dataset is too large to serialize');
     const isDatetime = data.metadata?.timeKind === 'datetime';
     const header = (name, variable) => {
         const unit = (String(variable?.description || '').match(/\[([^\]]+)\]/) || [])[1] || '';
@@ -399,17 +509,43 @@ proto._lazyDatasetCsvBytes = async function(data) {
     };
     const cell = value => (Number.isFinite(value) ? String(value) : '');
     const quote = text => (/[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
-    const parts = [[header(timeName, abscissa), ...names.map(name => header(name, data.variables[name]))].map(quote).join(',')];
-    for await (const chunk of streamColumns(data, names)) {
+    const SPILL_CHARS = 32 * 1024 * 1024;
+    const spilled = [];
+    let parts = [`${[header(timeName, abscissa), ...names.map(name => header(name, data.variables[name]))].map(quote).join(',')}\n`];
+    let chars = parts[0].length;
+    let done = 0;
+    for await (const chunk of streamColumns(data, names, { signal })) {
         const columns = names.map(name => chunk.yByVar.get(name));
+        const lines = [];
         for (let r = 0; r < chunk.x.length; r++) {
             const t = chunk.x[r];
-            const cells = [isDatetime ? (Number.isFinite(t) ? new Date(t).toISOString() : '') : cell(t)];
-            for (const column of columns) cells.push(cell(column[r]));
-            parts.push(cells.join(','));
+            let line = isDatetime ? (Number.isFinite(t) ? new Date(t).toISOString() : '') : cell(t);
+            for (const column of columns) line += `,${cell(column[r])}`;
+            lines.push(line);
         }
+        const text = `${lines.join('\n')}\n`;
+        parts.push(text);
+        chars += text.length;
+        if (chars >= SPILL_CHARS) {
+            spilled.push(new Blob(parts));
+            parts = [];
+            chars = 0;
+        }
+        done += chunk.x.length;
+        onRows?.(done);
     }
-    return new TextEncoder().encode(`${parts.join('\n')}\n`);
+    return new Blob([...spilled, ...parts], { type: 'text/csv;charset=utf-8;' });
+};
+
+// The CSV as bytes, for what needs them whole (a project session writing the
+// dataset out): held to a size an array can take.
+proto._lazyDatasetCsvBytes = async function(data) {
+    const timeName = data?.metadata?.timeName;
+    const names = Object.entries(data?.variables || {})
+        .filter(([name, variable]) => name !== timeName && variable?.kind !== 'parameter' && data._duckdb?.source?.hasSqlValue(variable));
+    const rows = Number(data?._duckdb?.totalRows) || 0;
+    if (rows * (names.length + 1) > LAZY_DATASET_CSV_MAX_CELLS) throw new Error('Dataset is too large to serialize');
+    return new Uint8Array(await (await this._lazyDatasetCsvBlob(data)).arrayBuffer());
 };
 
 // ─── The cross-correlation ──────────────────────────────────────────────────

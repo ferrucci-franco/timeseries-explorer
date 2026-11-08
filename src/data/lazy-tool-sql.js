@@ -63,7 +63,7 @@ export function bindSql(sql, name, body) {
 // FNV-1a over the text, two independent 32-bit lanes: a column name that is a
 // function of the expression, so an edited tool gets a new column (and a new
 // cache key) and two identical ones share it.
-function hashText(text) {
+export function hashText(text) {
     let a = 0x811c9dc5;
     let b = 0x01000193 ^ 0x5bd1e995;
     for (let i = 0; i < text.length; i++) {

@@ -141,6 +141,7 @@ proto._adoptDerivedDatasetData = function(fileId, data) {
     const entry = this.files.get(fileId);
     if (!entry) return;
     entry.syntheticBytes = () => this._derivedDatasetBytes(data);
+    entry.syntheticBlob = data?._duckdb ? (options) => this._lazyDatasetCsvBlob(data, options) : null;
     // Whatever was written out before this rewrite is now a copy of data that
     // no longer exists here, so the row stops claiming it.
     entry.savedCopyName = '';
@@ -354,6 +355,8 @@ proto._registerDerivedDataset = function(recipe, name, data, options = {}) {
         resampledFrom: recipe.sourceFileId,
         derivedDataset: { ...recipe, params: this._cloneSerializable(recipe.params || {}) },
         syntheticBytes: () => this._derivedDatasetBytes(data),
+        // A lazy dataset is written out a chunk at a time (saveInMemoryFile).
+        syntheticBlob: data?._duckdb ? (options) => this._lazyDatasetCsvBlob(data, options) : null,
     });
     // The source stays the active file: that is where the new dataset shows up
     // (under "Derived datasets"), and where the user was working.

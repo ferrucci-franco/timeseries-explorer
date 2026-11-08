@@ -23,7 +23,7 @@
 // or fail to converge. Root-finding is done too, but only to say WHERE the
 // offending pole is — a diagnosis, never the verdict.
 
-import { asFloat64, copyFloat64, DataToolError, normalizeTimeContext } from './shared.js';
+import { asFloat64, copyFloat64, DataToolError, normalizeTimeContext, cloneKernelState } from './shared.js';
 import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 
 export const FILTER_MODES = new Set(['forward', 'zeroPhase']);
@@ -1030,6 +1030,8 @@ function createAdvanceStage(advance, report) {
         // arrives `step` positions after it.
         let held = 0;
         return {
+            save: () => ({ held }),
+            load(saved) { held = saved.held; },
             push(raw, final) {
                 const out = new Float64Array(held + raw.length);
                 let k = 0;
@@ -1050,9 +1052,11 @@ function createAdvanceStage(advance, report) {
     }
     // A delay: each output of a stretch takes the value `step` positions
     // before it, and the first `step` of the stretch go missing.
-    const recent = new Float64Array(step);
+    let recent = new Float64Array(step);
     let run = 0;
     return {
+        save: () => ({ recent: recent.slice(), run }),
+        load(saved) { recent = saved.recent.slice(); run = saved.run; },
         push(raw) {
             const out = new Float64Array(raw.length);
             for (let i = 0; i < raw.length; i++) {
@@ -1143,9 +1147,20 @@ export function createForwardFilter(params = {}, { axis = null } = {}) {
         return out;
     }
 
+    // The state a flush leaves behind is put back by load (see
+    // createMovingAverage): the running states of the sections, the axis
+    // cursor, the counts and the advance stage's samples.
+    const state = () => ({ states, lastValid, lastTime, received, done, counts, shift: shift ? shift.save() : null });
     return {
         push,
         flush: () => push(null, null, true),
+        save: () => cloneKernelState(state()),
+        load(saved) {
+            const s = cloneKernelState(saved);
+            ({ states, lastValid, lastTime, received, done } = s);
+            Object.assign(counts, s.counts);
+            if (shift) shift.load(s.shift);
+        },
         // filteredCount is what the OUTPUT carries, not what the recursion
         // computed: the samples the advance emptied are not filtered data.
         report: () => ({

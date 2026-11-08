@@ -25,7 +25,7 @@ import {
 } from '../../parsers/audio-limits.js';
 
 import WorkerPool, { canUseWorkers, spawnWorker } from '../../core/worker-pool.js';
-import { GRIB_EXTENSIONS } from '../constants.js';
+import { APP_VERSION, BUILD_DATE, BUILD_SHA, GRIB_EXTENSIONS } from '../constants.js';
 import { checkDecodedAudioLimit, checkFullLoadLimit, checkLoadedNetcdfLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
 import {
@@ -4020,6 +4020,11 @@ proto._getDuckDbSource = async function() {
         if (!DuckDbSource) throw new Error('DuckDB source unavailable in this build.');
         this._duckdbSource = new DuckDbSource(this.parser);
     }
+    // Read when the engine starts: a change in Settings takes effect then.
+    this._duckdbSource.storagePreference = this.advancedSettings?.lazyResultsStorage === 'memory' ? 'memory' : 'disk';
+    // Results kept from one session to the next are this build's only: a
+    // kernel an update changed must not be served what the last one computed.
+    this._duckdbSource.keptResultsVersion = `${APP_VERSION}+${BUILD_SHA}+${BUILD_DATE}`;
     return this._duckdbSource;
 };
 
@@ -4323,9 +4328,22 @@ proto.saveInMemoryFile = async function(fileId) {
     const filename = base.toLowerCase().endsWith(extension) ? base : `${base}${extension}`;
 
     try {
-        // A lazy dataset reads its table: a promise.
-        const bytes = await entry.syntheticBytes();
-        const blob = new Blob([bytes], { type: 'text/csv' });
+        // A lazy dataset reads its table a chunk at a time into a Blob (no
+        // limit but the disk's), behind the busy overlay with its row count;
+        // anything else gives its bytes.
+        let blob;
+        if (typeof entry.syntheticBlob === 'function') {
+            const overlay = this._showBusyOverlay?.({ title: i18n.t('csvExportBuilding') }) || null;
+            try {
+                blob = await entry.syntheticBlob({
+                    onRows: rows => overlay?.progress(i18n.t('csvExportProgressRows').replace('{done}', i18n.formatNumber(rows))),
+                });
+            } finally {
+                overlay?.close();
+            }
+        } else {
+            blob = new Blob([await entry.syntheticBytes()], { type: 'text/csv' });
+        }
         const picker = globalThis.showSaveFilePicker;
         if (typeof picker === 'function') {
             let handle;

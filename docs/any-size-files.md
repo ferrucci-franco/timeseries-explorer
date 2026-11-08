@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c), 4a y 4b (4b-1 a 4b-4) implementadas (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"): toda herramienta de datos corre en lazy; histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"). De la 4b quedan sin hacer los sumideros de desborde a Parquet y la actualización en vivo por continuación (dicho en "Implementado (fase 4b-4)"); Parquet sin red resuelto (§8); la base de DuckDB sigue en memoria, con OPFS medido (§10, "Decidido en la 4b-1"); el resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -75,7 +75,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Histograma | ~~rechazado en lazy~~ **exacto sobre todas las filas** (sección "Implementado: histograma exacto"); solo se rechaza una señal que existe únicamente en el resumen | `histogramLazyUnsupported` |
 | Heatmap calendario | exacto en SQL desde la 3a para las columnas; las señales derivadas con SQL (derivada, media móvil, integral, fórmulas) ya entraban; **resuelto** lo que faltaba (sección "Implementado: heatmap y perfil temporal exactos"): un eje calendario generado desde una fecha de origen o un eje numérico promovido a calendario se agregan por el eje que el panel muestra, en vez de dibujarse desde el resumen o rechazarse como "aún no disponible"; solo se deja fuera, con aviso, una señal que existe únicamente en el resumen | `heatmapLazyDerivedUnsupported` |
 | Perfil temporal | exacto en SQL desde la 3a; **resuelto** lo mismo que el heatmap, más *fines de semana combinados* (que la consulta lazy ignoraba) y los períodos cortados por la selección, que los dos modos cuentan ahora igual | `temporalProfileLazyDerivedUnsupported` |
-| Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
+| Derivadas del eje de tiempo (`index`, `delta`) | ~~calculadas sobre el overview~~ **SQL sobre el archivo desde la 4a** (el número de fila y la diferencia de filas consecutivas, `rowIndexWindow` y `timeAxisDeltaWindows`); esta fila había quedado vieja | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
 | Guardar proyecto | rechazado | *"A complete project cannot be saved while these files are using memory-saving mode. Increase their full-load limit in Settings and reload them, or save a view instead"* |
@@ -288,7 +288,7 @@ En orden de valor visible por esfuerzo:
 | 2 | **Exportación exacta** para lazy sobre el stream (CSV; Parquet vía `COPY` directo) | 1 día | bajo; cierra el defecto §1.6 del blueprint, visible al usuario desde el primer día |
 | 3 | Herramientas puntuales y de ventana como **columnas virtuales SQL**: derivada, IQR, detrend (tras su pasada de agregados) | 1–2 días + paridad eager/lazy por herramienta | medio: semántica de no finitos y Δt = 0 |
 | 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
-| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital), **4b-3 hecha** (picos, relleno, reemplazo por interpolación, integral con *interpolar*), **4b-4 hecha** (remuestreo y colapsar como datasets lazy, correlación cruzada con presupuesto; sin los sumideros de desborde ni la continuación en vivo) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
+| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital), **4b-3 hecha** (picos, relleno, reemplazo por interpolación, integral con *interpolar*), **4b-4 hecha** (remuestreo y colapsar como datasets lazy, correlación cruzada con presupuesto), **4b-5 hecha** (los resultados en disco — la base en OPFS — y conservados entre sesiones, la continuación en vivo) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
 | 5 | Proyecto por definición para archivos lazy | 2–3 días | medio: formato de sesión, compatibilidad hacia atrás |
 | 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
 
@@ -568,7 +568,7 @@ de multiplicar por 0,001. El e2e crea una integral desde el panel.
 
 ### Diseño (fase 4b): las herramientas que no se escriben en SQL
 
-**Estado: diseño; las cuatro sub-fases están implementadas (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)", con lo que cambió respecto de este diseño); de este diseño quedan sin hacer los sumideros de desborde y la actualización en vivo por continuación.** Lo que queda después de la 4a son las
+**Estado: diseño; implementado entero, en cinco sub-fases (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-5)", con lo que cambió respecto de este diseño). Los sumideros de desborde a Parquet no se hicieron: los reemplazó la base de DuckDB en OPFS (§10), que la 4b-5 adoptó.** Lo que queda después de la 4a son las
 herramientas cuya salida no es una expresión sobre la fila y sus vecinas
 inmediatas: media móvil (y el detrend por media móvil), filtro digital (hacia
 adelante y de fase cero), picos, rellenar faltantes, las políticas *interpolar*
@@ -851,7 +851,8 @@ Node, y 5 M filas en Chromium con el bundle `eh` de la app:
 | **4b-1** | El ejecutor, el sumidero en tabla con presupuesto y lectura por `_fromSql`, la forma incremental de la **media móvil** (y el detrend por media móvil), overlay con progreso y cancelación, sesión (re-ejecución), tests de borde de trozo, e2e. **Decidir base en OPFS o en memoria** midiendo las pasadas de la 3b y el escaneo de CSV bajo `memory_limit` (§10) | 2–3 días |
 | **4b-2** | **Filtro IIR** hacia adelante (estado, huecos con el umbral de la 4a, avance) y de **fase cero** (sumidero de trabajo, vuelta al revés) | 1–2 días |
 | **4b-3** | La familia sin estado en el pool de workers: **picos**, **rellenar faltantes**, reemplazo de outliers por interpolación, política *interpolar* de la integral; el tope de mirada hacia adelante — **hecha** | 2 días |
-| **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto — **hecho**; los sumideros de desborde (Parquet en OPFS en web si la base quedó en memoria, Parquet nativo en escritorio) con sus mediciones y la actualización en vivo por continuación — **no hechos**, ver "Implementado (fase 4b-4)" | 2–3 días |
+| **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto — **hecho** | 2–3 días |
+| **4b-5** | Lo que la 4b-4 dejó: el desborde de los resultados, hecho con la **base en OPFS** en lugar de Parquet (web y escritorio), los resultados **conservados entre sesiones** (lo que el diseño pedía al escritorio con un Parquet temporal), la **actualización en vivo por continuación**, *completar marcas de tiempo* en lazy, el guardado de un dataset por trozos — **hecha**, ver "Implementado (fase 4b-5)" | 2 días |
 
 Cada sub-fase es un PR con paridad bit a bit contra el kernel en memoria (el
 mismo patrón que `scripts/test-lazy-data-tools.mjs`), y la 4b-1 deja la
@@ -1408,16 +1409,15 @@ Lo que cambió respecto del diseño:
 - El modo *completar timestamps faltantes* del remuestreo **no se ofrece** en
   lazy: su promesa ("todo paso es múltiplo entero de un Δt") se juzga con
   `detectRegularSampling` sobre el array en memoria, y el resumen es una
-  muestra. El panel lo dice (`dataToolResampleCompleteLazy`). Una pasada SQL
-  que lo juzgue sobre el archivo es trabajo futuro, chico.
+  muestra. El panel lo decía (`dataToolResampleCompleteLazy`). *Hecho en la
+  4b-5*: una pasada SQL lo juzga sobre el archivo.
 - El tope de 20 M puntos de la grilla no aplica en lazy (`planResampleGrid`
   acepta `maxPoints`); lo que acota es el presupuesto de resultados.
-- El CSV de un dataset lazy se construye en memoria con tope, no por el
-  stream de exportación de la fase 2 como proponía el diseño: ese stream es
-  del panel de exportación y arrastra su diálogo; el tope es el mismo que
-  tiene un dataset en memoria.
+- El CSV de un dataset lazy se construía en memoria con tope, no por el
+  stream de exportación de la fase 2 como proponía el diseño. *Hecho en la
+  4b-5*: por trozos, en partes de `Blob` como la exportación.
 
-**Lo que queda de la 4b-4 original, sin hacer**:
+**Lo que quedaba de la 4b-4 original — hecho en la 4b-5** (sección "Implementado (fase 4b-5)"):
 
 - **Los sumideros de desborde a Parquet** (OPFS en web, nativo en escritorio).
   La base sigue en memoria con presupuesto, como se decidió en la 4b-1 (§10):
@@ -1613,6 +1613,240 @@ Pruebas:
   reindexado desde 2024-01-01 a 1 min pone las filas de enero a julio de 2024
   en los dos paneles; sin errores de página.
 
+### Implementado (fase 4b-5): los resultados en disco, conservados entre sesiones, y la continuación en vivo
+
+Lo que la 4b-4 dejó sin hacer, más dos cosas que su sección había apuntado
+como trabajo futuro.
+
+#### El desborde de los resultados: la base de DuckDB en OPFS
+
+El diseño pedía, por encima del presupuesto en memoria, escribir los
+sumideros como Parquet: en OPFS en la web y por el DuckDB nativo del proceso
+principal en el escritorio. No se hizo así. Lo que se hizo es lo que el §10
+proponía como reemplazo: **la base entera en un archivo de OPFS**, donde
+DuckDB pagina solo a disco las tablas que no entran en `memory_limit`. Las
+razones:
+
+- **Sirve igual en el escritorio.** La ventana de Electron carga la página
+  desde `http://127.0.0.1:<puerto>` (`electron/main.cjs`): un contexto
+  seguro, con el mismo OPFS que Chromium. Un camino para los dos, sin IPC.
+- **Se puede verificar acá.** El módulo Parquet de DuckDB-WASM no se puede
+  bajar en este entorno (§8: el proxy responde 403), así que leer un
+  sumidero Parquet en el navegador no se habría podido probar; la base en
+  OPFS sí (`e2e:lazy-disk-results`).
+- **No cambia cómo se leen los resultados.** Un sumidero sigue siendo una
+  tabla, unida por posición al archivo (`_joinedRelationSql`): ni el
+  ejecutor, ni los escritores, ni las consultas saben dónde vive la base.
+
+Lo que hace `DuckDbSource`:
+
+- **Abrir.** `_openDatabase` prueba `opfs://omv-db-0.db`, `-1`, …, hasta seis
+  *ranuras*: un archivo de OPFS lo tiene abierto una sola pestaña, así que la
+  primera pestaña toma la 0 y una segunda la 1. Si OPFS no existe (contexto no
+  seguro, navegador viejo), lo niega o todas están tomadas, la base se abre en
+  memoria, como antes. La detección no puede preguntar por
+  `createSyncAccessHandle`, que existe solo dentro de los *workers* (el de
+  DuckDB); lo decide la apertura misma.
+- **`memory_limit` de 1,5 GiB** con la base en disco (en memoria no se fija,
+  como antes). La 4b-1 midió que de 256 MiB para arriba los escaneos y las
+  pasadas corren igual; 1,5 GiB deja entrar una carga completa dentro de los
+  límites de la app y deja lugar en el *heap* de wasm para lo que DuckDB no
+  cuenta.
+- **La carga completa escribe una tabla `TEMP`**: con la base en disco, una
+  tabla normal pasaría por el disco filas que se leen una vez y se borran.
+- **Una base abierta de nuevo** (una recarga) trae lo que dejó la sesión
+  anterior. Sus tablas y vistas se borran (sus nombres chocarían con los de
+  esta sesión), salvo los resultados conservados (abajo); los archivos de
+  ranuras que ninguna pestaña tiene se borran también.
+- **El presupuesto pasa a ser el disco**: antes de cada trabajo,
+  `refreshDiskBudget` lee `navigator.storage.estimate()` y **mide lo que el
+  almacenamiento admite de verdad** (abajo); los resultados pueden tomar el
+  80 % de lo menor. El mensaje es otro (`dataToolSinkDiskBudget`).
+  "Resultados en memoria" sigue valiendo cuando la base está en memoria.
+- **Una ventana privada no es un disco.** Encontrado con el bench: en una
+  ventana de incógnito (y en los contextos de Playwright, que lo son) el
+  navegador guarda el almacenamiento del origen **en memoria**, con un tope
+  propio — medido en Chromium: ~940 MB en una máquina de 16 GB, mientras
+  `estimate()` decía 3,2 GB —, y pasado ese tope **una escritura en OPFS no
+  falla: no está cuando se relee**. La base de DuckDB deja de crecer y sus
+  lecturas se cuelgan; el bench se trabó en el sexto sumidero de 20 M filas,
+  y la misma prueba en un perfil persistente escribió 1,27 GB de tablas no
+  comprimibles y releyó sus 180 M filas exactas. Chrome no deja saber si una
+  ventana es privada, así que se mide: un *worker*
+  (`src/workers/opfs-probe-worker.js`) estira un archivo de prueba al tamaño
+  (`truncate`), escribe un byte al final y lo relee. En un disco es un archivo
+  disperso y tarda un milisegundo; en memoria se rechaza pasado lo que hay, y
+  partiendo a la mitad se acota a 16 MB. Un almacenamiento que admite 2 GiB es
+  un disco y no se pregunta más. Así, un trabajo que no entra se rechaza con
+  el mensaje del disco en vez de trabar el motor.
+- **Un ajuste**: *Resultados de las herramientas de datos*, "En el disco
+  (almacenamiento del navegador)" o "En memoria". Se lee al arrancar el motor;
+  Ajustes dice dónde están ahora (y por qué en memoria, si no se eligió).
+
+#### Conservados de una sesión a la otra
+
+Lo que el diseño proponía para el escritorio — reutilizar un Parquet
+temporal si la huella de la fuente coincide — está hecho para la web y el
+escritorio con la misma base en OPFS: **un resultado sobrevive a la pestaña**,
+y una recarga, una sesión restaurada o el mismo archivo abierto otra vez lo
+adoptan en lugar de volver a correr el trabajo (20–30 s por herramienta en
+20 M filas, sección siguiente).
+
+- **La clave**: la versión y el *build* de la app (un kernel que cambió con
+  una actualización no debe servir lo que calculó el anterior), la **huella
+  del archivo** (`fileFingerprint`: nombre, tamaño, fecha, ruta en el
+  escritorio, y un SHA-256 de sus primeros y últimos 64 KiB, para que un
+  archivo reescrito con el mismo tamaño y fecha no pase por el mismo), **cómo
+  se lee** (el perfil CSV, la proyección, el filtro de filas, la expresión de
+  tiempo) y **qué calculó el trabajo** (el SQL de su fuente, el eje y los
+  ajustes normalizados). El SQL que arma la app nombra sus variables lambda
+  con un contador de la sesión (`__omv_0`, …, `__omv_a`): en la clave se
+  renumeran en orden de aparición.
+- **El nombre**: el resultado se escribe en `omv_kept_<hash de la clave>`. Como
+  las columnas de un sumidero toman su nombre del de la tabla, el SQL de lo
+  construido encima es el mismo de una sesión a la otra: **una herramienta
+  sobre un resultado conservado se conserva a su vez** (la media móvil de una
+  señal rellenada).
+- **El catálogo** (`omv_kept_results`) guarda la clave, la tabla, su forma, sus
+  filas y lo que el panel dice del trabajo (sus conteos), y cuándo se usó.
+  Sumideros y datasets de remuestreo y colapsar por igual; un dataset
+  conservado recibe la clave como huella, así lo calculado sobre él se
+  conserva también.
+- **Cerrar el archivo no lo borra**, y una tabla conservada que leen dos
+  archivos se cuenta por archivo. Juntos pueden ocupar 4 GiB y la mitad de la
+  cuota; por encima se van los menos usados, nunca uno que un archivo lee.
+  Ajustes dice cuánto hay y tiene un botón para borrarlo.
+- **No se conserva**: un archivo con actualización en vivo (no es lo que era),
+  ni nada con la base en memoria. Un resultado que una continuación va a
+  reescribir deja de estar conservado antes.
+
+#### La actualización en vivo por continuación
+
+Un archivo que crece volvía a correr cada herramienta desde la primera fila.
+Ahora sigue desde donde quedó:
+
+- **Toda salida que da un `push` es final**: espera las filas que necesita. Lo
+  provisorio es solo lo que da el `flush` del final — las filas que el kernel
+  seguía esperando, resueltas como si la serie terminara ahí.
+- **Cada kernel guarda y repone su estado** (`save()`/`load()`): la media
+  móvil y su detrend, el filtro hacia adelante y su adelanto/retardo, la
+  integral, el relleno, el tiempo entre flancos, y los adaptadores de solape y
+  de mirada hacia adelante. `cloneKernelState` copia solo la vista de cada
+  arreglo, no su buffer entero.
+- **El ejecutor**, con `resumable`, guarda el estado justo antes del `flush`
+  (dando antes los núcleos de picos en vuelo, que no son estado copiable),
+  hace el `flush` y repone el estado: ese es el *resume*, con la cola de filas
+  que el `flush` respondió. `continueChunkedJob` lee el archivo desde la fila
+  siguiente a la última leída, empuja en ese estado, vuelve a hacer el
+  `flush`, y **reescribe el sumidero desde la primera fila provisoria**.
+- **En una transacción**: el escritor borra la cola y escribe lo nuevo en su
+  propia conexión dentro de `BEGIN … COMMIT`, así una consulta ve el
+  sumidero de antes o el de después; un fallo hace `ROLLBACK` y la
+  herramienta corre de nuevo desde la primera fila.
+- **Cuándo continúa**: solo en un archivo con actualización en vivo (el
+  estado vive en memoria), y cuando nada de lo que el kernel leyó puede haber
+  cambiado: la misma carga, el mismo SQL de la fuente y los mismos ajustes;
+  una fuente estable al agregar filas (una columna, o SQL fila por fila — no
+  una ventana como la derivada o `diff()`, cuya última fila cambia, ni la
+  salida de otra herramienta, cuya cola reescribe su propia continuación); el
+  mismo paso del eje para el filtro, la integral y el relleno. El filtro de
+  fase cero (su vuelta recorre todo) y una corrida IQR (cada fila mueve sus
+  cotas) corren de nuevo.
+
+#### *Completar marcas de tiempo* y el guardado de un dataset
+
+- El modo *completar marcas de tiempo faltantes* del remuestreo se ofrece en
+  lazy: `_lazyRegularSampling` juzga sobre el archivo lo que
+  `detectRegularSampling` juzga sobre el arreglo — los pasos en orden (`LAG`),
+  el primero no finito o hacia atrás decide cuál de los dos se informa, la
+  mediana exacta de los pasos positivos, el múltiplo redondeado de cada paso —.
+  El panel dice que está midiendo y ofrece el modo cuando el veredicto llega.
+  La grilla ya salía de la misma mediana.
+- *Guardar como archivo* de un dataset lazy lee su tabla por trozos y junta el
+  texto en partes de `Blob` de 32 MB, como la exportación exacta: sin más
+  límite que el disco (antes, 60 M celdas en un arreglo). Los bytes que pide
+  un proyecto conservan el tope.
+
+#### Errores encontrados en el camino
+
+- La continuación borraba la cola desde la fila *siguiente* a la escrita (el
+  `DELETE` leía el cursor del escritor cuando ya había avanzado): la prueba de
+  paridad lo encontró en la primera corrida.
+- La clave de continuación se calculaba con los ajustes como se crearon, y la
+  app los normaliza después (un detrend gana `method` y `order`): ninguna
+  continuación habría coincidido. Se calcula sobre los normalizados.
+- Dos archivos que adoptan la misma tabla conservada: cerrar el primero la
+  sacaba de los sumideros vivos y el segundo la borraba. Se cuentan.
+- En una ventana privada, pasado el tope de su almacenamiento en memoria, el
+  motor se trababa sin error (arriba). La sonda lo mide antes de cada
+  trabajo.
+- La detección de OPFS preguntaba por `createSyncAccessHandle`, que solo existe
+  dentro de los *workers*: en la página daba "no hay OPFS" siempre. La decide
+  la apertura.
+
+#### Pruebas
+
+- `scripts/test-lazy-live-continuation.mjs` (DuckDB-WASM en Node): 17
+  herramientas (media móvil con dos ventanas, detrend, filtro con adelanto y
+  con retardo, integral que puentea huecos con sus tres métodos, relleno
+  lineal, pchip y suavizado con límite, tiempo entre flancos retenido y en el
+  flanco, picos con NaN e interpolados, límites duros interpolados) sobre
+  cuatro agregados (1, 37, 2500 y 3455 filas, uno que cierra un hueco abierto
+  al final de la primera parte): **bit a bit** con una corrida sobre el
+  archivo crecido entero, los conteos incluidos; el sumidero en el orden del
+  archivo y leído por la variable; una continuación que falla y una
+  reescritura abortada; lo que no continúa. Dos errores inyectados (no reponer
+  la suma de la media móvil; no reponer los contadores del filtro) los detecta
+  cada uno.
+- `scripts/test-lazy-kept-results.mjs` (DuckDB-WASM en Node, la base marcada
+  "en disco" a mano): cinco trabajos y un remuestreo y un colapsar adoptados en
+  la segunda sesión con los valores y conteos de una corrida; otro archivo,
+  otros ajustes, otra lectura: corren; una base abierta de nuevo; el lugar y
+  el desalojo; borrar; un archivo en vivo no conserva.
+- `scripts/test-lazy-regular-sampling.mjs`: 14 ejes juzgados como
+  `detectRegularSampling` los juzga.
+- `scripts/e2e-lazy-disk-results.mjs` (Chromium, OPFS real): un CSV de 7 MB en
+  lazy con "Resultados en memoria" en 1 MB; la base en la ranura 0; una media
+  móvil de 400 000 filas calculada igual (en disco), bit a bit con el kernel;
+  un filtro continuado en vivo sobre la base en disco, bit a bit sobre la
+  columna crecida; el almacenamiento privado medido por debajo de la cuota
+  que informa, y un trabajo que no entra rechazado con el mensaje del disco;
+  una segunda pestaña en la ranura 1; tras recargar, la media móvil adoptada,
+  no corrida; Ajustes; con "En memoria", la misma media rechazada por el
+  límite; un perfil persistente reconocido como disco.
+
+#### Medido: resultados más allá de la memoria
+
+`node bench/disk-results.mjs --rows 20000000 --sinks 8 --limit 512MB`: el CSV
+`t,a` de 20 M filas (359 MB) en lazy, el presupuesto de la app apagado
+(`lazyResultsMb` 0) para que decida el motor, y medias móviles de todas las
+filas una tras otra, cada una un sumidero tan largo como el archivo. Chromium
+headless, **un perfil persistente** por configuración (el almacenamiento de un
+navegador común, en disco), un hilo de DuckDB.
+
+| Qué | En disco, límite de la app (1,4 GiB) | En disco, 512 MB | En memoria, 512 MB |
+|---|---|---|---|
+| Abrir en lazy | 12,5 s | 12,4 s | 11,8 s |
+| Media móvil 1 / 2 / 3 | 17,5 / 17,8 / 17,2 s | 17,3 / 18,2 / 18,0 s | 16,7 / 17,2 s / ***Out of Memory*** |
+| Medias móviles 4 a 8 | 17,1–18,8 s cada una | 17,6–18,5 s cada una | — |
+| Memoria del motor con 8 (2 en memoria) | 1188 MB | **462 MB** | 291 MB |
+| Archivo de la base | 1274 MB | 1274 MB | — |
+| Zoom de 1000 filas leyendo todos los sumideros | 4,6 s (9 columnas) | 4,7 s (9 columnas) | 4,0 s (3 columnas) |
+| Refresco del resumen | 9,1 s | 8,9 s | 8,5 s |
+| Recargar la página y la media móvil 1 otra vez | **adoptada**, 7,6 s | **adoptada**, 7,8 s | — |
+
+Lo que dicen:
+
+- **Con la base en disco, los resultados no los limita la memoria**: con 512
+  MB de límite entraron ocho sumideros de 20 M filas (1,3 GB en disco), con el
+  motor quieto en 462 MB; con la base en memoria y el mismo límite, el
+  tercero falla. Cada trabajo cuesta lo mismo en las tres (17–19 s: lo domina
+  leer el CSV), y paginar no encarece el zoom ni el resumen.
+- **Un resultado conservado se adopta en 7–8 s** contra 17 s de calcularlo:
+  lo que queda es el refresco del resumen, que lee el archivo.
+- **El sumidero ocupa ~7,4 B/fila** en el disco (147 MB por 20 M filas), lo
+  mismo que en memoria; el presupuesto sigue contando 16.
+
 ### Medido: la 4b-3 y la 4b-4 sobre 20 M filas, en Chromium
 
 `node bench/lazy-sink-job.mjs --rows 20000000 --configs memory`, ampliado con
@@ -1729,7 +1963,8 @@ fallaba (sección "Implementado: histograma exacto"), corregido ya en `main`.
     `<app>/duckdb-extensions/v1.4.3/wasm_eh/parquet.duckdb_extension.wasm`) y
     el camino sin módulo; la carga real la verifica CI.
 
-- **La base de DuckDB en OPFS.** Medido (§10): con la base en el disco del
+- **La base de DuckDB en OPFS. Resuelto en la 4b-5**: es donde la app la
+  abre cuando puede. Medido (§10): con la base en el disco del
   navegador, DuckDB pagina solo las tablas que no entran en `memory_limit`,
   y lo demás (archivos registrados, tablas temporales, vistas) sigue igual.
   Es la alternativa al presupuesto en memoria y al desborde a Parquet de la
@@ -1789,8 +2024,10 @@ y a cerrar el navegador. Para esta app la persistencia importa poco (los datos
 son del archivo del usuario, no de una base); lo que importa es lo otro que
 trae una base en disco: **DuckDB puede sacar de memoria lo que no entra**.
 
-**Hoy no lo usamos.** `DuckDbSource._bootstrap` abre la base en memoria, no
-fija `memory_limit`, y nada de la app escribe en OPFS.
+**Desde la 4b-5 la app lo usa**: `DuckDbSource._bootstrap` abre la base en
+OPFS cuando el navegador lo da, con `memory_limit`, y en memoria si no
+(sección "Implementado (fase 4b-5)"). Lo que sigue es la medición y la
+propuesta que llevaron a eso.
 
 ### Medido
 
@@ -1846,7 +2083,7 @@ en este entorno de desarrollo la extensión Parquet no se puede bajar (§8).
   vigilar son las consultas globales (correlación cruzada, exportación con
   columnas de las dos fuentes), que tienen que ir por trozos también.
 
-### Decidido en la 4b-1: la base sigue en memoria, por ahora
+### Decidido en la 4b-1: la base sigue en memoria, por ahora (cambiado en la 4b-5)
 
 Medido en la 4b-1 (tabla en "Implementado (fase 4b-1)"): un `memory_limit`
 de 256 MiB a 1 GiB deja el escaneo de un CSV de 359 MB y las pasadas de la

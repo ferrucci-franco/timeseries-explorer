@@ -239,6 +239,10 @@ try {
     const cancelled = await page.evaluate(async () => {
         const source = [...window.app.plotManager.files.values()][0].data._duckdb.source;
         const sinksBefore = source._liveSinks.size;
+        // Every table, whatever its name: a sink of this session, or a result
+        // kept on disk under the name of its key (omv_kept_…).
+        const countTables = async () => (await source.query('SELECT COUNT(*)::INTEGER AS n FROM duckdb_tables()')).getChild('n').get(0);
+        const tablesBefore = await countTables();
         const observer = new MutationObserver(records => {
             for (const record of records) {
                 for (const node of record.addedNodes) {
@@ -259,18 +263,18 @@ try {
         output.dispatchEvent(new Event('input', { bubbles: true }));
         await window.app.commitDataTool({ plot: true });
         observer.disconnect();
-        const tables = await source.query("SELECT COUNT(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name LIKE '%_sink_%'");
         return {
             created: !!window.app.plotManager.files.values().next().value.data.variables.never,
             sinksBefore,
             sinksAfter: source._liveSinks.size,
-            tables: tables.getChild('n').get(0),
+            tablesBefore,
+            tables: await countTables(),
             message: document.getElementById('outlier-message')?.textContent || '',
         };
     });
     assert.equal(cancelled.created, false, 'a cancelled job creates no variable');
     assert.equal(cancelled.sinksAfter, cancelled.sinksBefore, 'and keeps no sink');
-    assert.equal(cancelled.tables, cancelled.sinksBefore, 'no table is left behind in DuckDB');
+    assert.equal(cancelled.tables, cancelled.tablesBefore, 'no table is left behind in DuckDB');
     assert.match(cancelled.message, /never/, `the panel says it was not created (${cancelled.message})`);
 
     // The file tools: lazy datasets of their own, and a correlation in memory.

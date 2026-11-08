@@ -29,6 +29,8 @@
 // behind. 4 M rows: 32 MB per column held in memory, at most, plus the chunk.
 export const LOOKAHEAD_MAX_ROWS = 1 << 22;
 
+import { cloneKernelState } from './shared.js';
+
 function concatFloat64(parts) {
     if (parts.length === 1) return parts[0];
     const out = new Float64Array(parts.reduce((n, part) => n + part.length, 0));
@@ -145,6 +147,19 @@ export function createOverlapKernel(compute, { before = 0, after = 0, depth = 1,
             done = true;
             if (received > next) schedule(next, received, true);
             return drain(true);
+        },
+        // The outputs of the cores in flight, all of them: what save needs
+        // first, since a core in flight is not state that can be copied.
+        settle: () => drain(true),
+        // The rows kept and the cursor (see createMovingAverage on save/load);
+        // only with no core in flight.
+        save() {
+            if (pending.length) throw new Error('overlap kernel: save with cores in flight (settle first)');
+            return cloneKernelState({ buffer, times, bufferStart, received, next, done });
+        },
+        load(saved) {
+            ({ buffer, times, bufferStart, received, next, done } = cloneKernelState(saved));
+            pending.length = 0;
         },
     };
 }
@@ -271,6 +286,12 @@ export function createLookaheadKernel(compute, { cap = LOOKAHEAD_MAX_ROWS, withT
             times = times && new Float64Array(0);
             aux = aux && new Uint8Array(0);
             return out;
+        },
+        // The rows kept and the cursor (see createMovingAverage on save/load);
+        // the state of compute, if it keeps any, is the caller's to save.
+        save: () => cloneKernelState({ buffer, times, aux, bufferStart, received, next, truncatedStart, done }),
+        load(saved) {
+            ({ buffer, times, aux, bufferStart, received, next, truncatedStart, done } = cloneKernelState(saved));
         },
     };
 }
