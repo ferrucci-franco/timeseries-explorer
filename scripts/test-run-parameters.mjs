@@ -88,8 +88,8 @@ assert.match(manager, /setHoverRunParameters\(v\) \{[\s\S]{0,300}?this\._runPara
 assert.match(data, /const runParams = this\._runParameterLabel\(t\.fileId\);/, 'the hover asks per trace');
 assert.match(data, /const runSuffix = runParams \? `<br><i>\$\{this\._escapeHTML\(runParams\)\}<\/i>` : '';/,
     'and escapes what it got — these are names out of a file');
-assert.equal((data.match(/\$\{runSuffix\}<extra><\/extra>/g) || []).length, 3,
-    'all three timeseries hover templates carry it');
+assert.equal((data.match(/\$\{runSuffix\}<extra><\/extra>/g) || []).length, 4,
+    'all four timeseries hover templates (constant, markers-only, events, line) carry it');
 
 const session = readFileSync(new URL('../src/app/methods/session-methods.js', import.meta.url), 'utf8');
 assert.match(session, /hoverRunParameters: this\.plotManager\.hoverRunParameters !== false,/, 'saved with the view');

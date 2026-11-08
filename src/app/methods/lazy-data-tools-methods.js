@@ -13,8 +13,9 @@
 // Hard bounds keep their original path (`_duckdbDataTool`, data-tools-methods.js).
 //
 // The moving average (and the moving-average detrend), the filter, the spike
-// detector, the interpolation of outliers, the fill of missing samples and the
-// integral bridging holes have no SQL form: their kernels run over the file a
+// detector, the interpolation of outliers, the fill of missing samples, the
+// integral bridging holes and the interarrival time between edges (a dead band
+// that remembers the last edge) have no SQL form: their kernels run over the file a
 // chunk at a time (src/data/chunk-executor.js) and write their output to a
 // sink, a table as long as the file, that the variable reads
 // (`definition.lazySink`). The run is a job behind an overlay with progress
@@ -27,6 +28,7 @@ import { createMovingAverage } from '../../compute/kernels/moving-average.js';
 import { createForwardFilter, createZeroPhaseFilter } from '../../compute/kernels/iir.js';
 import { createCumulativeIntegral } from '../../compute/kernels/integral.js';
 import { createMissingFiller } from '../../compute/kernels/interpolate.js';
+import { createInterarrival } from '../../compute/kernels/interarrival.js';
 import { createLookaheadKernel, createOverlapKernel, LOOKAHEAD_MAX_ROWS } from '../../compute/kernels/windowed.js';
 import { getComputePool, translateKernelError } from './data-tools-methods.js';
 import {
@@ -103,6 +105,9 @@ proto._isLazySqlToolConfig = function(config) {
 proto._isLazySinkToolConfig = function(config) {
     if (!config) return false;
     if (config.tool === 'movingAverage' || config.tool === 'filter' || config.tool === 'interpolate') return true;
+    // The dead band's reference is the value at the last edge: a state carried
+    // from row to row that no window function holds.
+    if (config.tool === 'interarrival') return true;
     if (config.tool === 'detrend') return (config.params?.method ?? config.method) === 'movingAverage';
     if (config.tool === 'integrate') return (config.params?.gapPolicy || 'zero') === 'interpolate';
     // The spike detector reads a window around each sample; interpolating an
@@ -410,7 +415,12 @@ proto._lazySqlToolVariable = function(data, name, definition) {
         displayName: name,
         // The overview is refilled by refreshOverview once the SQL is in place.
         data: new Float64Array(overviewLength).fill(NaN),
-        description: this._dataToolDescription({ ...definition, targetName: name, targetMode: 'create' }),
+        description: this._dataToolDescription({
+            ...definition,
+            targetName: name,
+            targetMode: 'create',
+            ...(definition.tool === 'interarrival' ? { timeUnit: this._interarrivalUnit(data) } : {}),
+        }),
         kind: 'variable',
         isConstant: false,
         interpolation: sourceVariable.interpolation || 'linear',
@@ -431,6 +441,7 @@ proto._lazySqlToolVariable = function(data, name, definition) {
             ...(definition.tool === 'interpolate' ? this._lazyInterpolateDataTool(definition.params || {}, sink?.report) : {}),
             ...(definition.tool === 'movingAverage' ? { window: definition.params?.window } : {}),
             ...(definition.tool === 'filter' ? this._lazyFilterDataTool(definition.params || {}, sink?.report) : {}),
+            ...(definition.tool === 'interarrival' ? this._interarrivalDataTool(definition.params || {}, sink?.report) : {}),
             ...(definition.tool === 'detrend'
                 ? { order: stats?.order ?? null, slope: stats?.slope ?? null, fitPoints: stats?.fitPoints ?? null }
                 : {}),
@@ -449,10 +460,15 @@ proto._lazySqlToolVariable = function(data, name, definition) {
         },
     };
     delete variable._duckdbCol;
+    delete variable._duckdbNumberFormat;
     delete variable._duckdbDataTool;
     delete variable._duckdbExpr;
     delete variable._duckdbWindows;
     delete variable.formula;
+    // Drawn as dots only when it IS a series of events, not when it was built
+    // from one.
+    delete variable.eventSamples;
+    if (definition.tool === 'interarrival') this._markInterarrivalVariable(variable);
     if (expr) {
         variable._duckdbExpr = expr;
         if (windows.length) variable._duckdbWindows = windows;
@@ -615,6 +631,11 @@ proto._applyLazySinkToolCreateMode = async function(context, config, options = {
         name: outputName,
         warning: note && note() ? note : '',
     };
+    if (tool === 'interarrival') {
+        result.report = report;
+        result.warning = this._interarrivalWarning(report);
+        result.note = () => this._interarrivalNote(report, data);
+    }
     if (!options.silent) {
         this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName, dependents.length);
     }
@@ -638,6 +659,7 @@ proto._lazySinkCount = function(tool, record) {
     if (tool === 'filter') return report?.filteredCount ?? 0;
     if (tool === 'interpolate') return report?.filledCount ?? 0;
     if (tool === 'removeOutliers') return report?.outlierCount ?? 0;
+    if (tool === 'interarrival') return report?.intervalCount ?? 0;
     return record?.rows ?? 0;
 };
 
@@ -748,6 +770,19 @@ proto._lazySinkKernel = function(data, definition, { axis = null, stats = null }
             flush: () => kernel.flush().values,
             report: () => integral.report(),
             withTime: timed,
+        };
+    }
+    if (definition.tool === 'interarrival') {
+        // Each row's time as the in-memory kernel reads it: the time axis, or
+        // the row's position when the file has none of its own.
+        const kind = this._lazyToolTimeAxis(data).kind;
+        const withTime = kind !== 'index';
+        const kernel = createInterarrival(params, { kind });
+        return {
+            push: chunk => kernel.push(column(chunk), withTime ? chunk.x : null),
+            flush: () => kernel.flush(),
+            report: () => kernel.report(),
+            withTime,
         };
     }
     if (definition.tool === 'filter') {

@@ -2182,7 +2182,7 @@ export default class DuckDbSource {
         if (!meta) throw new Error('countOutOfBounds: data is not DuckDB-backed (eager mode)');
         const variable = legacyData.variables?.[varName];
         if (!variable) throw new Error(`countOutOfBounds: unknown variable "${varName}"`);
-        const base = `try_cast(${this._quoteIdent(variable._duckdbCol || varName)} AS DOUBLE)`;
+        const base = this._numericColumnSql(variable, this._quoteIdent(variable._duckdbCol || varName));
         const predicate = this._boundsPredicateSql(base, params);
         if (!predicate) throw new Error('countOutOfBounds: missing finite bounds');
         const timeCol = meta.timeColumn;
@@ -4757,17 +4757,44 @@ export default class DuckDbSource {
         return meta.readWhere ? `(SELECT * FROM ${joined} WHERE ${meta.readWhere})` : joined;
     }
 
+    /**
+     * The number format a CSV's text columns are translated with, reduced to
+     * what csvNumericCastSql reads, or null when a plain try_cast reads them.
+     * Plain data, so it survives the structuredClone of a variable.
+     */
+    _csvNumberCastFormat(csvProfile) {
+        if (!csvProfile) return null;
+        if (csvNumericCastSql('x', csvProfile) === 'try_cast(x AS DOUBLE)') return null;
+        const { decimalSeparator, thousandsSeparator } = csvNumberFormat(csvProfile);
+        return {
+            decimalSeparator: csvProfileUsesDecimalComma(csvProfile) ? ',' : decimalSeparator,
+            thousandsSeparator,
+            delimiter: csvProfile.delimiter || ',',
+        };
+    }
+
+    // A file column read as a DOUBLE: translated from its text when the CSV
+    // writes numbers some other way than DuckDB reads them.
+    _numericColumnSql(variable, column) {
+        return variable?._duckdbNumberFormat
+            ? csvNumericCastSql(column, variable._duckdbNumberFormat)
+            : `try_cast(${column} AS DOUBLE)`;
+    }
+
     _valueExpressionSql(variable, fallbackName = '', options = {}) {
         // A formula translated to SQL is its own expression over the file's
         // columns (src/expr/sql.js), already a DOUBLE or NULL.
         if (variable?._duckdbExpr) {
             return options.castDouble ? `try_cast((${variable._duckdbExpr}) AS DOUBLE)` : variable._duckdbExpr;
         }
-        const base = this._quoteIdent(variable?._duckdbCol || fallbackName || variable?.name);
+        const column = this._quoteIdent(variable?._duckdbCol || fallbackName || variable?.name);
+        // A column held as text with a number format of its own is a number
+        // only once translated: as the overview's projection reads it.
+        const base = variable?._duckdbNumberFormat ? this._numericColumnSql(variable, column) : column;
         const definition = variable?._duckdbDataTool;
         let expr = base;
         if (definition?.tool === 'removeOutliers' && definition.method === 'bounds') {
-            const numericBase = `try_cast(${base} AS DOUBLE)`;
+            const numericBase = variable?._duckdbNumberFormat ? base : `try_cast(${base} AS DOUBLE)`;
             const predicate = this._boundsPredicateSql(numericBase, definition.params || {});
             if (predicate) {
                 expr = `CASE WHEN ${numericBase} IS NULL THEN NULL WHEN ${predicate} THEN ${numericBase} ELSE NULL END`;
@@ -4857,10 +4884,10 @@ export default class DuckDbSource {
 
         const usedNames = new Set();
         const variablePaths = new Map();
-        const csvDescriptionsByColumn = sourceInfo.format === 'csv'
-            ? new Map((this._csvColumnSpecs(sourceInfo.csvProfile) || [])
-                .map(spec => [spec.name, String(spec.description || '')]))
-            : new Map();
+        const csvSpecs = sourceInfo.format === 'csv' ? (this._csvColumnSpecs(sourceInfo.csvProfile) || []) : [];
+        const csvDescriptionsByColumn = new Map(csvSpecs.map(spec => [spec.name, String(spec.description || '')]));
+        const csvTextColumns = new Set(csvSpecs.filter(spec => spec.readType === 'VARCHAR').map(spec => spec.name));
+        const csvNumberCast = sourceInfo.format === 'csv' ? this._csvNumberCastFormat(sourceInfo.csvProfile) : null;
         const sanitize = (raw) => {
             const base = String(raw ?? '').trim() || `column`;
             return base;
@@ -4917,6 +4944,12 @@ export default class DuckDbSource {
                 source: sourceInfo.format === 'parquet' ? 'parquet' : 'csv',
                 _duckdbCol: columnNames[i],
             };
+            // The file holds this column as text ("8 597", "1,5"); every read
+            // of it after the overview has to translate it the way the
+            // projection did, or it reads NaN.
+            if (isNumeric && csvNumberCast && csvTextColumns.has(columnNames[i])) {
+                result.variables[uniqueName]._duckdbNumberFormat = { ...csvNumberCast };
+            }
             if (columnPath) {
                 result.variables[uniqueName].displayName = columnPath.join('.');
                 result.variables[uniqueName].pandas = { columnPath: columnPath.slice() };

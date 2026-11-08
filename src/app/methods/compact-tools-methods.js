@@ -49,6 +49,7 @@ const ICON = {
     filter: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>',
     resample: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18"/><path d="M5 20v-7M9 20v-11M13 20v-9M17 20v-6M21 20v-4"/></svg>',
     xcorr: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9c2.5-5 5-5 7.5 0s5 5 7.5 0"/><path d="M6 17c2.5-5 5-5 7.5 0s5 5 7.5 0" stroke-opacity=".55"/></svg>',
+    interarrival: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 20h4v-8h5v8h4v-8h5v8h2" stroke-opacity=".55"/><path d="M6 6.5h9M6 4v5M15 4v5"/></svg>',
     help: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5v.01"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -72,7 +73,7 @@ export const COMPACT_TOOL_GROUPS = [
     { id: 'clean', titleKey: 'compactToolGroupClean', tools: ['removeOutliers', 'interpolate', 'collapse'] },
     { id: 'calculus', titleKey: 'compactToolGroupCalculus', tools: ['derivative', 'integrate'] },
     { id: 'smooth', titleKey: 'compactToolGroupSmooth', tools: ['movingAverage', 'detrend', 'filter'] },
-    { id: 'time', titleKey: 'compactToolGroupTime', tools: ['resample', 'xcorr'] },
+    { id: 'time', titleKey: 'compactToolGroupTime', tools: ['resample', 'xcorr', 'interarrival'] },
 ];
 
 export const COMPACT_TOOLS = COMPACT_TOOL_GROUPS.flatMap(group => group.tools);

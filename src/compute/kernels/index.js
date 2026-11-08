@@ -10,6 +10,7 @@ import { computeIntegral } from './integral.js';
 import { computeMovingAverage } from './moving-average.js';
 import { fillMissingValues } from './interpolate.js';
 import { computeDetrend } from './detrend.js';
+import { computeInterarrival } from './interarrival.js';
 import { applyFilter, inspectFilter, inspectSos } from './iir.js';
 import { designFilter } from './filter-design.js';
 import { computeCrossCorrelation, runCrossCorrelation } from './xcorr.js';
@@ -18,6 +19,7 @@ import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } fro
 
 export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
 export { computeDetrend, applyFilter, inspectFilter, inspectSos, designFilter };
+export { computeInterarrival };
 export { computeCrossCorrelation, runCrossCorrelation };
 // The Integral analysis mode's scalar total. Not a Data Tools step — it creates
 // no variable — but it belongs to the same pure-kernel family and is re-exported
@@ -139,6 +141,10 @@ export function runDataToolStep(values, time, step) {
                     ...counts,
                 },
             };
+        }
+        case 'interarrival': {
+            const { values: out, ...report } = computeInterarrival(values, time, params);
+            return { values: out, meta: report };
         }
         case 'removeOutliers':
         default: {

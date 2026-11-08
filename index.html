@@ -286,6 +286,7 @@
                         <option value="interpolate" data-i18n="dataToolInterpolate">Fill missing data</option>
                         <option value="detrend" data-i18n="dataToolDetrend">Detrend</option>
                         <option value="filter" data-i18n="dataToolFilter">Digital filter</option>
+                        <option value="interarrival" data-i18n="dataToolInterarrival">Time between edges</option>
                         <option value="resample" data-i18n="dataToolResample">Resample</option>
                         <option value="xcorr" data-i18n="dataToolXcorr">Cross-correlation</option>
                         <option value="collapse" data-i18n="dataToolCollapse">Collapse repeated timestamps</option>
@@ -392,6 +393,18 @@
                                 <input id="moving-average-window-slider" class="data-tool-slider" type="range" min="2" max="200" step="1" value="21">
                                 <input id="moving-average-window" class="derived-input data-tool-number-input" type="number" min="2" step="1" value="21">
                             </div>
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="interarrival">
+                            <label class="options-subgroup-label" for="interarrival-edge" data-i18n="dataToolInterarrivalEdge">Edges</label>
+                            <select id="interarrival-edge" class="data-tool-select">
+                                <option value="both" selected data-i18n="dataToolInterarrivalBoth">Rising or falling</option>
+                                <option value="rising" data-i18n="dataToolInterarrivalRising">Rising only</option>
+                                <option value="falling" data-i18n="dataToolInterarrivalFalling">Falling only</option>
+                            </select>
+                            <label class="options-subgroup-label" for="interarrival-deadband" data-i18n="dataToolInterarrivalDeadband">Minimum change |ΔY|</label>
+                            <input id="interarrival-deadband" class="derived-input data-tool-number-input" type="number" min="0" step="any" value="0">
+                            <div class="data-tool-count" data-i18n="dataToolInterarrivalHint">An edge is a move of at least |ΔY| from the value at the last edge, so noise around a level makes none and a slow drift still counts once it has moved that far. 0 counts every change. The result is the time since the previous edge, at each edge, and empty in between.</div>
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="interpolate">
