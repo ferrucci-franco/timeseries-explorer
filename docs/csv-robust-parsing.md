@@ -181,25 +181,74 @@ described pattern parses its column exactly as Auto does.
 In the browser DuckDB reads every UTF-8 CSV first; the in-memory parser reads
 only what DuckDB cannot, and a file too large for memory has no fallback. The
 reading rules therefore exist in SQL too, and `npm run test:csv-duckdb-parity`
-keeps the two equal: every CSV in `test-files` is read in memory, by DuckDB
-whole, and by DuckDB lazily (every row streamed back, as zoom and the Data
-tools read it), and the rows must agree.
+keeps the two equal: every CSV in `test-files` is read in memory (by
+`parseWithProfile`, and by `parse()`, the automatic reading the app falls
+back to), by DuckDB whole, and by DuckDB lazily (every row streamed back as
+the Data tools read it, and a window of rows as zoom reads it). Variables,
+types, numbers, text and the order of the rows must agree.
 
-- `src/data/csv-sql-datetime.js` is the time axis in SQL, once for both DuckDB
-  readers (the browser's and the desktop converter's). It takes a date apart
-  and puts it together as `parseCsvTimeValue` does: two-digit years (70-99 are
+The SQL is generated from the same JS modules the in-memory reader uses, so
+there is one table of month names, one list of missing-value markers, one
+rule for what a numeric column is. Where it lives:
+
+- `src/data/csv-sql-schema.js`: which columns the file has and what each one
+  is read as, the `read_csv` call, the time axis, the projection, the row
+  filter, and the scan that types the columns. One module for both DuckDB
+  readers, the browser's (`duckdb-source.js`) and the desktop converter's
+  (`csv-to-parquet-core.js`), which used to carry a copy each.
+- `src/data/csv-sql-normalize.js`: numbers, missing values, invisible
+  characters, and the `read_csv` options a repair needs.
+- `src/data/csv-sql-datetime.js`: the time axis. It takes a date apart and
+  puts it together as `parseCsvTimeValue` does: two-digit years (70-99 are
   19xx), `3:00 a` and `1:45 PM`, `24:00`, UTC offsets, a comma before the
   fraction, and month names from the JS table, whole words only. DuckDB's own
   cast or `strptime` reads the usual rows first, so a plain ISO or
-  `dd/mm/yyyy` column costs no more than before (`dd/mm/yyyy` costs less).
-- Missing-value markers (`csvFilledCellSql`), hexadecimal numbers (`0x1F`), a
-  lazy column's number format (`_duckdbNumberFormat`) and blank cells past the
-  header (`strict_mode=false`) read as in memory.
+  `dd/mm/yyyy` column costs no more than before.
 
-Four files are known exceptions, listed in the test: three are not one table
-(SEL event report sections, LabVIEW segments, Anton Paar result blocks), and
-one ends its lines in CR CR LF, which DuckDB counts as one line and the parser
-as two.
+What the in-memory reader decides over the whole file, DuckDB decides over
+the whole file too — the sample is the first 100 data rows, and a file from a
+logger or a PLC does not keep to what its first 100 rows promised:
+
+- **Column types.** A column is numbers or text by the count of its cells
+  over every row (`isMostlyNumericColumn`). DuckDB counts them in one pass
+  before the projection is written (`csvColumnTypeScan`), together with the
+  row count and the time range, so a lazy file pays no extra pass. A sensor
+  that writes `OFF` until the plant starts is a numeric column with missing
+  values in both readers; a reading that becomes a status word after the
+  first rows is text in both. A type chosen by hand in the parsing options is
+  never scanned.
+- **Numbers.** DuckDB's own cast reads the usual cell; the cells it refuses
+  go through `csvNumberFallbackSql`, the per-cell rules of `parseCsvNumber`
+  in SQL: thousands grouped by a comma, a dot, an apostrophe or a space, a
+  decimal comma where the cell can only mean one, a typographic minus, a
+  space after the sign, a Fortran `D` exponent, and digits separated by
+  spaces refused as two values. A meter that passes 1000 after the sample and
+  writes `"1,203.5"` reads 1203.5 in both readers, where DuckDB read NaN. A
+  file of plain numbers evaluates the cast and nothing else; a lazy variable
+  carries its format (`_duckdbNumberFormat`) so every later query reads the
+  column the same way.
+- **Text.** Text columns are trimmed, as the in-memory reader trims every
+  cell: a space-padded flag reads ` IDLE` in neither.
+- **Order.** The in-memory reader sorts by time and keeps the file's order
+  for rows at the same instant. DuckDB in whole-file mode orders by time and
+  then by `rowid`, the row's position in the file, so it gives the same
+  order. The lazy reader streams the file as written (`column-stream.js`)
+  and assumes it is sorted; the test compares its rows as a set when the
+  file is not.
+- **Short rows.** When the table's last columns are optional — under an
+  empty header cell, or empty in the first row of a table without a header,
+  and filled only in some rows (a notes column at the end of a weather
+  export) — the profile says so (`optionalTrailingColumns`), `parseWithProfile`
+  pads the rows that stop short of them as `parse()` does, and DuckDB reads
+  with `null_padding=true`.
+- Missing-value markers (`csvFilledCellSql`), hexadecimal numbers (`0x1F`)
+  and blank cells past the header (`strict_mode=false`) read as in memory.
+
+`test-files/csv-parity/` holds the files built for these cases
+(`scripts/gen-csv-parity-fixtures.mjs` writes them). Three real-world files
+are known exceptions, listed in the test: two are not one table (LabVIEW
+segments, Anton Paar result blocks), and one ends its lines in CR CR LF,
+which DuckDB counts as one line and the parser as two.
 
 ## Tests
 

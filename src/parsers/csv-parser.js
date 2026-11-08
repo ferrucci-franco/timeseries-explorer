@@ -121,6 +121,54 @@ export default class CsvParser {
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
             .filter(({ index }) => !timeSource.sourceIndexes.includes(index));
+        const { timeValues, variableColumns, timeKind, timeOriginMs, invalidTimeRows, reorderedRows, datetimeRepeats } =
+            this._readTableColumns(dataRows, variableHeaders, timeSource, delimiter, { decimalSeparator, thousandsSeparator });
+
+        const { result, timeVar, numericColumnIndexes } = this._buildTableResult(
+            timeSource, { timeKind, timeValues, timeOriginMs }, variableHeaders, variableColumns, forcedColumnTypes(null));
+        result.metadata = {
+            numVariables: Object.keys(result.variables).length,
+            numParams: 0,
+            numTimevarying: variableHeaders.length,
+            numTimesteps: timeVar.data.length,
+            timeStart: timeVar.data[0],
+            timeEnd: timeVar.data[timeVar.data.length - 1],
+            csv: true,
+            delimiter,
+            hasHeader,
+            skippedRows: table.headerIndex,
+            skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
+            skippedInvalidTimeRows: invalidTimeRows,
+            skippedColumnCountRows: fitted.dropped,
+            repairedColumnCountRows: fitted.repaired,
+            reorderedRows,
+            timeName: timeVar.name,
+            timeKind,
+            timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
+            timeOriginMs,
+            timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`),
+            datetimeRepeats,
+            numericColumnIndexes,
+            unitRowIndex: table.unitRowIndex ?? null,
+            encoding: decoded.encoding,
+            removedInvisibleChars: decoded.removedChars,
+            detectedNumberFormat,
+        };
+
+        this._attachTree(result, null);
+        return result;
+    }
+
+    /**
+     * The table's rows read into columns: the time of each row, the number and
+     * the text of every variable cell, and what each column counted for its
+     * type. One loop for parse() and parseWithProfile(), so a file reads the
+     * same whether the reader detected the table or was told about it.
+     *
+     * Rows without a time are left out and counted. A time axis that is not a
+     * row index is sorted, stably: rows at one instant keep the file's order.
+     */
+    _readTableColumns(dataRows, variableHeaders, timeSource, delimiter, { decimalSeparator, thousandsSeparator }) {
         const timeValues = [];
         const variableColumns = variableHeaders.map(() => ({
             numericValues: [],
@@ -128,7 +176,7 @@ export default class CsvParser {
             nonEmptyCount: 0,
             finiteCount: 0
         }));
-        let timeKind = timeSource.kind;
+        const timeKind = timeSource.kind || 'index';
         let timeOriginMs = null;
         let invalidTimeRows = 0;
 
@@ -167,7 +215,17 @@ export default class CsvParser {
             if (timeKind === 'datetime') timeOriginMs = timeValues[0];
         }
         const datetimeRepeats = timeKind === 'datetime' ? repeatedTimestampSummary(timeValues) : null;
+        return { timeValues, variableColumns, timeKind, timeOriginMs, invalidTimeRows, reorderedRows, datetimeRepeats };
+    }
 
+    /**
+     * The parsed table: the time variable and one variable per column, each
+     * numbers or text as the whole column says (isMostlyNumericColumn) unless
+     * the reader chose its type by hand (`forced`, from the parsing options).
+     *
+     * @returns {{ result: object, timeVar: object, numericColumnIndexes: number[] }}
+     */
+    _buildTableResult(timeSource, { timeKind, timeValues, timeOriginMs }, variableHeaders, variableColumns, forced) {
         const result = {
             filename: '',
             metadata: {},
@@ -176,9 +234,9 @@ export default class CsvParser {
         };
 
         const timeVariable = {
-            name: timeSource.name,
+            name: timeSource.name || 'time',
             data: timeValues,
-            description: timeSource.description,
+            description: timeSource.description || (timeKind === 'index' ? '[index]' : ''),
             kind: 'abscissa',
             timeSourceStrategy: timeSource.strategy || null,
             dataType: this.structureParser._detectDataType(timeValues, 'abscissa'),
@@ -206,7 +264,8 @@ export default class CsvParser {
         for (let c = 0; c < variableHeaders.length; c++) {
             const header = variableHeaders[c].header;
             const column = variableColumns[c];
-            const isStringColumn = !isMostlyNumericColumn(column);
+            const chosen = forced?.get(variableHeaders[c].index) || null;
+            const isStringColumn = chosen ? chosen === 'text' : !isMostlyNumericColumn(column);
             if (!isStringColumn) numericColumnIndexes.push(variableHeaders[c].index);
             const values = isStringColumn ? column.stringValues : column.numericValues;
             let name = header.name;
@@ -229,39 +288,7 @@ export default class CsvParser {
                 source: 'csv'
             };
         }
-
-        const timeVar = result.variables[timeVariable.name];
-        result.metadata = {
-            numVariables: Object.keys(result.variables).length,
-            numParams: 0,
-            numTimevarying: variableHeaders.length,
-            numTimesteps: timeVar.data.length,
-            timeStart: timeVar.data[0],
-            timeEnd: timeVar.data[timeVar.data.length - 1],
-            csv: true,
-            delimiter,
-            hasHeader,
-            skippedRows: table.headerIndex,
-            skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
-            skippedInvalidTimeRows: invalidTimeRows,
-            skippedColumnCountRows: fitted.dropped,
-            repairedColumnCountRows: fitted.repaired,
-            reorderedRows,
-            timeName: timeVar.name,
-            timeKind,
-            timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
-            timeOriginMs,
-            timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`),
-            datetimeRepeats,
-            numericColumnIndexes,
-            unitRowIndex: table.unitRowIndex ?? null,
-            encoding: decoded.encoding,
-            removedInvisibleChars: decoded.removedChars,
-            detectedNumberFormat,
-        };
-
-        this._attachTree(result, null);
-        return result;
+        return { result, timeVar: result.variables[timeVariable.name], numericColumnIndexes };
     }
 
     /**
@@ -325,6 +352,16 @@ export default class CsvParser {
         // Cells the rows carry past the table's width, now counting the
         // unnamed empty columns just dropped.
         const trailingEmptyCells = Math.max(fitted.trailingEmpty, 0) + (fullWidth - rawHeaders.length);
+        // Trailing columns a row may stop short of (fitCsvRowToWidth): the ones
+        // under an empty header cell — or, with no header, empty in the first
+        // row — that some later row does fill (a notes column at the end of a
+        // weather export). Said on the profile, so parseWithProfile and the
+        // DuckDB readers keep those rows as parse() does. Not when the sample
+        // also holds rows too short to be rows of this table (a file of mixed
+        // record types): DuckDB pads every short row or none, and padding
+        // those would turn them into data.
+        const widthTemplate = headerRow.slice(0, rawHeaders.length);
+        const optionalTrailingColumns = fitted.dropped ? 0 : widthTemplate.length - minimumRowWidth(widthTemplate);
 
         const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
@@ -345,6 +382,7 @@ export default class CsvParser {
             ...(decoded.removedChars ? { removedInvisibleChars: decoded.removedChars } : {}),
             detectedNumberFormat,
             ...(trailingEmptyCells ? { trailingEmptyCells } : {}),
+            ...(optionalTrailingColumns > 0 ? { optionalTrailingColumns } : {}),
             lineEnding: detectLineEnding(text, table.dataStartIndex),
             ...(fitted.dropped ? { sampleColumnCountMismatches: fitted.dropped } : {}),
             hasHeader,
@@ -466,8 +504,11 @@ export default class CsvParser {
         const expectedColumns = rawHeaders.length;
         // The width rows are fitted to is the header's, with the empty cells a
         // header row may end in: a renamed header list is the same width.
+        // Without a header, the columns the sample found optional at the end
+        // (optionalTrailingColumns, from the first row) are the empty ones.
+        const optional = Math.max(0, Math.min(rawHeaders.length - 1, Number(profile.optionalTrailingColumns) || 0));
         const widthTemplate = rawHeaders.map((header, index) =>
-            hasHeader ? String(headerRow[index] ?? header ?? '') : 'x');
+            (hasHeader ? String(headerRow[index] ?? header ?? '') : (index >= rawHeaders.length - optional ? '' : 'x')));
         const fitted = fitCsvTableRows(rows, dataStartIndex, widthTemplate, { policy: normalizeRaggedRowPolicy(profile.raggedRows) });
         const widthRows = fitted.rows;
         const discardedColumnCountRows = fitted.dropped;
@@ -486,120 +527,13 @@ export default class CsvParser {
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
             .filter(({ index }) => !timeIndexes.has(index) && !ignoredIndexes.has(index));
-        const timeValues = [];
-        const variableColumns = variableHeaders.map(() => ({
-            numericValues: [],
-            stringValues: [],
-            nonEmptyCount: 0,
-            finiteCount: 0
-        }));
-        let timeKind = timeSource.kind || 'index';
-        let timeOriginMs = null;
-        let invalidTimeRows = 0;
+        const { timeValues, variableColumns, timeKind, timeOriginMs, invalidTimeRows, reorderedRows, datetimeRepeats } =
+            this._readTableColumns(dataRows, variableHeaders, timeSource, delimiter, { decimalSeparator, thousandsSeparator });
 
-        for (let r = 0; r < dataRows.length; r++) {
-            const row = dataRows[r];
-            if (!row.some(cell => cell !== '')) continue;
-
-            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator, thousandsSeparator });
-            if (!Number.isFinite(timeValue)) {
-                invalidTimeRows++;
-                continue;
-            }
-            timeValues.push(timeValue);
-            if (timeKind === 'datetime' && timeOriginMs === null) timeOriginMs = timeValue;
-
-            for (let c = 0; c < variableHeaders.length; c++) {
-                const sourceIndex = variableHeaders[c].index;
-                const rawValue = String(row[sourceIndex] ?? '').trim();
-                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator, thousandsSeparator);
-                const column = variableColumns[c];
-                column.numericValues.push(numericValue);
-                column.stringValues.push(rawValue);
-                if (rawValue !== '' && !isMissingNumberCell(rawValue)) column.nonEmptyCount++;
-                if (Number.isFinite(numericValue)) {
-                    column.finiteCount++;
-                }
-            }
-        }
-
-        if (!timeValues.length) {
-            throw new Error('CSV does not contain time values.');
-        }
-        let reorderedRows = 0;
-        if (timeKind !== 'index') {
-            reorderedRows = this._sortTimeSeriesByTime(timeValues, variableColumns);
-            if (timeKind === 'datetime') timeOriginMs = timeValues[0];
-        }
-        const datetimeRepeats = timeKind === 'datetime' ? repeatedTimestampSummary(timeValues) : null;
-
-        const result = {
-            filename: '',
-            metadata: {},
-            variables: {},
-            tree: {}
-        };
-
-        const timeVariable = {
-            name: timeSource.name || 'time',
-            data: timeValues,
-            description: timeSource.description || (timeKind === 'index' ? '[index]' : ''),
-            kind: 'abscissa',
-            timeSourceStrategy: timeSource.strategy || null,
-            dataType: this.structureParser._detectDataType(timeValues, 'abscissa'),
-            isConstant: this.structureParser._isConstantValues(timeValues),
-            interpolation: 'linear',
-            negate: false,
-            source: 'csv'
-        };
-        if (timeKind === 'datetime') {
-            timeVariable.timeKind = 'datetime';
-            // Repeated stamps are reported, never acted on: a burst of rows at
-            // one instant is no reason to throw away the rest of the column (#154).
-            timeVariable.timeDisplayMode = 'calendar';
-            timeVariable.timeOriginMs = timeOriginMs;
-            timeVariable.description = timeSource.description || '[datetime]';
-        } else if (timeKind === 'index') {
-            timeVariable.timeKind = 'index';
-            timeVariable.timeStepMode = 'index';
-            timeVariable.description = timeSource.description || '[index]';
-        }
-        result.variables[timeVariable.name] = timeVariable;
-        const usedVariableNames = new Set([timeVariable.name]);
-        const numericColumnIndexes = [];
         // A type chosen in the parsing options wins over the column's own
         // values, exactly as it does on the DuckDB path (csv-column-types.js).
-        const forced = forcedColumnTypes(profile);
-
-        for (let c = 0; c < variableHeaders.length; c++) {
-            const header = variableHeaders[c].header;
-            const column = variableColumns[c];
-            const chosen = forced.get(variableHeaders[c].index) || null;
-            const isStringColumn = chosen ? chosen === 'text' : !isMostlyNumericColumn(column);
-            if (!isStringColumn) numericColumnIndexes.push(variableHeaders[c].index);
-            const values = isStringColumn ? column.stringValues : column.numericValues;
-            let name = header.name;
-            if (usedVariableNames.has(name)) {
-                const base = name;
-                let suffix = 2;
-                while (usedVariableNames.has(`${base}_${suffix}`)) suffix++;
-                name = `${base}_${suffix}`;
-            }
-            usedVariableNames.add(name);
-            result.variables[name] = {
-                name,
-                data: values,
-                description: header.description,
-                kind: 'variable',
-                dataType: isStringColumn ? 'string' : this.structureParser._detectDataType(values, 'variable'),
-                isConstant: this.structureParser._isConstantValues(values),
-                interpolation: 'linear',
-                negate: false,
-                source: 'csv'
-            };
-        }
-
-        const timeVar = result.variables[timeVariable.name];
+        const { result, timeVar, numericColumnIndexes } = this._buildTableResult(
+            timeSource, { timeKind, timeValues, timeOriginMs }, variableHeaders, variableColumns, forcedColumnTypes(profile));
         result.metadata = {
             numVariables: Object.keys(result.variables).length,
             numParams: 0,

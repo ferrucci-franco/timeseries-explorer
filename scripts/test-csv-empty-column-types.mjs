@@ -78,29 +78,33 @@ for (const name of ['BATT_I', 'Calo_Config*']) {
 
 // ------------------------------------------------------------ full-file scan
 
-// What _resolveUnknownCsvColumnTypes would read back from DuckDB, with the
-// counts of the whole file: BATT_I holds nothing, Calo_Config* holds 20 numbers,
-// and a third column that only looks empty early turns out to be text.
+// What _scanCsvColumnTypes would read back from DuckDB, with the counts of
+// the whole file: BATT_I holds nothing, Calo_Config* holds 20 numbers, ELY_V
+// is numbers throughout and ELY_Status words throughout. Every column left on
+// auto is counted, not only the two the sample could not type: the sample is
+// the first 100 rows, and a column may change after them.
 const scanned = {
+    'ELY_V': { filled: 120, numeric: 120 },
     'BATT_I': { filled: 0, numeric: 0 },
     'Calo_Config*': { filled: 20, numeric: 20 },
+    'ELY_Status': { filled: 120, numeric: 0 },
 };
-const unknownOrder = source._csvColumnSpecs(profile, { withVerdict: true })
-    .filter(spec => spec.sampleVerdict === 'unknown')
+const scanOrder = source._csvColumnSpecs(profile, { withVerdict: true })
+    .filter(spec => !['time', 'chosen', 'scanned'].includes(spec.sampleVerdict))
     .map(spec => spec.name);
-assert.deepEqual(unknownOrder, ['BATT_I', 'Calo_Config*']);
+assert.deepEqual(scanOrder, ['ELY_V', 'BATT_I', 'Calo_Config*', 'ELY_Status']);
 
 const fakeResult = {
     getChild(name) {
         const match = /^(filled|numeric)_(\d+)$/.exec(name);
         if (!match) return null;
-        const column = unknownOrder[Number(match[2])];
+        const column = scanOrder[Number(match[2])];
         return { get: () => BigInt(scanned[column][match[1]]) };
     },
 };
 let scannedSql = '';
 
-await source._resolveUnknownCsvColumnTypes(
+await source._scanCsvColumnTypes(
     'omv_t_1',
     profile,
     header,
@@ -109,15 +113,18 @@ await source._resolveUnknownCsvColumnTypes(
 );
 // A cell counts as filled unless it is empty or a missing-value marker
 // ("-", NaN, NULL), as isMissingNumberCell decides in the in-memory reader.
-assert.ok(/COUNT\(\(CASE WHEN regexp_full_match\(trim\(CAST\("BATT_I" AS VARCHAR\)\), '[^']*'\) THEN NULL ELSE NULLIF\(trim\(CAST\("BATT_I" AS VARCHAR\)\), ''\) END\)\) AS filled_0/.test(scannedSql), scannedSql);
-assert.ok(/try_cast\("Calo_Config\*" AS DOUBLE\)\) AS numeric_1/.test(scannedSql), scannedSql);
+assert.ok(/COUNT\(\(CASE WHEN lower\(trim\(CAST\("BATT_I" AS VARCHAR\)\)\) IN \('nan', '\+nan', '-nan', 'null', 'none', 'nil', 'n\/a', '#n\/a', '-', '--', '---'\) THEN NULL ELSE NULLIF\(trim\(CAST\("BATT_I" AS VARCHAR\)\), ''\) END\)\) AS filled_1/.test(scannedSql), scannedSql);
+// A cell counts as a number when DuckDB's cast reads it, or the per-cell
+// reading behind it does (csvNumericCastSql), as parseCsvNumber would.
+assert.ok(/COUNT\(coalesce\(try_cast\("Calo_Config\*" AS DOUBLE\), .*\)\) AS numeric_2/.test(scannedSql), scannedSql);
 assert.ok(scannedSql.includes('FROM omv_t_1 WHERE "Date" IS NOT NULL'), scannedSql);
-assert.ok(!scannedSql.includes('"ELY_V"'), 'a column the sample typed is not worth a scan');
+assert.ok(scannedSql.includes('"ELY_V"'), 'a column the sample typed is scanned too: the sample may be wrong about the rest');
+assert.ok(!scannedSql.includes('"Date"') || !/COUNT\([^)]*"Date"/.test(scannedSql), 'the time axis is not');
 
 // The verdict is written back onto the profile, so the live-update appends and a
 // later Parquet conversion read the same types.
-assert.deepEqual(profile.scannedNumericColumns, [3, 4]);
-assert.deepEqual(profile.scannedTextColumns, []);
+assert.deepEqual(profile.scannedNumericColumns, [2, 3, 4]);
+assert.deepEqual(profile.scannedTextColumns, [5]);
 specs = specsByName();
 assert.equal(specs.get('BATT_I').type, 'DOUBLE', 'an empty column stays numeric');
 assert.equal(specs.get('Calo_Config*').type, 'DOUBLE', 'a column that starts late is numeric');
@@ -132,7 +139,7 @@ assert.equal(textSpecs.get('Calo_Config*').type, 'VARCHAR', 'the scan outranks t
 
 // A failed scan must not fail the load: the sample's types stand.
 const beforeFailure = { ...profile };
-await source._resolveUnknownCsvColumnTypes(
+await source._scanCsvColumnTypes(
     'omv_t_1',
     { ...profile, scannedNumericColumns: [], scannedTextColumns: [] },
     header,

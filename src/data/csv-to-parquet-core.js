@@ -5,17 +5,37 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
-import { parseCsvTimeValue } from '../parsers/csv-time-detection.js';
-import { csvDatetimeSql } from './csv-sql-datetime.js';
-import { columnIndexSet, columnSampleVerdict, forcedColumnTypes, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
-import { csvNumberFormat } from '../parsers/csv-text-normalize.js';
 import {
-    csvFilledCellSql,
-    csvNumericCastSql,
-    csvProfileUsesDecimalComma,
-    csvReadRepairOptions,
-    csvRepairProjectionSql,
-} from './csv-sql-normalize.js';
+    applyCsvColumnTypeScan,
+    csvColumnSpecs,
+    csvColumnTypeScan,
+    csvProjectionSql,
+    csvReadCsvSql,
+    csvRowFilterSql,
+    csvTimeColumnName,
+    csvTimeInfoFromProfile,
+    csvTimeOutputSql,
+    duckDbColumnsStruct,
+    escapeSqlString,
+    inferDuckDbCsvType,
+    quoteIdent,
+    sampleRowsWithValidTime,
+} from './csv-sql-schema.js';
+import { csvNumericCastSql, csvProfileUsesDecimalComma } from './csv-sql-normalize.js';
+import { csvDatetimeSql } from './csv-sql-datetime.js';
+
+// The SQL a profile turns into lives in csv-sql-schema.js, shared with the
+// browser's DuckDB reader so that a file converted here reads as it does
+// there. Re-exported under the names this module's callers and tests use.
+export {
+    csvColumnSpecs,
+    duckDbColumnsStruct,
+    escapeSqlString,
+    inferDuckDbCsvType,
+    quoteIdent,
+    sampleRowsWithValidTime,
+};
+export { csvRowFilterSql as rowFilterSql, csvTimeOutputSql as timeOutputSql };
 
 const require = createRequire(import.meta.url);
 const duckDbModulePath = (() => {
@@ -52,295 +72,68 @@ export function csvReadExpr(sqlInput, profile) {
     if (profile.delimiter === 'whitespace') {
         throw new Error('CSV-to-Parquet conversion does not yet support variable-width whitespace delimiters.');
     }
-    const specs = csvColumnSpecs(profile);
-    const options = [
-        `auto_detect=false`,
-        `header=false`,
-        `skip=${Math.max(0, Number(profile.dataStartIndex) || 0)}`,
-        `columns=${duckDbColumnsStruct(specs)}`,
-        `ignore_errors=true`,
-        ...csvReadRepairOptions(profile),
-    ];
-    if (profile.delimiter) options.push(`delim='${escapeSqlString(profile.delimiter)}'`);
-    if (csvUsesDecimalComma(profile)) options.push(`decimal_separator=','`);
-    const readSql = `read_csv('${sqlInput}', ${options.join(', ')})`;
-    return csvRepairProjectionSql(readSql, profile, specs.map(spec => spec.name)) || readSql;
-}
-
-// `withVerdict` adds what the sample says about each column ('numeric', 'text',
-// 'unknown' or 'time'), which only resolveUnknownCsvColumnTypes needs.
-export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
-    const rawHeaders = profile?.rawHeaders || [];
-    const headers = profile?.headers || [];
-    const sampleRows = profile?.sampleRows || [];
-    const timeSource = profile?.timeSource || {};
-    const timeIndexes = new Set(timeSource.sourceIndexes || []);
-    const numericIndexes = Array.isArray(profile?.numericColumnIndexes)
-        ? new Set(profile.numericColumnIndexes.map(index => Number(index)).filter(index => Number.isInteger(index) && index >= 0))
-        : null;
-    // Above everything the file says about itself: the type the reader chose in
-    // the parsing options.
-    const forced = forcedColumnTypes(profile);
-    // What the scan of the whole CSV decided for the columns the sample could
-    // not type (resolveUnknownCsvColumnTypes). It read every row, so it wins.
-    const scannedNumeric = columnIndexSet(profile?.scannedNumericColumns);
-    const scannedText = columnIndexSet(profile?.scannedTextColumns);
-    const validTimeRows = sampleRowsWithValidTime(sampleRows, profile);
-    const numberFormat = csvNumberFormat(profile);
-    return rawHeaders.map((raw, index) => {
-        const header = headers[index] || {};
-        const name = header.name || String(raw || `column_${index + 1}`);
-        const forceVarchar = timeIndexes.has(index)
-            && timeSource.kind === 'datetime'
-            && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
-        const chosen = forced.get(index) || null;
-        const scanned = scannedNumeric.has(index) || scannedText.has(index);
-        const inferred = forceVarchar
-            ? { type: 'VARCHAR', readType: 'VARCHAR' }
-            : chosen
-                ? { type: chosen === 'text' ? 'VARCHAR' : 'DOUBLE', readType: 'VARCHAR' }
-            : scannedNumeric.has(index)
-                ? { type: 'DOUBLE', readType: 'VARCHAR' }
-            : scannedText.has(index)
-                ? { type: 'VARCHAR', readType: 'VARCHAR' }
-            : numericIndexes
-                ? (numericIndexes.has(index) ? { type: 'DOUBLE', readType: 'VARCHAR' } : { type: 'VARCHAR', readType: 'VARCHAR' })
-            : inferDuckDbCsvType(validTimeRows, index, profile.delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator);
-        const spec = {
-            name,
-            description: String(header.description || ''),
-            ...inferred,
-        };
-        if (withVerdict) {
-            // 'chosen' and 'scanned' are both settled: the scan skips them.
-            spec.sampleVerdict = forceVarchar
-                ? 'time'
-                : chosen
-                    ? 'chosen'
-                    : scanned
-                        ? 'scanned'
-                        : columnSampleVerdict(validTimeRows, index, profile?.delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator);
-        }
-        return spec;
-    });
+    return csvReadCsvSql(sqlInput, profile);
 }
 
 /**
- * Ask the CSV about the columns its sample could not type, before writing them.
+ * Ask the CSV what each of its columns holds, before writing them.
  *
- * Same question the app's DuckDB path asks (duckdb-source.js
- * _resolveUnknownCsvColumnTypes), for the same reason: the sample is the first
- * 100 data rows of the first megabyte, and a channel that starts recording
- * later — or never — would otherwise be typed from no evidence at all and
- * written to Parquet as the wrong thing for good (#311).
+ * Same scan the app's DuckDB path runs on load (csvColumnTypeScan), for the
+ * same reason: the sample is the first 100 data rows of the first megabyte,
+ * and a channel that starts recording later — or never — would otherwise be
+ * typed from no evidence at all (#311), and a column that changes after the
+ * sample (a sensor writing "OFF" until the plant starts) from the wrong
+ * evidence, and written to Parquet as the wrong thing for good.
  *
- * One aggregate query, so one extra pass over the CSV, against a conversion that
- * already reads and sorts the whole file. Nothing is written if it fails: the
- * sample's answer is good enough to convert with.
+ * One aggregate query over the rows with a time, so one extra pass over the
+ * CSV, against a conversion that already reads and sorts the whole file.
+ * Nothing is written if it fails: the sample's answer is good enough to
+ * convert with.
  */
-export async function resolveUnknownCsvColumnTypes(conn, readExpr, profile) {
+export async function resolveUnknownCsvColumnTypes(conn, readExpr, profile, timeInfo = null) {
     if (!profile) return;
-    const specs = csvColumnSpecs(profile, { withVerdict: true });
-    const unknown = specs
-        .map((spec, index) => ({ spec, index }))
-        .filter(({ spec }) => spec.sampleVerdict === 'unknown');
-    if (!unknown.length) return;
-
-    const selections = unknown.map(({ spec }, slot) => {
-        const ident = quoteIdent(spec.name);
-        return `COUNT(${csvFilledCellSql(ident)}) AS filled_${slot}`
-            + `, COUNT(${numericCastSql(ident, profile)}) AS numeric_${slot}`;
-    });
-    const filterWhere = rowFilterSql(profile);
-    const sql = `SELECT ${selections.join(', ')} FROM ${readExpr}${filterWhere ? ` WHERE ${filterWhere}` : ''}`;
+    const scan = csvColumnTypeScan(profile);
+    if (!scan) return;
+    const where = [rowFilterSql(profile), timeInfo?.sql && !timeInfo.generated ? `${timeInfo.sql} IS NOT NULL` : '']
+        .filter(Boolean).join(' AND ');
+    const sql = `SELECT ${scan.selectList} FROM ${readExpr}${where ? ` WHERE ${where}` : ''}`;
 
     let rows = null;
     try {
         rows = await runDuckDb(conn, sql);
     } catch (err) {
-        console.warn(`[csv-to-parquet] could not scan for untyped columns; keeping the sample's types: ${err?.message || err}`);
+        console.warn(`[csv-to-parquet] could not scan the file for its column types; keeping the sample's types: ${err?.message || err}`);
         return;
     }
     const row = rows?.[0];
     if (!row) return;
-
-    const numericColumns = columnIndexSet(profile.scannedNumericColumns);
-    const textColumns = columnIndexSet(profile.scannedTextColumns);
-    unknown.forEach(({ index }, slot) => {
-        const filled = Number(row[`filled_${slot}`] ?? 0);
-        const numeric = Number(row[`numeric_${slot}`] ?? 0);
-        if (isMostlyNumericColumn({ nonEmptyCount: filled, finiteCount: numeric })) numericColumns.add(index);
-        else textColumns.add(index);
-    });
-    profile.scannedNumericColumns = [...numericColumns].sort((a, b) => a - b);
-    profile.scannedTextColumns = [...textColumns].sort((a, b) => a - b);
-}
-
-export function sampleRowsWithValidTime(sampleRows, profile) {
-    const timeSource = profile?.timeSource;
-    if (!timeSource?.ok || timeSource.strategy === 'generated-index') return sampleRows || [];
-    const delimiter = profile?.delimiter || ',';
-    const { decimalSeparator, thousandsSeparator } = csvNumberFormat(profile);
-    return (sampleRows || []).filter((row, index) =>
-        Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator, thousandsSeparator }))
-    );
-}
-
-// Text only when the sample says so: a column the sample held no value for —
-// a channel the logger never recorded — is numbers, not a string column (#311).
-// resolveUnknownCsvColumnTypes settles those columns against the whole file
-// before anything is written; this is what stands if that scan cannot run.
-export function inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
-    return columnSampleVerdict(sampleRows, index, delimiter, decimalSeparator, thousandsSeparator) === 'text'
-        ? { type: 'VARCHAR', readType: 'VARCHAR' }
-        : { type: 'DOUBLE', readType: 'VARCHAR' };
-}
-
-export function duckDbColumnsStruct(specs) {
-    const fields = specs.map(({ name, type, readType }) =>
-        `'${escapeSqlString(name)}': '${escapeSqlString(readType || type || 'VARCHAR')}'`
-    );
-    return `{${fields.join(', ')}}`;
+    applyCsvColumnTypeScan(profile, scan.columns, alias => Number(row[alias] ?? 0));
 }
 
 export function csvUsesDecimalComma(profile) {
     return csvProfileUsesDecimalComma(profile);
 }
 
+// The generated index stays the integer DuckDB counts: that is what the
+// converter has always written, and what a Parquet reader expects of one.
 export function timeInfoFromProfile(profile) {
-    const timeSource = profile?.timeSource;
-    if (!timeSource?.ok) return null;
-    const specs = csvColumnSpecs(profile);
-    const sourceNames = (timeSource.sourceIndexes || [])
-        .map(index => specs[index]?.name)
-        .filter(name => name != null);
-
-    if (timeSource.strategy === 'generated-index') {
-        return {
-            name: timeSource.name || 'index',
-            sourceNames: [],
-            sql: 'ROW_NUMBER() OVER () - 1',
-            generated: true,
-        };
-    }
-
-    if (!sourceNames.length) return null;
-    if (timeSource.strategy === 'index-column') {
-        return {
-            name: timeSource.name || sourceNames[0],
-            sourceNames,
-            sql: numericCastSql(quoteIdent(sourceNames[0]), profile),
-            generated: false,
-        };
-    }
-    if (timeSource.kind === 'numeric') {
-        return {
-            name: timeSource.name || sourceNames[0],
-            sourceNames,
-            sql: numericCastSql(quoteIdent(sourceNames[0]), profile),
-            generated: false,
-        };
-    }
-
-    if (timeSource.kind !== 'datetime') return null;
-    return {
-        name: timeSource.name || sourceNames.join(' '),
-        sourceNames,
-        sql: datetimeSqlFromProfile(timeSource, sourceNames, profile),
-        timeKind: 'datetime',
-        generated: false,
-    };
-}
-
-/**
- * The time column as it is written to the file.
- *
- * The projection computes time as milliseconds since the epoch, which is what
- * the plot needs but not what the file should say: a Parquet holding a plain
- * number has forgotten that its time was a date, and reopening it gave a
- * numeric axis where the CSV had a calendar. Written back as a TIMESTAMP, the
- * file carries that fact itself, and it is a date again on the next open.
- */
-export function timeOutputSql(timeInfo, expression = '"__omv_time"') {
-    return timeInfo?.timeKind === 'datetime'
-        ? `epoch_ms(CAST(${expression} AS BIGINT))`
-        : expression;
+    return csvTimeInfoFromProfile(profile, { indexAsDouble: false });
 }
 
 export function datetimeSqlFromProfile(timeSource, sourceNames, profile = null) {
     return csvDatetimeSql(timeSource, sourceNames, {
         quoteIdent,
-        numericCastSql: expr => numericCastSql(expr, profile),
+        numericCastSql: expr => csvNumericCastSql(expr, profile),
     });
 }
 
 export function projectionSql(profile, timeInfo) {
-    if (!timeInfo?.sql) throw new Error('No suitable time column detected by the CSV pre-scan.');
-    const specs = csvColumnSpecs(profile);
-    const exclude = new Set(timeInfo.sourceNames || []);
-    for (const index of profile?.ignoredColumns || []) {
-        const name = specs[Number(index)]?.name;
-        if (name) exclude.add(name);
-    }
-    const columns = specs
-        .filter(({ name }) => !exclude.has(name))
-        .map(spec => projectionColumnSql(spec, profile));
-    return [
-        `${timeInfo.sql} AS "__omv_time"`,
-        ...columns,
-    ].join(', ');
+    return csvProjectionSql(profile, timeInfo);
 }
 
-/**
- * What to call the time column in the file the user keeps.
- *
- * __omv_time is this application's internal name for it, and it was leaking
- * into every converted file: a CSV whose column said "time" produced a Parquet
- * whose column said "__omv_time". The name the source used is the one to write,
- * unless a column that survived the projection already has it — two columns of
- * the same name would be a file nobody can query unambiguously.
- */
+/** What to call the time column in the file the user keeps (csvTimeColumnName). */
 export function timeColumnName(profile, timeInfo) {
-    const candidate = String(timeInfo?.name ?? '').trim();
-    if (!candidate) return '__omv_time';
-    const exclude = new Set(timeInfo?.sourceNames || []);
-    const specs = csvColumnSpecs(profile);
-    for (const index of profile?.ignoredColumns || []) {
-        const name = specs[Number(index)]?.name;
-        if (name) exclude.add(name);
-    }
-    const taken = specs.map(spec => spec.name).filter(name => !exclude.has(name));
-    return taken.includes(candidate) ? '__omv_time' : candidate;
-}
-
-function projectionColumnSql(spec, profile = null) {
-    const name = spec?.name;
-    const ident = quoteIdent(name);
-    if (spec?.type === 'DOUBLE' && spec?.readType === 'VARCHAR') {
-        return `${numericCastSql(ident, profile)} AS ${ident}`;
-    }
-    return ident;
-}
-
-export function rowFilterSql(profile) {
-    const filter = profile?.rowFilter;
-    if (!filter?.enabled) return '';
-    const columnIndex = Number(filter.columnIndex);
-    if (!Number.isInteger(columnIndex) || columnIndex < 0) return '';
-    const specs = csvColumnSpecs(profile);
-    const column = specs[columnIndex]?.name;
-    if (!column) return '';
-    if (filter.operator === 'is_numeric') return `${numericCastSql(quoteIdent(column), profile)} IS NOT NULL`;
-    const operator = filter.operator === '!=' ? '<>' : '=';
-    return `trim(CAST(${quoteIdent(column)} AS VARCHAR)) ${operator} '${escapeSqlString(String(filter.value ?? '').trim())}'`;
-}
-
-function numericCastSql(expr, profile = null) {
-    return csvNumericCastSql(expr, profile);
-}
-
-export function quoteIdent(name) {
-    return `"${String(name ?? '').replace(/"/g, '""')}"`;
+    return csvTimeColumnName(profile, timeInfo);
 }
 
 // Every other value in this module reaches SQL through quoteIdent, sqlPath,
@@ -356,10 +149,6 @@ export function parquetCompression(value) {
         throw new Error(`Unsupported Parquet compression: ${name}. Use one of ${[...PARQUET_COMPRESSIONS].join(', ')}.`);
     }
     return name;
-}
-
-export function escapeSqlString(value) {
-    return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "''");
 }
 
 export function sqlPath(filePath) {
@@ -418,7 +207,7 @@ export async function convertCsvToParquet(options = {}) {
         const compress = compression === 'none' ? '' : `, COMPRESSION ${compression.toUpperCase()}`;
         const readExpr = csvReadExpr(sqlPath(inputPath), profile);
         // Before the projection, which is where a column's type becomes a cast.
-        await resolveUnknownCsvColumnTypes(conn, readExpr, profile);
+        await resolveUnknownCsvColumnTypes(conn, readExpr, profile, timeInfo);
         const projection = projectionSql(profile, timeInfo);
         const filterWhere = rowFilterSql(profile);
         await runDuckDb(conn, `

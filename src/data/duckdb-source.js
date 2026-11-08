@@ -23,18 +23,20 @@ import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
-import { parseCsvTimeValue } from '../parsers/csv-time-detection.js';
-import { csvNumberFormat } from '../parsers/csv-text-normalize.js';
-import { csvDatetimeSql } from './csv-sql-datetime.js';
+import { csvNumberCastFormat, csvNumericCastSql } from './csv-sql-normalize.js';
 import {
-    csvFilledCellSql,
-    csvNumericCastSql,
-    csvProfileHasHexNumbers,
-    csvProfileUsesDecimalComma,
-    csvReadRepairOptions,
-    csvRepairProjectionSql,
-} from './csv-sql-normalize.js';
-import { columnIndexSet, columnSampleVerdict, forcedColumnTypes, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
+    applyCsvColumnTypeScan,
+    csvColumnSpecs,
+    csvColumnTypeScan,
+    csvKeptColumns,
+    csvProjectionColumnSql,
+    csvProjectionSql,
+    csvReadCsvSql,
+    csvRowFilterSql,
+    csvTimeColumnName,
+    csvTimeInfoFromProfile,
+    csvTimeOutputSql,
+} from './csv-sql-schema.js';
 import { buildCsvTree, resolveCsvGrouping } from '../parsers/csv-tree-grouping.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import {
@@ -458,43 +460,18 @@ export default class DuckDbSource {
             + ` FROM (SELECT ${projection} FROM (${raw})) WHERE "__omv_time" IS NOT NULL`;
     }
 
-    /**
-     * The time column as it is written to the file.
-     *
-     * The projection computes time as milliseconds since the epoch, which is
-     * what the plot needs but not what the file should say: a Parquet holding a
-     * plain number has forgotten that its time was a date, and reopening it
-     * gave a numeric axis where the CSV had a calendar. Written back as a
-     * TIMESTAMP, the file carries that fact itself.
-     */
     _conversionTimeSql(timeInfo, expression = '"__omv_time"') {
-        return timeInfo?.timeKind === 'datetime'
-            ? `epoch_ms(CAST(${expression} AS BIGINT))`
-            : expression;
-    }
-
-    _conversionKeptColumns(columnNames, timeInfo = null, csvProfile = null) {
-        const exclude = new Set(timeInfo?.sourceNames || []);
-        for (const index of csvProfile?.ignoredColumns || []) {
-            const name = columnNames[Number(index)];
-            if (name != null) exclude.add(name);
-        }
-        return columnNames.filter(name => !exclude.has(name));
+        return csvTimeOutputSql(timeInfo, expression);
     }
 
     _conversionTimeColumnName(timeInfo, columnNames, csvProfile = null) {
-        const candidate = String(timeInfo?.name ?? '').trim();
-        if (!candidate) return '__omv_time';
-        // Two columns of the same name would be a file nobody can query
-        // unambiguously. The internal name is ugly, but it is never taken.
-        const taken = new Set(this._conversionKeptColumns(columnNames, timeInfo, csvProfile));
-        return taken.has(candidate) ? '__omv_time' : candidate;
+        return csvTimeColumnName(csvProfile, timeInfo, columnNames);
     }
 
     _conversionColumnsSql(columnNames, csvProfile = null) {
-        const specsByName = new Map((this._csvColumnSpecs(csvProfile) || []).map(spec => [spec.name, spec]));
-        const columns = this._conversionKeptColumns(columnNames, null, csvProfile)
-            .map(name => this._projectionColumnSql(name, specsByName.get(name), csvProfile));
+        const specsByName = new Map(csvColumnSpecs(csvProfile).map(spec => [spec.name, spec]));
+        const columns = csvKeptColumns(csvProfile, null, columnNames)
+            .map(name => csvProjectionColumnSql(name, specsByName.get(name), csvProfile));
         return columns.join(', ') || '*';
     }
 
@@ -2668,24 +2645,35 @@ export default class DuckDbSource {
         const escTimeAlias = timeAlias.replace(/"/g, '""');
         const validTimeWhere = timeInfo.generated ? 'TRUE' : `${timeInfo.sql} IS NOT NULL`;
 
-        // Before the projection is written: it is the projection that casts, so
-        // the columns the sample could not type have to be settled first.
-        if (format === 'csv') {
-            await this._resolveUnknownCsvColumnTypes(tableName, csvProfile, columnNames, validTimeWhere, query);
-        }
+        // One pass over the file before the projection is written: the row
+        // count, the time range, and the type of every column the reader left
+        // on auto — it is the projection that casts, so the types come first
+        // (_scanCsvLoad).
+        const scanned = await this._scanCsvLoad(tableName, csvProfile, columnNames, timeInfo, validTimeWhere, query, { format });
         const projection = this._projectionSql(columnNames, timeInfo, csvProfile);
 
-        let totalRows;
+        // The file's row count as the lazy queries use it (a row-number axis
+        // counts every row, with a time or without) is not the scan's count of
+        // the rows with a time: a view stays uncounted until a query needs it
+        // (_currentDuckDbRowCount), as before. The scan's count is the number
+        // of timesteps, which the metadata reports below.
+        let totalRows = viewMode ? undefined : scanned?.rows;
         let dataSql;
         if (!viewMode) {
-            const countResult = await query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName} WHERE ${validTimeWhere}`);
-            const countCol = countResult.getChildAt(0) || countResult.getChild('n');
-            totalRows = Number(countCol?.get(0) ?? 0);
+            if (totalRows === undefined) {
+                // The scan failed, and the count it carried is not optional here.
+                const countResult = await query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName} WHERE ${validTimeWhere}`);
+                const countCol = countResult.getChildAt(0) || countResult.getChild('n');
+                totalRows = Number(countCol?.get(0) ?? 0);
+            }
             if (format === 'csv' && totalRows <= 0) {
                 throw new Error('DuckDB CSV profile produced no valid time rows; falling back.');
             }
+            // Rows at the same instant keep the file's order, as the in-memory
+            // reader's stable sort keeps it: rowid is the row's position in the
+            // table, which CREATE TABLE AS filled in the file's order.
             dataSql = (!lazy || totalRows <= overviewPoints)
-                ? `SELECT ${projection} FROM ${tableName} WHERE ${validTimeWhere} ORDER BY "${escTimeAlias}" ASC NULLS LAST`
+                ? `SELECT ${projection} FROM ${tableName} WHERE ${validTimeWhere} ORDER BY "${escTimeAlias}" ASC NULLS LAST, rowid`
                 : this._overviewSql(tableName, projection, escTimeAlias, totalRows, overviewPoints, validTimeWhere);
         } else {
             if (format === 'parquet') {
@@ -2723,21 +2711,14 @@ export default class DuckDbSource {
 
         if (viewMode) {
             // In view mode the overview is a small reservoir sample, so its
-            // first/last values are not the file's true time range. Issue an
-            // aggregate query — DuckDB can compute MIN/MAX without sorting.
-            if (!timeInfo.generated) try {
-                const aggResult = await query(
-                    `SELECT MIN(${timeInfo.sql})::DOUBLE AS tmin, MAX(${timeInfo.sql})::DOUBLE AS tmax FROM ${tableName} WHERE ${validTimeWhere}`
-                );
-                const tmin = aggResult.getChild('tmin')?.get(0);
-                const tmax = aggResult.getChild('tmax')?.get(0);
-                if (Number.isFinite(Number(tmin))) legacy.metadata.timeStart = Number(tmin);
-                if (Number.isFinite(Number(tmax))) legacy.metadata.timeEnd = Number(tmax);
-            } catch (err) {
-                if (err?.name === 'AbortError') throw err;
-                /* metadata best-effort */
+            // first/last values are not the file's true time range: the scan's
+            // MIN and MAX are, and its count is the rows with a time, as in
+            // whole-file mode. Null for both when the scan failed.
+            if (!timeInfo.generated && scanned) {
+                if (Number.isFinite(scanned.timeStart)) legacy.metadata.timeStart = scanned.timeStart;
+                if (Number.isFinite(scanned.timeEnd)) legacy.metadata.timeEnd = scanned.timeEnd;
             }
-            legacy.metadata.numTimesteps = null;
+            legacy.metadata.numTimesteps = Number.isFinite(scanned?.rows) ? scanned.rows : null;
         }
 
         if (lazy) {
@@ -4104,42 +4085,15 @@ export default class DuckDbSource {
         return { timeValues: time, variables };
     }
 
+    // The read_csv call for the profile (csvReadCsvSql), every column as
+    // text and every repair applied. Without a profile, DuckDB's own sniffer.
     _csvReadExpr(escapedHandle, csvProfile = null, readOptions = {}) {
         if (!csvProfile) return `read_csv_auto('${escapedHandle}', sample_size=20000)`;
-
-        const specs = this._csvColumnSpecs(csvProfile);
-        const skip = Number.isFinite(Number(readOptions.skip))
-            ? Number(readOptions.skip)
-            : Math.max(0, Number(csvProfile.dataStartIndex) || 0);
-        const options = [
-            `auto_detect=false`,
-            `header=false`,
-            `skip=${skip}`,
-            `columns=${this._duckDbColumnsStruct(specs)}`,
-            `ignore_errors=true`,
-            ...csvReadRepairOptions(csvProfile),
-        ];
-        if (csvProfile.delimiter && csvProfile.delimiter !== 'whitespace') {
-            options.push(`delim='${this._escapeSqlString(csvProfile.delimiter)}'`);
-        }
-        if (this._csvUsesDecimalComma(csvProfile)) options.push(`decimal_separator=','`);
-        const readSql = `read_csv('${escapedHandle}', ${options.join(', ')})`;
-        // Invisible characters, and a time column's decimal comma or weekday:
-        // repaired here, once, so every query on the file reads the same
-        // clean columns.
-        return csvRepairProjectionSql(readSql, csvProfile, specs.map(spec => spec.name)) || readSql;
+        return csvReadCsvSql(escapedHandle, csvProfile, { skip: readOptions.skip });
     }
 
     _csvRowFilterSql(csvProfile = null) {
-        const filter = csvProfile?.rowFilter;
-        if (!filter?.enabled) return '';
-        const columnIndex = Number(filter.columnIndex);
-        if (!Number.isInteger(columnIndex) || columnIndex < 0) return '';
-        const column = this._csvColumnSpecs(csvProfile)[columnIndex]?.name;
-        if (!column) return '';
-        if (filter.operator === 'is_numeric') return `${this._numericCastSql(this._quoteIdent(column), csvProfile)} IS NOT NULL`;
-        const operator = filter.operator === '!=' ? '<>' : '=';
-        return `trim(CAST(${this._quoteIdent(column)} AS VARCHAR)) ${operator} '${this._escapeSqlString(String(filter.value ?? '').trim())}'`;
+        return csvRowFilterSql(csvProfile);
     }
 
     _andSql(parts = []) {
@@ -4149,175 +4103,81 @@ export default class DuckDbSource {
             .join(' AND ') || 'TRUE';
     }
 
+    // The file's columns as the profile describes them (csvColumnSpecs).
+    _csvColumnSpecs(csvProfile, options = {}) {
+        return csvColumnSpecs(csvProfile, options);
+    }
+
     /**
-     * The file's columns as the profile describes them: name, description and
-     * the type the projection casts to.
+     * The aggregates read in one pass over the file before the projection is
+     * written: the row count, the time range, and the counts that type every
+     * column the reader left on auto (csvColumnTypeScan).
      *
-     * `withVerdict` adds what the SAMPLE says about each column — 'numeric',
-     * 'text', 'unknown' (it held no value for it) or 'time'. Only the scan that
-     * resolves the unknown ones asks for it, because saying it for every column
-     * means parsing every sampled cell, and this runs on every lazy query.
-     */
-    _csvColumnSpecs(csvProfile, { withVerdict = false } = {}) {
-        const rawHeaders = csvProfile?.rawHeaders || [];
-        const headers = csvProfile?.headers || [];
-        const timeSource = csvProfile?.timeSource || {};
-        const timeIndexes = new Set(timeSource.sourceIndexes || []);
-        const numericIndexes = Array.isArray(csvProfile?.numericColumnIndexes)
-            ? new Set(csvProfile.numericColumnIndexes.map(index => Number(index)).filter(index => Number.isInteger(index) && index >= 0))
-            : null;
-        // Above everything the file says about itself: the type the reader chose
-        // in the parsing options.
-        const forced = forcedColumnTypes(csvProfile);
-        // What a scan of the whole file decided for the columns the sample could
-        // not type (_resolveUnknownCsvColumnTypes). It outranks the sample,
-        // whoever took it: it read every row.
-        const scannedNumeric = columnIndexSet(csvProfile?.scannedNumericColumns);
-        const scannedText = columnIndexSet(csvProfile?.scannedTextColumns);
-        let validTimeRows = null;
-        const sampleRowsOnce = () => {
-            if (validTimeRows === null) {
-                validTimeRows = this._sampleRowsWithValidTime(csvProfile?.sampleRows || [], csvProfile);
-            }
-            return validTimeRows;
-        };
-        const numberFormat = csvNumberFormat(csvProfile);
-        const verdictOf = (index) => columnSampleVerdict(
-            sampleRowsOnce(), index, csvProfile?.delimiter, numberFormat.decimalSeparator, numberFormat.thousandsSeparator,
-        );
-        return rawHeaders.map((raw, index) => {
-            const header = headers[index] || {};
-            const name = header.name || String(raw || `column_${index + 1}`);
-            const forceVarchar = timeIndexes.has(index)
-                && timeSource.kind === 'datetime'
-                && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
-            const chosen = forced.get(index) || null;
-            const scanned = scannedNumeric.has(index) || scannedText.has(index);
-            const inferred = forceVarchar
-                ? { type: 'VARCHAR', readType: 'VARCHAR' }
-                : chosen
-                    ? { type: chosen === 'text' ? 'VARCHAR' : 'DOUBLE', readType: 'VARCHAR' }
-                : scannedNumeric.has(index)
-                    ? { type: 'DOUBLE', readType: 'VARCHAR' }
-                : scannedText.has(index)
-                    ? { type: 'VARCHAR', readType: 'VARCHAR' }
-                : numericIndexes
-                    ? (numericIndexes.has(index) ? { type: 'DOUBLE', readType: 'VARCHAR' } : { type: 'VARCHAR', readType: 'VARCHAR' })
-                : this._inferDuckDbCsvType(
-                    sampleRowsOnce(),
-                    index,
-                    csvProfile.delimiter,
-                    numberFormat.decimalSeparator,
-                    numberFormat.thousandsSeparator,
-                );
-            const spec = {
-                name,
-                description: String(header.description || ''),
-                ...inferred,
-            };
-            if (withVerdict) {
-                // 'chosen' and 'scanned' both mean "settled, nothing left to
-                // ask the file about" — the scan skips them.
-                spec.sampleVerdict = forceVarchar
-                    ? 'time'
-                    : chosen
-                        ? 'chosen'
-                        : scanned ? 'scanned' : verdictOf(index);
-            }
-            return spec;
-        });
-    }
-
-    _sampleRowsWithValidTime(sampleRows, csvProfile) {
-        const timeSource = csvProfile?.timeSource;
-        if (!timeSource?.ok || timeSource.strategy === 'generated-index') return sampleRows || [];
-        const delimiter = csvProfile?.delimiter || ',';
-        const { decimalSeparator, thousandsSeparator } = csvNumberFormat(csvProfile);
-        return (sampleRows || []).filter((row, index) =>
-            Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator, thousandsSeparator }))
-        );
-    }
-
-    // Text only when the sample says so. A column the sample held no value for
-    // is read as numbers — the scan below corrects it if the file disagrees, and
-    // until it answers, numbers are the better guess for a column of a log.
-    _inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto', thousandsSeparator = 'auto') {
-        const verdict = columnSampleVerdict(sampleRows, index, delimiter, decimalSeparator, thousandsSeparator);
-        return verdict === 'text'
-            ? { type: 'VARCHAR', readType: 'VARCHAR' }
-            : { type: 'DOUBLE', readType: 'VARCHAR' };
-    }
-
-    /**
-     * Ask the file about the columns the sample could not type.
+     * One query, because each of them is a pass over the file, and in
+     * memory-saving mode a pass over the file is the whole cost: the row
+     * count and the time range used to be two queries (or, for the count,
+     * skipped), and the type scan a third that only asked about the columns
+     * the sample could not type.
      *
      * The sample is the first 100 data rows of the first megabyte
-     * (CsvParser.inspectSample), which says nothing about a channel the logger
-     * started recording at row 225 — or never recorded at all. Those columns
-     * used to be typed text and arrived as string series: unplottable, out of
-     * every formula and statistic (#311).
+     * (CsvParser.inspectSample). It says nothing about a channel the logger
+     * started recording at row 225 (#311), and it says the wrong thing about
+     * a column that changes after it — a sensor writing "OFF" until the
+     * plant starts, a status that is numeric only during the test. The
+     * in-memory reader types a column over every row; this is what makes
+     * DuckDB answer the same.
      *
-     * So they are counted over every row instead, in ONE query: how many cells
-     * hold anything, and how many of those are a number. Every column is read as
-     * VARCHAR and cast in the projection, so this only decides what the
-     * projection casts — the read above it does not change.
+     * Every column is read as VARCHAR and cast in the projection, so the scan
+     * only decides what the projection casts — the read above it does not
+     * change. The verdict is written onto the profile, so the live-update
+     * appends, a later Parquet conversion and a reload of the same profile
+     * all agree with it.
      *
-     * Cheap where it runs: in whole-file mode the table is already in DuckDB's
-     * memory, so the scan never touches the file again. In memory-saving mode it
-     * is one extra pass over the file, which is the price of not throwing a
-     * column away.
-     *
-     * The verdict is written back onto the profile, so the live-update appends,
-     * a later Parquet conversion and a reload of the same profile all agree with
-     * it. A scan that fails leaves the sample's answer standing: typing a column
-     * is not worth failing a load over.
+     * Returns `{ rows, timeStart, timeEnd }`, or null when the query failed:
+     * typing a column is not worth failing a load over, and the caller
+     * decides what it cannot do without.
      */
-    async _resolveUnknownCsvColumnTypes(tableName, csvProfile, columnNames, validTimeWhere, query) {
-        if (!csvProfile) return;
-        const specs = this._csvColumnSpecs(csvProfile, { withVerdict: true });
-        const available = new Set(columnNames || []);
-        const unknown = specs
-            .map((spec, index) => ({ spec, index }))
-            .filter(({ spec }) => spec.sampleVerdict === 'unknown' && available.has(spec.name));
-        if (!unknown.length) return;
-
-        const selections = unknown.map(({ spec }, slot) => {
-            const ident = this._quoteIdent(spec.name);
-            return `COUNT(${csvFilledCellSql(ident)}) AS filled_${slot}`
-                + `, COUNT(${this._numericCastSql(ident, csvProfile)}) AS numeric_${slot}`;
-        });
-        const sql = `SELECT ${selections.join(', ')} FROM ${tableName} WHERE ${validTimeWhere}`;
-
+    async _scanCsvLoad(tableName, csvProfile, columnNames, timeInfo, validTimeWhere, query, { format = 'csv' } = {}) {
+        const scan = format === 'csv' && csvProfile ? csvColumnTypeScan(csvProfile, { columnNames }) : null;
+        const aggregates = ['COUNT(*)::BIGINT AS n'];
+        if (!timeInfo?.generated && timeInfo?.sql) {
+            aggregates.push(`MIN(${timeInfo.sql})::DOUBLE AS tmin`, `MAX(${timeInfo.sql})::DOUBLE AS tmax`);
+        }
+        if (scan) aggregates.push(scan.selectList);
         let result = null;
         try {
-            result = await query(sql);
+            result = await query(`SELECT ${aggregates.join(', ')} FROM ${tableName} WHERE ${validTimeWhere}`);
         } catch (err) {
             if (err?.name === 'AbortError') throw err;
-            console.warn('[duckdb] could not scan the file for untyped columns; keeping the sample\'s types:', err?.message || err);
+            console.warn('[duckdb] could not scan the file for its row count and column types:', err?.message || err);
+            return null;
+        }
+        const value = (alias) => {
+            const raw = result.getChild(alias)?.get(0);
+            return raw === null || raw === undefined ? null : Number(raw);
+        };
+        if (scan) applyCsvColumnTypeScan(csvProfile, scan.columns, alias => value(alias) ?? 0);
+        return { rows: value('n') ?? 0, timeStart: value('tmin'), timeEnd: value('tmax') };
+    }
+
+    /**
+     * The type scan alone, over a table that already exists: what a test or a
+     * caller without a load in progress asks for. The load itself runs it
+     * inside _scanCsvLoad.
+     */
+    async _scanCsvColumnTypes(tableName, csvProfile, columnNames, validTimeWhere, query) {
+        if (!csvProfile) return;
+        const scan = csvColumnTypeScan(csvProfile, { columnNames });
+        if (!scan) return;
+        let result = null;
+        try {
+            result = await query(`SELECT ${scan.selectList} FROM ${tableName} WHERE ${validTimeWhere}`);
+        } catch (err) {
+            if (err?.name === 'AbortError') throw err;
+            console.warn('[duckdb] could not scan the file for its column types; keeping the sample\'s types:', err?.message || err);
             return;
         }
-
-        const numericColumns = columnIndexSet(csvProfile.scannedNumericColumns);
-        const textColumns = columnIndexSet(csvProfile.scannedTextColumns);
-        unknown.forEach(({ index }, slot) => {
-            const filled = Number(result.getChild(`filled_${slot}`)?.get(0) ?? 0);
-            const numeric = Number(result.getChild(`numeric_${slot}`)?.get(0) ?? 0);
-            if (isMostlyNumericColumn({ nonEmptyCount: filled, finiteCount: numeric })) numericColumns.add(index);
-            else textColumns.add(index);
-        });
-        csvProfile.scannedNumericColumns = [...numericColumns].sort((a, b) => a - b);
-        csvProfile.scannedTextColumns = [...textColumns].sort((a, b) => a - b);
-    }
-
-    _duckDbColumnsStruct(specs) {
-        const fields = specs.map(({ name, type, readType }) =>
-            `'${this._escapeSqlString(name)}': '${this._escapeSqlString(readType || type || 'VARCHAR')}'`
-        );
-        return `{${fields.join(', ')}}`;
-    }
-
-    _csvUsesDecimalComma(csvProfile) {
-        return csvProfileUsesDecimalComma(csvProfile);
+        applyCsvColumnTypeScan(csvProfile, scan.columns, alias => Number(result.getChild(alias)?.get(0) ?? 0));
     }
 
     async _parquetRowCountFromMetadata(escapedHandle) {
@@ -4360,81 +4220,11 @@ export default class DuckDbSource {
     }
 
     _timeInfoFromProfile(columnNames, columnTypes, csvProfile) {
-        const timeSource = csvProfile?.timeSource;
-        if (!timeSource?.ok) return null;
-        if (timeSource.strategy === 'generated-index') {
-            return {
-                name: timeSource.name || 'index',
-                description: timeSource.description || '[index]',
-                timeKind: 'index',
-                strategy: timeSource.strategy || 'generated-index',
-                sourceNames: [],
-                sql: '(ROW_NUMBER() OVER () - 1)::DOUBLE',
-                generated: true,
-            };
-        }
-
-        const sourceNames = (timeSource.sourceIndexes || [])
-            .map(index => columnNames[index])
-            .filter(name => name != null);
-        if (!sourceNames.length) return null;
-
-        const name = timeSource.name || sourceNames.join(' ');
-        const description = timeSource.description || (timeSource.kind === 'datetime' ? '[datetime]' : '');
-        const firstName = sourceNames[0];
-        const firstType = columnTypes[timeSource.sourceIndexes?.[0] ?? 0] || '';
-        const first = this._quoteIdent(firstName);
-        let sql = null;
-
-        if (timeSource.strategy === 'index-column') {
-            sql = this._numericCastSql(first, csvProfile);
-        } else if (timeSource.kind === 'numeric') {
-            sql = this._numericCastSql(first, csvProfile);
-        } else if (timeSource.kind === 'datetime') {
-            sql = this._datetimeSqlFromProfile(timeSource, sourceNames, firstType, csvProfile);
-        }
-
-        if (!sql) return null;
-        return {
-            name,
-            description,
-            timeKind: timeSource.strategy === 'index-column' ? 'index' : timeSource.kind,
-            strategy: timeSource.strategy || timeSource.mode || null,
-            sourceNames,
-            sql,
-        };
-    }
-
-    _datetimeSqlFromProfile(timeSource, sourceNames, firstType, csvProfile = null) {
-        return csvDatetimeSql(timeSource, sourceNames, {
-            quoteIdent: name => this._quoteIdent(name),
-            numericCastSql: expr => this._numericCastSql(expr, csvProfile),
-            firstType,
-        });
+        return csvTimeInfoFromProfile(csvProfile, { columnNames, columnTypes });
     }
 
     _projectionSql(columnNames, timeInfo, csvProfile = null) {
-        const specsByName = new Map((this._csvColumnSpecs(csvProfile) || []).map(spec => [spec.name, spec]));
-        const exclude = new Set(timeInfo.sourceNames || []);
-        for (const index of csvProfile?.ignoredColumns || []) {
-            const name = columnNames[Number(index)];
-            if (name != null) exclude.add(name);
-        }
-        const columns = columnNames
-            .filter(name => !exclude.has(name))
-            .map(name => this._projectionColumnSql(name, specsByName.get(name), csvProfile));
-        return [
-            `${timeInfo.sql} AS "__omv_time"`,
-            ...columns,
-        ].join(', ');
-    }
-
-    _projectionColumnSql(name, spec = null, csvProfile = null) {
-        const ident = this._quoteIdent(name);
-        if (spec?.type === 'DOUBLE' && spec?.readType === 'VARCHAR') {
-            return `${this._numericCastSql(ident, csvProfile)} AS ${ident}`;
-        }
-        return ident;
+        return csvProjectionSql(csvProfile, timeInfo, { columnNames });
     }
 
     _numericCastSql(expr, csvProfile = null) {
@@ -4546,19 +4336,11 @@ export default class DuckDbSource {
 
     /**
      * The number format a CSV's text columns are translated with, reduced to
-     * what csvNumericCastSql reads, or null when a plain try_cast reads them.
-     * Plain data, so it survives the structuredClone of a variable.
+     * what csvNumericCastSql reads. Plain data, so it survives the
+     * structuredClone of a variable.
      */
     _csvNumberCastFormat(csvProfile) {
-        if (!csvProfile) return null;
-        if (csvNumericCastSql('x', csvProfile) === 'try_cast(x AS DOUBLE)') return null;
-        const { decimalSeparator, thousandsSeparator } = csvNumberFormat(csvProfile);
-        return {
-            decimalSeparator: csvProfileUsesDecimalComma(csvProfile) ? ',' : decimalSeparator,
-            thousandsSeparator,
-            delimiter: csvProfile.delimiter || ',',
-            hexNumbers: csvProfileHasHexNumbers(csvProfile),
-        };
+        return csvProfile ? csvNumberCastFormat(csvProfile) : null;
     }
 
     // A file column read as a DOUBLE: translated from its text when the CSV
