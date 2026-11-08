@@ -426,6 +426,7 @@ proto.loadFiles = async function(items = []) {
     }
 
     const loaded = [];
+    let preferredActiveId = null;
     this._showFileLoadingOverlay(entries.length, loadToken);
     await this._yieldToBrowser();
     try {
@@ -454,11 +455,20 @@ proto.loadFiles = async function(items = []) {
                 netcdfAsSeries: item?.netcdfAsSeries === true,
                 loadToken,
             });
-            if (result) loaded.push(result);
+            if (result) {
+                loaded.push(result);
+                // A later file in the batch takes the active place as usual;
+                // the rest of a workbook's sheets do not.
+                if (item?.excelActivate) preferredActiveId = result.fileId;
+                else if (!item?.excelWorkbook) preferredActiveId = null;
+            }
             if (loadToken.cancelled) break;
             await this._yieldToBrowser();
         }
 
+        if (preferredActiveId && this.files.has(preferredActiveId)) {
+            this.plotManager.setActiveFile(preferredActiveId);
+        }
         if (loaded.length) {
             document.getElementById('drop-zone').classList.remove('active');
             this._updateTopBar();
@@ -568,27 +578,38 @@ proto._expandExcelEntries = async function(entries) {
                 );
                 continue;
             }
-            // One sheet is opened; a workbook with more than one sheet of data
-            // stays one item in the files list, with its sheets listed under it
-            // so the reader switches between them there (and the ones not yet
-            // read are read when picked). Opening every sheet up front as its
-            // own file was what made one workbook look like several files.
-            const sheetName = converted.sheetName || nonEmpty[0].name;
+            // A workbook with more than one sheet of data asks which to open
+            // (all of them, unless switched off) and stays one item in the
+            // files list, with every sheet listed under it: the open ones to
+            // switch between, the others to open later from there.
+            let selected = [converted.sheetName || nonEmpty[0].name];
+            if (nonEmpty.length > 1) {
+                hideBusy();
+                const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
+                const picked = await ExcelSheetPickerDialog.open({ fileName: file.name, sheets });
+                if (!picked || !picked.length) continue;
+                selected = picked;
+            }
             const workbook = nonEmpty.length > 1
                 ? { workbookKey: this._newExcelWorkbookKey(), sheets: this._excelSheetInventory(sheets) }
                 : null;
-            expanded.push({
-                file,
-                fileHandle,
-                localPath: item?.localPath || '',
-                excelSheetName: sheetName,
-                // The sheet that came back with the inventory is already
-                // serialized; carrying it forward is what keeps the usual
-                // workbook down to one decode.
-                excelCsvBuffer: sheetName === converted.sheetName ? converted.csvBuffer : null,
-                excelSheetNames: sheets.map(sheet => sheet.name),
-                excelAppendSheetName: !!workbook,
-                excelWorkbook: workbook,
+            selected.forEach((sheetName, index) => {
+                expanded.push({
+                    file,
+                    fileHandle,
+                    localPath: item?.localPath || '',
+                    excelSheetName: sheetName,
+                    // The sheet that came back with the inventory is already
+                    // serialized; carrying it forward is what keeps the usual
+                    // workbook down to one decode. Any other sheet is decoded
+                    // again, in the worker.
+                    excelCsvBuffer: sheetName === converted.sheetName ? converted.csvBuffer : null,
+                    excelSheetNames: sheets.map(sheet => sheet.name),
+                    excelAppendSheetName: !!workbook,
+                    excelWorkbook: workbook,
+                    // The workbook opens on its first chosen sheet, not its last.
+                    excelActivate: !!workbook && index === 0,
+                });
             });
         } catch (err) {
             hideBusy();

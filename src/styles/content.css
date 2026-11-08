@@ -505,15 +505,36 @@
     cursor: default;
     font-weight: 600;
     color: var(--text-primary);
-    border-left: 3px solid transparent;
 }
 
 .file-workbook-header .file-entry-name {
     cursor: pointer;
 }
 
+/* The active dataset is one of this workbook's sheets: the workbook takes the
+   app's usual blue, and the sheet itself a second, deeper blue (below), so the
+   two read as "this file, this sheet". */
 .file-workbook-header.contains-active {
-    border-left-color: var(--primary-color);
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+}
+
+.file-workbook-header.contains-active .file-workbook-icon {
+    color: #fff;
+}
+
+.file-workbook-header.contains-active .file-entry-type {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.16);
+}
+
+.file-list-item-sheet .file-entry.active {
+    --sheet-active-color: #3949ab;
+    background: var(--sheet-active-color);
+    border-color: var(--sheet-active-color);
+    color: #fff;
 }
 
 .file-workbook-icon {
