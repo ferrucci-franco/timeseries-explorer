@@ -1659,10 +1659,26 @@ Lo que hace `DuckDbSource`:
   esta sesión), salvo los resultados conservados (abajo); los archivos de
   ranuras que ninguna pestaña tiene se borran también.
 - **El presupuesto pasa a ser el disco**: antes de cada trabajo,
-  `refreshDiskBudget` lee `navigator.storage.estimate()`, y los resultados
-  pueden tomar el 80 % de lo libre. El mensaje es otro
-  (`dataToolSinkDiskBudget`). "Resultados en memoria" sigue valiendo cuando la
-  base está en memoria.
+  `refreshDiskBudget` lee `navigator.storage.estimate()` y **mide lo que el
+  almacenamiento admite de verdad** (abajo); los resultados pueden tomar el
+  80 % de lo menor. El mensaje es otro (`dataToolSinkDiskBudget`).
+  "Resultados en memoria" sigue valiendo cuando la base está en memoria.
+- **Una ventana privada no es un disco.** Encontrado con el bench: en una
+  ventana de incógnito (y en los contextos de Playwright, que lo son) el
+  navegador guarda el almacenamiento del origen **en memoria**, con un tope
+  propio — medido en Chromium: ~940 MB en una máquina de 16 GB, mientras
+  `estimate()` decía 3,2 GB —, y pasado ese tope **una escritura en OPFS no
+  falla: no está cuando se relee**. La base de DuckDB deja de crecer y sus
+  lecturas se cuelgan; el bench se trabó en el sexto sumidero de 20 M filas,
+  y la misma prueba en un perfil persistente escribió 1,27 GB de tablas no
+  comprimibles y releyó sus 180 M filas exactas. Chrome no deja saber si una
+  ventana es privada, así que se mide: un *worker*
+  (`src/workers/opfs-probe-worker.js`) estira un archivo de prueba al tamaño
+  (`truncate`), escribe un byte al final y lo relee. En un disco es un archivo
+  disperso y tarda un milisegundo; en memoria se rechaza pasado lo que hay, y
+  partiendo a la mitad se acota a 16 MB. Un almacenamiento que admite 2 GiB es
+  un disco y no se pregunta más. Así, un trabajo que no entra se rechaza con
+  el mensaje del disco en vez de trabar el motor.
 - **Un ajuste**: *Resultados de las herramientas de datos*, "En el disco
   (almacenamiento del navegador)" o "En memoria". Se lee al arrancar el motor;
   Ajustes dice dónde están ahora (y por qué en memoria, si no se eligió).
@@ -1761,6 +1777,12 @@ Ahora sigue desde donde quedó:
   continuación habría coincidido. Se calcula sobre los normalizados.
 - Dos archivos que adoptan la misma tabla conservada: cerrar el primero la
   sacaba de los sumideros vivos y el segundo la borraba. Se cuentan.
+- En una ventana privada, pasado el tope de su almacenamiento en memoria, el
+  motor se trababa sin error (arriba). La sonda lo mide antes de cada
+  trabajo.
+- La detección de OPFS preguntaba por `createSyncAccessHandle`, que solo existe
+  dentro de los *workers*: en la página daba "no hay OPFS" siempre. La decide
+  la apertura.
 
 #### Pruebas
 
@@ -1787,9 +1809,43 @@ Ahora sigue desde donde quedó:
   lazy con "Resultados en memoria" en 1 MB; la base en la ranura 0; una media
   móvil de 400 000 filas calculada igual (en disco), bit a bit con el kernel;
   un filtro continuado en vivo sobre la base en disco, bit a bit sobre la
-  columna crecida; una segunda pestaña en la ranura 1; tras recargar, la
-  media móvil adoptada, no corrida; Ajustes; con "En memoria", la misma media
-  rechazada por el límite.
+  columna crecida; el almacenamiento privado medido por debajo de la cuota
+  que informa, y un trabajo que no entra rechazado con el mensaje del disco;
+  una segunda pestaña en la ranura 1; tras recargar, la media móvil adoptada,
+  no corrida; Ajustes; con "En memoria", la misma media rechazada por el
+  límite; un perfil persistente reconocido como disco.
+
+#### Medido: resultados más allá de la memoria
+
+`node bench/disk-results.mjs --rows 20000000 --sinks 8 --limit 512MB`: el CSV
+`t,a` de 20 M filas (359 MB) en lazy, el presupuesto de la app apagado
+(`lazyResultsMb` 0) para que decida el motor, y medias móviles de todas las
+filas una tras otra, cada una un sumidero tan largo como el archivo. Chromium
+headless, **un perfil persistente** por configuración (el almacenamiento de un
+navegador común, en disco), un hilo de DuckDB.
+
+| Qué | En disco, límite de la app (1,4 GiB) | En disco, 512 MB | En memoria, 512 MB |
+|---|---|---|---|
+| Abrir en lazy | 12,5 s | 12,4 s | 11,8 s |
+| Media móvil 1 / 2 / 3 | 17,5 / 17,8 / 17,2 s | 17,3 / 18,2 / 18,0 s | 16,7 / 17,2 s / ***Out of Memory*** |
+| Medias móviles 4 a 8 | 17,1–18,8 s cada una | 17,6–18,5 s cada una | — |
+| Memoria del motor con 8 (2 en memoria) | 1188 MB | **462 MB** | 291 MB |
+| Archivo de la base | 1274 MB | 1274 MB | — |
+| Zoom de 1000 filas leyendo todos los sumideros | 4,6 s (9 columnas) | 4,7 s (9 columnas) | 4,0 s (3 columnas) |
+| Refresco del resumen | 9,1 s | 8,9 s | 8,5 s |
+| Recargar la página y la media móvil 1 otra vez | **adoptada**, 7,6 s | **adoptada**, 7,8 s | — |
+
+Lo que dicen:
+
+- **Con la base en disco, los resultados no los limita la memoria**: con 512
+  MB de límite entraron ocho sumideros de 20 M filas (1,3 GB en disco), con el
+  motor quieto en 462 MB; con la base en memoria y el mismo límite, el
+  tercero falla. Cada trabajo cuesta lo mismo en las tres (17–19 s: lo domina
+  leer el CSV), y paginar no encarece el zoom ni el resumen.
+- **Un resultado conservado se adopta en 7–8 s** contra 17 s de calcularlo:
+  lo que queda es el refresco del resumen, que lee el archivo.
+- **El sumidero ocupa ~7,4 B/fila** en el disco (147 MB por 20 M filas), lo
+  mismo que en memoria; el presupuesto sigue contando 16.
 
 ### Medido: la 4b-3 y la 4b-4 sobre 20 M filas, en Chromium
 
