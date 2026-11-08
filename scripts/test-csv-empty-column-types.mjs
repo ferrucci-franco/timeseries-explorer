@@ -107,7 +107,9 @@ await source._resolveUnknownCsvColumnTypes(
     '"Date" IS NOT NULL',
     async (sql) => { scannedSql = sql; return fakeResult; },
 );
-assert.ok(/COUNT\(NULLIF\(trim\(CAST\("BATT_I" AS VARCHAR\)\), ''\)\) AS filled_0/.test(scannedSql), scannedSql);
+// A cell counts as filled unless it is empty or a missing-value marker
+// ("-", NaN, NULL), as isMissingNumberCell decides in the in-memory reader.
+assert.ok(/COUNT\(\(CASE WHEN regexp_full_match\(trim\(CAST\("BATT_I" AS VARCHAR\)\), '[^']*'\) THEN NULL ELSE NULLIF\(trim\(CAST\("BATT_I" AS VARCHAR\)\), ''\) END\)\) AS filled_0/.test(scannedSql), scannedSql);
 assert.ok(/try_cast\("Calo_Config\*" AS DOUBLE\)\) AS numeric_1/.test(scannedSql), scannedSql);
 assert.ok(scannedSql.includes('FROM omv_t_1 WHERE "Date" IS NOT NULL'), scannedSql);
 assert.ok(!scannedSql.includes('"ELY_V"'), 'a column the sample typed is not worth a scan');

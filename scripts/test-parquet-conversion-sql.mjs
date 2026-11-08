@@ -179,7 +179,9 @@ await check('a datetime is written back as a date, not a number', async () => {
     }));
     const sql = source.copySql();
     // The projection works in milliseconds because that is what the plot needs.
-    assert.match(sql, /epoch_ms\(CAST\("time" AS TIMESTAMP\)\)::DOUBLE AS "__omv_time"/, 'time is computed as a number');
+    // (src/data/csv-sql-datetime.js: DuckDB's cast for the usual cells, the
+    // parts for the others.)
+    assert.match(sql, /SELECT coalesce\([\s\S]*round\(epoch_us\(TRY_CAST\(CAST\("time" AS VARCHAR\) AS TIMESTAMP\)\) \/ 1000\.0\)[\s\S]*\) AS "__omv_time"/, 'time is computed as a number');
     // But a file holding a plain number has forgotten its time was a date, and
     // reopening it gave a numeric axis where the CSV had a calendar.
     assert.match(sql, /SELECT epoch_ms\(CAST\("__omv_time" AS BIGINT\)\) AS "time"/, 'and written back as a TIMESTAMP');

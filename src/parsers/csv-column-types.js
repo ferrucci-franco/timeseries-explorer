@@ -28,6 +28,9 @@ export const NUMERIC_COLUMN_MIN_RATIO = 0.5;
 // (SCADA databases), None, N/A and #N/A (spreadsheets), and a run of dashes
 // (weather stations). "NA" is left out: it is also sodium's column.
 const MISSING_NUMBER_CELL = /^(?:[+-]?nan|null|none|nil|n\/a|#n\/a|-{1,3})$/i;
+// The same markers as an RE2 pattern for DuckDB's regexp_full_match, so the
+// SQL readers count the same cells as missing.
+export const MISSING_NUMBER_CELL_RE2 = '(?i)(?:[+-]?nan|null|none|nil|n/a|#n/a|-{1,3})';
 export function isMissingNumberCell(cell) {
     const text = typeof cell === 'string' ? cell : String(cell ?? '');
     // Every marker is at most four characters and none starts with a digit:

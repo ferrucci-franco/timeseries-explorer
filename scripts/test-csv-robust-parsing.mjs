@@ -406,7 +406,9 @@ console.log('CSV robust parsing tests passed.');
     const dialog = openDialog(utf8(text), profile);
     assert.equal(dialog.resultProfile.rawHeaders.length, 3);
     assert.equal(dialog.validation.ok, true, dialog.validation.messages.join('; '));
-    assert.deepEqual(csvReadRepairOptions(profile), ["new_line='\\r\\n'"]);
+    // Rows longer than the header: DuckDB is told not to drop them, as it
+    // did when the extra cell held a space.
+    assert.deepEqual(csvReadRepairOptions(profile), ['strict_mode=false', "new_line='\\r\\n'"]);
     console.log('GTB export tests passed.');
 }
 {
@@ -599,4 +601,28 @@ console.log('CSV robust parsing tests passed.');
     assert.equal(fixedProfile.delimiter, 'whitespace');
     assert.equal(fixedProfile.detectedNumberFormat.decimalSeparator, ',');
     console.log('Real-world corpus rule tests passed.');
+}
+
+// ─── Found by the DuckDB parity test (scripts/test-csv-duckdb-parity.mjs) ──
+{
+    // "0xD0" is 208: the Fortran D-exponent rule ("1.5D3") made it "0xe0".
+    assert.equal(parseCsvNumber('0xD0'), 208);
+    assert.equal(parseCsvNumber('1.5D3'), 1500);
+    // An offset is subtracted: a fraction that rounds to 1000 ms used to be
+    // written ".1000" for Date.parse, which read it as 0.1 s.
+    const iso = { ok: true, strategy: 'iso-datetime', kind: 'datetime', sourceIndexes: [0] };
+    assert.equal(new Date(parseCsvTimeValue(iso, ['2023-11-15T15:38:31.999973780+00:00'], 0)).toISOString(), '2023-11-15T15:38:32.000Z');
+    assert.equal(new Date(parseCsvTimeValue(iso, ['2020-08-02T00:00:00+02:00'], 0)).toISOString(), '2020-08-01T22:00:00.000Z');
+    // "3:00 a" (Davis WeatherLink) is a time of day: the date and time
+    // columns pair up, and the hour is kept.
+    const davis = await parser.parse(utf8('Date\tTime\tTemp\n06/09/22\t3:00 a\t16.1\n06/09/22\t12:00 p\t19\n06/09/22\t1:00 p\t20\n'));
+    assert.deepEqual(Array.from(davis.variables[davis.metadata.timeName].data).map(v => new Date(v).toISOString()),
+        ['2022-09-06T03:00:00.000Z', '2022-09-06T12:00:00.000Z', '2022-09-06T13:00:00.000Z']);
+    // Campbell TOA5: names, units ("W m-2"), processing, data.
+    const toa5 = parser.inspectSample(utf8('"TOA5","CR6","CR6"\n"TIMESTAMP","RECORD","H","WD"\n"TS","RN","W m-2","Decimal degrees"\n'
+        + '"","","Smp","Smp"\n"2017-08-01 00:30:00",0,12.5,180\n"2017-08-01 01:00:00",1,11.5,190\n'));
+    assert.deepEqual([toa5.headerIndex, toa5.dataStartIndex, toa5.unitRowIndex, toa5.rawHeaders[0]], [1, 4, 2, 'TIMESTAMP']);
+    // Header names unique without regard to case, as DuckDB compares them.
+    assert.deepEqual(parser._makeUniqueHeaders(['Decimal degrees', 'decimal degrees']).map(h => h.name), ['Decimal degrees', 'decimal degrees_2']);
+    console.log('DuckDB parity findings tests passed.');
 }
