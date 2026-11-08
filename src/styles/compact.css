@@ -2777,6 +2777,10 @@ html.compact .compact-alert-dialog .modal-icon {
     margin-bottom: 0.4rem;
 }
 
+html.compact .compact-alert-dialog .modal-icon.modal-icon-text {
+    font-size: 0.8rem;
+}
+
 html.compact .compact-alert-dialog .modal-icon img,
 html.compact .compact-alert-dialog .modal-icon svg {
     width: 2rem;
@@ -2805,6 +2809,9 @@ html.compact .compact-alert-dialog .modal-buttons {
 }
 
 html.compact .compact-alert-dialog .modal-btn {
+    /* Stacked in a column, the choice dialog's "flex: 1 1 11rem" would turn
+       its 11rem basis into each button's height. */
+    flex: 0 0 auto;
     width: 100%;
     min-height: 48px;
     border-radius: 12px;

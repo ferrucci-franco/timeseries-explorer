@@ -5,6 +5,14 @@
 
 import i18n from '../i18n/index.js';
 
+// An icon spelled in letters ("CSV") rather than drawn as an emoji reads as a
+// shouted heading at emoji size. Marked, it is drawn as a small badge instead.
+function markTextIcon(icon) {
+    if (icon.childElementCount === 0 && /^[A-Za-z0-9.]{2,}$/.test(icon.textContent.trim())) {
+        icon.classList.add('modal-icon-text');
+    }
+}
+
 const Modal = {
     /**
      * Show a confirmation dialog
@@ -35,6 +43,7 @@ const Modal = {
             icon.className = 'modal-icon';
             if (options.iconHtml) icon.innerHTML = options.iconHtml;
             else icon.textContent = options.icon || '⚠️';
+            markTextIcon(icon);
             content.appendChild(icon);
 
             // Message
@@ -132,6 +141,7 @@ const Modal = {
                 const icon = document.createElement('div');
                 icon.className = 'modal-icon';
                 icon.textContent = options.icon || '!';
+                markTextIcon(icon);
                 content.appendChild(icon);
             }
 
@@ -228,6 +238,7 @@ const Modal = {
                 icon.className = 'modal-icon';
                 if (options.iconHtml) icon.innerHTML = options.iconHtml;
                 else icon.textContent = options.icon || '⚠️';
+                markTextIcon(icon);
                 content.appendChild(icon);
             }
 
@@ -400,6 +411,7 @@ const Modal = {
                 icon.className = 'modal-icon';
                 if (options.iconHtml) icon.innerHTML = options.iconHtml;
                 else icon.textContent = options.icon || '⚠️';
+                markTextIcon(icon);
                 content.appendChild(icon);
             }
 
