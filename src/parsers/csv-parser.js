@@ -1144,6 +1144,8 @@ export default class CsvParser {
     }
 
     _detectTableRows(rows, delimiter = ',') {
+        const toa5 = this._campbellToa5Table(rows, delimiter);
+        if (toa5) return toa5;
         const limit = Math.min(rows.length, 250);
         let best = null;
         let lastWritten = rows.length - 1;
@@ -1365,6 +1367,33 @@ export default class CsvParser {
         return dataCount >= Math.max(2, Math.ceil(nonEmpty.length * 0.5));
     }
 
+    // Campbell Scientific's TOA5, the format of its data loggers: a line that
+    // starts "TOA5", then the names, the units ("W m-2", "Decimal degrees"),
+    // the processing ("Smp", "Avg"), and the data. Units like those are not
+    // units to the units-row test, so the score took them for the header.
+    _campbellToa5Table(rows, delimiter = ',') {
+        if (String(rows[0]?.[0] ?? '').trim().toUpperCase() !== 'TOA5') return null;
+        const names = rows[1] || [];
+        if (names.length < 2 || rows.length < 4) return null;
+        const units = rows[2] || [];
+        let dataStartIndex = -1;
+        for (let i = 3; i < Math.min(rows.length, 6); i++) {
+            const row = fitCsvRowToWidth(rows[i] || [], names.length, { minWidth: minimumRowWidth(names) });
+            if (row && (this._isDataLikeRow(row, delimiter) || this._isSparseDataRow(row, delimiter))) {
+                dataStartIndex = i;
+                break;
+            }
+        }
+        if (dataStartIndex < 0) return null;
+        return {
+            headerIndex: 1,
+            dataStartIndex,
+            hasHeader: true,
+            unitRowIndex: units.length === names.length ? 2 : null,
+            score: 0,
+        };
+    }
+
     // Whether a row is empty or not a number in a column where a data row
     // holds a number.
     _lacksValuesOf(row, dataRow, delimiter = ',') {
@@ -1459,8 +1488,11 @@ export default class CsvParser {
         return rawHeaders.map((raw, index) => {
             const parsed = split[index];
             const base = parsed.name;
-            const count = (seen.get(base) || 0) + 1;
-            seen.set(base, count);
+            // Case-blind: DuckDB's column names are, so "Decimal degrees" and
+            // "decimal degrees" are one name there and the read failed.
+            const key = String(base).toLowerCase();
+            const count = (seen.get(key) || 0) + 1;
+            seen.set(key, count);
             return {
                 name: count === 1 ? base : `${base}_${count}`,
                 description: parsed.description
@@ -1473,8 +1505,9 @@ export default class CsvParser {
         return rawHeaders.map((raw, index) => {
             const fallback = index === 0 ? 'time' : `column_${index + 1}`;
             const base = this._sanitizeHeaderName(raw, fallback);
-            const count = (seen.get(base) || 0) + 1;
-            seen.set(base, count);
+            const key = String(base).toLowerCase();
+            const count = (seen.get(key) || 0) + 1;
+            seen.set(key, count);
             return {
                 name: count === 1 ? base : `${base}_${count}`,
                 description: ''

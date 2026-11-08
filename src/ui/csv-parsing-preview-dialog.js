@@ -811,8 +811,10 @@ function makeUniqueInlineHeaders(rawHeaders, format) {
     return rawHeaders.map((raw, index) => {
         const parsed = parseInlineUnitHeader(raw, index, format);
         const base = parsed.name;
-        const count = (seen.get(base) || 0) + 1;
-        seen.set(base, count);
+        // Case-blind, as DuckDB compares column names.
+        const key = String(base).toLowerCase();
+        const count = (seen.get(key) || 0) + 1;
+        seen.set(key, count);
         return {
             name: count === 1 ? base : `${base}_${count}`,
             description: parsed.description,

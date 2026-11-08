@@ -184,6 +184,14 @@ The corrections apply to every reader. Without them, our reader scores 123 of
 132 (93.2%) instead of 126, the "before" reader 107 (81.1%) instead of 109, and
 the baselines score the same.
 
+## The DuckDB readers
+
+The tables above measure the in-memory parser. The browser reads UTF-8 files
+with DuckDB first, so the same files were also read by DuckDB, whole and
+lazily, and compared row by row (`scripts/test-csv-duckdb-parity.mjs`). On the
+first run 20 of the 182 files it compares read differently or not at all; after
+the fixes, all but 4 read the same (see `docs/csv-robust-parsing.md`).
+
 ## No regressions elsewhere
 
 - **CSV_Wrangling** (`bench/dialect`). Half A stays at 97.38% and the held-out

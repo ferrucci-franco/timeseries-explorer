@@ -23,10 +23,13 @@ import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
-import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import { csvNumberFormat } from '../parsers/csv-text-normalize.js';
+import { csvDatetimeSql } from './csv-sql-datetime.js';
 import {
+    csvFilledCellSql,
     csvNumericCastSql,
+    csvProfileHasHexNumbers,
     csvProfileUsesDecimalComma,
     csvReadRepairOptions,
     csvRepairProjectionSql,
@@ -68,7 +71,6 @@ const BUNDLES = {
 };
 
 const TIME_HEADER_RE = /^(time|temps|t|datetime|timestamp|horodatage|date|fecha|hora|heure)$/i;
-const MS_PER_DAY = 86400000;
 const DUCKDB_DEFAULT_THREADS = 2;
 const DUCKDB_DEFAULT_PRESERVE_INSERTION_ORDER = false;
 const DUCKDB_PHASE_THREADS = 1;
@@ -4281,7 +4283,7 @@ export default class DuckDbSource {
 
         const selections = unknown.map(({ spec }, slot) => {
             const ident = this._quoteIdent(spec.name);
-            return `COUNT(NULLIF(trim(CAST(${ident} AS VARCHAR)), '')) AS filled_${slot}`
+            return `COUNT(${csvFilledCellSql(ident)}) AS filled_${slot}`
                 + `, COUNT(${this._numericCastSql(ident, csvProfile)}) AS numeric_${slot}`;
         });
         const sql = `SELECT ${selections.join(', ')} FROM ${tableName} WHERE ${validTimeWhere}`;
@@ -4404,226 +4406,11 @@ export default class DuckDbSource {
     }
 
     _datetimeSqlFromProfile(timeSource, sourceNames, firstType, csvProfile = null) {
-        const first = this._quoteIdent(sourceNames[0]);
-        if (/TIMESTAMP|DATE|TIME/.test(firstType || '')) return `epoch_ms(${first})::DOUBLE`;
-
-        const strategy = timeSource.strategy;
-        const numericFirst = this._numericCastSql(first, csvProfile);
-        if (strategy === 'excel-serial') return `((${numericFirst} - 25569) * ${MS_PER_DAY})`;
-        if (strategy === 'matlab-datenum') return `((${numericFirst} - 719529) * ${MS_PER_DAY})`;
-        if (strategy === 'decimal-year') return this._decimalYearSql(numericFirst);
-        if (strategy === 'yearless-date-time') return this._yearlessDateTimeSql(first, timeSource.format);
-        if (strategy === 'month-name-date') return this._monthNameDateSql(first);
-        if (strategy === 'partial-year-month') return this._partialYearMonthSql(first);
-
-        if (strategy === 'iso-datetime') {
-            return `epoch_ms(CAST(${first} AS TIMESTAMP))::DOUBLE`;
-        }
-
-        if (strategy === 'custom-format') {
-            return this._customFormatSql(first, timeSource.format?.pattern || '');
-        }
-
-        const order = timeSource.format?.dateOrder || 'YMD';
-        if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
-            const formats = this._dateTimeFormats(order, dateSeparatorForStrategy(strategy));
-            return this._tryStrptimeSql(`CAST(${first} AS VARCHAR)`, formats);
-        }
-
-        if (timeSource.mode === 'split' && sourceNames.length >= 2) {
-            const dateCol = this._quoteIdent(sourceNames[0]);
-            const timeCol = this._quoteIdent(sourceNames[1]);
-            const sep = timeSource.format?.dotSeparator ? '.' : timeSource.format?.dashSeparator ? '-' : '/';
-            const formats = this._dateTimeFormats(order, sep);
-            const expr = `CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
-            const partialYearMonth = `CAST(${dateCol} AS VARCHAR) || '-01 ' || CAST(${timeCol} AS VARCHAR)`;
-            const partialMonthDay = `'2001-' || CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
-            const timestamps = [
-                this._tryStrptimeTimestampSql(expr, formats),
-                this._tryStrptimeTimestampSql(partialYearMonth, this._partialYearMonthDateTimeFormats()),
-                this._tryStrptimeTimestampSql(partialMonthDay, this._partialMonthDayDateTimeFormats(order)),
-            ];
-            return `epoch_ms(coalesce(${timestamps.join(', ')}))::DOUBLE`;
-        }
-
-        if (timeSource.mode === 'parts' || strategy === 'parts') {
-            return this._partsDateTimeSql(timeSource, sourceNames);
-        }
-
-        return null;
-    }
-
-    _partsDateTimeSql(timeSource, sourceNames) {
-        const sourceIndexes = timeSource.sourceIndexes || [];
-        const parts = timeSource.format?.parts || {};
-        const partExpr = (name, fallback = '0') => {
-            const profileIndex = parts[name];
-            const sourceOffset = sourceIndexes.indexOf(profileIndex);
-            if (sourceOffset < 0 || !sourceNames[sourceOffset]) return fallback;
-            return `try_cast(${this._quoteIdent(sourceNames[sourceOffset])} AS DOUBLE)`;
-        };
-        const year = partExpr('year', '2001');
-        const month = partExpr('month', '1');
-        const day = partExpr('day', '1');
-        const hour = partExpr('hour', '0');
-        const minute = partExpr('minute', '0');
-        const second = partExpr('second', '0');
-        const secondInt = `FLOOR(${second})`;
-        const microsecond = `ROUND((${second} - FLOOR(${second})) * 1000000)`;
-        const expr = `make_timestamp(CAST(${year} AS BIGINT), CAST(${month} AS BIGINT), CAST(${day} AS BIGINT), CAST(${hour} AS BIGINT), CAST(${minute} AS BIGINT), CAST(${secondInt} AS BIGINT)) + CAST(${microsecond} AS BIGINT) * INTERVAL 1 MICROSECOND`;
-        return `epoch_ms(${expr})::DOUBLE`;
-    }
-
-    _dateTimeFormats(order, sep) {
-        const date = order === 'DMY'
-            ? `%d${sep}%m${sep}%Y`
-            : order === 'MDY'
-              ? `%m${sep}%d${sep}%Y`
-              : `%Y${sep}%m${sep}%d`;
-        const shortYear = order === 'DMY'
-            ? `%d${sep}%m${sep}%y`
-            : order === 'MDY'
-              ? `%m${sep}%d${sep}%y`
-              : `%y${sep}%m${sep}%d`;
-        return [
-            `${date} %H:%M:%S.%f`,
-            `${date} %H:%M:%S`,
-            `${date} %H:%M`,
-            date,
-            `${shortYear} %H:%M:%S.%f`,
-            `${shortYear} %H:%M:%S`,
-            `${shortYear} %H:%M`,
-            shortYear,
-        ];
-    }
-
-    _partialYearMonthDateTimeFormats() {
-        return [
-            '%Y-%m-%d %H:%M:%S.%f',
-            '%Y-%m-%d %H:%M:%S',
-            '%Y-%m-%d %H:%M',
-            '%Y/%m-%d %H:%M:%S.%f',
-            '%Y/%m-%d %H:%M:%S',
-            '%Y/%m-%d %H:%M',
-        ];
-    }
-
-    _partialMonthDayDateTimeFormats(order) {
-        const dash = order === 'DMY' ? '%Y-%d-%m' : '%Y-%m-%d';
-        const slash = order === 'DMY' ? '%Y-%d/%m' : '%Y-%m/%d';
-        return [
-            `${dash} %H:%M:%S.%f`,
-            `${dash} %H:%M:%S`,
-            `${dash} %H:%M`,
-            `${slash} %H:%M:%S.%f`,
-            `${slash} %H:%M:%S`,
-            `${slash} %H:%M`,
-        ];
-    }
-
-    _decimalYearSql(expr) {
-        const value = `${expr}::DOUBLE`;
-        const year = `FLOOR(${value})`;
-        const leap = `((${year} % 4 = 0 AND ${year} % 100 <> 0) OR ${year} % 400 = 0)`;
-        return `(
-            epoch_ms(CAST(CAST(CAST(${year} AS BIGINT) AS VARCHAR) || '-01-01' AS TIMESTAMP))::DOUBLE
-            + (${value} - ${year}) * CASE WHEN ${leap} THEN 366 ELSE 365 END * ${MS_PER_DAY}
-        )`;
-    }
-
-    _yearlessDateTimeSql(expr, format = {}) {
-        const order = format?.dateOrder || 'MDY';
-        const sep = format?.dashSeparator ? '-' : '/';
-        const date = order === 'DMY'
-            ? `%Y${sep}%d${sep}%m`
-            : `%Y${sep}%m${sep}%d`;
-        const formats = [
-            `${date} %H:%M:%S.%f`,
-            `${date} %H:%M:%S`,
-            `${date} %H:%M`,
-        ];
-        return this._tryStrptimeSql(`'2001${sep}' || CAST(${expr} AS VARCHAR)`, formats);
-    }
-
-    _monthNameDateSql(expr) {
-        return this._tryStrptimeSql(this._normalizedMonthNameSql(expr), [
-            '%d-%b-%Y %H:%M:%S.%f',
-            '%d-%b-%Y %H:%M:%S',
-            '%d-%b-%Y %H:%M',
-            '%d-%b-%Y',
-            '%d %b %Y %H:%M:%S.%f',
-            '%d %b %Y %H:%M:%S',
-            '%d %b %Y %H:%M',
-            '%d %b %Y',
-            '%b %d %Y %H:%M:%S.%f',
-            '%b %d %Y %H:%M:%S',
-            '%b %d %Y %H:%M',
-            '%b %d %Y',
-            '%B %d %Y %H:%M:%S.%f',
-            '%B %d %Y %H:%M:%S',
-            '%B %d %Y %H:%M',
-            '%B %d %Y',
-        ]);
-    }
-
-    _partialYearMonthSql(expr) {
-        return this._tryStrptimeSql(`CAST(${expr} AS VARCHAR) || '-01'`, ['%Y-%m-%d', '%Y/%m-%d']);
-    }
-
-    _customFormatSql(expr, pattern) {
-        const info = customDatetimePatternInfo(pattern);
-        if (!info?.format) return null;
-        let valueExpr = `CAST(${expr} AS VARCHAR)`;
-        if (info.hasWeekday) valueExpr = `regexp_replace(trim(${valueExpr}), '^[\\p{L}-]{2,14}\\.?,?\\s+', '')`;
-        if (info.valuePrefix) valueExpr = `'${this._escapeSqlString(info.valuePrefix)}' || ${valueExpr}`;
-        if (info.valueSuffix) valueExpr = `${valueExpr} || '${this._escapeSqlString(info.valueSuffix)}'`;
-        if (info.hasMonthName) valueExpr = this._normalizedMonthNameSql(valueExpr);
-        return this._tryStrptimeSql(valueExpr, [info.format]);
-    }
-
-    _normalizedMonthNameSql(expr) {
-        let sql = `lower(strip_accents(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g')))`;
-        const replacements = [
-            ['january', 'jan'], ['janvier', 'jan'], ['enero', 'jan'],
-            ['february', 'feb'], ['février', 'feb'], ['fevrier', 'feb'], ['févr', 'feb'], ['fevr', 'feb'], ['febrero', 'feb'],
-            ['march', 'mar'], ['mars', 'mar'], ['marzo', 'mar'],
-            ['april', 'apr'], ['avril', 'apr'], ['abril', 'apr'],
-            ['mayo', 'may'], ['mai', 'may'],
-            ['june', 'jun'], ['juin', 'jun'], ['junio', 'jun'],
-            ['july', 'jul'], ['juillet', 'jul'], ['juil', 'jul'], ['julio', 'jul'],
-            ['august', 'aug'], ['août', 'aug'], ['aout', 'aug'], ['agosto', 'aug'],
-            ['september', 'sep'], ['septembre', 'sep'], ['septiembre', 'sep'], ['sept', 'sep'],
-            ['october', 'oct'], ['octobre', 'oct'], ['octubre', 'oct'],
-            ['november', 'nov'], ['novembre', 'nov'], ['noviembre', 'nov'],
-            ['december', 'dec'], ['décembre', 'dec'], ['decembre', 'dec'], ['diciembre', 'dec'],
-        ];
-        replacements.push(
-            ['gennaio', 'jan'], ['janeiro', 'jan'], ['ene', 'jan'], ['gen', 'jan'],
-            ['febbraio', 'feb'], ['fevereiro', 'feb'],
-            ['marco', 'mar'], ['marz', 'mar'],
-            ['aprile', 'apr'], ['abr', 'apr'],
-            ['maggio', 'may'], ['maio', 'may'], ['mag', 'may'],
-            ['giugno', 'jun'], ['junho', 'jun'], ['juni', 'jun'], ['giu', 'jun'],
-            ['luglio', 'jul'], ['julho', 'jul'], ['juli', 'jul'], ['lug', 'jul'],
-            ['ago', 'aug'],
-            ['settembre', 'sep'], ['setembro', 'sep'], ['set', 'sep'],
-            ['ottobre', 'oct'], ['outubro', 'oct'], ['oktober', 'oct'], ['ott', 'oct'], ['okt', 'oct'],
-            ['novembro', 'nov'],
-            ['dicembre', 'dec'], ['dezembro', 'dec'], ['dezember', 'dec'], ['dic', 'dec'], ['dez', 'dec'],
-        );
-        for (const [from, to] of replacements) {
-            sql = `replace(${sql}, '${this._escapeSqlString(from)}', '${to}')`;
-        }
-        return sql;
-    }
-
-    _tryStrptimeSql(expr, formats) {
-        return `epoch_ms(${this._tryStrptimeTimestampSql(expr, formats)})::DOUBLE`;
-    }
-
-    _tryStrptimeTimestampSql(expr, formats) {
-        const list = formats.map(format => `'${this._escapeSqlString(format)}'`).join(', ');
-        return `try_strptime(${expr}, [${list}])`;
+        return csvDatetimeSql(timeSource, sourceNames, {
+            quoteIdent: name => this._quoteIdent(name),
+            numericCastSql: expr => this._numericCastSql(expr, csvProfile),
+            firstType,
+        });
     }
 
     _projectionSql(columnNames, timeInfo, csvProfile = null) {
@@ -4770,6 +4557,7 @@ export default class DuckDbSource {
             decimalSeparator: csvProfileUsesDecimalComma(csvProfile) ? ',' : decimalSeparator,
             thousandsSeparator,
             delimiter: csvProfile.delimiter || ',',
+            hexNumbers: csvProfileHasHexNumbers(csvProfile),
         };
     }
 

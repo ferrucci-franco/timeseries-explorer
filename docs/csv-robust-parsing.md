@@ -176,10 +176,38 @@ described pattern parses its column exactly as Auto does.
   `_cellInfo` computes it without the DOM, so it is unit-tested.
 - Saved settings files carry `thousandsSeparator` and `raggedRows`.
 
+## The same reading in DuckDB
+
+In the browser DuckDB reads every UTF-8 CSV first; the in-memory parser reads
+only what DuckDB cannot, and a file too large for memory has no fallback. The
+reading rules therefore exist in SQL too, and `npm run test:csv-duckdb-parity`
+keeps the two equal: every CSV in `test-files` is read in memory, by DuckDB
+whole, and by DuckDB lazily (every row streamed back, as zoom and the Data
+tools read it), and the rows must agree.
+
+- `src/data/csv-sql-datetime.js` is the time axis in SQL, once for both DuckDB
+  readers (the browser's and the desktop converter's). It takes a date apart
+  and puts it together as `parseCsvTimeValue` does: two-digit years (70-99 are
+  19xx), `3:00 a` and `1:45 PM`, `24:00`, UTC offsets, a comma before the
+  fraction, and month names from the JS table, whole words only. DuckDB's own
+  cast or `strptime` reads the usual rows first, so a plain ISO or
+  `dd/mm/yyyy` column costs no more than before (`dd/mm/yyyy` costs less).
+- Missing-value markers (`csvFilledCellSql`), hexadecimal numbers (`0x1F`), a
+  lazy column's number format (`_duckdbNumberFormat`) and blank cells past the
+  header (`strict_mode=false`) read as in memory.
+
+Four files are known exceptions, listed in the test: three are not one table
+(SEL event report sections, LabVIEW segments, Anton Paar result blocks), and
+one ends its lines in CR CR LF, which DuckDB counts as one line and the parser
+as two.
+
 ## Tests
 
 - `npm run test:csv-robust-parsing` covers the parser, the describer, the SQL
   text and the dialog without a DOM.
+- `npm run test:csv-sql-datetime` checks the SQL time axis cell by cell against
+  the JS reader, and `npm run test:csv-duckdb-parity` every fixture through the
+  three readers.
 - `npm run test:csv-robust-duckdb` converts dirty files with the native DuckDB
   and checks the values.
 - `npm run e2e:csv-robust-parsing` loads a dirty PLC export in Chromium, as

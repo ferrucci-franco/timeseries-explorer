@@ -12,6 +12,7 @@
  * readers share it.
  */
 import { csvNumberFormat, INVISIBLE_CHARS_RE2 } from '../parsers/csv-text-normalize.js';
+import { MISSING_NUMBER_CELL_RE2 } from '../parsers/csv-column-types.js';
 
 export function escapeSqlLiteral(value) {
     return String(value ?? '').replace(/'/g, "''");
@@ -41,6 +42,17 @@ export function csvProfileUsesDecimalComma(profile) {
 }
 
 /**
+ * A cell's text when it holds a value: NULL for an empty cell and for a
+ * missing-value marker (NaN, NULL, N/A, "-"), as isMissingNumberCell says
+ * in the in-memory reader. A column of numbers with "-" for the hours a
+ * meter did not report is a column of numbers.
+ */
+export function csvFilledCellSql(expr) {
+    const text = `trim(CAST(${expr} AS VARCHAR))`;
+    return `(CASE WHEN regexp_full_match(${text}, '${MISSING_NUMBER_CELL_RE2.replace(/'/g, "''")}') THEN NULL ELSE NULLIF(${text}, '') END)`;
+}
+
+/**
  * A text cell read as a DOUBLE, translating the profile's number format.
  * With nothing to translate it is the plain try_cast every file used to get,
  * so ordinary files pay nothing for the rest.
@@ -67,7 +79,34 @@ export function csvNumericCastSql(expr, profile = null) {
         value = `replace(${value}, '${escapeSqlLiteral(decimalSeparator)}', '.')`;
         translated = true;
     }
-    return translated ? `try_cast(${value} AS DOUBLE)` : `try_cast(${expr} AS DOUBLE)`;
+    const cast = translated ? `try_cast(${value} AS DOUBLE)` : `try_cast(${expr} AS DOUBLE)`;
+    // "0x1F", as logic analysers write a digital bus: the in-memory reader
+    // reads it as 31 (Number does), DuckDB only through an integer cast.
+    return csvProfileHasHexNumbers(profile)
+        ? `coalesce(${cast}, try_cast(try_cast(trim(CAST(${expr} AS VARCHAR)) AS UBIGINT) AS DOUBLE))`
+        : cast;
+}
+
+const HEX_CELL = /^0x[0-9a-f]+$/i;
+const hexNumbersByProfile = new WeakMap();
+
+/**
+ * Whether the profile's sample writes numbers in hexadecimal ("0x00"). A
+ * profile reduced to its number format (a lazy variable's) says it with
+ * `hexNumbers`.
+ */
+export function csvProfileHasHexNumbers(profile) {
+    if (!profile || typeof profile !== 'object') return false;
+    if (typeof profile.hexNumbers === 'boolean') return profile.hexNumbers;
+    if (hexNumbersByProfile.has(profile)) return hexNumbersByProfile.get(profile);
+    let found = false;
+    const rows = Array.isArray(profile.sampleRows) ? profile.sampleRows : [];
+    for (const row of rows) {
+        const cells = Array.isArray(row) ? row : (row && typeof row === 'object' ? Object.values(row) : []);
+        if (cells.some(cell => HEX_CELL.test(String(cell ?? '').trim()))) { found = true; break; }
+    }
+    hexNumbersByProfile.set(profile, found);
+    return found;
 }
 
 /**
@@ -81,6 +120,11 @@ export function csvNumericCastSql(expr, profile = null) {
 export function csvReadRepairOptions(profile) {
     const options = [];
     if (profile?.raggedRows === 'pad') options.push('null_padding=true');
+    // Rows that run past the header: DuckDB accepts empty cells there, but a
+    // single space ("1000000;-20,05; ", a Rohde & Schwarz sweep) made every
+    // row an error, and ignore_errors then dropped the whole table. The
+    // in-memory reader drops blank cells past the header (fitCsvRowToWidth).
+    if (Number(profile?.trailingEmptyCells) > 0) options.push('strict_mode=false');
     // Data lines ending in CRLF: said explicitly. Left to itself, DuckDB
     // skipped the wrong number of lines (or failed) when the lines above the
     // table mixed LF and CRLF, and the preamble and header became data.
