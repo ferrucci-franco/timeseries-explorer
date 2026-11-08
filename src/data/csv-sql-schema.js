@@ -169,10 +169,12 @@ export function csvReadCsvSql(sqlInput, profile, options = {}) {
     if (csvProfileUsesDecimalComma(profile)) readOptions.push(`decimal_separator=','`);
     const readSql = `read_csv('${sqlInput}', ${readOptions.join(', ')})`;
     // Columns kept as text are trimmed as the in-memory reader trims every
-    // cell. The time source is not one of them: its SQL trims for itself.
+    // cell. Not the time source, whose SQL trims for itself, nor a column the
+    // reader unticked, which no query reads.
     const timeIndexes = new Set(profile.timeSource?.sourceIndexes || []);
+    const ignored = columnIndexSet(profile.ignoredColumns);
     const textColumns = specs
-        .filter((spec, index) => spec.type === 'VARCHAR' && !timeIndexes.has(index))
+        .filter((spec, index) => spec.type === 'VARCHAR' && !timeIndexes.has(index) && !ignored.has(index))
         .map(spec => spec.name);
     return csvRepairProjectionSql(readSql, profile, specs.map(spec => spec.name), { textColumns }) || readSql;
 }

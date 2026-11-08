@@ -57,10 +57,16 @@ for (const [label, pattern] of [
     ['the table that reads the whole file', /await query\(`CREATE TABLE \$\{tableName\} AS SELECT \* FROM \$\{sourceExpr\}`\)/],
     ['the row count', /const countResult = await query\(/],
     ['the data itself', /const dataResult = await query\(dataSql\)/],
-    ['the time range of a lazy file', /const aggResult = await query\(/],
+    ['the scan of the row count, the time range and the column types',
+        /const scanned = await this\._scanCsvLoad\(tableName, csvProfile, columnNames, timeInfo, validTimeWhere, query/],
 ]) {
     assert.match(loadBody, pattern, `${label} can be interrupted`);
 }
+// The scan runs in its own method, with the query function it was handed.
+const scan = duck.slice(duck.indexOf('    async _scanCsvLoad('));
+const scanBody = scan.slice(0, scan.indexOf('\n    }\n'));
+assert.match(scanBody, /result = await query\(`SELECT \$\{aggregates\.join\(', '\)\} FROM \$\{tableName\} WHERE \$\{validTimeWhere\}`\)/,
+    'the scan of a lazy file can be interrupted');
 assert.match(loadBody, /if \(err\?\.name === 'AbortError'\) throw err;\s*const msg/,
     'a cancelled CREATE TABLE is not reported as a read failure');
 assert.match(duck, /keepSchema && reader\.schema\s*\? new arrow\.Table\(reader\.schema, batches\)/,

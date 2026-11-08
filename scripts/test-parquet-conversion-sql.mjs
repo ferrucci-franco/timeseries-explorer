@@ -110,8 +110,10 @@ await check('numeric columns are cast, not copied as text', async () => {
     assert.ok(sql, 'a COPY statement was issued');
     // The exact shape that was missing. Without it DuckDB writes the VARCHAR it
     // read, and the app opens a file where nothing is plottable.
-    assert.match(sql, /try_cast\("v1" AS DOUBLE\) AS "v1"/, 'v1 is cast to DOUBLE');
-    assert.match(sql, /try_cast\("v2" AS DOUBLE\) AS "v2"/, 'v2 is cast to DOUBLE');
+    // DuckDB's own cast first, and the per-cell reading of parseCsvNumber
+    // behind it for the cells the cast refuses (csvNumericCastSql).
+    assert.match(sql, /coalesce\(try_cast\("v1" AS DOUBLE\), [\s\S]*?\) AS "v1"/, 'v1 is cast to DOUBLE');
+    assert.match(sql, /coalesce\(try_cast\("v2" AS DOUBLE\), [\s\S]*?\) AS "v2"/, 'v2 is cast to DOUBLE');
     // The regression itself: a bare SELECT * as the whole COPY body.
     assert.ok(!/^\s*COPY\s*\(\s*SELECT\s+\*\s+FROM\s+read_csv/i.test(sql),
         'the COPY body is a projection, not a bare SELECT * over the reader');
