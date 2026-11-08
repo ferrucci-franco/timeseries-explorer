@@ -25,8 +25,10 @@ import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { csvNumberCastFormat, csvNumericCastSql } from './csv-sql-normalize.js';
 import {
+    applyCsvColumnTypeRescan,
     applyCsvColumnTypeScan,
     csvColumnSpecs,
+    csvColumnTypeRescan,
     csvColumnTypeScan,
     csvKeptColumns,
     csvProjectionColumnSql,
@@ -4156,8 +4158,30 @@ export default class DuckDbSource {
             const raw = result.getChild(alias)?.get(0);
             return raw === null || raw === undefined ? null : Number(raw);
         };
-        if (scan) applyCsvColumnTypeScan(csvProfile, scan.columns, alias => value(alias) ?? 0);
+        if (scan) {
+            const suspects = applyCsvColumnTypeScan(csvProfile, scan.columns, alias => value(alias) ?? 0);
+            await this._rescanCsvColumnTypes(tableName, csvProfile, suspects, validTimeWhere, query);
+        }
         return { rows: value('n') ?? 0, timeStart: value('tmin'), timeEnd: value('tmax') };
+    }
+
+    /**
+     * The scan's second phase: the columns with cells DuckDB's cast refused
+     * but which hold a digit, counted again cell by cell (csvColumnTypeRescan).
+     * A file of plain numbers has none, and never sends this query.
+     */
+    async _rescanCsvColumnTypes(tableName, csvProfile, suspects, validTimeWhere, query) {
+        const rescan = csvColumnTypeRescan(csvProfile, suspects);
+        if (!rescan) return;
+        let result = null;
+        try {
+            result = await query(`SELECT ${rescan.selectList} FROM ${tableName} WHERE ${validTimeWhere}`);
+        } catch (err) {
+            if (err?.name === 'AbortError') throw err;
+            console.warn('[duckdb] could not re-count the columns with unusual numbers; keeping the sample\'s types:', err?.message || err);
+            return;
+        }
+        applyCsvColumnTypeRescan(csvProfile, rescan.columns, alias => Number(result.getChild(alias)?.get(0) ?? 0));
     }
 
     /**
@@ -4177,7 +4201,8 @@ export default class DuckDbSource {
             console.warn('[duckdb] could not scan the file for its column types; keeping the sample\'s types:', err?.message || err);
             return;
         }
-        applyCsvColumnTypeScan(csvProfile, scan.columns, alias => Number(result.getChild(alias)?.get(0) ?? 0));
+        const suspects = applyCsvColumnTypeScan(csvProfile, scan.columns, alias => Number(result.getChild(alias)?.get(0) ?? 0));
+        await this._rescanCsvColumnTypes(tableName, csvProfile, suspects, validTimeWhere, query);
     }
 
     async _parquetRowCountFromMetadata(escapedHandle) {
@@ -4339,8 +4364,8 @@ export default class DuckDbSource {
      * what csvNumericCastSql reads. Plain data, so it survives the
      * structuredClone of a variable.
      */
-    _csvNumberCastFormat(csvProfile) {
-        return csvProfile ? csvNumberCastFormat(csvProfile) : null;
+    _csvNumberCastFormat(csvProfile, spec = null) {
+        return csvProfile ? csvNumberCastFormat(csvProfile, { perCell: spec?.perCell }) : null;
     }
 
     // A file column read as a DOUBLE: translated from its text when the CSV
@@ -4456,8 +4481,7 @@ export default class DuckDbSource {
         const variablePaths = new Map();
         const csvSpecs = sourceInfo.format === 'csv' ? (this._csvColumnSpecs(sourceInfo.csvProfile) || []) : [];
         const csvDescriptionsByColumn = new Map(csvSpecs.map(spec => [spec.name, String(spec.description || '')]));
-        const csvTextColumns = new Set(csvSpecs.filter(spec => spec.readType === 'VARCHAR').map(spec => spec.name));
-        const csvNumberCast = sourceInfo.format === 'csv' ? this._csvNumberCastFormat(sourceInfo.csvProfile) : null;
+        const csvSpecsByName = new Map(csvSpecs.map(spec => [spec.name, spec]));
         const sanitize = (raw) => {
             const base = String(raw ?? '').trim() || `column`;
             return base;
@@ -4517,9 +4541,11 @@ export default class DuckDbSource {
             // The file holds this column as text ("8 597", "1,5"); every read
             // of it after the overview has to translate it the way the
             // projection did, or it reads NaN.
-            if (isNumeric && csvNumberCast && csvTextColumns.has(columnNames[i])) {
-                result.variables[uniqueName]._duckdbNumberFormat = { ...csvNumberCast };
-            }
+            const csvSpec = csvSpecsByName.get(columnNames[i]);
+            const csvNumberCast = isNumeric && csvSpec?.readType === 'VARCHAR'
+                ? this._csvNumberCastFormat(sourceInfo.csvProfile, csvSpec)
+                : null;
+            if (csvNumberCast) result.variables[uniqueName]._duckdbNumberFormat = csvNumberCast;
             if (columnPath) {
                 result.variables[uniqueName].displayName = columnPath.join('.');
                 result.variables[uniqueName].pandas = { columnPath: columnPath.slice() };

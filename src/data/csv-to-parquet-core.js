@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url';
 import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
 import {
+    applyCsvColumnTypeRescan,
     applyCsvColumnTypeScan,
     csvColumnSpecs,
+    csvColumnTypeRescan,
     csvColumnTypeScan,
     csvProjectionSql,
     csvReadCsvSql,
@@ -114,7 +116,19 @@ export async function resolveUnknownCsvColumnTypes(conn, readExpr, profile, time
     }
     const row = rows?.[0];
     if (!row) return;
-    applyCsvColumnTypeScan(profile, scan.columns, alias => Number(row[alias] ?? 0));
+    const suspects = applyCsvColumnTypeScan(profile, scan.columns, alias => Number(row[alias] ?? 0));
+    // The columns with cells the cast refused but which hold a digit, counted
+    // again cell by cell. A file of plain numbers has none.
+    const rescan = csvColumnTypeRescan(profile, suspects);
+    if (!rescan) return;
+    let again = null;
+    try {
+        again = await runDuckDb(conn, `SELECT ${rescan.selectList} FROM ${readExpr}${where ? ` WHERE ${where}` : ''}`);
+    } catch (err) {
+        console.warn(`[csv-to-parquet] could not re-count the columns with unusual numbers; keeping the sample's types: ${err?.message || err}`);
+        return;
+    }
+    if (again?.[0]) applyCsvColumnTypeRescan(profile, rescan.columns, alias => Number(again[0][alias] ?? 0));
 }
 
 export function csvUsesDecimalComma(profile) {

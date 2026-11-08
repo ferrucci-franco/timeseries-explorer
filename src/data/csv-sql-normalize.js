@@ -177,17 +177,36 @@ export function csvNumberFallbackSql(expr, modes) {
 }
 
 /**
+ * Whether a column's cells are read one by one (csvNumberFallbackSql) where
+ * DuckDB's cast refuses them. The per-cell reading is long SQL, and binding
+ * it for every column of a wide file took seconds, so a column carries it
+ * only when the scan of the file found a refused cell with a digit in it
+ * (csvColumnTypeScan writes `scannedPerCellColumns`); a cell without one is
+ * never a number, so the two readings are equal without it. Before the scan
+ * has spoken, and for a lazy variable's reduced format, the answer is on the
+ * format itself (`perCell`), and otherwise yes: equal first, fast second.
+ */
+export function csvPerCellNumbers(profile, options = {}) {
+    if (typeof options.perCell === 'boolean') return options.perCell;
+    if (typeof profile?.perCell === 'boolean') return profile.perCell;
+    return true;
+}
+
+/**
  * A text cell read as a DOUBLE, as parseCsvNumber reads it in memory.
  *
  * DuckDB's own cast reads the usual cell, translated first when the profile
  * names a decimal mark or a grouping character; the cells it refuses go to
  * csvNumberFallbackSql, which reads each one on its own as the in-memory
- * reader does. A file of plain numbers evaluates the cast and nothing else,
- * so it costs what the bare try_cast every file used to get cost; the
- * difference is that "1,203.5" at row 300 of a file whose sample held only
- * "0.5" reads as 1203.5 in both readers, where DuckDB used to read NaN.
+ * reader does (when csvPerCellNumbers says the column needs it). A file of
+ * plain numbers evaluates the cast and nothing else, so it costs what the
+ * bare try_cast every file used to get cost; the difference is that
+ * "1,203.5" at row 300 of a file whose sample held only "0.5" reads as
+ * 1203.5 in both readers, where DuckDB used to read NaN.
+ *
+ * @param {{ perCell?: boolean }} [options]
  */
-export function csvNumericCastSql(expr, profile = null) {
+export function csvNumericCastSql(expr, profile = null, options = {}) {
     const modes = csvNumberModes(profile);
     const { decimalMode, thousandsMode } = modes;
     let value = `CAST(${expr} AS VARCHAR)`;
@@ -206,31 +225,46 @@ export function csvNumericCastSql(expr, profile = null) {
         value = `replace(${value}, '${escapeSqlLiteral(decimalMode)}', '.')`;
         translated = true;
     }
-    const parts = [
-        translated ? `try_cast(${value} AS DOUBLE)` : `try_cast(${expr} AS DOUBLE)`,
-        csvNumberFallbackSql(expr, modes),
-    ];
+    const parts = [translated ? `try_cast(${value} AS DOUBLE)` : `try_cast(${expr} AS DOUBLE)`];
+    if (csvPerCellNumbers(profile, options)) parts.push(csvNumberFallbackSql(expr, modes));
     // "0x1F", as logic analysers write a digital bus: the in-memory reader
     // reads it as 31 (Number does), DuckDB only through an integer cast.
     if (csvProfileHasHexNumbers(profile)) {
         parts.push(`try_cast(try_cast(trim(CAST(${expr} AS VARCHAR)) AS UBIGINT) AS DOUBLE)`);
     }
-    return `coalesce(${parts.join(', ')})`;
+    return parts.length === 1 ? parts[0] : `coalesce(${parts.join(', ')})`;
+}
+
+/**
+ * A cell DuckDB's cast refuses that holds a digit: the only kind the
+ * per-cell reading can read. Counted per column by the scan of the file,
+ * so that the per-cell reading is carried only where it changes something.
+ */
+export function csvSuspectCellSql(expr, profile = null) {
+    const fast = csvNumericCastSql(expr, profile, { perCell: false });
+    return `(CASE WHEN ${fast} IS NULL AND regexp_matches(CAST(${expr} AS VARCHAR), '[0-9]') THEN 1 END)`;
 }
 
 /**
  * The number format a lazy variable carries, reduced to what
  * csvNumericCastSql reads: plain data, so it survives the structuredClone
  * of a variable, and complete, so a read of the column on any later query
- * (zoom, Data tools, a formula) translates it as the overview did.
+ * (zoom, Data tools, a formula) translates it as the overview did. Null when
+ * a bare try_cast reads the column.
+ *
+ * @param {{ perCell?: boolean }} [options] whether this column's cells are
+ *   read one by one (csvPerCellNumbers)
  */
-export function csvNumberCastFormat(profile) {
+export function csvNumberCastFormat(profile, options = {}) {
+    const perCell = csvPerCellNumbers(profile, options);
+    if (csvNumericCastSql('x', profile, { perCell }) === 'try_cast(x AS DOUBLE)') return null;
     const { decimalMode, thousandsMode, delimiter } = csvNumberModes(profile);
     return {
         decimalSeparator: decimalMode,
         thousandsSeparator: thousandsMode,
         delimiter,
         hexNumbers: csvProfileHasHexNumbers(profile),
+        perCell,
     };
 }
 

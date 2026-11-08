@@ -21,6 +21,7 @@ import {
     csvProfileUsesDecimalComma,
     csvReadRepairOptions,
     csvRepairProjectionSql,
+    csvSuspectCellSql,
 } from './csv-sql-normalize.js';
 
 export function quoteIdent(name) {
@@ -78,6 +79,10 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
     // the sample, whoever took it: it read every row.
     const scannedNumeric = columnIndexSet(profile?.scannedNumericColumns);
     const scannedText = columnIndexSet(profile?.scannedTextColumns);
+    // Which columns are read cell by cell where DuckDB's cast refuses them
+    // (csvPerCellNumbers): the ones the scan found such cells in, or every
+    // column until a scan has spoken.
+    const scannedPerCell = Array.isArray(profile?.scannedPerCellColumns) ? columnIndexSet(profile.scannedPerCellColumns) : null;
     let validTimeRows = null;
     const sampleRowsOnce = () => {
         if (validTimeRows === null) validTimeRows = sampleRowsWithValidTime(profile?.sampleRows || [], profile);
@@ -116,6 +121,7 @@ export function csvColumnSpecs(profile, { withVerdict = false } = {}) {
             name,
             description: String(header.description || ''),
             ...inferred,
+            perCell: scannedPerCell ? scannedPerCell.has(index) : true,
         };
         if (withVerdict) {
             // 'chosen' and 'scanned' both mean "settled, nothing left to ask
@@ -259,7 +265,7 @@ export function csvKeptColumns(profile, timeInfo, columnNames = null) {
 export function csvProjectionColumnSql(name, spec = null, profile = null) {
     const ident = quoteIdent(name);
     if (spec?.type === 'DOUBLE' && spec?.readType === 'VARCHAR') {
-        return `${csvNumericCastSql(ident, profile)} AS ${ident}`;
+        return `${csvNumericCastSql(ident, profile, { perCell: spec.perCell })} AS ${ident}`;
     }
     return ident;
 }
@@ -318,9 +324,17 @@ export function csvTimeColumnName(profile, timeInfo, columnNames = null) {
  * not only the ones the sample could not type; a column chosen by hand, the
  * time axis, an unticked column and one already scanned are not.
  *
+ * Two phases, so that a wide file of plain numbers pays nothing for the
+ * per-cell reading (csvNumberFallbackSql): this first phase counts, with
+ * DuckDB's own cast, the filled cells, the numbers, and the SUSPECT cells —
+ * refused by the cast but holding a digit, the only ones the per-cell
+ * reading could read. applyCsvColumnTypeScan settles every column without
+ * suspects and returns the others; csvColumnTypeRescan counts those again,
+ * cell by cell, and applyCsvColumnTypeRescan settles them.
+ *
  * Returns the SELECT list and the columns it counts, or null when there is
  * nothing to ask. The caller runs it where its other aggregates run (the
- * row count, the time range) and hands the counts to applyCsvColumnTypeScan.
+ * row count, the time range).
  */
 export function csvColumnTypeScan(profile, { columnNames = null } = {}) {
     if (!profile) return null;
@@ -339,34 +353,68 @@ export function csvColumnTypeScan(profile, { columnNames = null } = {}) {
     const selectList = columns.map(({ name, slot }) => {
         const ident = quoteIdent(name);
         return `COUNT(${csvFilledCellSql(ident)}) AS filled_${slot}`
-            + `, COUNT(${csvNumericCastSql(ident, profile)}) AS numeric_${slot}`;
+            + `, COUNT(${csvNumericCastSql(ident, profile, { perCell: false })}) AS numeric_${slot}`
+            + `, COUNT(${csvSuspectCellSql(ident, profile)}) AS suspect_${slot}`;
     }).join(', ');
     return { columns, selectList };
 }
 
-/**
- * Write the scan's verdict onto the profile (scannedNumericColumns,
- * scannedTextColumns), so the live-update appends, a later Parquet
- * conversion and a reload of the same profile all read the same types.
- *
- * @param {object} profile
- * @param {{ index: number, slot: number }[]} columns from csvColumnTypeScan
- * @param {(alias: string) => number} valueOf the count under an alias
- */
-export function applyCsvColumnTypeScan(profile, columns, valueOf) {
+function writeScanVerdict(profile, index, filled, numeric) {
     const numericColumns = columnIndexSet(profile.scannedNumericColumns);
     const textColumns = columnIndexSet(profile.scannedTextColumns);
-    for (const { index, slot } of columns) {
-        const filled = Number(valueOf(`filled_${slot}`) ?? 0);
-        const numeric = Number(valueOf(`numeric_${slot}`) ?? 0);
-        if (isMostlyNumericColumn({ nonEmptyCount: filled, finiteCount: numeric })) {
-            numericColumns.add(index);
-            textColumns.delete(index);
-        } else {
-            textColumns.add(index);
-            numericColumns.delete(index);
-        }
+    if (isMostlyNumericColumn({ nonEmptyCount: filled, finiteCount: numeric })) {
+        numericColumns.add(index);
+        textColumns.delete(index);
+    } else {
+        textColumns.add(index);
+        numericColumns.delete(index);
     }
     profile.scannedNumericColumns = [...numericColumns].sort((a, b) => a - b);
     profile.scannedTextColumns = [...textColumns].sort((a, b) => a - b);
+}
+
+/**
+ * Write the first phase's verdict onto the profile (scannedNumericColumns,
+ * scannedTextColumns, scannedPerCellColumns), so the live-update appends, a
+ * later Parquet conversion and a reload of the same profile all read the
+ * same types. Returns the columns with suspect cells, which the second
+ * phase (csvColumnTypeRescan) has to count again; an empty list when none.
+ *
+ * @param {object} profile
+ * @param {{ index: number, slot: number, name: string }[]} columns from csvColumnTypeScan
+ * @param {(alias: string) => number} valueOf the count under an alias
+ */
+export function applyCsvColumnTypeScan(profile, columns, valueOf) {
+    const perCell = columnIndexSet(profile.scannedPerCellColumns);
+    const suspects = [];
+    for (const column of columns) {
+        const { index, slot } = column;
+        const filled = Number(valueOf(`filled_${slot}`) ?? 0);
+        const numeric = Number(valueOf(`numeric_${slot}`) ?? 0);
+        const suspect = Number(valueOf(`suspect_${slot}`) ?? 0);
+        if (suspect > 0) {
+            perCell.add(index);
+            suspects.push({ ...column, filled });
+        } else {
+            perCell.delete(index);
+            writeScanVerdict(profile, index, filled, numeric);
+        }
+    }
+    profile.scannedPerCellColumns = [...perCell].sort((a, b) => a - b);
+    return suspects;
+}
+
+/** The second phase: the suspect columns' numbers counted cell by cell. */
+export function csvColumnTypeRescan(profile, suspects) {
+    if (!suspects?.length) return null;
+    const selectList = suspects.map(({ name, slot }) =>
+        `COUNT(${csvNumericCastSql(quoteIdent(name), profile, { perCell: true })}) AS numeric_${slot}`).join(', ');
+    return { columns: suspects, selectList };
+}
+
+/** The second phase's verdict for the suspect columns. */
+export function applyCsvColumnTypeRescan(profile, suspects, valueOf) {
+    for (const { index, slot, filled } of suspects) {
+        writeScanVerdict(profile, index, filled, Number(valueOf(`numeric_${slot}`) ?? 0));
+    }
 }

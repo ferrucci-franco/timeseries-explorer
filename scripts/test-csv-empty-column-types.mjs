@@ -114,9 +114,12 @@ await source._scanCsvColumnTypes(
 // A cell counts as filled unless it is empty or a missing-value marker
 // ("-", NaN, NULL), as isMissingNumberCell decides in the in-memory reader.
 assert.ok(/COUNT\(\(CASE WHEN lower\(trim\(CAST\("BATT_I" AS VARCHAR\)\)\) IN \('nan', '\+nan', '-nan', 'null', 'none', 'nil', 'n\/a', '#n\/a', '-', '--', '---'\) THEN NULL ELSE NULLIF\(trim\(CAST\("BATT_I" AS VARCHAR\)\), ''\) END\)\) AS filled_1/.test(scannedSql), scannedSql);
-// A cell counts as a number when DuckDB's cast reads it, or the per-cell
-// reading behind it does (csvNumericCastSql), as parseCsvNumber would.
-assert.ok(/COUNT\(coalesce\(try_cast\("Calo_Config\*" AS DOUBLE\), .*\)\) AS numeric_2/.test(scannedSql), scannedSql);
+// A cell counts as a number when DuckDB's cast reads it; the cells it
+// refuses that hold a digit are counted apart (suspects), and only a column
+// with some is read again cell by cell (csvNumberFallbackSql).
+assert.ok(/COUNT\(try_cast\("Calo_Config\*" AS DOUBLE\)\) AS numeric_2/.test(scannedSql), scannedSql);
+assert.ok(/regexp_matches\(CAST\("Calo_Config\*" AS VARCHAR\), '\[0-9\]'\) THEN 1 END\)\) AS suspect_2/.test(scannedSql), scannedSql);
+assert.ok(!scannedSql.includes('list_transform'), 'the first phase carries no per-cell reading');
 assert.ok(scannedSql.includes('FROM omv_t_1 WHERE "Date" IS NOT NULL'), scannedSql);
 assert.ok(scannedSql.includes('"ELY_V"'), 'a column the sample typed is scanned too: the sample may be wrong about the rest');
 assert.ok(!scannedSql.includes('"Date"') || !/COUNT\([^)]*"Date"/.test(scannedSql), 'the time axis is not');
@@ -125,6 +128,7 @@ assert.ok(!scannedSql.includes('"Date"') || !/COUNT\([^)]*"Date"/.test(scannedSq
 // later Parquet conversion read the same types.
 assert.deepEqual(profile.scannedNumericColumns, [2, 3, 4]);
 assert.deepEqual(profile.scannedTextColumns, [5]);
+assert.deepEqual(profile.scannedPerCellColumns, [], 'no column had a refused cell with a digit');
 specs = specsByName();
 assert.equal(specs.get('BATT_I').type, 'DOUBLE', 'an empty column stays numeric');
 assert.equal(specs.get('Calo_Config*').type, 'DOUBLE', 'a column that starts late is numeric');

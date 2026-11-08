@@ -223,10 +223,14 @@ logger or a PLC does not keep to what its first 100 rows promised:
   decimal comma where the cell can only mean one, a typographic minus, a
   space after the sign, a Fortran `D` exponent, and digits separated by
   spaces refused as two values. A meter that passes 1000 after the sample and
-  writes `"1,203.5"` reads 1203.5 in both readers, where DuckDB read NaN. A
-  file of plain numbers evaluates the cast and nothing else; a lazy variable
-  carries its format (`_duckdbNumberFormat`) so every later query reads the
-  column the same way.
+  writes `"1,203.5"` reads 1203.5 in both readers, where DuckDB read NaN.
+  The per-cell reading is long SQL, so a column carries it only when the
+  scan found a cell the cast refused with a digit in it (a cell without one
+  is never a number): the scan counts those cells first, with the cast
+  alone, and counts the columns that have some a second time, cell by cell.
+  A wide file of plain numbers never binds it. A lazy variable carries its
+  format (`_duckdbNumberFormat`, with `perCell`) so every later query reads
+  the column the same way.
 - **Text.** Text columns are trimmed, as the in-memory reader trims every
   cell: a space-padded flag reads ` IDLE` in neither.
 - **Order.** The in-memory reader sorts by time and keeps the file's order
