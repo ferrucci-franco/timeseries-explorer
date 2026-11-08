@@ -17,6 +17,8 @@ import { createServer as createHttpServer } from 'node:http';
 
 import { chromium } from 'playwright';
 
+import { FEEDBACK_SEND_TIMEOUT_MS } from '../src/app/feedback-transport.js';
+
 // A stand-in for server/feedback-worker: it records what arrived and answers
 // the way the worker does. The endpoint is read at build time, so it has to be
 // in the environment before Vite's config is loaded.
@@ -64,6 +66,51 @@ const PNG = Buffer.from(
     'base64',
 );
 
+// Send, and wait for the form's answer either way. Waiting for "sent" alone,
+// for 15 s, turned a failure on main (after #342) into a bare timeout that
+// said nothing: a form that never validated, a request still in flight and a
+// refusal all looked the same. And 15 s was shorter than the app's own limit
+// (FEEDBACK_SEND_TIMEOUT_MS, 60 s), so a slow request was cut off before the
+// form could say what became of it. Now the wait outlasts that limit, and a
+// failure carries the state of the form.
+const SEND_ANSWER_WAIT_MS = FEEDBACK_SEND_TIMEOUT_MS + 10_000;
+const sendAndAwaitAnswer = async (target, label, errors) => {
+    const describe = () => target.evaluate(() => {
+        const form = document.querySelector('.feedback-dialog form');
+        const status = document.querySelector('.feedback-status');
+        return {
+            dialogs: document.querySelectorAll('.feedback-dialog').length,
+            formValid: form ? form.checkValidity() : null,
+            sending: form ? form.classList.contains('is-sending') : null,
+            status: status ? { className: status.className, text: status.textContent.trim() } : null,
+            values: Array.from(document.querySelectorAll('.feedback-dialog .feedback-control'))
+                .map(control => control.value),
+        };
+    }).catch(error => ({ unreadable: String(error) }));
+    const failure = (what, state) => new Error(`${label}: ${what}. Form: ${JSON.stringify(state)}. `
+        + `Requests at the stub: ${received.length}. Page errors: ${JSON.stringify(errors)}`);
+
+    await target.click('.feedback-send-btn');
+    const right = await describe();
+    if (right.formValid === false) throw failure('the form did not validate, so Send did nothing', right);
+    try {
+        await target.waitForSelector('.feedback-status.is-sent, .feedback-status.is-error', { timeout: SEND_ANSWER_WAIT_MS });
+    } catch (_) {
+        throw failure(`Send got no answer within ${SEND_ANSWER_WAIT_MS / 1000} s`, await describe());
+    }
+    const outcome = await target.$eval('.feedback-status', node => ({ className: node.className, text: node.textContent.trim() }));
+    assert.match(outcome.className, /\bis-sent\b/,
+        `${label}: the report was not filed: ${outcome.text} (requests at the stub: ${received.length}, page errors: ${JSON.stringify(errors)})`);
+};
+
+// The form opened, drawn and holding the caret: what a person sees before
+// typing. The handover page opens it during start-up, so "the dialog exists"
+// is not yet that.
+const awaitSettledForm = async (target) => {
+    await target.waitForSelector('.feedback-overlay.show .feedback-dialog');
+    await target.waitForFunction(() => document.activeElement?.closest('.feedback-field') !== null);
+};
+
 try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const pageErrors = [];
@@ -72,11 +119,10 @@ try {
     await page.waitForFunction(() => typeof window.app?.showFeedbackForm === 'function');
 
     await page.evaluate(() => window.app.showFeedbackForm());
-    await page.waitForSelector('.feedback-dialog');
 
     // The form opens with the caret in the summary field. That is the state
     // the paste bug lived in, so the test keeps it.
-    await page.waitForFunction(() => document.activeElement?.closest('.feedback-field') !== null);
+    await awaitSettledForm(page);
     const focusedFirst = await page.evaluate(() => document.activeElement.tagName.toLowerCase());
     assert.equal(focusedFirst, 'input', 'the form still opens with the focus in a text field');
 
@@ -125,8 +171,7 @@ try {
     assert.equal(stillOne, 1, 'a paste with no file attaches nothing');
 
     // ── Send ────────────────────────────────────────────────────────────────
-    await page.click('.feedback-send-btn');
-    await page.waitForSelector('.feedback-status.is-sent', { timeout: 15000 });
+    await sendAndAwaitAnswer(page, 'first report', pageErrors);
 
     assert.equal(await page.isVisible('.feedback-status'), true, 'and a real one is');
     const link = await page.$eval('.feedback-status-link', node => ({ href: node.href, text: node.textContent }));
@@ -205,17 +250,24 @@ try {
     // build it is about -- the desktop one, not this page.
     received.length = 0;
     const handed = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const handedErrors = [];
+    handed.on('pageerror', error => handedErrors.push(String(error)));
+    handed.on('console', message => { if (message.type() === 'error') handedErrors.push(`console: ${message.text()}`); });
     await handed.goto(`${baseUrl}?feedback=1&from=desktop&v=0.4.1&c=abc1234&p=win32`, { waitUntil: 'domcontentloaded' });
     await handed.waitForSelector('.feedback-dialog', { timeout: 15000 });
+    // The form comes up inside the app's constructor, before start-up has
+    // finished; wait for the app to be all there and the form to settle.
+    await handed.waitForFunction(() => typeof window.app?.showFeedbackForm === 'function');
+    await awaitSettledForm(handed);
     assert.equal(await handed.evaluate(() => window.location.search), '',
         'the query is cleared, so a reload does not reopen the form');
 
     await handed.fill('.feedback-field:nth-child(3) .feedback-control', 'Crashes when opening a .mat');
     await handed.fill('.feedback-field:nth-child(4) .feedback-control', 'Opened a Dymola result in the desktop app.');
-    await handed.click('.feedback-send-btn');
-    await handed.waitForSelector('.feedback-status.is-sent', { timeout: 15000 });
+    await sendAndAwaitAnswer(handed, 'report handed over from Full Desktop', handedErrors);
     const handedHead = JSON.parse(received[0].body.split('\n')[0]);
     assert.equal(handedHead.app.reportedFrom, 'Full Desktop 0.4.1 · win32 · commit abc1234');
+    assert.deepEqual(handedErrors.filter(text => !text.startsWith('console:')), [], 'no page errors on the handover page');
 
     // ── And the desktop end of it ───────────────────────────────────────────
     // With a desktop runtime in place, Feedback must build no sending form at
