@@ -5,10 +5,12 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
-import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { csvDatetimeSql } from './csv-sql-datetime.js';
 import { columnIndexSet, columnSampleVerdict, forcedColumnTypes, isMostlyNumericColumn } from '../parsers/csv-column-types.js';
 import { csvNumberFormat } from '../parsers/csv-text-normalize.js';
 import {
+    csvFilledCellSql,
     csvNumericCastSql,
     csvProfileUsesDecimalComma,
     csvReadRepairOptions,
@@ -25,7 +27,6 @@ const duckDbModulePath = (() => {
 })();
 const duckdbPkg = require(duckDbModulePath);
 const { Database } = duckdbPkg;
-const MS_PER_DAY = 86400000;
 
 export function formatMB(bytes) {
     return (Number(bytes || 0) / (1024 * 1024)).toFixed(1);
@@ -147,7 +148,7 @@ export async function resolveUnknownCsvColumnTypes(conn, readExpr, profile) {
 
     const selections = unknown.map(({ spec }, slot) => {
         const ident = quoteIdent(spec.name);
-        return `COUNT(NULLIF(trim(CAST(${ident} AS VARCHAR)), '')) AS filled_${slot}`
+        return `COUNT(${csvFilledCellSql(ident)}) AS filled_${slot}`
             + `, COUNT(${numericCastSql(ident, profile)}) AS numeric_${slot}`;
     });
     const filterWhere = rowFilterSql(profile);
@@ -267,82 +268,10 @@ export function timeOutputSql(timeInfo, expression = '"__omv_time"') {
 }
 
 export function datetimeSqlFromProfile(timeSource, sourceNames, profile = null) {
-    const first = quoteIdent(sourceNames[0]);
-    const strategy = timeSource.strategy;
-    const numericFirst = numericCastSql(first, profile);
-    if (strategy === 'excel-serial') return `((${numericFirst} - 25569) * ${MS_PER_DAY})`;
-    if (strategy === 'matlab-datenum') return `((${numericFirst} - 719529) * ${MS_PER_DAY})`;
-    if (strategy === 'decimal-year') return decimalYearSql(numericFirst);
-    if (strategy === 'yearless-date-time') return yearlessDateTimeSql(first, timeSource.format);
-    if (strategy === 'month-name-date') return monthNameDateSql(first);
-    if (strategy === 'partial-year-month') return partialYearMonthSql(first);
-    if (strategy === 'iso-datetime') return `epoch_ms(CAST(${first} AS TIMESTAMP))::DOUBLE`;
-    if (strategy === 'custom-format') {
-        return customFormatSql(first, timeSource.format?.pattern || '');
-    }
-
-    const order = timeSource.format?.dateOrder || 'YMD';
-    if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
-        const formats = dateTimeFormats(order, dateSeparatorForStrategy(strategy));
-        return tryStrptimeSql(`CAST(${first} AS VARCHAR)`, formats);
-    }
-
-    if (timeSource.mode === 'split' && sourceNames.length >= 2) {
-        const dateCol = quoteIdent(sourceNames[0]);
-        const timeCol = quoteIdent(sourceNames[1]);
-        const sep = timeSource.format?.dotSeparator ? '.' : timeSource.format?.dashSeparator ? '-' : '/';
-        const formats = timeSource.format?.monthName
-            ? monthNameFormats()
-            : dateTimeFormats(order, sep);
-        const expr = `CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
-        if (timeSource.format?.monthName) return tryStrptimeSql(normalizedMonthNameSql(expr), formats);
-        const partialYearMonth = `CAST(${dateCol} AS VARCHAR) || '-01 ' || CAST(${timeCol} AS VARCHAR)`;
-        const partialMonthDay = `'2001-' || CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
-        const timestamps = [
-            tryStrptimeTimestampSql(expr, formats),
-            tryStrptimeTimestampSql(partialYearMonth, partialYearMonthDateTimeFormats()),
-            tryStrptimeTimestampSql(partialMonthDay, partialMonthDayDateTimeFormats(order)),
-        ];
-        return `epoch_ms(coalesce(${timestamps.join(', ')}))::DOUBLE`;
-    }
-
-    if (timeSource.mode === 'parts' || strategy === 'parts') {
-        return partsDateTimeSql(timeSource, sourceNames);
-    }
-
-    return null;
-}
-
-function customFormatSql(expr, pattern) {
-    const info = customDatetimePatternInfo(pattern);
-    if (!info?.format) return null;
-    let valueExpr = `CAST(${expr} AS VARCHAR)`;
-    if (info.hasWeekday) valueExpr = `regexp_replace(trim(${valueExpr}), '^[\\p{L}-]{2,14}\\.?,?\\s+', '')`;
-    if (info.valuePrefix) valueExpr = `'${escapeSqlString(info.valuePrefix)}' || ${valueExpr}`;
-    if (info.valueSuffix) valueExpr = `${valueExpr} || '${escapeSqlString(info.valueSuffix)}'`;
-    if (info.hasMonthName) valueExpr = normalizedMonthNameSql(valueExpr);
-    return tryStrptimeSql(valueExpr, [info.format]);
-}
-
-function partsDateTimeSql(timeSource, sourceNames) {
-    const sourceIndexes = timeSource.sourceIndexes || [];
-    const parts = timeSource.format?.parts || {};
-    const partExpr = (name, fallback = '0') => {
-        const profileIndex = parts[name];
-        const sourceOffset = sourceIndexes.indexOf(profileIndex);
-        if (sourceOffset < 0 || !sourceNames[sourceOffset]) return fallback;
-        return `try_cast(${quoteIdent(sourceNames[sourceOffset])} AS DOUBLE)`;
-    };
-    const year = partExpr('year', '2001');
-    const month = partExpr('month', '1');
-    const day = partExpr('day', '1');
-    const hour = partExpr('hour', '0');
-    const minute = partExpr('minute', '0');
-    const second = partExpr('second', '0');
-    const secondInt = `FLOOR(${second})`;
-    const microsecond = `ROUND((${second} - FLOOR(${second})) * 1000000)`;
-    const expr = `make_timestamp(CAST(${year} AS BIGINT), CAST(${month} AS BIGINT), CAST(${day} AS BIGINT), CAST(${hour} AS BIGINT), CAST(${minute} AS BIGINT), CAST(${secondInt} AS BIGINT)) + CAST(${microsecond} AS BIGINT) * INTERVAL 1 MICROSECOND`;
-    return `epoch_ms(${expr})::DOUBLE`;
+    return csvDatetimeSql(timeSource, sourceNames, {
+        quoteIdent,
+        numericCastSql: expr => numericCastSql(expr, profile),
+    });
 }
 
 export function projectionSql(profile, timeInfo) {
@@ -527,113 +456,3 @@ export async function convertCsvToParquet(options = {}) {
     };
 }
 
-function dateTimeFormats(order, sep) {
-    const date = order === 'DMY'
-        ? `%d${sep}%m${sep}%Y`
-        : order === 'MDY'
-          ? `%m${sep}%d${sep}%Y`
-          : `%Y${sep}%m${sep}%d`;
-    const shortYear = order === 'DMY'
-        ? `%d${sep}%m${sep}%y`
-        : order === 'MDY'
-          ? `%m${sep}%d${sep}%y`
-          : `%y${sep}%m${sep}%d`;
-    return [
-        `${date} %H:%M:%S.%f`, `${date} %H:%M:%S`, `${date} %H:%M`, date,
-        `${shortYear} %H:%M:%S.%f`, `${shortYear} %H:%M:%S`, `${shortYear} %H:%M`, shortYear,
-    ];
-}
-
-function partialYearMonthDateTimeFormats() {
-    return [
-        '%Y-%m-%d %H:%M:%S.%f',
-        '%Y-%m-%d %H:%M:%S',
-        '%Y-%m-%d %H:%M',
-        '%Y/%m-%d %H:%M:%S.%f',
-        '%Y/%m-%d %H:%M:%S',
-        '%Y/%m-%d %H:%M',
-    ];
-}
-
-function partialMonthDayDateTimeFormats(order) {
-    const dash = order === 'DMY' ? '%Y-%d-%m' : '%Y-%m-%d';
-    const slash = order === 'DMY' ? '%Y-%d/%m' : '%Y-%m/%d';
-    return [
-        `${dash} %H:%M:%S.%f`,
-        `${dash} %H:%M:%S`,
-        `${dash} %H:%M`,
-        `${slash} %H:%M:%S.%f`,
-        `${slash} %H:%M:%S`,
-        `${slash} %H:%M`,
-    ];
-}
-
-function decimalYearSql(expr) {
-    const value = `${expr}::DOUBLE`;
-    const year = `FLOOR(${value})`;
-    const leap = `((${year} % 4 = 0 AND ${year} % 100 <> 0) OR ${year} % 400 = 0)`;
-    return `(
-        epoch_ms(CAST(CAST(CAST(${year} AS BIGINT) AS VARCHAR) || '-01-01' AS TIMESTAMP))::DOUBLE
-        + (${value} - ${year}) * CASE WHEN ${leap} THEN 366 ELSE 365 END * ${MS_PER_DAY}
-    )`;
-}
-
-function yearlessDateTimeSql(expr, format = {}) {
-    const order = format?.dateOrder || 'MDY';
-    const sep = format?.dashSeparator ? '-' : '/';
-    const date = order === 'DMY' ? `%Y${sep}%d${sep}%m` : `%Y${sep}%m${sep}%d`;
-    return tryStrptimeSql(`'2001${sep}' || CAST(${expr} AS VARCHAR)`, [
-        `${date} %H:%M:%S.%f`,
-        `${date} %H:%M:%S`,
-        `${date} %H:%M`,
-    ]);
-}
-
-function monthNameDateSql(expr) {
-    return tryStrptimeSql(normalizedMonthNameSql(expr), monthNameFormats());
-}
-
-function partialYearMonthSql(expr) {
-    const value = `CAST(${expr} AS VARCHAR) || '-01'`;
-    return tryStrptimeSql(value, ['%Y-%m-%d', '%Y/%m-%d']);
-}
-
-function monthNameFormats() {
-    return [
-        '%d-%b-%Y %H:%M:%S.%f', '%d-%b-%Y %H:%M:%S', '%d-%b-%Y %H:%M', '%d-%b-%Y',
-        '%d %b %Y %H:%M:%S.%f', '%d %b %Y %H:%M:%S', '%d %b %Y %H:%M', '%d %b %Y',
-        '%b %d %Y %H:%M:%S.%f', '%b %d %Y %H:%M:%S', '%b %d %Y %H:%M', '%b %d %Y',
-        '%B %d %Y %H:%M:%S.%f', '%B %d %Y %H:%M:%S', '%B %d %Y %H:%M', '%B %d %Y',
-    ];
-}
-
-function normalizedMonthNameSql(expr) {
-    let sql = `lower(strip_accents(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g')))`;
-    const replacements = [
-        ['january', 'jan'], ['janvier', 'jan'], ['enero', 'jan'], ['ene', 'jan'], ['gennaio', 'jan'], ['gen', 'jan'], ['janeiro', 'jan'],
-        ['february', 'feb'], ['fevrier', 'feb'], ['fevr', 'feb'], ['febrero', 'feb'], ['febbraio', 'feb'], ['fevereiro', 'feb'],
-        ['march', 'mar'], ['mars', 'mar'], ['marzo', 'mar'], ['marz', 'mar'], ['marco', 'mar'],
-        ['april', 'apr'], ['avril', 'apr'], ['abril', 'apr'], ['abr', 'apr'], ['aprile', 'apr'],
-        ['mayo', 'may'], ['mai', 'may'], ['maggio', 'may'], ['mag', 'may'], ['maio', 'may'],
-        ['june', 'jun'], ['juin', 'jun'], ['junio', 'jun'], ['giugno', 'jun'], ['giu', 'jun'], ['junho', 'jun'], ['juni', 'jun'],
-        ['july', 'jul'], ['juillet', 'jul'], ['juil', 'jul'], ['julio', 'jul'], ['luglio', 'jul'], ['lug', 'jul'], ['julho', 'jul'], ['juli', 'jul'],
-        ['august', 'aug'], ['aout', 'aug'], ['agosto', 'aug'], ['ago', 'aug'],
-        ['september', 'sep'], ['septembre', 'sep'], ['septiembre', 'sep'], ['sept', 'sep'], ['settembre', 'sep'], ['setembro', 'sep'], ['set', 'sep'],
-        ['october', 'oct'], ['octobre', 'oct'], ['octubre', 'oct'], ['ottobre', 'oct'], ['ott', 'oct'], ['outubro', 'oct'], ['oktober', 'oct'], ['okt', 'oct'],
-        ['november', 'nov'], ['novembre', 'nov'], ['noviembre', 'nov'], ['novembro', 'nov'],
-        ['december', 'dec'], ['decembre', 'dec'], ['diciembre', 'dec'], ['dicembre', 'dec'], ['dic', 'dec'], ['dezembro', 'dec'], ['dezember', 'dec'], ['dez', 'dec'],
-    ];
-    for (const [from, to] of replacements) {
-        sql = `replace(${sql}, '${escapeSqlString(from)}', '${to}')`;
-    }
-    return sql;
-}
-
-function tryStrptimeSql(expr, formats) {
-    return `epoch_ms(${tryStrptimeTimestampSql(expr, formats)})::DOUBLE`;
-}
-
-function tryStrptimeTimestampSql(expr, formats) {
-    const list = formats.map(format => `'${escapeSqlString(format)}'`).join(', ');
-    return `try_strptime(${expr}, [${list}])`;
-}

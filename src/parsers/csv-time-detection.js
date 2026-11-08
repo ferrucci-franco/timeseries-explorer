@@ -157,6 +157,21 @@ for (const [lang, days] of Object.entries(WEEKDAY_NAMES)) {
 }
 const MONTH_LOOKUP = Object.fromEntries([...MONTH_INDEX].map(([name, entry]) => [name, entry.month]));
 
+/**
+ * Every month name and abbreviation the reader knows, by month (1-12), lower
+ * case and without accents: the table the SQL readers build their month
+ * names from, so both read the same words.
+ * @returns {Array<[number, string[]]>}
+ */
+export function csvMonthNameTable() {
+    const byMonth = new Map();
+    for (const [name, entry] of MONTH_INDEX) {
+        if (!byMonth.has(entry.month)) byMonth.set(entry.month, []);
+        byMonth.get(entry.month).push(name);
+    }
+    return [...byMonth].sort((a, b) => a[0] - b[0]);
+}
+
 // ---------------------------------------------------------------------------
 // parseCsvNumber - exported public helper
 // ---------------------------------------------------------------------------
@@ -184,10 +199,10 @@ export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'au
         else if (/^[+-]\s+\S+$/.test(raw)) raw = raw.replace(/\s+/, '');
         else if (/\d\s+\d/.test(raw)) return NaN;
     }
-    // Translate Fortran-style D-exponents.
-    const normalized = raw
-        .replace(/\s+/g, '')
-        .replace(/[dD]([+-]?\d+)$/, 'e$1');
+    // Translate Fortran-style D-exponents ("1.5D3"), but not inside a
+    // hexadecimal number: "0xD0" is 208, and read as "0xe0" it was 224.
+    const compact = raw.replace(/\s+/g, '');
+    const normalized = /^[+-]?0x/i.test(compact) ? compact : compact.replace(/[dD]([+-]?\d+)$/, 'e$1');
 
     if (/^[+-]?inf(?:inity)?$/i.test(normalized)) {
         return normalized.startsWith('-') ? -Infinity : Infinity;
@@ -768,7 +783,7 @@ function matchNamedDateBody(s, weekdayToken) {
         const ampm = g.ampm ? g.ampm.replace(/\./g, '').toUpperCase() : '';
         if (ampm) {
             if (H < 1 || H > 12) continue;
-            H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+            H = (H % 12) + (ampm.startsWith('P') ? 12 : 0);
         }
         return {
             order: pattern.order === 'MY' ? 'MDY' : pattern.order,
@@ -858,7 +873,8 @@ function profileColumnContent(sample, colIdx, delimiter) {
             prevNum = null;
         }
 
-        if (/^\d{1,2}:\d{2}(:\d{2})?([.,]\d+)?$/.test(cell)) profile.timeOfDay++;
+        // "13:05", "1:05 PM", and the "3:00 a" WeatherLink writes.
+        if (/^\d{1,2}:\d{2}(:\d{2})?([.,]\d+)?(?:\s*[AaPp]\.?(?:[Mm]\.?)?)?$/.test(cell)) profile.timeOfDay++;
 
         const pym = cell.match(/^(\d{4})([/-])(\d{1,2})$/);
         if (pym) {
@@ -868,7 +884,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         }
 
         const ym = cell.match(
-            /^(\d{1,2})([/-])(\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?$/i,
+            /^(\d{1,2})([/-])(\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]\.?(?:M\.?)?)?$/i,
         );
         if (ym) {
             profile.yearlessDateTime++;
@@ -876,7 +892,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
             else profile.yearlessDash++;
             tallyDateAmbiguity(profile.yearlessCounts, +ym[1], +ym[3], ym[1]);
             profile.hasTimePart++;
-            if (/[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
+            if (/\d\s*[AP]\.?(?:M\.?)?\s*$/i.test(cell)) profile.meridiemTimePart++;
             continue;
         }
 
@@ -895,24 +911,24 @@ function profileColumnContent(sample, colIdx, delimiter) {
         }
 
         const sm = cell.match(
-            /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i,
+            /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]\.?(?:M\.?)?)?)?$/i,
         );
         if (sm) {
             profile.slashDate++;
             tallyDateAmbiguity(profile.slashCounts, +sm[1], +sm[2], sm[1]);
             if (sm[4] != null) profile.hasTimePart++;
-            if (sm[4] != null && /[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
+            if (sm[4] != null && /\d\s*[AP]\.?(?:M\.?)?\s*$/i.test(cell)) profile.meridiemTimePart++;
             continue;
         }
 
         const dm = cell.match(
-            /^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i,
+            /^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]\.?(?:M\.?)?)?)?$/i,
         );
         if (dm) {
             profile.dashDate++;
             tallyDateAmbiguity(profile.dashCounts, +dm[1], +dm[2], dm[1]);
             if (dm[4] != null) profile.hasTimePart++;
-            if (dm[4] != null && /[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
+            if (dm[4] != null && /\d\s*[AP]\.?(?:M\.?)?\s*$/i.test(cell)) profile.meridiemTimePart++;
             continue;
         }
 
@@ -920,13 +936,13 @@ function profileColumnContent(sample, colIdx, delimiter) {
         // so a decimal number (12.5) never reaches here as a date — it was
         // counted as numeric above and fails this pattern anyway.
         const dot = cell.match(
-            /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]M)?)?$/i,
+            /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?(?:\s*[AP]\.?(?:M\.?)?)?)?$/i,
         );
         if (dot && (dot[1].length === 4 ? dot[3].length <= 2 : (dot[1].length <= 2 && (dot[3].length === 2 || dot[3].length === 4)))) {
             profile.dotDate++;
             tallyDateAmbiguity(profile.dotCounts, +dot[1], +dot[2], dot[1]);
             if (dot[4] != null) profile.hasTimePart++;
-            if (dot[4] != null && /[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
+            if (dot[4] != null && /\d\s*[AP]\.?(?:M\.?)?\s*$/i.test(cell)) profile.meridiemTimePart++;
             continue;
         }
 
@@ -1447,15 +1463,11 @@ function parseIsoMs(cell) {
     const Ms = m[7] != null ? Math.round(Number('0.' + m[7]) * 1000) : 0;
     const tz = m[8];
 
-    if (tz) {
-        const normalizedTz = tz === 'Z' ? 'Z' : /^[+\-]\d{2}$/.test(tz) ? `${tz}:00` : tz.replace(/^([+\-]\d{2})(\d{2})$/, '$1:$2');
-        const padded = `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-            + `T${String(H).padStart(2, '0')}:${String(Mi).padStart(2, '0')}:${String(Se).padStart(2, '0')}.${String(Ms).padStart(3, '0')}${normalizedTz}`;
-        const ms = Date.parse(padded);
-        return Number.isFinite(ms) ? ms : NaN;
-    }
-
-    return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
+    if (H > 24 || Mi > 59 || Se > 59 || (H === 24 && (Mi || Se || Ms))) return NaN;
+    // The offset is subtracted, not written into a string for Date.parse:
+    // a fraction that rounds to 1000 ms ("31.99997") wrote ".1000", which
+    // Date.parse read as 0.1 s, and the instant went back 0.9 s.
+    return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms) - tzOffsetMinutes(tz) * 60000;
 }
 
 function parsePartialYearMonthMs(cell) {
@@ -1472,10 +1484,10 @@ function parsePartialYearMonthMs(cell) {
 function parseFlexibleDateMs(cell, order, sep) {
     if (cell == null || cell === '') return NaN;
     const re = sep === '-'
-        ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?)?$/i
+        ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP])\.?(?:M\.?)?)?)?$/i
         : sep === '.'
-            ? /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?)?$/i
-            : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?)?$/i;
+            ? /^(\d{1,4})\.(\d{1,2})\.(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP])\.?(?:M\.?)?)?)?$/i
+            : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP])\.?(?:M\.?)?)?)?$/i;
     const m = String(cell).trim().match(re);
     if (!m) return NaN;
 
@@ -1494,7 +1506,7 @@ function parseFlexibleDateMs(cell, order, sep) {
     const ampm = m[8] ? String(m[8]).toUpperCase() : '';
     if (ampm) {
         if (H < 1 || H > 12) return NaN;
-        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+        H = (H % 12) + (ampm.startsWith('P') ? 12 : 0);
     }
 
     return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
@@ -1634,9 +1646,9 @@ function parseCustomFormatMs(cell, pattern) {
     const ampm = match.groups.ampm ? String(match.groups.ampm).replace(/\./g, '').toUpperCase() : '';
     if (match.groups.hour12 != null) {
         if (H < 1 || H > 12 || !ampm) return NaN;
-        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+        H = (H % 12) + (ampm.startsWith('P') ? 12 : 0);
     } else if (ampm && H >= 1 && H <= 12) {
-        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+        H = (H % 12) + (ampm.startsWith('P') ? 12 : 0);
     }
     const Mi = match.groups.minute != null ? Number(match.groups.minute) : 0;
     const Se = match.groups.second != null ? Number(match.groups.second) : 0;
@@ -1681,7 +1693,7 @@ function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator
 function parseYearlessDateTimeMs(cell, order) {
     if (cell == null || cell === '') return NaN;
     const m = String(cell).trim().match(
-        /^(\d{1,2})[/-](\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?$/i,
+        /^(\d{1,2})[/-](\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP])\.?(?:M\.?)?)?$/i,
     );
     if (!m) return NaN;
 
@@ -1696,7 +1708,7 @@ function parseYearlessDateTimeMs(cell, order) {
     const ampm = m[7] ? String(m[7]).toUpperCase() : '';
     if (ampm) {
         if (H < 1 || H > 12) return NaN;
-        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+        H = (H % 12) + (ampm.startsWith('P') ? 12 : 0);
     }
     const baseYear = 2001;
     if (!isValidDate(baseYear, mo, d)) return NaN;
@@ -1720,13 +1732,13 @@ function parseMonthNameDateMs(cell) {
 }
 
 function parseTimeOfDay(cell) {
-    const t = String(cell ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP]M))?$/i);
+    const t = String(cell ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(?:\s*([AP])\.?(?:M\.?)?)?$/i);
     if (!t) return null;
     let H = +t[1];
     const ampm = t[5] ? String(t[5]).toUpperCase() : '';
     if (ampm) {
         if (H < 1 || H > 12) return null;
-        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+        H = (H % 12) + (ampm.startsWith('P') ? 12 : 0);
     }
     return {
         H,
