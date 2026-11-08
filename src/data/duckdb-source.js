@@ -1385,14 +1385,16 @@ export default class DuckDbSource {
         await this.init();
         const id = ++this._nextSinkId;
         // A result to be kept is written under the name of its key
-        // (keptResultTable): whatever had that name is stale.
+        // (keptResultTable): whatever had that name is stale — unless a file
+        // still reads it (a run whose listing failed), when this one gets a
+        // name of its own.
+        if (name && this._liveSinks.has(name)) name = null;
         const table = name || `${meta.baseTableName || meta.tableName}_sink_${id}`;
         const entries = Array.from({ length: Math.max(1, columns) }, (_, index) => sinkColumn(table, index));
         const rnColumn = name ? '__omv_sink_rn' : `__omv_sink_rn_${id}`;
         const definition = [`${quoteIdent(rnColumn)} BIGINT`, ...entries.map(entry => `${quoteIdent(entry.column)} DOUBLE`)].join(', ');
         await this._withConnectionLock(async () => {
             if (name) {
-                if (this._liveSinks.has(table)) throw new Error(`createSink: ${table} is in use`);
                 await this._conn.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
                 try { await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE table_name = ${sqlString(table)}`); } catch (_) { /* no catalog */ }
             }
@@ -1600,14 +1602,15 @@ export default class DuckDbSource {
         if (!columns?.length) throw new Error('createDatasetTable: no columns');
         await this.init();
         const id = ++this._nextSinkId;
-        // A dataset to be kept is written under the name of its key.
+        // A dataset to be kept is written under the name of its key (unless a
+        // file still reads a table of that name: then one of its own).
+        if (name && (this._liveSinks.has(name) || this._keptTablesInUse.has(name))) name = null;
         const table = name || `${meta.baseTableName || meta.tableName}_dataset_${id}`;
         const names = [timeColumn, ...columns];
         if (new Set(names).size !== names.length) throw new Error('createDatasetTable: duplicate column names');
         const definition = names.map(name => `${this._quoteIdent(name)} DOUBLE`).join(', ');
         await this._withConnectionLock(async () => {
             if (name) {
-                if (this._liveSinks.has(table) || this._keptTablesInUse.has(table)) throw new Error(`createDatasetTable: ${table} is in use`);
                 await this._conn.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
                 try { await this._conn.query(`DELETE FROM ${KEPT_RESULTS_CATALOG} WHERE table_name = ${sqlString(table)}`); } catch (_) { /* no catalog */ }
                 this._keptTableNames.delete(table);
