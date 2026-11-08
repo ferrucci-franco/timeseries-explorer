@@ -1,4 +1,4 @@
-import { asFloat64, normalizeMovingAverageWindow } from './shared.js';
+import { asFloat64, cloneKernelState, normalizeMovingAverageWindow } from './shared.js';
 
 // Centred moving average over a sliding window, skipping non-finite samples.
 //
@@ -40,6 +40,10 @@ export function computeMovingAverage(sourceValues, params = {}) {
  *     windowForLength(Infinity).
  *   · residual — give value − average instead of the average, NaN unless both
  *     are finite (the moving-average detrend). `used` counts those samples.
+ *
+ * `save()` gives a copy of the state and `load(state)` puts one back: a flush
+ * between the two leaves the object as it was before it, so a series that
+ * grows can be flushed for its outputs so far and pushed on (live update).
  *
  * Memory held: the samples of one window, plus the chunk being read.
  */
@@ -139,9 +143,14 @@ export function createMovingAverage(params = {}, options = {}) {
         return out;
     }
 
+    const state = () => ({ held, base, received, window, left, right, next, start, end, sum, count, used, done });
     return {
         push,
         flush: () => push(null, true),
+        save: () => cloneKernelState(state()),
+        load(saved) {
+            ({ held, base, received, window, left, right, next, start, end, sum, count, used, done } = cloneKernelState(saved));
+        },
         // Samples whose output is finite in residual mode — the detrend's fit
         // points. Final once flushed.
         get used() { return used; },

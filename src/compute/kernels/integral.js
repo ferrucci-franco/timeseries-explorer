@@ -256,5 +256,16 @@ export function createCumulativeIntegral(params = {}, { kind = 'numeric', gapThr
         hasNominalStep: sum ? false : hasNominalStep,
         timeKind: sum ? 'index' : kind,
     });
-    return { compute, report };
+    // The accumulator and the counts (see createMovingAverage on save/load).
+    const save = () => ({
+        acc, rows, prevSource, prevWork, prevTime, lastFinite, lastFiniteAt,
+        negativeDtCount, gapCount, nanSegmentCount, uncoveredTime,
+    });
+    const load = (s) => {
+        ({
+            acc, rows, prevSource, prevWork, prevTime, lastFinite, lastFiniteAt,
+            negativeDtCount, gapCount, nanSegmentCount, uncoveredTime,
+        } = s);
+    };
+    return { compute, report, save, load };
 }

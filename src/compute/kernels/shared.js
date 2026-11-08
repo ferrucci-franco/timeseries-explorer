@@ -23,6 +23,24 @@ export class DataToolError extends Error {
 // unboxed doubles — it is the per-element cost: the conversion pass itself, the
 // map check and hole check on every JSArray load, and the full extra copy that
 // was allocated on entry even when the caller already held a Float64Array.
+// A copy of a kernel's state that shares nothing with the kernel: a typed
+// array is copied (only the part a view covers, not the buffer behind it),
+// arrays and plain objects are copied through, the rest is taken as it is.
+// What save() and load() of the incremental kernels pass around, so that a
+// state saved once can be loaded any number of times (a file that grows by
+// live update continues from the same state at each append; see
+// src/data/chunk-executor.js).
+export function cloneKernelState(value) {
+    if (ArrayBuffer.isView(value)) return value.slice();
+    if (Array.isArray(value)) return value.map(cloneKernelState);
+    if (value && typeof value === 'object') {
+        const out = {};
+        for (const [key, item] of Object.entries(value)) out[key] = cloneKernelState(item);
+        return out;
+    }
+    return value;
+}
+
 export function asFloat64(values) {
     if (values instanceof Float64Array) return values;
     if (!values) return new Float64Array(0);

@@ -273,5 +273,10 @@ export function createInterarrival(params = {}, { kind = 'numeric', maxHoldRows 
             droppedIntervals,
             timeKind: kind,
         }),
+        // Every number it carries (see createMovingAverage on save/load).
+        save: () => ({ position, hasRef, ref, hasLast, lastTime, lastValue, risingCount, fallingCount, intervalCount, negativeDtCount, zeroDtCount, sumDt, minDt, maxDt, sumDy, sumRateDt, minRate, maxRate, minJump, maxJump, pending, dropping, droppedIntervals, done }),
+        load(saved) {
+            ({ position, hasRef, ref, hasLast, lastTime, lastValue, risingCount, fallingCount, intervalCount, negativeDtCount, zeroDtCount, sumDt, minDt, maxDt, sumDy, sumRateDt, minRate, maxRate, minJump, maxJump, pending, dropping, droppedIntervals, done } = saved);
+        },
     };
 }

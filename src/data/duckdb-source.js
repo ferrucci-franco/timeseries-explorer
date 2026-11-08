@@ -876,6 +876,13 @@ export default class DuckDbSource {
             sql = `SELECT __omv_raw_rn::DOUBLE AS rn, ${withTime ? `${tExpr}::DOUBLE` : 'CAST(NULL AS DOUBLE)'} AS t${values}`
                 + ` FROM ${from} WHERE ${tExpr} IS NOT NULL`;
         }
+        // From a file position on (a job continued over rows a live update
+        // appended): filtered outside, so a generated axis keeps numbering
+        // every row.
+        if (options.fromRow !== undefined && options.fromRow !== null) {
+            const fromRow = Math.max(0, Math.round(Number(options.fromRow) || 0));
+            sql = `SELECT * FROM (${sql}) WHERE rn >= ${fromRow}`;
+        }
         yield* this._streamSql(sql, (batches) => {
             const column = (idx) => this._joinedColumn(batches, idx);
             const yByVar = new Map();
@@ -1024,22 +1031,49 @@ export default class DuckDbSource {
      * writer's own (the shared one serves zooms meanwhile). Past the budget,
      * `write` throws an error with code SINK_BUDGET. `finish()` inserts the
      * rest and compacts the table; `abort()` drops it.
+     *
+     * With `fromRow` the writer rewrites an existing sink from that row on
+     * (a job continued over rows a live update appended,
+     * src/data/chunk-executor.js): the sink's rows from there are deleted and
+     * the new ones inserted in one transaction, so a query sees the sink
+     * before or after, never half of it; `abort()` rolls it back and leaves
+     * the sink as it was.
      */
-    openSinkWriter(legacyData, sink, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS } = {}) {
+    openSinkWriter(legacyData, sink, { chunkRows = STREAM_DEFAULT_CHUNK_ROWS, fromRow = null } = {}) {
         const nColumns = sink.columns.length;
         const bufferRows = Math.max(1, Math.round(Number(chunkRows) || STREAM_DEFAULT_CHUNK_ROWS));
+        const rewrite = Number.isFinite(Number(fromRow)) && fromRow !== null;
         let conn = null;
         let rn = new Float64Array(bufferRows);
         let values = Array.from({ length: nColumns }, () => new Float64Array(bufferRows));
         let buffered = 0;
-        let nextRow = 0;
+        // A rewrite starts at `fromRow`: what is deleted, and the next row.
+        const startRow = rewrite ? Math.max(0, Math.round(Number(fromRow))) : 0;
+        let nextRow = startRow;
         let closed = false;
+        let transaction = false;
+        const rowsBefore = sink.rows;
+
+        // The connection, and for a rewrite the transaction that deletes the
+        // rows from `fromRow` on before the first insert.
+        const open = async () => {
+            if (conn) return conn;
+            conn = await this._openStreamConnection();
+            if (rewrite) {
+                await conn.query('BEGIN TRANSACTION');
+                transaction = true;
+                await conn.query(`DELETE FROM ${sink.table} WHERE ${quoteIdent(sink.rnColumn)} >= ${startRow}`);
+                sink.rows = Math.min(sink.rows, startRow);
+                sink.bytes = this.sinkBytesFor(sink.rows, nColumns);
+            }
+            return conn;
+        };
 
         const insert = async () => {
             if (!buffered) return;
             const budget = this.sinkBudget();
             if (budget.used + this.sinkBytesFor(buffered, nColumns) > budget.limit) throw sinkBudgetError(budget);
-            conn ||= await this._openStreamConnection();
+            await open();
             const table = this._sinkArrowTable(sink, rn, values, buffered);
             await conn.insertArrowTable(table, { name: sink.table, create: false });
             sink.rows += buffered;
@@ -1050,6 +1084,8 @@ export default class DuckDbSource {
         };
         return {
             sink,
+            // The next file position the sink gets a row for.
+            nextRow: () => nextRow,
             write: async (rows, columns) => {
                 if (closed) throw new Error('sink writer: write after close');
                 let i = 0;
@@ -1082,22 +1118,42 @@ export default class DuckDbSource {
                 if (closed) return sink;
                 closed = true;
                 try {
+                    // A rewrite that wrote nothing still deletes the old tail.
+                    if (rewrite) await open();
                     await insert();
+                    if (transaction) {
+                        await conn.query('COMMIT');
+                        transaction = false;
+                    }
                     // Compacts what was written while the table grew
                     // (measured: 369 → 221 MB for 20M rows of a sine).
                     try { await conn?.query('CHECKPOINT'); } catch (_) { /* best effort */ }
                 } finally {
+                    if (transaction) {
+                        try { await conn.query('ROLLBACK'); } catch (_) { /* gone with the connection */ }
+                        transaction = false;
+                        sink.rows = rowsBefore;
+                        sink.bytes = this.sinkBytesFor(sink.rows, nColumns);
+                    }
                     await this._closeStreamConnection(conn);
                     conn = null;
                 }
                 this._clearRangeCacheForTable(legacyData?._duckdb?.tableName);
+                this._clearRangeCacheForTable(legacyData?._duckdb?.combinedViewName);
                 return sink;
             },
             abort: async () => {
                 closed = true;
+                if (transaction) {
+                    try { await conn.query('ROLLBACK'); } catch (_) { /* gone with the connection */ }
+                    transaction = false;
+                    sink.rows = rowsBefore;
+                    sink.bytes = this.sinkBytesFor(sink.rows, nColumns);
+                }
                 await this._closeStreamConnection(conn);
                 conn = null;
-                await this.dropSink(legacyData, sink.table);
+                // A rewrite leaves the sink as it was; a new sink goes.
+                if (!rewrite) await this.dropSink(legacyData, sink.table);
             },
         };
     }
