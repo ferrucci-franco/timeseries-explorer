@@ -120,6 +120,7 @@ class OpenModelicaViewer {
         // requested in the query (src/app/feedback-transport.js): that edition
         // transmits nothing itself, so the browser files the report for it.
         if (!DEMO_MODE) this.openFeedbackFromUrl?.();
+        this._syncGuideNewMark?.();
     }
 
     // ─── File management ───────────────────────────────────────────

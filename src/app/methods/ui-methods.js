@@ -68,6 +68,8 @@ const FEEDBACK_REFUSAL_KEYS = {
 // browser keeps the first download and silently drops the rest.
 const FEEDBACK_DOWNLOAD_GAP_MS = 150;
 
+const GUIDE_SEEN_KEY = 'omv_guide_seen';
+
 const HELP_TOPICS = [
     { section: '1', icon: 'compass', color: '#3b82f6' },
     { section: '2', icon: 'folder', color: '#f59e0b' },
@@ -3398,7 +3400,24 @@ proto._guideIsOffered = function() {
 proto.openGuide = function(chapterId) {
     if (!this._guideIsOffered()) return;
     if (!this._guide) this._guide = createGuide(this);
+    try {
+        globalThis.localStorage?.setItem(GUIDE_SEEN_KEY, '1');
+    } catch (_) { /* the dot comes back next visit */ }
+    this._syncGuideNewMark();
     this._guide.open(chapterId);
+};
+
+// The guide sits in the menu, behind a button that says nothing about it. Until
+// it has been opened once, a small dot on that button (and on the entry) says
+// there is something new to see there.
+proto._syncGuideNewMark = function() {
+    let seen = true;
+    if (this._guideIsOffered()) {
+        try {
+            seen = globalThis.localStorage?.getItem(GUIDE_SEEN_KEY) === '1';
+        } catch (_) { seen = true; }
+    }
+    document.documentElement.classList.toggle('guide-new', !seen);
 };
 
 proto.showHelp = function() {

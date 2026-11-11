@@ -36,6 +36,8 @@ try {
     await page.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'), null, { timeout: 60000 });
 
     // ── The way in: Menu → Animated guide, and from the Help window ──
+    // Until it has been opened once, a dot on the menu button says it is there.
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('guide-new')), true, 'a first visit is told about the guide');
     await page.click('#extra-menu-btn');
     await page.click('#extra-menu [data-action="extraGuide"]');
     await page.waitForSelector('.guide-back.open .guide-item');
@@ -45,6 +47,8 @@ try {
         GUIDE_CHAPTERS.map(chapter => chapter.t.en));
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.guide-back').count(), 0, 'Escape closes the guide');
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('guide-new')), false, 'once opened, the dot is gone');
+    assert.equal(await page.evaluate(() => localStorage.getItem('omv_guide_seen')), '1');
 
     await page.evaluate(() => window.app.showHelp());
     await page.click('.help-guide-link');

@@ -282,3 +282,26 @@ body.theme-dark .guide {
 /* The app inside the guide's frame (html.demo, src/app/demo-mode.js): the
    notices that slide in go to the top, because the captions are at the bottom. */
 html.demo body { overflow: hidden; }
+
+/* The guide not opened yet: a small dot on the menu button and on its entry. */
+html.guide-new #extra-menu-btn { position: relative; }
+html.guide-new #extra-menu-btn::after,
+html.guide-new #extra-menu [data-action="extraGuide"] .extra-menu-icon::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    box-shadow: 0 0 0 2px var(--bg-primary);
+    animation: guide-new 1.8s ease-in-out infinite;
+}
+html.guide-new #extra-menu [data-action="extraGuide"] .extra-menu-icon { position: relative; }
+html.guide-new #extra-menu [data-action="extraGuide"] .extra-menu-icon::after { top: -3px; right: -5px; width: 7px; height: 7px; }
+@keyframes guide-new { 50% { transform: scale(1.35); opacity: 0.65; } }
+@media (prefers-reduced-motion: reduce) {
+    html.guide-new #extra-menu-btn::after,
+    html.guide-new #extra-menu [data-action="extraGuide"] .extra-menu-icon::after { animation: none; }
+}

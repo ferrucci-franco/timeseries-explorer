@@ -16,6 +16,10 @@ That choice has three consequences worth knowing:
   (seeded, so every run shows the same curves); the one exception is a 175 KB
   PyPSA network under `public/examples/guide/`.
 
+Until the guide has been opened once, a small dot on the menu button (and on the
+entry) points at it; the only thing remembered is that it was opened
+(`omv_guide_seen` in the browser's storage).
+
 ## Files
 
 | File | What it is |
