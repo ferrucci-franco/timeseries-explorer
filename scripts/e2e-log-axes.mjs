@@ -201,7 +201,9 @@ try {
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.phaseTraces.length > 0
         && window.app.plotManager.plots.get(id).div?._fullLayout?.xaxis?._length > 0, panelId, { timeout: 30000 });
     await page.waitForTimeout(400);
-    await page.locator(`.layout-panel[data-id="${panelId}"] .phase2d-fit-toggle-btn`).click();
+    // Curve fit is a card of the 2D plot's Analysis menu.
+    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-analysis-menu-btn`).click();
+    await page.locator('.panel-analysis-menu .analysis-card[data-mark="phase2d-fit"]').click();
     await page.waitForFunction(id => !!document.querySelector(`.layout-panel[data-id="${id}"] .phase2d-fit-type-select`), panelId, { timeout: 30000 });
     await page.locator(`.layout-panel[data-id="${panelId}"] .phase2d-fit-type-select`).selectOption('power');
     await page.waitForFunction(id => (window.app.plotManager.plots.get(id)._phase2dFits || [])[0]?.fit?.model === 'power', panelId, { timeout: 30000 });

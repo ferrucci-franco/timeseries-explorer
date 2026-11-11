@@ -44,7 +44,25 @@ export const ANALYSIS_ART = {
         + '<path class="art-fill" d="M24 48V26c6-8 10-12 16-8s10 12 16 8 8-10 14-12v34z"/>'
         + '<path class="art-line" d="M10 38c6-4 10-8 14-12 6-8 10-12 16-8s10 12 16 8 8-10 14-12c6-2 10 2 16 6"/>'
         + '<path class="art-bound" d="M24 12v36M70 8v40"/>'),
+    // The analyses of a 2D plot. "None" is the 2D plot itself.
+    phase2d: art(
+        '<path class="art-faint" d="M8 6v42h82"/>'
+        + '<ellipse class="art-fill" cx="50" cy="27" rx="30" ry="13" transform="rotate(-22 50 27)"/>'
+        + '<ellipse class="art-line" cx="50" cy="27" rx="30" ry="13" transform="rotate(-22 50 27)"/>'),
+    // Two signals over time, and the r that says how they move together.
+    correlation: art(
+        '<path class="art-faint" d="M8 48h52"/>'
+        + '<path class="art-line" d="M10 22c6-10 10-10 16 0s10 10 16 0 10-10 16 0"/>'
+        + '<path class="art-line art-second" d="M10 36c6-10 10-10 16 0s10 10 16 0 10-10 16 0"/>'
+        + '<path class="art-faint" d="M70 6v42M66 27h24"/>'
+        + '<rect class="art-bar" x="73" y="9" width="12" height="18" rx="1.5"/>'),
+    // Points of a pair, and the curve fitted through them.
+    'phase2d-fit': art(
+        '<path class="art-faint" d="M8 6v42h82"/>'
+        + [[16, 42], [24, 37], [31, 39], [38, 31], [45, 30], [52, 24], [59, 23], [66, 17], [74, 15], [82, 10]]
+            .map(([x, y]) => `<circle class="art-point" cx="${x}" cy="${y}" r="2.6"/>`).join('')
+        + '<path class="art-line" d="M12 44C30 36 50 26 86 8"/>'),
 };
 
 // The key of the line under a card's name.
-export const analysisDescKey = id => `analysisDesc_${id === 'temporal-profile' ? 'profile' : id}`;
+export const analysisDescKey = id => `analysisDesc_${id === 'temporal-profile' ? 'profile' : id.replace(/-/g, '_')}`;

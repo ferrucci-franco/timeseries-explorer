@@ -25,6 +25,13 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 
+// The plot types are one button of the panel's toolbar and a gallery behind it.
+async function pickPlotType(page, panelId, key) {
+    await page.click(`.layout-panel[data-id="${panelId}"] .plot-type-btn`);
+    await page.click(`.panel-type-menu .analysis-card[data-mark="${key}"]`);
+    await page.waitForFunction(() => !document.querySelector('.panel-type-menu'));
+}
+
 const lines = ['time,temp,pressure,flow,state'];
 for (let i = 0; i < 300; i++) {
     lines.push(`${i / 10},${(20 + i * 0.01).toFixed(2)},${(1013 + i * 0.1).toFixed(2)},${(i % 7) * 0.5},${i % 2 ? 'ON' : 'OFF'}`);
@@ -63,7 +70,7 @@ try {
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, panelId);
 
     // ── A plot turned into a dashboard: its signals become cards ──
-    await page.click(`.layout-panel[data-id="${panelId}"] .mode-btn[data-mode="dashboard"]`);
+    await pickPlotType(page, panelId, 'dashboard');
     await page.waitForSelector('.dashboard-card');
     let c = await cards(page);
     assert.deepEqual(c.map(card => card.title), ['temp', 'pressure', 'flow'], 'the plot\'s signals, in order');
@@ -268,7 +275,7 @@ try {
 
     // ── Back to a plot: the signals, the text one as a state band ──
     const restoredId = await page.evaluate(() => document.querySelector('.layout-panel').dataset.id);
-    await page.click(`.layout-panel[data-id="${restoredId}"] .mode-btn[data-mode="timeseries"]`);
+    await pickPlotType(page, restoredId, 'timeseries');
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, restoredId);
     const traces = await page.evaluate(id => window.app.plotManager.plots.get(id).traces.map(t => t.varName), restoredId);
     assert.deepEqual(traces, ['pressure', 'flow', 'temp', 'state', 'temp_k'], 'the text signal comes back as a state band');
@@ -294,10 +301,12 @@ try {
     assert.deepEqual(await order(left), leftBefore, 'and so does the first one');
 
     // ── The dashboard's instant, as a line on the time plot beside it ──
-    await page.click(`.layout-panel[data-id="${right}"] .mode-btn[data-mode="timeseries"]`);
+    await pickPlotType(page, right, 'timeseries');
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, right);
-    const modeOrder = await page.$$eval(`.layout-panel[data-id="${left}"] .mode-btn`, buttons => buttons.map(b => b.dataset.mode));
-    assert.deepEqual(modeOrder.slice(0, 2), ['timeseries', 'dashboard'], 'the dashboard button next to the time series one');
+    await page.click(`.layout-panel[data-id="${left}"] .plot-type-btn`);
+    const modeOrder = await page.$$eval('.panel-type-menu .analysis-card', cards => cards.map(card => card.dataset.mark));
+    assert.deepEqual(modeOrder.slice(0, 2), ['timeseries', 'dashboard'], 'the dashboard card next to the time series one');
+    await page.keyboard.press('Escape');
     const markIn = id => page.evaluate(pid => {
         const plot = window.app.plotManager.plots.get(pid);
         const head = plot.div?.querySelector('svg.main-svg .dashboard-time-mark');
@@ -347,7 +356,7 @@ try {
         slider.value = '300';
         slider.dispatchEvent(new Event('input', { bubbles: true }));
     }, left);
-    await page.click(`.layout-panel[data-id="${left}"] .mode-btn[data-mode="timeseries"]`);
+    await pickPlotType(page, left, 'timeseries');
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, left);
     await page.waitForTimeout(100);
     assert.equal(await markIn(right), null, 'the other plot no longer shows it');

@@ -617,32 +617,38 @@ html.demo *{scroll-behavior:auto !important}`;
         }
     }
 
-    /**
-     * Press one of a panel's mode buttons: 'timeseries', 'dashboard', 'phase2d',
-     * 'phase2dt', 'phase3d', 'state-anim' (dim 2 or 3). A change that empties the
-     * panel asks first; the demo confirms.
-     */
-    async mode(mode, { dim = null, panelIndex = 0 } = {}) {
-        const panel = this.panel(panelIndex);
-        const selector = `.mode-btn[data-mode="${mode}"]${dim ? `[data-state-anim-dim="${dim}"]` : ''}`;
-        const button = panel?.querySelector(selector);
-        if (!button) throw new Error(`guide: no mode button ${mode}`);
-        await this.tap(button);
-        const confirm = () => panel.querySelector('.mode-change-warning-btn.confirm');
-        if (await this.until(confirm, 600)) {
-            await this.wait(700);
-            await this.tap(confirm());
-        }
-        await this.until(() => panel.querySelector(selector)?.classList.contains('active'), 3000);
-        await this.wait(250);
-    }
-
     /** Drag a variable from the tree onto a panel (ax, ay: where on the panel). */
     async plot(name, panelIndex = 0, { ax = 0.4, ay = 0.5, ...opts } = {}) {
         const item = await this.variable(name);
         const panel = this.panel(panelIndex);
         if (!panel) throw new Error(`guide: no panel ${panelIndex}`);
         await this.dragDrop({ el: item.querySelector('.tree-label') || item }, { el: panel, ax, ay }, { label: name.split('.').pop(), ...opts });
+    }
+
+    // Change what a panel draws: 'timeseries', 'dashboard', 'phase2d',
+    // 'phase2dt', 'phase3d', 'state-anim-2', 'state-anim-3'.
+    //
+    // THE ONE PLACE that knows where the plot types are in the toolbar: one
+    // button, and a gallery behind it.
+    async plotType(key, panelIndex = 0) {
+        const panel = this.panel(panelIndex);
+        const button = panel?.querySelector('.plot-type-btn');
+        if (!button) throw new Error('guide: no plot-type button');
+        await this.tap(button);
+        await this.until(() => this.$('.panel-type-menu'), 2000);
+        // The gallery is larger than the zoom on the toolbar: all of it in view.
+        if (this.guide.camR) await this.cam([button, this.$('.panel-type-menu')], 1.15, 700);
+        await this.wait(500);
+        const item = this.$(`.panel-type-menu .marks-menu-item[data-mark="${key}"]`);
+        if (!item) throw new Error(`guide: no plot type ${key}`);
+        await this.tap(item, { after: 200 });
+        // A change that empties the panel asks first: the demo confirms.
+        const confirm = () => this.panel(panelIndex)?.querySelector('.mode-change-warning-btn.confirm');
+        if (await this.until(confirm, 600)) {
+            await this.wait(700);
+            await this.tap(confirm());
+        }
+        await this.until(() => this.panel(panelIndex)?.querySelector('.plot-type-btn')?.dataset.plotType === key, 4000);
     }
 
     // Turn an analysis of a time-series panel on: 'fft', 'histogram', 'heatmap',

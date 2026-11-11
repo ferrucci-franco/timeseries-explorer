@@ -210,36 +210,20 @@ export const GUIDE_CHAPTERS = [
     },
 
     {
-        id: 'plot-types', g: 'plots', icon: '◫', est: 85000,
-        t: say('Seven ways to draw a panel', 'Sept façons de tracer un panneau', 'Siete formas de dibujar un panel', 'Sette modi di disegnare un pannello', '面板的七种绘图方式'),
+        id: 'time-dashboard', g: 'plots', icon: '▤', est: 32000,
+        t: say('Several signals, and the dashboard', 'Plusieurs signaux, et le tableau de bord', 'Varias señales, y el tablero', 'Più segnali, e la dashboard', '多个信号与仪表板'),
         d: say(
-            'The buttons at the left of a panel’s toolbar choose how it draws: signals against time <b>📈</b>, cards with their values (dashboard), one signal against another <b>2D</b>, the same with time <b>2D+t</b>, three signals <b>3D</b>, and the state moving with its derivative <b>▶x 2D</b>, <b>▶x 3D</b>. <b>Ctrl+click</b> in the tree selects several variables to drag at once.',
-            'Les boutons à gauche de la barre d’un panneau choisissent son tracé : les signaux en fonction du temps <b>📈</b>, des cartes avec leurs valeurs (tableau de bord), un signal en fonction d’un autre <b>2D</b>, la même chose avec le temps <b>2D+t</b>, trois signaux <b>3D</b>, et l’état qui bouge avec sa dérivée <b>▶x 2D</b>, <b>▶x 3D</b>. <b>Ctrl+clic</b> dans l’arbre sélectionne plusieurs variables à glisser ensemble.',
-            'Los botones a la izquierda de la barra de un panel eligen cómo dibuja: señales en función del tiempo <b>📈</b>, tarjetas con sus valores (tablero), una señal contra otra <b>2D</b>, lo mismo con el tiempo <b>2D+t</b>, tres señales <b>3D</b>, y el estado moviéndose con su derivada <b>▶x 2D</b>, <b>▶x 3D</b>. <b>Ctrl+clic</b> en el árbol selecciona varias variables para arrastrarlas juntas.',
-            'I pulsanti a sinistra della barra di un pannello scelgono come disegna: segnali nel tempo <b>📈</b>, schede con i loro valori (dashboard), un segnale contro un altro <b>2D</b>, lo stesso con il tempo <b>2D+t</b>, tre segnali <b>3D</b>, e lo stato in movimento con la sua derivata <b>▶x 2D</b>, <b>▶x 3D</b>. <b>Ctrl+clic</b> nell’albero seleziona più variabili da trascinare insieme.',
-            '面板工具栏左侧的按钮决定绘图方式：信号随时间变化 <b>📈</b>、带数值的卡片（仪表板）、一个信号对另一个信号 <b>2D</b>、加上时间的 <b>2D+t</b>、三个信号 <b>3D</b>，以及状态随其导数运动 <b>▶x 2D</b>、<b>▶x 3D</b>。在变量树中 <b>Ctrl+点击</b> 可选中多个变量一起拖动。',
+            '<b>Ctrl+click</b> in the tree selects several variables, and one drag puts them all on a panel. The <b>plot type</b> button of the panel turns the same signals into a <b>dashboard</b>: a card per signal with its value, the last one or the one at the instant of the slider.',
+            '<b>Ctrl+clic</b> dans l’arbre sélectionne plusieurs variables, et un seul glisser les met toutes sur un panneau. Le bouton du <b>type de graphique</b> transforme les mêmes signaux en <b>tableau de bord</b> : une carte par signal avec sa valeur, la dernière ou celle de l’instant du curseur.',
+            '<b>Ctrl+clic</b> en el árbol selecciona varias variables, y un solo arrastre las pone todas en un panel. El botón del <b>tipo de gráfico</b> convierte esas mismas señales en un <b>tablero</b>: una tarjeta por señal con su valor, el último o el del instante del deslizador.',
+            '<b>Ctrl+clic</b> nell’albero seleziona più variabili, e un solo trascinamento le mette tutte su un pannello. Il pulsante del <b>tipo di grafico</b> trasforma gli stessi segnali in una <b>dashboard</b>: una scheda per segnale con il suo valore, l’ultimo o quello dell’istante del cursore.',
+            '在变量树中 <b>Ctrl+点击</b> 可选中多个变量，一次拖动即可全部放到面板上。面板的<b>图表类型</b>按钮能把同样的信号变成<b>仪表板</b>：每个信号一张卡片，显示最新值或滑块所选时刻的值。',
         ),
         async setup(d) {
             await d.loadBundledResult('examples/lorenz-data.js', 'LorenzSystem_res.mat');
         },
         async run(d) {
             const panel = d.panel(0);
-            const group = panel.querySelector('.mode-btn-group');
-            await d.cam(group, 1.9, 800);
-            d.say(say(
-                'One panel, seven ways to draw it',
-                'Un panneau, sept façons de le tracer',
-                'Un panel, siete formas de dibujarlo',
-                'Un pannello, sette modi di disegnarlo',
-                '一个面板，七种画法',
-            ));
-            const buttons = Array.from(group.querySelectorAll('.mode-btn'));
-            await d.move(buttons[0]);
-            await d.move(buttons[buttons.length - 1], 1300);
-            await d.wait(300);
-
-            // Time series, with three signals dragged at once.
-            await d.cam(null, null, 800);
             d.say(say(
                 '<b>Ctrl+click</b> to select x, y and z…',
                 '<b>Ctrl+clic</b> pour sélectionner x, y et z…',
@@ -258,14 +242,26 @@ export const GUIDE_CHAPTERS = [
             await d.plot('x', 0, { label: 'x, y, z' });
             await d.until(() => panel.querySelector('.js-plotly-plot'), 5000);
             d.say(say(
-                '<b>📈</b> Each signal against time',
-                '<b>📈</b> Chaque signal en fonction du temps',
-                '<b>📈</b> Cada señal en función del tiempo',
-                '<b>📈</b> Ogni segnale nel tempo',
-                '<b>📈</b> 每个信号随时间变化',
+                'Three signals against time, in one drag',
+                'Trois signaux en fonction du temps, en un seul glisser',
+                'Tres señales en función del tiempo, en un solo arrastre',
+                'Tre segnali nel tempo, con un solo trascinamento',
+                '一次拖动，三个信号随时间变化',
             ));
-            await d.wait(2000);
+            await d.wait(2200);
 
+            const typeButton = panel.querySelector('.plot-type-btn');
+            await d.cam({ el: typeButton, ax: 0.5 }, 1.6, 700);
+            d.say(say(
+                'The <b>plot type</b>: what the panel draws',
+                'Le <b>type de graphique</b> : ce que dessine le panneau',
+                'El <b>tipo de gráfico</b>: qué dibuja el panel',
+                'Il <b>tipo di grafico</b>: che cosa disegna il pannello',
+                '<b>图表类型</b>：面板绘制什么',
+            ));
+            await d.wait(900);
+            await d.plotType('dashboard');
+            await d.cam(null, null, 800);
             d.say(say(
                 '<b>Dashboard</b>: a card per signal, with its value',
                 '<b>Tableau de bord</b> : une carte par signal, avec sa valeur',
@@ -273,18 +269,70 @@ export const GUIDE_CHAPTERS = [
                 '<b>Dashboard</b>: una scheda per segnale, con il suo valore',
                 '<b>仪表板</b>：每个信号一张卡片，显示其数值',
             ));
-            await d.mode('dashboard');
-            await d.wait(2400);
+            await d.until(() => panel.querySelector('.dashboard-card'), 4000);
+            await d.wait(2000);
 
-            // One signal against another.
+            const slider = panel.querySelector('.dashboard-slider');
+            if (slider) {
+                d.say(say(
+                    'The slider: the values at any instant',
+                    'Le curseur : les valeurs à n’importe quel instant',
+                    'El deslizador: los valores en cualquier instante',
+                    'Il cursore: i valori in qualsiasi istante',
+                    '滑块：任意时刻的数值',
+                ));
+                const lo = Number(slider.min || 0);
+                const hi = Number(slider.max || 100);
+                await d.slide(slider, lo + (hi - lo) * 0.35, { ms: 2200 });
+                await d.wait(1600);
+                const latest = panel.querySelector('.dashboard-latest-btn');
+                if (latest) {
+                    d.say(say(
+                        '<b>Latest</b>: back to the last value read',
+                        '<b>Dernière</b> : retour à la dernière valeur lue',
+                        '<b>Último</b>: vuelve al último valor leído',
+                        '<b>Ultimo</b>: torna all’ultimo valore letto',
+                        '<b>最新</b>：回到最新读数',
+                    ));
+                    await d.tap(latest);
+                    await d.wait(1600);
+                }
+            }
+        },
+    },
+
+    {
+        id: 'phase-plots', g: 'plots', icon: '◎', est: 60000,
+        t: say('Phase plots: 2D, 2D+t, 3D, ▶x', 'Plans de phase : 2D, 2D+t, 3D, ▶x', 'Diagramas de fase: 2D, 2D+t, 3D, ▶x', 'Diagrammi di fase: 2D, 2D+t, 3D, ▶x', '相图：2D、2D+t、3D、▶x'),
+        d: say(
+            'The <b>plot type</b> button also draws signals against each other: one against another <b>2D</b>, the same curve along time <b>2D+t</b>, three signals in space <b>3D</b>, and the state moving with its derivative <b>▶x 2D</b>, <b>▶x 3D</b>. Variables selected with <b>Ctrl+click</b> fill X, Y, Z in the order they were picked.',
+            'Le bouton du <b>type de graphique</b> trace aussi des signaux l’un contre l’autre : un en fonction d’un autre <b>2D</b>, la même courbe dans le temps <b>2D+t</b>, trois signaux dans l’espace <b>3D</b>, et l’état qui bouge avec sa dérivée <b>▶x 2D</b>, <b>▶x 3D</b>. Les variables choisies au <b>Ctrl+clic</b> remplissent X, Y, Z dans l’ordre de sélection.',
+            'El botón del <b>tipo de gráfico</b> también dibuja señales unas contra otras: una contra otra <b>2D</b>, la misma curva a lo largo del tiempo <b>2D+t</b>, tres señales en el espacio <b>3D</b>, y el estado moviéndose con su derivada <b>▶x 2D</b>, <b>▶x 3D</b>. Las variables elegidas con <b>Ctrl+clic</b> llenan X, Y, Z en el orden en que se eligieron.',
+            'Il pulsante del <b>tipo di grafico</b> disegna anche segnali l’uno contro l’altro: uno contro un altro <b>2D</b>, la stessa curva lungo il tempo <b>2D+t</b>, tre segnali nello spazio <b>3D</b>, e lo stato in movimento con la sua derivata <b>▶x 2D</b>, <b>▶x 3D</b>. Le variabili scelte con <b>Ctrl+clic</b> riempiono X, Y, Z nell’ordine in cui sono state scelte.',
+            '<b>图表类型</b>按钮还能把信号相互对照绘制：一个对另一个 <b>2D</b>、同一曲线沿时间展开 <b>2D+t</b>、三个信号构成空间曲线 <b>3D</b>，以及状态随其导数运动 <b>▶x 2D</b>、<b>▶x 3D</b>。用 <b>Ctrl+点击</b> 选中的变量按选择顺序填入 X、Y、Z。',
+        ),
+        async setup(d) {
+            await d.loadBundledResult('examples/lorenz-data.js', 'LorenzSystem_res.mat');
+        },
+        async run(d) {
+            const panel = d.panel(0);
+            await d.cam({ el: panel.querySelector('.plot-type-btn'), ax: 0.5 }, 1.6, 700);
             d.say(say(
-                '<b>2D</b>: one signal against another — X, then Y',
-                '<b>2D</b> : un signal en fonction d’un autre — X, puis Y',
-                '<b>2D</b>: una señal contra otra — X y luego Y',
-                '<b>2D</b>: un segnale contro un altro — X, poi Y',
-                '<b>2D</b>：一个信号对另一个信号——先 X 后 Y',
+                '<b>Plot type</b> → <b>2D</b>: one signal against another',
+                '<b>Type de graphique</b> → <b>2D</b> : un signal en fonction d’un autre',
+                '<b>Tipo de gráfico</b> → <b>2D</b>: una señal contra otra',
+                '<b>Tipo di grafico</b> → <b>2D</b>: un segnale contro un altro',
+                '<b>图表类型</b> → <b>2D</b>：一个信号对另一个信号',
             ));
-            await d.mode('phase2d');
+            await d.plotType('phase2d');
+            await d.cam(null, null, 700);
+            d.say(say(
+                'Select X, then Y — x and z — and drag',
+                'Sélectionnez X, puis Y — x et z — et glissez',
+                'Elija X y luego Y — x y z — y arrastre',
+                'Scegli X, poi Y — x e z — e trascina',
+                '先选 X 再选 Y——x 和 z——然后拖动',
+            ));
             await d.select(['x', 'z']);
             await d.plot('x', 0, { label: 'x, z' });
             await d.until(() => panel.querySelector('.js-plotly-plot'), 5000);
@@ -295,7 +343,7 @@ export const GUIDE_CHAPTERS = [
                 'La farfalla dell’attrattore di Lorenz',
                 '洛伦兹吸引子的“蝴蝶”',
             ));
-            await d.wait(1800);
+            await d.wait(2000);
 
             d.say(say(
                 '<b>2D+t</b>: the same curve, unrolled along time',
@@ -304,7 +352,8 @@ export const GUIDE_CHAPTERS = [
                 '<b>2D+t</b>: la stessa curva, srotolata nel tempo',
                 '<b>2D+t</b>：同一条曲线沿时间展开',
             ));
-            await d.mode('phase2dt');
+            await d.plotType('phase2dt');
+            await d.cam(null, null, 600);
             await d.plot('x', 0, { label: 'x, z' });
             await d.until(() => panel.querySelector('.js-plotly-plot'), 5000);
             await d.wait(2000);
@@ -316,7 +365,8 @@ export const GUIDE_CHAPTERS = [
                 '<b>3D</b>: tre segnali — x, y, z',
                 '<b>3D</b>：三个信号——x、y、z',
             ));
-            await d.mode('phase3d');
+            await d.plotType('phase3d');
+            await d.cam(null, null, 600);
             await d.select(['x', 'y', 'z']);
             await d.plot('x', 0, { label: 'x, y, z' });
             await d.until(() => panel.querySelector('.js-plotly-plot'), 5000);
@@ -330,7 +380,7 @@ export const GUIDE_CHAPTERS = [
             await d.wait(500);
             const scene = panel.querySelector('.js-plotly-plot');
             await d.drag({ el: scene, ax: 0.42, ay: 0.55 }, [{ el: scene, ax: 0.62, ay: 0.5 }], { ms: 1400 });
-            await d.wait(1200);
+            await d.wait(1000);
 
             d.say(say(
                 '<b>▶x 3D</b>: the state moving, with its derivative',
@@ -339,12 +389,13 @@ export const GUIDE_CHAPTERS = [
                 '<b>▶x 3D</b>: lo stato in movimento, con la sua derivata',
                 '<b>▶x 3D</b>：运动中的状态及其导数',
             ));
-            await d.mode('state-anim', { dim: 3 });
+            await d.plotType('state-anim-3');
+            await d.cam(null, null, 600);
             await d.plot('x', 0, { label: 'x, y, z' });
             await d.until(() => panel.querySelector('.js-plotly-plot'), 5000);
-            await d.wait(700);
+            await d.wait(600);
             const play = panel.querySelector('.sa-play-btn');
-            if (play && !/pause|⏸/i.test(play.textContent + play.className)) {
+            if (play) {
                 d.say(say(
                     '<b>▶</b> plays the trajectory: <b>ẋ</b> is the arrow',
                     '<b>▶</b> joue la trajectoire : <b>ẋ</b> est la flèche',
@@ -358,7 +409,6 @@ export const GUIDE_CHAPTERS = [
             await d.wait(3600);
         },
     },
-
     {
         id: 'fft', g: 'analysis', icon: '∿', est: 34000,
         t: say('Frequency spectrum (FFT)', 'Spectre de fréquence (FFT)', 'Espectro de frecuencia (FFT)', 'Spettro di frequenza (FFT)', '频谱 (FFT)'),
@@ -627,7 +677,7 @@ export const GUIDE_CHAPTERS = [
                 '<b>2D</b>: un diagramma di fase — rilascia X, poi Y',
                 '<b>2D</b>：相图——先拖入 X，再拖入 Y',
             ));
-            await d.tap(d.panel(1).querySelector('.mode-btn[data-mode="phase2d"]'));
+            await d.plotType('phase2d', 1);
             await d.wait(500);
             await d.plot('theta', 1, { ax: 0.5 });
             await d.plot('omega', 1, { ax: 0.5 });
