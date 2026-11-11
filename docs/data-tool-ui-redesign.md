@@ -283,3 +283,32 @@ tool's own source picker, and the session snapshot
   `data-tool-*`.
 - **The self-disabling live-chain checkbox (§6.1) is not implemented.** It waits
   for the slowness to be observed rather than predicted.
+
+## 10. The tool gallery (added later)
+
+The "Tool" dropdown of §3 is no longer what the user sees. In its place the
+side panel shows the tools as tiles, in the four families of the phone's hub
+(clean, calculus, smooth and filter, resample and compare), each with its
+drawing and its family's colour. The catalogue — families, drawings,
+description keys — is shared with the phone in
+[data-tool-catalog.js](../src/app/data-tool-catalog.js); the gallery itself is
+[data-tool-gallery-methods.js](../src/app/methods/data-tool-gallery-methods.js).
+
+- **Two densities**, switched by the button in the section's header and kept
+  in `localStorage`: tiles with names, or drawings only. The first time, a
+  window under 800 px high gets the drawings, so the gallery does not push the
+  rest of the panel out of a 1366 × 768 screen.
+- **Pointing at a tile** (or reaching it with the keyboard) shows a card beside
+  the panel: name, family, the one line that says what the tool does, and, when
+  the tile is off, why (no file loaded, or a file in memory-saving mode).
+- **Opening a tool** folds the gallery into a header (drawing, name, family,
+  description, and ✕ to go back); the form of §3 unfolds under it unchanged.
+- **Width**: three tiles per row at the usual panel width, two under ~230 px,
+  and the families two abreast once the panel is dragged past ~450 px.
+
+The `<select id="data-tool-select">` is still in the page, off screen, and is
+still the only holder of which tool is open: a tile sets it and fires its
+`change`. Everything that writes it (editing a transformation, the phone's
+pages, the tests) therefore moves the gallery without knowing it exists;
+`_syncDataToolGallery()` redraws from it at each `_syncDataTools()`.
+`npm run e2e:data-tool-gallery` covers it.

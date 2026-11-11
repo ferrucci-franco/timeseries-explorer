@@ -4293,6 +4293,7 @@ proto._updateActionButtons = function() {
                 this._syncDataTools?.();
             }
         }
+        this._syncDataToolGallery?.();
     }
     this._updateLiveUpdateTopBar?.();
     const reloadModeToggle = document.getElementById('reload-as-version-toggle');

@@ -295,6 +295,7 @@ proto.initDataTools = function() {
         this._renderDataToolTable();
     });
 
+    this._initDataToolGallery?.();
     this._syncDataTools();
 };
 
@@ -400,6 +401,7 @@ proto._syncDataTools = function() {
     }
     const editing = this._dataToolEditing || null;
     this._syncDataToolPickerOptions(lazy);
+    this._syncDataToolGallery?.();
 
     const tool = this._getSelectedDataTool();
     const hasTool = !!tool;
