@@ -84,6 +84,7 @@ expected duration in milliseconds, for the progress bar of the first run.
 | `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. |
 | `d.plot(name, panelIndex)` | Drag a variable from the tree onto a panel. |
 | `d.folder(label)` | Open or close a folder of the tree. |
+| `d.plotType(key, panelIndex)` | Change what a panel draws: `'timeseries'`, `'dashboard'`, `'phase2d'`, `'phase2dt'`, `'phase3d'`, `'state-anim-2'`, `'state-anim-3'`. |
 | `d.analysis(mode, panelIndex)` | Turn an analysis on: `'fft'`, `'histogram'`, `'heatmap'`, `'temporal-profile'`, `'integral'`. |
 | `d.choose(select, value)` | Pick in a drop-down list (a look-alike list is drawn, since a script cannot open the browser's own). |
 | `d.slide(rangeInput, value)` | Drag a slider. |
@@ -94,7 +95,7 @@ expected duration in milliseconds, for the progress bar of the first run.
 
 `d.analysis()` is the only place that knows where the analyses are in a panel's
 toolbar. When that part of the toolbar is redesigned, change it there and both
-analysis demos follow.
+analysis demos follow. `d.plotType()` is the same for the plot types.
 
 Prefer selectors that do not depend on the language: a class, a `data-` attribute,
 the `value` of an option (`listWith(root, 'hann')`), never a label.

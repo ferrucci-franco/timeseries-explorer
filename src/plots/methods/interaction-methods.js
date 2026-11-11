@@ -4723,7 +4723,6 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     const phase2dFamilyModes = new Set(['phase2d', 'correlation']);
     const isTimeseriesFamily = timeseriesFamilyModes.has(currentMode);
     const isPhase2dFamily = phase2dFamilyModes.has(currentMode);
-    const activePrimaryMode = isTimeseriesFamily ? 'timeseries' : (isPhase2dFamily ? 'phase2d' : currentMode);
     const createAutoscaleButton = () => {
         const button = document.createElement('button');
         button.className = 'layout-toolbar-btn panel-action-btn view-btn panel-autoscale-btn';
@@ -4766,34 +4765,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     const modeGroup = document.createElement('div');
     modeGroup.className = 'mode-btn-group';
 
-    // The dashboard sits next to the time series: the two show the same
-    // signals, and a panel goes from one to the other keeping them. Its icon
-    // is a gauge, in currentColor so it turns white when the mode is on.
-    const DASHBOARD_MODE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4.5 17.5a8 8 0 1 1 15 0"/><path d="M12 14.5l4-5"/><circle cx="12" cy="14.5" r="1.3" fill="currentColor"/></svg>';
-    const modes = [
-        { id: 'timeseries', label: '📈', titleKey: 'modeTimeseries' },
-        { id: 'dashboard',  icon: DASHBOARD_MODE_ICON, titleKey: 'modeDashboard' },
-        { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
-        { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
-        { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
-        { id: 'state-anim', label: '▶x 2D',  titleKey: 'modeStateAnim2d', stateAnimDim: 2 },
-        { id: 'state-anim', label: '▶x 3D',  titleKey: 'modeStateAnim3d', stateAnimDim: 3 },
-    ];
-    modes.forEach(m => {
-        const btn = document.createElement('button');
-        const isActive = m.id === activePrimaryMode && (m.id !== 'state-anim' || (plot?.stateAnimDim || 2) === m.stateAnimDim);
-        btn.className = 'layout-toolbar-btn mode-btn' + (m.icon ? ' mode-btn-icon' : '') + (isActive ? ' active' : '');
-        if (m.icon) btn.innerHTML = m.icon;
-        else btn.textContent = m.label;
-        btn.dataset.mode = m.id;
-        if (m.stateAnimDim) btn.dataset.stateAnimDim = String(m.stateAnimDim);
-        btn.title = i18n.t(m.titleKey);
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._requestModeChange(panelId, m.id, m.stateAnimDim || null);
-        });
-        modeGroup.appendChild(btn);
-    });
+    // One button that names the type that is on, and opens the gallery of
+    // types (marks-methods.js, plot-type-gallery.js).
+    modeGroup.appendChild(this._createPlotTypeButton(panelId, plot, currentMode));
     toolbar.appendChild(modeGroup);
 
     // A dashboard has nothing to zoom, measure, compare or listen to: its own
@@ -4863,34 +4837,11 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         viewGroup.appendChild(this._createViewButton(panelId, plot));
     }
 
-    // Correlation is an analysis toggle of the 2D/pair family (shares the pair
-    // list). Appended AFTER the 2D Display controls (below) so it reads as its
-    // own toggle, not as a label for the Display dropdown.
-    let phase2dCorrelationBtn = null;
-    if (isPhase2dFamily) {
-        const corrActive = currentMode === 'correlation';
-        phase2dCorrelationBtn = document.createElement('button');
-        phase2dCorrelationBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn correlation-toggle-btn' + (corrActive ? ' active' : '');
-        phase2dCorrelationBtn.textContent = i18n.t('modeCorrelationLabel');
-        phase2dCorrelationBtn.title = i18n.t('modeCorrelation');
-        phase2dCorrelationBtn.setAttribute('aria-pressed', String(corrActive));
-        phase2dCorrelationBtn.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this._toggleCorrelationMode(panelId);
-        });
-    }
+    // Correlation and Curve fit: the 2D plot's Analysis menu, after View, the
+    // same button and gallery the time series has.
+    if (isPhase2dFamily) viewGroup.appendChild(this._createAnalysisButton(panelId, plot));
 
     toolbar.appendChild(viewGroup);
-
-    // Analysis toggles (Correlation + Curve Fit) grouped behind their own
-    // coloured separator so they read as analyses, not Display options.
-    if (isPhase2dFamily) {
-        const analysisGroup = document.createElement('div');
-        analysisGroup.className = 'phase2d-analysis-group';
-        if (phase2dCorrelationBtn) analysisGroup.appendChild(phase2dCorrelationBtn);
-        this._injectPhase2dFitToggle?.(panelId, analysisGroup, plot);
-        if (analysisGroup.childElementCount) toolbar.appendChild(analysisGroup);
-    }
 
     // Compare (overlay traces from other files) — left of CSV
     const compareBtn = document.createElement('button');
@@ -5079,14 +5030,7 @@ proto._dismissModeChangeWarning = function(panelId) {
 proto._updateModeButtons = function(panelEl, activeMode) {
     const panelId = panelEl.dataset.id;
     const plot = panelId ? this.plots.get(panelId) : null;
-    const activePrimaryMode = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(activeMode)
-        ? 'timeseries'
-        : activeMode;
-    panelEl.querySelectorAll('.mode-btn').forEach(btn => {
-        const mode = btn.dataset.mode;
-        const dim = btn.dataset.stateAnimDim ? Number(btn.dataset.stateAnimDim) : null;
-        btn.classList.toggle('active', mode === activePrimaryMode && (!dim || dim === (plot?.stateAnimDim || 2)));
-    });
+    this._applyPlotTypeButtonState(plot, panelEl.querySelector('.plot-type-btn'), activeMode);
     this._applyAnalysisButtonState(plot, panelEl.querySelector('.timeseries-analysis-menu-btn'));
 };
 
@@ -5428,7 +5372,7 @@ proto._placeSamplesPill = function(panelEl, pill) {
     pill.style.left = '';
     pill.style.top = '';
     pill.style.transform = '';
-    const menu = document.querySelector('.timeseries-marks-menu:not(.panel-view-menu):not(.panel-analysis-menu)');
+    const menu = document.querySelector('.timeseries-marks-menu:not(.panel-view-menu):not(.panel-gallery-menu)');
     if (!menu?.isConnected) return;
     const menuRect = menu.getBoundingClientRect();
     const pillRect = pill.getBoundingClientRect();

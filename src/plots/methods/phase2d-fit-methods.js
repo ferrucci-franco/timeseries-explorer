@@ -111,34 +111,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return plot.pairDisplay3D[mode];
     };
 
-    // "Curve Fit" toolbar toggle (TODO 10) — a press/release button like the
-    // Correlation toggle (blue when active), not a dropdown. Turning it on opens
-    // the FFT-like fit workspace; the per-pair model lives inside the drawer.
-    // Shown across the phase2d family so it is always available: clicking it from
-    // Correlation switches back to 2D and opens the workspace.
-    proto._injectPhase2dFitToggle = function(panelId, container, plot) {
-        if (!container || (plot?.mode !== 'phase2d' && plot?.mode !== 'correlation')) return;
-        const state = this._ensurePhase2dState(plot);
-        const active = plot.mode === 'phase2d' && state.fitEnabled;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn phase2d-fit-toggle-btn' + (active ? ' active' : '');
-        btn.textContent = i18n.t('phase2dFitToggleLabel');
-        btn.title = i18n.t('phase2dFitTooltip');
-        btn.setAttribute('aria-pressed', String(active));
-        btn.addEventListener('click', (event) => {
-            event.stopPropagation();
-            if (plot.mode === 'correlation') {
-                // Leave Correlation and open the fit workspace in 2D.
-                this._ensurePhase2dState(plot).fitEnabled = true;
-                this._setMode(panelId, 'phase2d');
-            } else {
-                this._togglePhase2dFit(panelId);
-            }
-        });
-        container.appendChild(btn);
-    };
-
     proto._setPhase2dDisplayMode = function(panelId, displayMode) {
         const plot = this.plots.get(panelId);
         if (!plot || !DISPLAY_MODES.has(plot.mode)) return;
@@ -458,14 +430,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         }
     };
 
-    // Sync the toolbar Curve Fit toggle button's pressed/active look.
+    // The fit is not a mode, so the Analysis button that names it is told here.
     proto._syncPhase2dFitToggleBtn = function(panelId, plot) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-        const btn = panelEl?.querySelector('.phase2d-fit-toggle-btn');
-        if (!btn) return;
-        const active = plot.mode === 'phase2d' && this._ensurePhase2dState(plot).fitEnabled;
-        btn.classList.toggle('active', active);
-        btn.setAttribute('aria-pressed', String(active));
+        this._applyAnalysisButtonState?.(plot, panelEl?.querySelector('.timeseries-analysis-menu-btn'));
     };
 
     // Set the fit model of the drawer's ACTIVE pair (None/Linear/Quadratic) and

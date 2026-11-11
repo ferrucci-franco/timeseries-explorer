@@ -602,6 +602,26 @@ html.demo *{scroll-behavior:auto !important}`;
         await this.dragDrop({ el: item.querySelector('.tree-label') || item }, { el: panel, ax, ay }, { label: name.split('.').pop(), ...opts });
     }
 
+    // Change what a panel draws: 'timeseries', 'dashboard', 'phase2d',
+    // 'phase2dt', 'phase3d', 'state-anim-2', 'state-anim-3'.
+    //
+    // THE ONE PLACE that knows where the plot types are in the toolbar: one
+    // button, and a gallery behind it.
+    async plotType(key, panelIndex = 0) {
+        const panel = this.panel(panelIndex);
+        const button = panel?.querySelector('.plot-type-btn');
+        if (!button) throw new Error('guide: no plot-type button');
+        await this.tap(button);
+        await this.until(() => this.$('.panel-type-menu'), 2000);
+        // The gallery is larger than the zoom on the toolbar: all of it in view.
+        if (this.guide.camR) await this.cam([button, this.$('.panel-type-menu')], 1.15, 700);
+        await this.wait(500);
+        const item = this.$(`.panel-type-menu .marks-menu-item[data-mark="${key}"]`);
+        if (!item) throw new Error(`guide: no plot type ${key}`);
+        await this.tap(item, { after: 200 });
+        await this.until(() => this.panel(panelIndex)?.querySelector('.plot-type-btn')?.dataset.plotType === key, 4000);
+    }
+
     // Turn an analysis of a time-series panel on: 'fft', 'histogram', 'heatmap',
     // 'temporal-profile', 'integral'; 'timeseries' turns it off.
     //

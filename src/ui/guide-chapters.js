@@ -476,7 +476,7 @@ export const GUIDE_CHAPTERS = [
                 '<b>2D</b>: un diagramma di fase — rilascia X, poi Y',
                 '<b>2D</b>：相图——先拖入 X，再拖入 Y',
             ));
-            await d.tap(d.panel(1).querySelector('.mode-btn[data-mode="phase2d"]'));
+            await d.plotType('phase2d', 1);
             await d.wait(500);
             await d.plot('theta', 1, { ax: 0.5 });
             await d.plot('omega', 1, { ax: 0.5 });
