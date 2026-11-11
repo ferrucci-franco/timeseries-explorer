@@ -19,6 +19,7 @@ import {
     normalizeLayoutOverride,
     shouldUseCompactLayout,
 } from '../../ui/compact-layout.js';
+import { DEMO_MODE } from '../demo-mode.js';
 import { button, el, section } from './compact-dom.js';
 import {
     COMPACT_ANALYSES,
@@ -170,6 +171,7 @@ export function installCompactMethods(ViewerClass) {
     proto.initCompactLayout = function() {
         let override = 'auto';
         try {
+            if (DEMO_MODE) throw new Error('demo');
             const stored = normalizeLayoutOverride(globalThis.localStorage?.getItem(LAYOUT_OVERRIDE_STORAGE_KEY));
             // A "Desktop" saved on a large window (by an earlier version) is
             // let go of here, so the window switches by its size again.
@@ -177,6 +179,8 @@ export function installCompactMethods(ViewerClass) {
             override = layoutOverrideToStore(stored, width, height);
             if (override !== stored) globalThis.localStorage?.removeItem(LAYOUT_OVERRIDE_STORAGE_KEY);
         } catch (_) { /* no storage: automatic */ }
+        // The guide's frame shows the desktop layout whatever the screen.
+        if (DEMO_MODE) override = 'full';
         this._compact = {
             active: false,
             landscape: false,

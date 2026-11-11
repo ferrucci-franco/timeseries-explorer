@@ -10,6 +10,7 @@
 //
 // The FFT pane is not touched by any of this: it keeps _missingDataInfo and the
 // classic detector (fft-methods.js), which its uniformity checks rely on.
+import { DEMO_MODE } from '../../app/demo-mode.js';
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
 import {
@@ -54,6 +55,9 @@ const REPEATED_STRIP_FRACTION = 0.015;
 const ANALYSIS_DISCOVERED_KEY = 'omv.analysisMenu.discovered';
 let analysisNudgeShown = false;
 const analysisDiscovered = () => {
+    // The animated guide's frame keeps nothing and shows the button as it is
+    // once known (src/app/demo-mode.js).
+    if (DEMO_MODE) return true;
     try { return globalThis.localStorage?.getItem(ANALYSIS_DISCOVERED_KEY) === '1'; } catch { return true; }
 };
 
@@ -1272,7 +1276,9 @@ export function installPlotMarksMethods(TargetClass) {
     };
 
     proto._analysisButtonDiscovered = function() {
-        try { globalThis.localStorage?.setItem(ANALYSIS_DISCOVERED_KEY, '1'); } catch { /* not kept */ }
+        if (!DEMO_MODE) {
+            try { globalThis.localStorage?.setItem(ANALYSIS_DISCOVERED_KEY, '1'); } catch { /* not kept */ }
+        }
         globalThis.document?.querySelectorAll?.('.timeseries-analysis-menu-btn.analysis-nudge')
             .forEach(button => button.classList.remove('analysis-nudge'));
     };

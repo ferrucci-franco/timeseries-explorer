@@ -1,3 +1,4 @@
+import { DEMO_MODE } from '../demo-mode.js';
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import CsvParsingPreviewDialog from '../../ui/csv-parsing-preview-dialog.js';
@@ -4023,6 +4024,8 @@ proto._canUseParserWorker = function() {
 
 proto._canUseDuckDb = function() {
     if (globalThis.__OMV_PORTABLE__ === true) return false;
+    // The guide's frame: see src/app/demo-mode.js.
+    if (DEMO_MODE) return false;
     if (this._duckdbDisabled) return false;
     if (typeof window === 'undefined') return false;
     if (typeof Worker === 'undefined') return false;
