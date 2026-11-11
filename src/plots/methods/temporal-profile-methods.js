@@ -1,5 +1,7 @@
 import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
+import { appendCopyButton } from '../../ui/copy-button.js';
+import { blockText } from '../../utils/clipboard.js';
 import Plotly from '../../vendor/plotly.js';
 import {
     buildTemporalProfile,
@@ -1676,6 +1678,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     }), text('temporalProfileDiscardTip'));
 
     section(text('temporalProfileSummary'));
+    appendCopyButton(options.lastElementChild, () => blockText(summary));
     const summary = document.createElement('div');
     summary.className = 'hist-summary temporal-profile-summary';
     options.appendChild(summary);

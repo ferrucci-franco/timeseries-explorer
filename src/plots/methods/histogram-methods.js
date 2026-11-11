@@ -1,5 +1,7 @@
 import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
+import { appendCopyButton } from '../../ui/copy-button.js';
+import { blockText } from '../../utils/clipboard.js';
 import Plotly from '../../vendor/plotly.js';
 import {
     HISTOGRAM_AUTO_MAX_BINS,
@@ -1288,6 +1290,7 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
 
     // Sample summary.
     section('histogramSummary');
+    appendCopyButton(options.lastElementChild, () => blockText(summaryBox));
     const summaryBox = document.createElement('div');
     summaryBox.className = 'hist-summary';
     options.appendChild(summaryBox);

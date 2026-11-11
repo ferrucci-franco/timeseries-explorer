@@ -1,5 +1,6 @@
 import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
+import { tableText } from '../utils/clipboard.js';
 import Plotly, { onPlotDrawn } from '../vendor/plotly.js';
 import { installLegendToggle, resetLegendToggles, syncAllLegendToggles } from '../ui/legend-toggle.js';
 import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
@@ -1152,8 +1153,7 @@ class PlotManager {
             const p = this.plots.get(panelId);
             const hasPending = p && p.div && p.mode !== 'timeseries' && p.phasePending && p.phasePending.x;
             if (hasPending) {
-                overlay.classList.add('active', 'pending');
-                overlay.innerHTML = `<span>${this._dropMessage(panelId)}</span>`;
+                this._fillPendingOverlay(panelId, overlay, this._dropMessage(panelId));
             } else {
                 overlay.classList.remove('active', 'pending');
             }
@@ -1439,14 +1439,53 @@ class PlotManager {
             const message = !this.compactLayout || !pending.x ? this._dropMessage(panelId)
                 : pending.y ? i18n.t('compactPendingZ').replace('{x}', pending.x).replace('{y}', pending.y)
                 : i18n.t('compactPendingY').replace('{x}', pending.x);
-            overlay.innerHTML = '';
-            const span = document.createElement('span');
-            span.textContent = message;
-            overlay.appendChild(span);
-            overlay.classList.add('active', 'pending');
+            this._fillPendingOverlay(panelId, overlay, message);
         } else {
             overlay.classList.remove('active', 'pending');
         }
+    }
+
+    /**
+     * The pending hint: what to drop next, and a way out. Without the Cancel
+     * the only way to give up a half-built pair was to drop something and
+     * delete the trace it made, or to clear the whole panel.
+     */
+    _fillPendingOverlay(panelId, overlay, message) {
+        overlay.innerHTML = '';
+        const span = document.createElement('span');
+        span.textContent = message;
+        overlay.appendChild(span);
+        // The phone layout has its own Cancel in the banner above the plot.
+        if (!this.compactLayout) overlay.appendChild(this._pendingCancelButton(panelId));
+        overlay.classList.add('active', 'pending');
+    }
+
+    _pendingCancelButton(panelId) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pending-cancel-btn';
+        btn.textContent = i18n.t('cancel');
+        btn.title = i18n.t('pendingCancelTip');
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.cancelPhasePending(panelId);
+        });
+        return btn;
+    }
+
+    /** Forget the X (and Y) dropped so far for the next 2D/3D or correlation pair. */
+    cancelPhasePending(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot?.phasePending?.x) return;
+        plot.phasePending = { x: null, y: null, z: null, fileId: null };
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (panelEl) {
+            this._setPendingOverlay(panelId, panelEl, false);
+            this._updatePlaceholder(panelId, panelEl);
+        }
+        // Correlation lists the pending X in its options panel.
+        if (plot.mode === 'correlation' && plot.correlationOptionsEl) this._renderCorrelationOptionsPanel?.(panelId, plot);
     }
 
     /** Message shown in the drop overlay depending on mode and current state. */
@@ -3870,7 +3909,10 @@ class PlotManager {
                 </table>
             </div>
         `;
-        Modal.alert(i18n.t('panelStatsTitle'), body, { icon: 'Σ', html: true, className: 'modal-dialog-stats' });
+        Modal.alert(i18n.t('panelStatsTitle'), body, {
+            icon: 'Σ', html: true, className: 'modal-dialog-stats',
+            copyText: dialog => tableText(dialog.querySelector('.stats-table')),
+        });
     }
 
     // ─── Helpers ───────────────────────────────────────────────────

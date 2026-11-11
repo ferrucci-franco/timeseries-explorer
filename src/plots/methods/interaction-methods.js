@@ -8,9 +8,9 @@ import { sceneAspectUpdate } from '../../ui/plot-3d-gestures.js';
 import { movedBeyondSlop } from '../../utils/touch-plot-gestures.js';
 import { copyTextToClipboard, cursorReadoutText } from '../../utils/clipboard.js';
 import { cursorHandleAt, cursorHandleLayout } from '../../utils/cursor-handles.js';
+import { COPY_ICON as CURSOR_COPY_ICON, showCopyResult } from '../../ui/copy-button.js';
 
-const CURSOR_COPY_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
-const CURSOR_COPIED_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const PENDING_PAIR_MODES = new Set(['phase2d', 'phase2dt', 'phase3d', 'correlation']);
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -4295,20 +4295,7 @@ proto._copyCursorReadout = async function(box, btn) {
     });
     const text = cursorReadoutText(box.querySelector('.cursor-info-values'), traceLines);
     const copied = text ? await copyTextToClipboard(text) : false;
-    const label = i18n.t(copied ? 'cursorCopied' : 'cursorCopyFailed');
-    clearTimeout(btn._copiedTimer);
-    btn.classList.toggle('copied', copied);
-    btn.classList.toggle('copy-failed', !copied);
-    btn.innerHTML = copied ? CURSOR_COPIED_ICON : CURSOR_COPY_ICON;
-    btn.title = label;
-    btn.setAttribute('aria-label', label);
-    btn._copiedTimer = setTimeout(() => {
-        const idle = i18n.t('cursorCopy');
-        btn.classList.remove('copied', 'copy-failed');
-        btn.innerHTML = CURSOR_COPY_ICON;
-        btn.title = idle;
-        btn.setAttribute('aria-label', idle);
-    }, 1500);
+    showCopyResult(btn, copied, i18n.t('cursorCopy'));
 };
 
 proto._cursorViewBoxElement = function(panelEl, viewId) {
@@ -5722,6 +5709,9 @@ proto._updatePlaceholder = function(panelId, panelEl) {
                 : !pp.y ? i18n.t('dropY')
                 :         i18n.t('dropZ');
             break;
+        case 'correlation':
+            msg = !pp.x ? i18n.t('correlationDropX') : i18n.t('correlationDropY');
+            break;
         case 'fft':
             msg = i18n.t('dropFftMulti');
             break;
@@ -5748,6 +5738,10 @@ proto._updatePlaceholder = function(panelId, panelEl) {
         <small class="layout-panel-placeholder-hint">${formatPlaceholderHint('multiSelectHint')}</small>
         <small class="layout-panel-placeholder-hint">${formatPlaceholderHint('legendHint')}</small>
     `;
+    // Halfway through a pair: the way out of it, under what to drop next.
+    if (pp?.x && PENDING_PAIR_MODES.has(mode)) {
+        placeholder.insertBefore(this._pendingCancelButton(panelId), placeholder.children[1] || null);
+    }
 };
 
 // ─── Helpers ───────────────────────────────────────────────────

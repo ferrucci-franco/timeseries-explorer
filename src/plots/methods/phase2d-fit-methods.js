@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
+import { createCopyButton } from '../../ui/copy-button.js';
 import {
     defaultPhase2dState,
     normalizePhase2dState,
@@ -1377,7 +1378,11 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         metricsHelpBtn.title = i18n.t('phase2dFitMetricsHelpTitle');
         metricsHelpBtn.setAttribute('aria-label', i18n.t('phase2dFitMetricsHelpTitle'));
         metricsHelpBtn.addEventListener('click', () => this._showPhase2dFitMetricsHelp());
-        resultsHead.append(title, metricsHelpBtn);
+        // What the block below says, as text, for a report or a notebook:
+        // the pair, the model, its coefficients and how well it fits.
+        const copyLines = [];
+        const copyBtn = createCopyButton(() => copyLines.join('\n'), { className: 'phase2d-fit-copy-btn' });
+        resultsHead.append(title, metricsHelpBtn, copyBtn);
         drawer.appendChild(resultsHead);
 
         const r = results.find(res => res.pair === activePair) || {};
@@ -1423,7 +1428,15 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 stats.append(dt, dd);
             }
             block.appendChild(stats);
+            copyLines.push(
+                this._phase2dFitPairLabel(plot, activePair),
+                parts.generic,
+                ...parts.coeffs.map(([k, v]) => `${k} = ${v}`),
+                ...rows.map(([k, v]) => `${k}: ${v}`),
+            );
         }
+        // Nothing worked out yet (or the fit failed): nothing worth copying.
+        copyBtn.disabled = !copyLines.length;
 
         const warn = options.pending
             ? i18n.t('phase2dFitCalculating')
