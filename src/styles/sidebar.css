@@ -2511,3 +2511,404 @@
     padding: 0.45rem 1.1rem;
     font-size: 0.88rem;
 }
+
+/* ── Data tools: the gallery (data-tool-gallery-methods.js) ───────────────
+   The tools as tiles in four families, each its own colour: the same
+   families and colours as the phone's hub (compact.css). */
+.data-tools-section,
+.data-tool-hovercard {
+    --tool-clean: #d9822b;
+    --tool-calculus: var(--primary-color);
+    --tool-smooth: #2e9d6a;
+    --tool-time: #8a5cd6;
+    --tool-accent: var(--text-secondary);
+}
+
+.data-tools-section .group-clean,
+.data-tool-hovercard.group-clean { --tool-accent: var(--tool-clean); }
+.data-tools-section .group-calculus,
+.data-tool-hovercard.group-calculus { --tool-accent: var(--tool-calculus); }
+.data-tools-section .group-smooth,
+.data-tool-hovercard.group-smooth { --tool-accent: var(--tool-smooth); }
+.data-tools-section .group-time,
+.data-tool-hovercard.group-time { --tool-accent: var(--tool-time); }
+
+.data-tools-header {
+    min-height: 24px;
+}
+
+.data-tool-density-btn svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    opacity: 0.75;
+}
+
+/* The button shows the view it switches to. */
+.data-tool-density-btn[aria-pressed="false"] .data-tool-density-gallery,
+.data-tool-density-btn[aria-pressed="true"] .data-tool-density-compact {
+    display: none;
+}
+
+/* The select still holds which tool is open, but the gallery is what is used:
+   it is kept in the layout tree, off screen, rather than display:none, so it
+   can still be driven like any select. */
+.data-tool-native-picker {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* One family under the other in a side panel of the usual width, two abreast
+   in one dragged wide. */
+.data-tool-gallery {
+    container-type: inline-size;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+    gap: 0.7rem 0.9rem;
+}
+
+.data-tool-family-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.data-tool-family-title::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--tool-accent);
+}
+
+.data-tool-family-title::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border-color);
+}
+
+.data-tool-tiles {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+}
+
+@container (max-width: 215px) {
+    .data-tool-tiles {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+.data-tool-glyph {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--tool-accent) 15%, transparent);
+    color: var(--tool-accent);
+    transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.data-tool-glyph svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.data-tool-glyph.is-large {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+}
+
+.data-tool-glyph.is-large svg {
+    width: 26px;
+    height: 26px;
+}
+
+.data-tool-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 9px 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    cursor: pointer;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+
+.data-tool-tile-name {
+    max-width: 100%;
+    font-size: 0.72rem;
+    font-weight: 500;
+    line-height: 1.2;
+    text-align: center;
+    overflow-wrap: break-word;
+    /* Only a word too long for the tile is hyphenated ("Rééchantillonner"),
+       not every one that could be. */
+    hyphens: auto;
+    hyphenate-limit-chars: 11 4 4;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+}
+
+.data-tool-tile:not([aria-disabled="true"]):hover,
+.data-tool-tile:not([aria-disabled="true"]):focus-visible {
+    border-color: var(--tool-accent);
+    box-shadow: 0 3px 10px color-mix(in srgb, var(--tool-accent) 22%, transparent);
+    transform: translateY(-1px);
+}
+
+.data-tool-tile:not([aria-disabled="true"]):hover .data-tool-glyph,
+.data-tool-tile:not([aria-disabled="true"]):focus-visible .data-tool-glyph {
+    background: var(--tool-accent);
+    color: #fff;
+}
+
+.data-tool-tile:focus-visible {
+    outline: 2px solid var(--tool-accent);
+    outline-offset: 1px;
+}
+
+.data-tool-tile:not([aria-disabled="true"]):active {
+    transform: scale(0.97);
+    box-shadow: none;
+}
+
+.data-tool-tile[aria-disabled="true"] {
+    cursor: default;
+}
+
+.data-tool-tile[aria-disabled="true"] > * {
+    opacity: 0.45;
+}
+
+/* With no file every tile is off: keep the colours, so the gallery still shows
+   what the panel has to offer. */
+.data-tool-gallery.needs-file .data-tool-tile[aria-disabled="true"] > * {
+    opacity: 0.6;
+}
+
+/* Drawings only: the families run on as clusters, told apart by colour. */
+.data-tool-gallery.density-compact {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+}
+
+.data-tool-gallery.density-compact .data-tool-family-title,
+.data-tool-gallery.density-compact .data-tool-tile-name {
+    display: none;
+}
+
+.data-tool-gallery.density-compact .data-tool-tiles {
+    display: flex;
+    gap: 4px;
+}
+
+.data-tool-gallery.density-compact .data-tool-glyph {
+    width: 40px;
+    height: 40px;
+}
+
+.data-tool-gallery.density-compact .data-tool-glyph svg {
+    width: 24px;
+    height: 24px;
+}
+
+.data-tool-gallery.density-compact .data-tool-tile {
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+    border-radius: 10px;
+}
+
+.data-tool-gallery.density-compact .data-tool-tile:not([aria-disabled="true"]):hover,
+.data-tool-gallery.density-compact .data-tool-tile:not([aria-disabled="true"]):focus-visible {
+    border-color: transparent;
+}
+
+/* The tool that is open: the gallery folded into one line, with the way back. */
+.data-tool-active {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.4rem 0.6rem;
+    padding: 0.55rem 0.6rem;
+    border: 1px solid color-mix(in srgb, var(--tool-accent) 35%, var(--border-color));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--tool-accent) 7%, var(--bg-primary));
+}
+
+.data-tool-active > .data-tool-glyph {
+    background: var(--tool-accent);
+    color: #fff;
+}
+
+.data-tool-active-text {
+    min-width: 0;
+}
+
+.data-tool-active-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.data-tool-active-family,
+.data-tool-hovercard-family {
+    margin-top: 2px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tool-accent);
+}
+
+.data-tool-active-desc {
+    grid-column: 1 / -1;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.data-tool-active-close {
+    align-self: start;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.data-tool-active-close:hover,
+.data-tool-active-close:focus-visible {
+    background: color-mix(in srgb, var(--tool-accent) 18%, transparent);
+    color: var(--text-primary);
+}
+
+.data-tool-active-close:focus-visible {
+    outline: 2px solid var(--tool-accent);
+    outline-offset: 1px;
+}
+
+.data-tool-active-close svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+}
+
+/* What a tool does, on pointing at its tile. */
+.data-tool-hovercard {
+    position: fixed;
+    z-index: 4000;
+    width: 264px;
+    max-width: calc(100vw - 16px);
+    padding: 0.75rem 0.8rem;
+    border: 1px solid var(--border-color);
+    border-top: 3px solid var(--tool-accent);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+    pointer-events: none;
+    animation: data-tool-hovercard-in 0.12s ease-out;
+}
+
+.data-tool-hovercard[hidden] {
+    display: none;
+}
+
+.theme-dark .data-tool-hovercard {
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+
+.data-tool-hovercard-head {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.data-tool-hovercard-name {
+    font-size: 0.92rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.data-tool-hovercard-desc {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+
+.data-tool-hovercard-note {
+    margin-top: 0.55rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.76rem;
+    line-height: 1.35;
+    color: var(--text-primary);
+}
+
+@keyframes data-tool-hovercard-in {
+    from { opacity: 0; transform: translateX(-4px); }
+    to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .data-tool-tile,
+    .data-tool-glyph {
+        transition: none;
+    }
+
+    .data-tool-tile:hover,
+    .data-tool-tile:active {
+        transform: none !important;
+    }
+
+    .data-tool-hovercard {
+        animation: none;
+    }
+}

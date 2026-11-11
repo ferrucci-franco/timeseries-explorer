@@ -33,23 +33,14 @@
 // hiding the sheet to look at the plot keeps either, and Analyze says so.
 import i18n from '../../i18n/index.js';
 import { setEmphasizedText } from '../../ui/emphasis.js';
+import { DATA_TOOL_GROUPS, DATA_TOOL_ICONS, dataToolDescKey, dataToolGroupOf } from '../data-tool-catalog.js';
 import { button, el, section } from './compact-dom.js';
 import { COMPACT_SIGNAL_LIST_MODES } from './compact-analyses.js';
 import { RESAMPLE_ALL_VARIABLES } from './data-tools-methods.js';
 
 const ICON = {
     tools: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><path d="M13 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M7 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M15 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/></svg>',
-    removeOutliers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16h5.5l2.5-9 2.5 9H21"/><path d="M15.5 3.5l4 4M19.5 3.5l-4 4"/></svg>',
-    interpolate: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18l5-6M16 9l5-5"/><path d="M10.5 11h.01M13.5 10h.01"/></svg>',
-    collapse: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h.01M5 12h.01M5 19h.01"/><path d="M8.5 6l6 6-6 6M8.5 12h6"/><path d="M19 12h.01"/></svg>',
-    derivative: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19c6 0 10-4 12-14"/><path d="M7 21l13-13" stroke-dasharray="2.2 2.2"/></svg>',
-    integrate: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19h18"/><path d="M4 19c3-9 6-11 9-7s5 2 7-5"/><path d="M8 19v-6M12 19v-7M16 19v-5" stroke-opacity=".55"/></svg>',
-    movingAverage: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l2-4 2 6 2-7 2 7 2-5 2 6 2-6 2 4 2-1" stroke-opacity=".45"/><path d="M3 12c6-1.5 12-1.5 18 0"/></svg>',
-    detrend: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19L21 6" stroke-opacity=".45" stroke-dasharray="2.2 2.2"/><path d="M3 14l3-2 3 3 3-3 3 2 3-2 3 1"/></svg>',
-    filter: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>',
-    resample: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18"/><path d="M5 20v-7M9 20v-11M13 20v-9M17 20v-6M21 20v-4"/></svg>',
-    xcorr: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9c2.5-5 5-5 7.5 0s5 5 7.5 0"/><path d="M6 17c2.5-5 5-5 7.5 0s5 5 7.5 0" stroke-opacity=".55"/></svg>',
-    interarrival: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 20h4v-8h5v8h4v-8h5v8h2" stroke-opacity=".55"/><path d="M6 6.5h9M6 4v5M15 4v5"/></svg>',
+    ...DATA_TOOL_ICONS,
     help: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5v.01"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -69,17 +60,12 @@ const ICON = {
 // the desktop gains one this table does not place, which is the §11 rule
 // enforced in code. A tool's settings are, by default, its own block of the
 // side panel; Remove outliers is the one built from several.
-export const COMPACT_TOOL_GROUPS = [
-    { id: 'clean', titleKey: 'compactToolGroupClean', tools: ['removeOutliers', 'interpolate', 'collapse'] },
-    { id: 'calculus', titleKey: 'compactToolGroupCalculus', tools: ['derivative', 'integrate'] },
-    { id: 'smooth', titleKey: 'compactToolGroupSmooth', tools: ['movingAverage', 'detrend', 'filter'] },
-    { id: 'time', titleKey: 'compactToolGroupTime', tools: ['resample', 'xcorr', 'interarrival'] },
-];
+export const COMPACT_TOOL_GROUPS = DATA_TOOL_GROUPS;
 
 export const COMPACT_TOOLS = COMPACT_TOOL_GROUPS.flatMap(group => group.tools);
 
 // A tool's drawing, tinted by its group so the hub reads as four families.
-const groupOf = tool => COMPACT_TOOL_GROUPS.find(group => group.tools.includes(tool))?.id || 'other';
+const groupOf = tool => dataToolGroupOf(tool)?.id || 'other';
 const glyphNode = (tool, extra = '') => {
     const glyph = el('span', `compact-tool-glyph group-${groupOf(tool)}${extra ? ` ${extra}` : ''}`);
     glyph.innerHTML = ICON[tool] || ICON.tools;
@@ -122,7 +108,7 @@ export function compactToolSheetSize(viewportHeight) {
 }
 
 // A tool's description and how it reads in a tile, per language.
-const descKey = tool => `compactToolDesc_${tool}`;
+const descKey = dataToolDescKey;
 
 export function installCompactToolsMethods(ViewerClass) {
     const proto = ViewerClass.prototype;

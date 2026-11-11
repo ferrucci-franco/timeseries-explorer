@@ -275,10 +275,31 @@
 
             <!-- Data Tools -->
             <div class="sidebar-section data-tools-section">
-                <h3 data-i18n="dataTools">Data tools</h3>
+                <div class="section-header data-tools-header">
+                    <h3 data-i18n="dataTools">Data tools</h3>
+                    <button id="data-tool-density" class="tree-control-btn data-tool-density-btn" type="button" aria-pressed="false" title="Show the tools as icons only" data-i18n-title="dataToolDensityCompact">
+                        <svg class="data-tool-density-compact" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4zM16 16h4v4h-4z"/></svg>
+                        <svg class="data-tool-density-gallery" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
+                    </button>
+                </div>
                 <div class="data-tool-panel">
-                    <label class="options-subgroup-label" for="data-tool-select" data-i18n="dataToolSelect">Tool</label>
-                    <select id="data-tool-select" class="data-tool-select" title="Load a file first: the tools work on its signals." data-i18n-title="dataToolNeedsFile" disabled>
+                    <!-- The gallery below is the picker people use. The select stays
+                         as the one place that holds which tool is open: the phone's
+                         pages, the session restore and the tests all read and write it. -->
+                    <div id="data-tool-gallery" class="data-tool-gallery" role="group" aria-labelledby="data-tool-gallery-label"></div>
+                    <div id="data-tool-active" class="data-tool-active" hidden>
+                        <span id="data-tool-active-glyph" class="data-tool-glyph" aria-hidden="true"></span>
+                        <div class="data-tool-active-text">
+                            <div id="data-tool-active-name" class="data-tool-active-name"></div>
+                            <div id="data-tool-active-family" class="data-tool-active-family"></div>
+                        </div>
+                        <button id="data-tool-active-close" class="data-tool-active-close" type="button" title="Back to all tools" data-i18n-title="dataToolAllTools" aria-label="Back to all tools" data-i18n-aria-label="dataToolAllTools">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                        </button>
+                        <div id="data-tool-active-desc" class="data-tool-active-desc"></div>
+                    </div>
+                    <label id="data-tool-gallery-label" class="options-subgroup-label data-tool-native-picker" for="data-tool-select" data-i18n="dataToolSelect">Tool</label>
+                    <select id="data-tool-select" class="data-tool-select data-tool-native-picker" tabindex="-1" title="Load a file first: the tools work on its signals." data-i18n-title="dataToolNeedsFile" disabled>
                         <option value="" data-i18n="dataToolChoose">Choose a tool</option>
                         <option value="removeOutliers" data-i18n="removeOutliers">Remove outliers</option>
                         <option value="derivative" data-i18n="dataToolDerivative">Derivative</option>
