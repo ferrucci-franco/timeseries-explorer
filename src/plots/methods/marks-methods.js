@@ -846,10 +846,12 @@ export function installPlotMarksMethods(TargetClass) {
             document.removeEventListener('pointerdown', onPointer, true);
             document.removeEventListener('keydown', onKey, true);
         };
+        // Escape works from the moment the menu is up: a timer here left a
+        // few milliseconds in which the menu was open and the key did nothing.
+        document.addEventListener('keydown', onKey, true);
         setTimeout(() => {
             if (!menu.isConnected) return;
             document.addEventListener('pointerdown', onPointer, true);
-            document.addEventListener('keydown', onKey, true);
         }, 0);
         // Analysis opens on the card that is on; the others on their first item.
         (menu.querySelector('.analysis-card.checked') || menu.querySelector('button:not(:disabled)'))?.focus?.();
