@@ -150,6 +150,19 @@ try {
     assert.equal(await short.page.locator('#data-tool-gallery.density-compact').count(), 1);
     const box = await short.page.locator('#data-tool-gallery').boundingBox();
     assert.ok(box.height <= 110, `the compact gallery is short (${box.height}px)`);
+
+    // A tile that has to be scrolled to still gets its card: the panel's
+    // scroll takes the card away, and it comes back when the scrolling stops.
+    await short.page.evaluate(() => {
+        window.app._setDataToolDensity('gallery');
+        document.getElementById('sidebar').scrollTop = 0;
+    });
+    const last = short.page.locator('.data-tool-tile[data-tool="interarrival"]');
+    const panelBox = await short.page.locator('#sidebar').boundingBox();
+    assert.ok((await last.boundingBox()).y > panelBox.y + panelBox.height, 'the last tile starts below the fold');
+    await last.hover();
+    await short.page.locator('#data-tool-hovercard:not([hidden])').waitFor();
+    assert.ok(await short.page.evaluate(() => document.getElementById('sidebar').scrollTop > 0), 'the panel scrolled to reach it');
     assert.deepEqual(short.errors, []);
     await short.context.close();
 

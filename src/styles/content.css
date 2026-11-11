@@ -1985,9 +1985,253 @@
     cursor: help;
 }
 
-/* Analysis: one analysis at a time, so its marks are round, like radios. */
-.panel-analysis-menu .marks-menu-check {
+/* ── Analysis: the button and its gallery ─────────────────────────────────
+   Fourier, Histogram, Heatmap, Profile and Integral change what a panel
+   shows, and used to sit behind a text button that looked like its
+   neighbours. The button now carries a drawing and the accent colour, and its
+   menu is a gallery: a card per analysis (plots/analysis-gallery.js). */
+.layout-toolbar-btn.timeseries-analysis-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px 2px 7px;
+    border-color: color-mix(in srgb, var(--primary-color) 60%, var(--border-color));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary-color) 12%, var(--bg-primary));
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.timeseries-analysis-menu-btn::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 12px;
+    height: 12px;
+    background-color: currentColor;
+    -webkit-mask: var(--analysis-btn-icon) center / contain no-repeat;
+    mask: var(--analysis-btn-icon) center / contain no-repeat;
+    --analysis-btn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 21h18'/%3E%3Cpath d='M4 18h3l2.5-14 2.5 14h3l1.5-7 1.5 7h2'/%3E%3C/svg%3E");
+}
+
+.layout-toolbar-btn.timeseries-analysis-menu-btn:hover:not(:disabled),
+.layout-toolbar-btn.timeseries-analysis-menu-btn[aria-expanded="true"] {
+    background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-primary));
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+/* An analysis is on: the button is filled and names it. */
+.layout-toolbar-btn.timeseries-analysis-menu-btn.active,
+.layout-toolbar-btn.timeseries-analysis-menu-btn.active:hover:not(:disabled) {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+    box-shadow: none;
+}
+
+/* Until the gallery has been opened once, the button draws the eye. */
+.timeseries-analysis-menu-btn.analysis-nudge:not(:disabled) {
+    animation: analysis-nudge 1.6s ease-out 1.2s 3;
+}
+
+@keyframes analysis-nudge {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary-color) 55%, transparent); }
+    100% { box-shadow: 0 0 0 9px transparent; }
+}
+
+.timeseries-marks-menu.panel-analysis-menu {
+    display: block;
+    width: min(610px, calc(100vw - 16px));
+    padding: 12px;
+    border-radius: 12px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
+    overflow-y: auto;
+    font-size: 0.8rem;
+}
+
+.theme-dark .timeseries-marks-menu.panel-analysis-menu {
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+}
+
+.analysis-gallery-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 10px;
+    margin: 0 2px 10px;
+}
+
+.analysis-gallery-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.analysis-gallery-hint {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.analysis-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 10px;
+}
+
+.timeseries-marks-menu .analysis-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    min-width: 0;
+    padding: 7px 7px 9px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: inherit;
+    line-height: 1.3;
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    cursor: pointer;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+
+.analysis-card-art {
+    display: block;
+    height: 68px;
+    margin-bottom: 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--primary-color) 6%, var(--bg-secondary, var(--bg-primary)));
+    transition: background-color 0.14s ease;
+}
+
+.analysis-card-art svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.analysis-card-art .art-line {
+    fill: none;
+    stroke: var(--primary-color);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.analysis-card-art .art-fill {
+    fill: var(--primary-color);
+    fill-opacity: 0.18;
+    stroke: none;
+}
+
+.analysis-card-art .art-bar {
+    fill: var(--primary-color);
+    fill-opacity: 0.32;
+}
+
+.analysis-card-art .art-cell {
+    fill: var(--primary-color);
+}
+
+.analysis-card-art .art-faint {
+    fill: none;
+    stroke: var(--text-secondary);
+    stroke-opacity: 0.4;
+    stroke-width: 1.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.analysis-card-art .art-bound {
+    fill: none;
+    stroke: var(--primary-color);
+    stroke-opacity: 0.75;
+    stroke-width: 1.4;
+    stroke-dasharray: 3 3;
+    stroke-linecap: round;
+}
+
+.analysis-card-name {
+    padding: 0 3px;
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+.analysis-card-desc {
+    padding: 2px 3px 0;
+    font-size: 0.74rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.timeseries-marks-menu .analysis-card:hover:not(:disabled),
+.timeseries-marks-menu .analysis-card:focus-visible {
+    background: var(--bg-primary);
+    border-color: var(--primary-color);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--primary-color) 22%, transparent);
+    transform: translateY(-1px);
+}
+
+.analysis-card:hover .analysis-card-art,
+.analysis-card:focus-visible .analysis-card-art {
+    background: color-mix(in srgb, var(--primary-color) 13%, var(--bg-secondary, var(--bg-primary)));
+}
+
+.timeseries-marks-menu .analysis-card:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.timeseries-marks-menu .analysis-card:active {
+    transform: scale(0.98);
+    box-shadow: none;
+}
+
+/* The one that is on. */
+.timeseries-marks-menu .analysis-card.checked {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 1px var(--primary-color);
+}
+
+.analysis-card-badge {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--bg-primary);
     border-radius: 50%;
+    background: var(--primary-color);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.analysis-card-badge:empty {
+    display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .timeseries-analysis-menu-btn.analysis-nudge {
+        animation: none;
+    }
+
+    .timeseries-marks-menu .analysis-card {
+        transition: none;
+    }
+
+    .timeseries-marks-menu .analysis-card:hover,
+    .timeseries-marks-menu .analysis-card:active {
+        transform: none;
+    }
 }
 
 /* A numeric setting in the View menu (2D marker size / opacity). */
