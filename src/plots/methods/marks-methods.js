@@ -39,6 +39,7 @@ import {
 import { lazyGapsFromBuckets } from '../../data/missing-buckets-sql.js';
 import { TIME_UNITS, formatTimeValue, pickTimeUnit } from '../../utils/time-unit-format.js';
 import { ANALYSIS_ART, analysisDescKey } from '../analysis-gallery.js';
+import { PLOT_TYPES, PLOT_TYPE_ART, plotTypeDescKey, plotTypeOf } from '../plot-type-gallery.js';
 
 // Above this many gaps (or NaN runs) in view, the per-item intervals are not
 // materialized at all: they would be coalesced into a wall anyway, and a wrong
@@ -784,7 +785,7 @@ export function installPlotMarksMethods(TargetClass) {
     };
 
     proto._marksMenuEl = function(panelId) {
-        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu):not(.panel-analysis-menu)`);
+        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu):not(.panel-gallery-menu)`);
     };
 
     // Closes whichever panel dropdown is open — Marks, View or Analysis; one at a time.
@@ -793,7 +794,7 @@ export function installPlotMarksMethods(TargetClass) {
         if (!menu) return;
         menu._cleanup?.();
         menu.remove();
-        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"], .panel-view-btn[aria-expanded="true"], .timeseries-analysis-menu-btn[aria-expanded="true"]')
+        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"], .panel-view-btn[aria-expanded="true"], .timeseries-analysis-menu-btn[aria-expanded="true"], .plot-type-btn[aria-expanded="true"]')
             .forEach(button => button.setAttribute('aria-expanded', 'false'));
     };
 
@@ -807,8 +808,8 @@ export function installPlotMarksMethods(TargetClass) {
         this._closeMarksMenu();
         const plot = this.plots.get(panelId);
         if (!plot) return;
-        const extraClass = { view: ' panel-view-menu', analysis: ' panel-analysis-menu' }[kind] || '';
-        const labelKey = { view: 'viewMenuLabel', analysis: 'analysisMenuLabel' }[kind] || 'marksMenuLabel';
+        const extraClass = { view: ' panel-view-menu', analysis: ' panel-analysis-menu panel-gallery-menu', type: ' panel-type-menu panel-gallery-menu' }[kind] || '';
+        const labelKey = { view: 'viewMenuLabel', analysis: 'analysisMenuLabel', type: 'compactPlotType' }[kind] || 'marksMenuLabel';
         const menu = document.createElement('div');
         menu.className = `timeseries-marks-menu${extraClass}`;
         menu.dataset.panelId = String(panelId);
@@ -817,6 +818,7 @@ export function installPlotMarksMethods(TargetClass) {
         document.body.appendChild(menu);
         if (kind === 'view') this._renderViewMenu(panelId, menu);
         else if (kind === 'analysis') this._renderAnalysisMenu(panelId, menu);
+        else if (kind === 'type') this._renderPlotTypeMenu(panelId, menu);
         else this._renderMarksMenu(panelId, menu);
         anchor?.setAttribute('aria-expanded', 'true');
         const rect = anchor?.getBoundingClientRect?.();
@@ -837,7 +839,7 @@ export function installPlotMarksMethods(TargetClass) {
         const onPointer = (event) => {
             // The button toggles the menu itself (a rebuilt toolbar may have
             // replaced `anchor` since the menu opened).
-            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn, .panel-view-btn, .timeseries-analysis-menu-btn')) return;
+            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn, .panel-view-btn, .timeseries-analysis-menu-btn, .plot-type-btn')) return;
             this._closeMarksMenu();
         };
         const onKey = (event) => {
@@ -1306,7 +1308,19 @@ export function installPlotMarksMethods(TargetClass) {
     proto._renderAnalysisMenu = function(panelId, menu = this._analysisMenuEl(panelId)) {
         if (!menu) return;
         const plot = this.plots.get(panelId);
-        const items = this._analysisMenuModel(panelId, plot).filter(item => !item.divider);
+        this._renderGalleryMenu(menu, {
+            title: 'analysisMenuLabel',
+            hint: 'analysisGalleryHint',
+            items: this._analysisMenuModel(panelId, plot).filter(item => !item.divider),
+            art: ANALYSIS_ART,
+            descKey: analysisDescKey,
+        });
+    };
+
+    // A menu as a gallery of cards — the analyses, and the plot types. Each
+    // item is { key, label, checked, run }; `art` gives its drawing and
+    // `descKey` the key of the line under its name.
+    proto._renderGalleryMenu = function(menu, { title, hint, items, art, descKey }) {
         const make = (tag, className, text) => {
             const node = document.createElement(tag);
             node.className = className;
@@ -1315,8 +1329,8 @@ export function installPlotMarksMethods(TargetClass) {
         };
         const head = make('div', 'analysis-gallery-head');
         head.append(
-            make('span', 'analysis-gallery-title', i18n.t('analysisMenuLabel')),
-            make('span', 'analysis-gallery-hint', i18n.t('analysisGalleryHint')),
+            make('span', 'analysis-gallery-title', i18n.t(title)),
+            make('span', 'analysis-gallery-hint', i18n.t(hint)),
         );
         const grid = make('div', 'analysis-gallery-grid');
         for (const item of items) {
@@ -1328,9 +1342,9 @@ export function installPlotMarksMethods(TargetClass) {
             card.classList.toggle('checked', !!item.checked);
             const picture = make('span', 'analysis-card-art');
             picture.setAttribute('aria-hidden', 'true');
-            picture.innerHTML = ANALYSIS_ART[item.key] || '';
+            picture.innerHTML = art[item.key] || '';
             const name = make('span', 'analysis-card-name', i18n.t(item.label));
-            const desc = make('span', 'analysis-card-desc', i18n.t(analysisDescKey(item.key)));
+            const desc = make('span', 'analysis-card-desc', i18n.t(descKey(item.key)));
             const badge = make('span', 'analysis-card-badge', item.checked ? '✓' : '');
             badge.setAttribute('aria-hidden', 'true');
             card.append(picture, name, desc, badge);
@@ -1341,8 +1355,8 @@ export function installPlotMarksMethods(TargetClass) {
             grid.appendChild(card);
         }
         menu.replaceChildren(head, grid);
-        if (menu._analysisKeys) return;
-        menu._analysisKeys = true;
+        if (menu._galleryKeys) return;
+        menu._galleryKeys = true;
         // The arrows walk the cards the way they are laid out.
         menu.addEventListener('keydown', (event) => {
             const cards = [...menu.querySelectorAll('.analysis-card')];
@@ -1358,6 +1372,65 @@ export function installPlotMarksMethods(TargetClass) {
             if (next < 0 || next >= cards.length) return;
             event.preventDefault();
             cards[next].focus();
+        });
+    };
+
+    // ── Plot type ──
+
+    // What a panel draws: one button that names the type that is on, and a
+    // gallery behind it (plot-type-gallery.js). An analysis is still a time
+    // series and Correlation still a 2D plot, so those keep their type on.
+    proto._plotTypeMenuModel = function(panelId, plot) {
+        const current = plotTypeOf(plot?.mode, plot?.stateAnimDim);
+        return PLOT_TYPES.map(type => ({
+            key: type.key,
+            label: type.labelKey,
+            checked: type === current,
+            run: () => {
+                this._closeMarksMenu();
+                this._requestModeChange(panelId, type.mode, type.dim || null);
+            },
+        }));
+    };
+
+    proto._createPlotTypeButton = function(panelId, plot, mode = plot?.mode) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'layout-toolbar-btn plot-type-btn';
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        this._applyPlotTypeButtonState(plot, button, mode);
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (this._plotTypeMenuEl(panelId)) this._closeMarksMenu();
+            else this._openPanelDropdown(panelId, button, 'type');
+        });
+        return button;
+    };
+
+    // The button names the type that is on, the short way the toolbar always
+    // did ("2D+t"); the gallery and the tooltip say it in full.
+    proto._applyPlotTypeButtonState = function(plot, button, mode = plot?.mode) {
+        if (!button) return;
+        const type = plotTypeOf(mode, plot?.stateAnimDim);
+        const short = type ? (type.shortKey ? i18n.t(type.shortKey) : type.short) : i18n.t('compactPlotType');
+        button.textContent = `${short} ▾`;
+        button.dataset.plotType = type ? type.key : '';
+        button.title = type ? `${i18n.t('compactPlotType')}: ${i18n.t(type.labelKey)}` : i18n.t('compactPlotType');
+    };
+
+    proto._plotTypeMenuEl = function(panelId) {
+        return document.querySelector(`.panel-type-menu[data-panel-id="${panelId}"]`);
+    };
+
+    proto._renderPlotTypeMenu = function(panelId, menu = this._plotTypeMenuEl(panelId)) {
+        if (!menu) return;
+        this._renderGalleryMenu(menu, {
+            title: 'compactPlotType',
+            hint: 'plotTypeGalleryHint',
+            items: this._plotTypeMenuModel(panelId, this.plots.get(panelId)),
+            art: PLOT_TYPE_ART,
+            descKey: plotTypeDescKey,
         });
     };
 

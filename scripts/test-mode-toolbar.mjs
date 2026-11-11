@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { ANALYSIS_ART, analysisDescKey } from '../src/plots/analysis-gallery.js';
+import { PLOT_TYPES, PLOT_TYPE_ART, plotTypeDescKey, plotTypeOf } from '../src/plots/plot-type-gallery.js';
 
 const interactionSource = readFileSync(
     new URL('../src/plots/methods/interaction-methods.js', import.meta.url),
@@ -258,6 +259,10 @@ const sandbox = {
     i18n: { t: key => key },
     ANALYSIS_ART,
     analysisDescKey,
+    PLOT_TYPES,
+    PLOT_TYPE_ART,
+    plotTypeDescKey,
+    plotTypeOf,
 };
 
 vm.runInNewContext([
@@ -280,6 +285,11 @@ vm.runInNewContext([
     marksMethodAssignment('_createAnalysisButton'),
     marksMethodAssignment('_applyAnalysisButtonState'),
     marksMethodAssignment('_renderAnalysisMenu'),
+    marksMethodAssignment('_renderGalleryMenu'),
+    marksMethodAssignment('_plotTypeMenuModel'),
+    marksMethodAssignment('_createPlotTypeButton'),
+    marksMethodAssignment('_applyPlotTypeButtonState'),
+    marksMethodAssignment('_renderPlotTypeMenu'),
 ].join('\n'), sandbox);
 
 // The Analysis menu of a rendered toolbar, and a pick in it.
@@ -534,22 +544,76 @@ assert.ok(globalAutoscaleIconMatch, 'global autoscale button icon is present');
 const globalAutoscaleIcon = globalAutoscaleIconMatch[1].trim();
 assert.equal(globalAutoscaleIcon, '⛶', 'global autoscale uses the expected icon');
 
+// The plot-type button names the type that is on — an analysis is still a time
+// series, Correlation still a 2D plot, an animation of its state's dimension —
+// and a card of its gallery asks for that type.
+for (const [mode, dim, key, label] of [
+    ['timeseries', 2, 'timeseries', 'modeTimeseries'],
+    ['dashboard', 2, 'dashboard', 'plotTypeShortDashboard'],
+    ['phase2d', 2, 'phase2d', '2D'],
+    ['correlation', 2, 'phase2d', '2D'],
+    ['phase2dt', 2, 'phase2dt', '2D+t'],
+    ['phase3d', 2, 'phase3d', '3D'],
+    ['state-anim', 2, 'state-anim-2', '▶x 2D'],
+    ['state-anim', 3, 'state-anim-3', '▶x 3D'],
+]) {
+    assert.equal(plotTypeOf(mode, dim)?.key, key);
+    // A dashboard's toolbar is its own (dashboard-methods.js, e2e:dashboard).
+    if (mode === 'dashboard') continue;
+    const { manager, toolbar } = renderToolbar(mode, dim);
+    const button = toolbar.querySelector('.plot-type-btn');
+    assert.equal(button.dataset.plotType, key, `${mode}/${dim}: the button knows the type`);
+    assert.equal(button.textContent, `${label} ▾`, `${mode}/${dim}: and names it`);
+    const menu = new FakeElement('div');
+    manager._renderPlotTypeMenu('panel', menu);
+    assert.deepEqual(menu.querySelectorAll('.marks-menu-item').filter(card => card.classList.contains('checked')).map(card => card.dataset.mark), [key]);
+}
+{
+    const { manager } = renderToolbar('timeseries');
+    manager._closeMarksMenu = () => {};
+    manager._requestModeChange = (panelId, mode, dim) => manager.modeChanges.push({ panelId, mode, dim });
+    const menu = new FakeElement('div');
+    manager._renderPlotTypeMenu('panel', menu);
+    menu.querySelector('.marks-item-state-anim-3').click();
+    menu.querySelector('.marks-item-phase2d').click();
+    assert.deepEqual(manager.modeChanges, [
+        { panelId: 'panel', mode: 'state-anim', dim: 3 },
+        { panelId: 'panel', mode: 'phase2d', dim: null },
+    ], 'a card asks for its type, an animation with its dimension');
+}
+
 // Fourier, Histogram and Heatmap are contextual actions of the time-series family,
 // not primary plot types alongside 2D/3D/state animation.
 for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']) {
     const { manager, toolbar } = renderToolbar(mode);
-    const primaryModes = toolbar
-        .querySelector('.mode-btn-group')
-        .querySelectorAll('.mode-btn')
-        .map(button => button.dataset.mode);
+    // The plot types are one button, first in the toolbar's own group, and
+    // a gallery behind it.
+    const typeBtn = toolbar.querySelector('.mode-btn-group').querySelector('.plot-type-btn');
+    assert.ok(typeBtn, `${mode}: the plot-type button is in the mode group`);
+    assert.equal(toolbar.querySelectorAll('.mode-btn').length, 0, `${mode}: no row of type buttons`);
+    assert.equal(typeBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: it announces its gallery`);
+    const typeMenu = new FakeElement('div');
+    manager._renderPlotTypeMenu('panel', typeMenu);
+    const typeCards = typeMenu.querySelectorAll('.marks-menu-item');
+    const primaryModes = typeCards.map(card => card.dataset.mark);
+    assert.deepEqual(primaryModes,
+        ['timeseries', 'dashboard', 'phase2d', 'phase2dt', 'phase3d', 'state-anim-2', 'state-anim-3'],
+        `${mode}: every plot type, the dashboard next to the time series`);
+    for (const card of typeCards) {
+        assert.equal(card.getAttribute('role'), 'menuitemradio');
+        assert.equal(card.querySelector('.analysis-card-art').innerHTML, PLOT_TYPE_ART[card.dataset.mark], `${card.dataset.mark} has its drawing`);
+        assert.equal(card.querySelector('.analysis-card-desc').textContent, plotTypeDescKey(card.dataset.mark));
+    }
     assert.ok(!primaryModes.includes('fft'), `${mode}: Fourier is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('histogram'), `${mode}: Histogram is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('heatmap'), `${mode}: Heatmap is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('temporal-profile'), `${mode}: Temporal Profile is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('integral'), `${mode}: Integral is absent from the primary plot-mode group`);
 
-    const timeseriesPrimary = findModeButton(toolbar, 'timeseries', 'mode-btn');
-    assert.ok(timeseriesPrimary?.classList.contains('active'), `${mode}: time-series family keeps its primary mode pressed`);
+    assert.equal(typeBtn.dataset.plotType, 'timeseries', `${mode}: an analysis is still a time series`);
+    assert.equal(typeBtn.textContent, 'modeTimeseries ▾', `${mode}: and the button says so`);
+    assert.deepEqual(typeCards.filter(card => card.getAttribute('aria-checked') === 'true').map(card => card.dataset.mark),
+        ['timeseries'], `${mode}: the time-series card is the one that is on`);
 
     const tools = toolbar.querySelector('.timeseries-tools-group');
     assert.ok(tools, `${mode}: time-series family exposes its contextual options group`);
