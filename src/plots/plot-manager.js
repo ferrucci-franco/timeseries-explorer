@@ -1099,7 +1099,12 @@ class PlotManager {
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) { placeholder.style.display = ''; placeholder.classList.remove('drag-over'); }
         this._injectModeButtons(panelId, panelEl, mode);
+        // A view captured before this change belongs to the mode it was taken
+        // in. The dashboard draws no chart and never takes it, so without this
+        // a time window left there by a time series was applied to the next
+        // chart drawn — a 2D phase plot came up with time as its X range.
         if (restoreView) plot._pendingViewRestore = restoreView;
+        else delete plot._pendingViewRestore;
         if (this._hasContent(plot)) {
             if (placeholder) placeholder.style.display = 'none';
             if (mode === 'state-anim') this._createStateAnimChart(panelId, panelEl);

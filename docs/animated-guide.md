@@ -84,6 +84,8 @@ expected duration in milliseconds, for the progress bar of the first run.
 | `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. |
 | `d.plot(name, panelIndex)` | Drag a variable from the tree onto a panel. |
 | `d.folder(label)` | Open or close a folder of the tree. |
+| `d.select(names)` | Select variables of the tree: a click, then Ctrl+click on each, in order (X, Y, Z of a phase plot). |
+| `d.mode(mode, { dim })` | Press a panel's mode button: `'timeseries'`, `'dashboard'`, `'phase2d'`, `'phase2dt'`, `'phase3d'`, `'state-anim'` (dim 2 or 3), confirming when the change empties the panel. |
 | `d.analysis(mode, panelIndex)` | Turn an analysis on: `'fft'`, `'histogram'`, `'heatmap'`, `'temporal-profile'`, `'integral'`. |
 | `d.choose(select, value)` | Pick in a drop-down list (a look-alike list is drawn, since a script cannot open the browser's own). |
 | `d.slide(rangeInput, value)` | Drag a slider. |
@@ -102,7 +104,7 @@ the `value` of an option (`listWith(root, 'hann')`), never a label.
 ## Opening one demo from elsewhere
 
 ```js
-app.openGuide('fft');   // 'csv-parsing', 'fft', 'temporal-profile', 'modelica', 'pypsa'
+app.openGuide('fft');   // 'csv-parsing', 'plot-types', 'fft', 'temporal-profile', 'modelica', 'pypsa'
 ```
 
 opens the guide on that demo. A "tip of the day", or a "show me" link next to a
