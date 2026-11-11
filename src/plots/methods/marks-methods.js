@@ -1223,7 +1223,17 @@ export function installPlotMarksMethods(TargetClass) {
     // The analyses of the time-series family. Picking one switches the panel to
     // it; picking the one that is on (or None) goes back to the time series —
     // the same toggle the separate buttons used to be.
-    proto._analysisModes = function() {
+    // The analyses a panel offers depend on what it draws. A time series has
+    // Fourier, Histogram, Heatmap, Profile and Integral, each a mode of its
+    // own; a 2D plot has Correlation (a mode of the pair family) and Curve fit
+    // (a workspace the 2D plot opens over itself, not a mode).
+    proto._analysisModes = function(plot) {
+        if (plot?.mode === 'phase2d' || plot?.mode === 'correlation') {
+            return [
+                { id: 'correlation', label: 'modeCorrelationLabel', title: 'modeCorrelation', short: 'modeCorrelationLabel' },
+                { id: 'phase2d-fit', label: 'phase2dFitToggleLabel', title: 'phase2dFitTooltip', short: 'phase2dFitToggleLabel' },
+            ];
+        }
         return [
             { id: 'fft', label: 'analysisItemFft', title: 'modeFFT', short: 'Fourier' },
             { id: 'histogram', label: 'analysisItemHistogram', title: 'modeHistogram', short: 'analysisItemHistogram' },
@@ -1233,8 +1243,50 @@ export function installPlotMarksMethods(TargetClass) {
         ];
     };
 
+    // Which analysis is on, by its id in _analysisModes, or '' for none. The
+    // fit is asked of the plot: it is not a mode.
+    proto._activeAnalysisId = function(plot) {
+        const mode = plot?.mode;
+        if (mode === 'correlation') return 'correlation';
+        if (mode === 'phase2d') return plot.phase2d?.fitEnabled ? 'phase2d-fit' : '';
+        return this._analysisModes(plot).some(item => item.id === mode) ? mode : '';
+    };
+
     proto._analysisMenuModel = function(panelId, plot) {
         const mode = plot?.mode;
+        const active = this._activeAnalysisId(plot);
+        if (mode === 'phase2d' || mode === 'correlation') {
+            // Picking the analysis that is on, or None, goes back to the plain
+            // 2D plot; the pairs are kept across the whole family.
+            const backTo2d = () => {
+                if (mode === 'correlation') this._requestModeChange(panelId, 'phase2d');
+                else if (active === 'phase2d-fit') this._togglePhase2dFit(panelId);
+            };
+            const pick = (id) => {
+                this._closeMarksMenu();
+                if (id === 'phase2d' || id === active) return backTo2d();
+                const state = this._ensurePhase2dState(plot);
+                if (id === 'correlation') {
+                    // The fit workspace belongs to the 2D plot: closed on the way out.
+                    state.fitEnabled = false;
+                    this._requestModeChange(panelId, 'correlation');
+                } else if (mode === 'correlation') {
+                    // Leave Correlation with the flag set, so the 2D plot is
+                    // built with its fit workspace already open.
+                    state.fitEnabled = true;
+                    this._requestModeChange(panelId, 'phase2d');
+                } else {
+                    this._togglePhase2dFit(panelId);
+                }
+            };
+            return [
+                { key: 'phase2d', label: 'compactAnalysisNone2d', title: 'analysisItemNoneTitle2d', checked: !active, run: () => pick('phase2d') },
+                { divider: true },
+                ...this._analysisModes(plot).map(({ id, label, title }) => (
+                    { key: id, label, title, checked: active === id, run: () => pick(id) }
+                )),
+            ];
+        }
         const pick = (id) => {
             this._closeMarksMenu();
             if (id === 'timeseries') {
@@ -1246,7 +1298,7 @@ export function installPlotMarksMethods(TargetClass) {
         return [
             { key: 'timeseries', label: 'analysisItemNone', title: 'analysisItemNoneTitle', checked: mode === 'timeseries', run: () => pick('timeseries') },
             { divider: true },
-            ...this._analysisModes().map(({ id, label, title }) => (
+            ...this._analysisModes(plot).map(({ id, label, title }) => (
                 { key: id, label, title, checked: mode === id, run: () => pick(id) }
             )),
         ];
@@ -1288,10 +1340,12 @@ export function installPlotMarksMethods(TargetClass) {
     // The button names the analysis that is on, pressed; otherwise "Analysis".
     proto._applyAnalysisButtonState = function(plot, button) {
         if (!button) return;
-        const active = this._analysisModes().find(item => item.id === plot?.mode);
+        const activeId = this._activeAnalysisId(plot);
+        const active = this._analysisModes(plot).find(item => item.id === activeId);
         const label = active ? i18n.t(active.short) : i18n.t('analysisMenuLabel');
         button.textContent = `${label} ▾`;
-        button.dataset.mode = active ? active.id : 'timeseries';
+        const pair = plot?.mode === 'phase2d' || plot?.mode === 'correlation';
+        button.dataset.mode = active ? active.id : (pair ? 'phase2d' : 'timeseries');
         button.classList.toggle('active', !!active);
         button.setAttribute('aria-pressed', String(!!active));
         button.title = active ? i18n.t(active.title) : i18n.t('analysisMenuTitle');

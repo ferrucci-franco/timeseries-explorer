@@ -281,6 +281,7 @@ vm.runInNewContext([
     marksMethodAssignment('_applyViewButtonState'),
     marksMethodAssignment('_renderViewMenu'),
     marksMethodAssignment('_analysisModes'),
+    marksMethodAssignment('_activeAnalysisId'),
     marksMethodAssignment('_analysisMenuModel'),
     marksMethodAssignment('_createAnalysisButton'),
     marksMethodAssignment('_applyAnalysisButtonState'),
@@ -809,6 +810,50 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.deepEqual(renderViewMenu(manager).querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview'], 'correlation: Last view only');
 }
 
+// A 2D plot has its own Analysis menu, the same button and gallery: None (the
+// 2D plot), Correlation, Curve fit. The fit is not a mode, so the button and
+// the cards ask the plot whether it is open.
+for (const [mode, fitEnabled, on] of [
+    ['phase2d', false, ''], ['phase2d', true, 'phase2d-fit'], ['correlation', false, 'correlation'],
+]) {
+    const { manager, toolbar } = renderToolbar(mode, 2, { phase2d: { fitEnabled } });
+    assert.equal(toolbar.querySelectorAll('.correlation-toggle-btn, .phase2d-fit-toggle-btn').length, 0, `${mode}: no separate analysis toggles`);
+    assert.equal(toolbar.querySelectorAll('.phase2d-analysis-group').length, 0, `${mode}: and no group for them`);
+    const button = toolbar.querySelector('.view-btn-group').querySelector('.timeseries-analysis-menu-btn');
+    assert.ok(button, `${mode}: the Analysis button follows View`);
+    assert.equal(button.dataset.mode, on || 'phase2d', `${mode}/${fitEnabled}: the button knows which analysis is on`);
+    assert.equal(button.getAttribute('aria-pressed'), String(!!on));
+    assert.equal(button.textContent, `${({ '': 'analysisMenuLabel', 'phase2d-fit': 'phase2dFitToggleLabel', correlation: 'modeCorrelationLabel' })[on]} ▾`);
+    const menu = renderAnalysisMenu(manager);
+    const cards = menu.querySelectorAll('.marks-menu-item');
+    assert.deepEqual(cards.map(card => card.dataset.mark), ['phase2d', 'correlation', 'phase2d-fit'], `${mode}: None, Correlation, Curve fit`);
+    for (const card of cards) {
+        assert.ok(ANALYSIS_ART[card.dataset.mark], `${card.dataset.mark} has a drawing`);
+        assert.equal(card.querySelector('.analysis-card-desc').textContent, analysisDescKey(card.dataset.mark));
+        assert.equal(card.getAttribute('aria-checked'), String(card.dataset.mark === (on || 'phase2d')));
+    }
+}
+// What a card does, from each 2D state.
+{
+    const run = (mode, fitEnabled, key) => {
+        const { manager } = renderToolbar(mode, 2, { phase2d: { fitEnabled } });
+        const calls = [];
+        manager._closeMarksMenu = () => {};
+        manager._requestModeChange = (panelId, next) => calls.push(`mode:${next}:fit=${manager.plot.phase2d.fitEnabled}`);
+        manager._togglePhase2dFit = () => calls.push('toggleFit');
+        marksItem(renderAnalysisMenu(manager), key).click();
+        return calls;
+    };
+    assert.deepEqual(run('phase2d', false, 'phase2d-fit'), ['toggleFit'], 'Curve fit opens the workspace');
+    assert.deepEqual(run('phase2d', true, 'phase2d-fit'), ['toggleFit'], 'and picking it again closes it');
+    assert.deepEqual(run('phase2d', true, 'phase2d'), ['toggleFit'], 'None closes it too');
+    assert.deepEqual(run('phase2d', false, 'phase2d'), [], 'None on a plain 2D plot does nothing');
+    assert.deepEqual(run('phase2d', true, 'correlation'), ['mode:correlation:fit=false'], 'Correlation closes the fit on the way');
+    assert.deepEqual(run('correlation', false, 'correlation'), ['mode:phase2d:fit=false'], 'picking Correlation again goes back to 2D');
+    assert.deepEqual(run('correlation', false, 'phase2d'), ['mode:phase2d:fit=false'], 'so does None');
+    assert.deepEqual(run('correlation', false, 'phase2d-fit'), ['mode:phase2d:fit=true'], 'Curve fit from Correlation: 2D with the workspace open');
+}
+
 // Line shape: a panel-level radio derived from the traces' overrides.
 {
     const { manager } = renderToolbar('timeseries', 2, {});
@@ -885,9 +930,13 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
 }
 
 {
-    const { toolbar } = renderToolbar('phase2d');
+    const { manager, toolbar } = renderToolbar('phase2d');
     assert.equal(toolbar.querySelector('.timeseries-tools-group'), null, 'non-time-series plots hide the contextual options group');
-    assert.equal(toolbar.querySelector('.timeseries-analysis-menu-btn'), null, 'non-time-series plots do not expose the Analysis menu (Fourier, Histogram, Heatmap, Profile, Integral)');
+    assert.ok(!renderAnalysisMenu(manager).querySelectorAll('.marks-menu-item').some(item => ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(item.dataset.mark)),
+        'a 2D plot\'s Analysis menu has none of the time-series analyses (Fourier, Histogram, Heatmap, Profile, Integral)');
+    for (const mode of ['phase2dt', 'phase3d', 'state-anim']) {
+        assert.equal(renderToolbar(mode).toolbar.querySelector('.timeseries-analysis-menu-btn'), null, `${mode}: no Analysis menu`);
+    }
 }
 
 // Phase/state views use the same contextual Autoscale action, first in the
@@ -929,7 +978,12 @@ for (const { mode, stateAnimDim = 2 } of [
     }
     const viewBtn = viewGroup.querySelector('.panel-view-btn');
     assert.ok(viewBtn, `${label}: View sits in the view group`);
-    assert.equal(viewGroup.children[viewGroup.children.length - 1], viewBtn, `${label}: after Autoscale (and the fits)`);
+    // A 2D plot closes the group with its Analysis menu, as the time series does.
+    const closing = mode === 'phase2d' ? viewGroup.children[viewGroup.children.length - 2] : viewGroup.children[viewGroup.children.length - 1];
+    assert.equal(closing, viewBtn, `${label}: after Autoscale (and the fits)`);
+    if (mode === 'phase2d') {
+        assert.ok(viewGroup.children[viewGroup.children.length - 1].classList.contains('timeseries-analysis-menu-btn'), `${label}: Analysis follows View`);
+    }
 
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${label}: contextual Autoscale triggers one autoscale`);

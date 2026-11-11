@@ -4837,34 +4837,11 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         viewGroup.appendChild(this._createViewButton(panelId, plot));
     }
 
-    // Correlation is an analysis toggle of the 2D/pair family (shares the pair
-    // list). Appended AFTER the 2D Display controls (below) so it reads as its
-    // own toggle, not as a label for the Display dropdown.
-    let phase2dCorrelationBtn = null;
-    if (isPhase2dFamily) {
-        const corrActive = currentMode === 'correlation';
-        phase2dCorrelationBtn = document.createElement('button');
-        phase2dCorrelationBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn correlation-toggle-btn' + (corrActive ? ' active' : '');
-        phase2dCorrelationBtn.textContent = i18n.t('modeCorrelationLabel');
-        phase2dCorrelationBtn.title = i18n.t('modeCorrelation');
-        phase2dCorrelationBtn.setAttribute('aria-pressed', String(corrActive));
-        phase2dCorrelationBtn.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this._toggleCorrelationMode(panelId);
-        });
-    }
+    // Correlation and Curve fit: the 2D plot's Analysis menu, after View, the
+    // same button and gallery the time series has.
+    if (isPhase2dFamily) viewGroup.appendChild(this._createAnalysisButton(panelId, plot));
 
     toolbar.appendChild(viewGroup);
-
-    // Analysis toggles (Correlation + Curve Fit) grouped behind their own
-    // coloured separator so they read as analyses, not Display options.
-    if (isPhase2dFamily) {
-        const analysisGroup = document.createElement('div');
-        analysisGroup.className = 'phase2d-analysis-group';
-        if (phase2dCorrelationBtn) analysisGroup.appendChild(phase2dCorrelationBtn);
-        this._injectPhase2dFitToggle?.(panelId, analysisGroup, plot);
-        if (analysisGroup.childElementCount) toolbar.appendChild(analysisGroup);
-    }
 
     // Compare (overlay traces from other files) — left of CSV
     const compareBtn = document.createElement('button');

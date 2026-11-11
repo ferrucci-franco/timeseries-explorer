@@ -1545,17 +1545,6 @@
     color: white;
 }
 
-/* Analysis toggles (Correlation + Curve Fit) group — its own coloured divider,
-   distinct from the green mode divider and the blue tools divider. */
-.phase2d-analysis-group {
-    display: flex;
-    flex: 0 0 auto;
-    gap: 2px;
-    margin-left: 8px;
-    border-left: 3px solid color-mix(in srgb, #9c27b0 62%, var(--border-color));
-    padding-left: 8px;
-}
-
 /* Fit results/options drawer content — lives inside the shell's .fft-options
    aside (which supplies width/scroll/hidden), so only the inner blocks below
    need styling. */
@@ -2066,6 +2055,17 @@
 .analysis-card-art .art-dot {
     fill: var(--gallery-accent);
     stroke: none;
+}
+
+.analysis-card-art .art-point {
+    fill: var(--gallery-accent);
+    fill-opacity: 0.55;
+    stroke: none;
+}
+
+.analysis-card-art .art-second {
+    stroke-opacity: 0.5;
+    stroke-dasharray: 4 3;
 }
 
 .analysis-card-art .art-tile {
