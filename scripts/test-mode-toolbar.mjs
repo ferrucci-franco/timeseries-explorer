@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { ANALYSIS_ART, analysisDescKey } from '../src/plots/analysis-gallery.js';
 
 const interactionSource = readFileSync(
     new URL('../src/plots/methods/interaction-methods.js', import.meta.url),
@@ -255,6 +256,8 @@ const sandbox = {
     MARKER_OPACITY_MAX: 1,
     document: { createElement: tagName => new FakeElement(tagName) },
     i18n: { t: key => key },
+    ANALYSIS_ART,
+    analysisDescKey,
 };
 
 vm.runInNewContext([
@@ -615,6 +618,13 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.deepEqual(items.map(item => item.dataset.mark),
         ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'],
         `${mode}: None, then every analysis of the family`);
+    // Each is a card: a drawing of what comes out, its name, what it shows.
+    for (const item of items) {
+        assert.ok(ANALYSIS_ART[item.dataset.mark], `${mode}: ${item.dataset.mark} has a drawing`);
+        assert.equal(item.querySelector('.analysis-card-art').innerHTML, ANALYSIS_ART[item.dataset.mark]);
+        assert.equal(item.querySelector('.analysis-card-desc').textContent, analysisDescKey(item.dataset.mark));
+        assert.equal(item.querySelector('.analysis-card-badge').textContent, item.dataset.mark === mode ? '✓' : '');
+    }
     for (const item of items) {
         assert.equal(item.getAttribute('role'), 'menuitemradio', `${mode}: ${item.dataset.mark} is a radio item`);
         assert.equal(item.getAttribute('aria-checked'), String(item.dataset.mark === mode), `${mode}: ${item.dataset.mark} checked only when on`);

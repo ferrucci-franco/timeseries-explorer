@@ -37,6 +37,7 @@ import {
 } from '../../utils/nan-strip.js';
 import { lazyGapsFromBuckets } from '../../data/missing-buckets-sql.js';
 import { TIME_UNITS, formatTimeValue, pickTimeUnit } from '../../utils/time-unit-format.js';
+import { ANALYSIS_ART, analysisDescKey } from '../analysis-gallery.js';
 
 // Above this many gaps (or NaN runs) in view, the per-item intervals are not
 // materialized at all: they would be coalesced into a wall anyway, and a wrong
@@ -47,6 +48,14 @@ const MOVE_ICON_SVG = '<svg class="cursor-info-move-icon" width="13" height="13"
 // Pixel height of the Repeated strip's slot (paper 0.985–1 of the plot area) is
 // read from the laid-out plot; this is the fallback before layout.
 const REPEATED_STRIP_FRACTION = 0.015;
+
+// The Analysis button's nudge: shown on the first Analysis button of a session,
+// until the menu has been opened once on this machine.
+const ANALYSIS_DISCOVERED_KEY = 'omv.analysisMenu.discovered';
+let analysisNudgeShown = false;
+const analysisDiscovered = () => {
+    try { return globalThis.localStorage?.getItem(ANALYSIS_DISCOVERED_KEY) === '1'; } catch { return true; }
+};
 
 export function installPlotMarksMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -810,7 +819,16 @@ export function installPlotMarksMethods(TargetClass) {
         if (rect) {
             const left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8);
             menu.style.left = `${Math.max(8, left)}px`;
-            menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+            // Under its button; above it when that is where the room is (the
+            // Analysis gallery of a lower panel); and never taller than the
+            // room it has, scrolling inside instead.
+            const height = menu.offsetHeight;
+            const below = window.innerHeight - rect.bottom - 12;
+            const above = rect.top - 12;
+            const up = height > below && above > below;
+            const room = Math.max(120, up ? above : below);
+            menu.style.maxHeight = `${Math.round(room)}px`;
+            menu.style.top = `${Math.round(up ? rect.top - 4 - Math.min(height, room) : rect.bottom + 4)}px`;
         }
         const onPointer = (event) => {
             // The button toggles the menu itself (a rebuilt toolbar may have
@@ -833,7 +851,10 @@ export function installPlotMarksMethods(TargetClass) {
             document.addEventListener('pointerdown', onPointer, true);
             document.addEventListener('keydown', onKey, true);
         }, 0);
-        menu.querySelector('button:not(:disabled)')?.focus?.();
+        // Analysis opens on the card that is on; the others on their first item.
+        (menu.querySelector('.analysis-card.checked') || menu.querySelector('button:not(:disabled)'))?.focus?.();
+        // Opening it once is knowing where it is: the nudge has done its work.
+        if (kind === 'analysis') this._analysisButtonDiscovered?.();
     };
 
     proto._renderMarksMenu = function(panelId, menu = this._marksMenuEl(panelId)) {
@@ -1230,12 +1251,28 @@ export function installPlotMarksMethods(TargetClass) {
         button.setAttribute('aria-haspopup', 'menu');
         button.setAttribute('aria-expanded', 'false');
         this._applyAnalysisButtonState(plot, button);
+        // Until the menu has been opened once, the button draws the eye when
+        // it first shows in a session: it was the control nobody found.
+        if (this._analysisNudgeWanted?.()) button.classList.add('analysis-nudge');
         button.addEventListener('click', (event) => {
             event.stopPropagation();
             if (this._analysisMenuEl(panelId)) this._closeMarksMenu();
             else this._openPanelDropdown(panelId, button, 'analysis');
         });
         return button;
+    };
+
+    // True once per session, and only while the menu has never been opened.
+    proto._analysisNudgeWanted = function() {
+        if (analysisNudgeShown || analysisDiscovered()) return false;
+        analysisNudgeShown = true;
+        return true;
+    };
+
+    proto._analysisButtonDiscovered = function() {
+        try { globalThis.localStorage?.setItem(ANALYSIS_DISCOVERED_KEY, '1'); } catch { /* not kept */ }
+        globalThis.document?.querySelectorAll?.('.timeseries-analysis-menu-btn.analysis-nudge')
+            .forEach(button => button.classList.remove('analysis-nudge'));
     };
 
     // The button names the analysis that is on, pressed; otherwise "Analysis".
@@ -1254,12 +1291,66 @@ export function installPlotMarksMethods(TargetClass) {
         return document.querySelector(`.panel-analysis-menu[data-panel-id="${panelId}"]`);
     };
 
+    // The menu is a gallery: a card per analysis, with a drawing of what comes
+    // out and a line that says what it shows (analysis-gallery.js). One of
+    // them is on at a time, so the cards are radios; the first is the plain
+    // time series, which is how an analysis is left.
     proto._renderAnalysisMenu = function(panelId, menu = this._analysisMenuEl(panelId)) {
         if (!menu) return;
         const plot = this.plots.get(panelId);
-        this._renderPanelMenuItems(panelId, menu, this._analysisMenuModel(panelId, plot));
-        // One of them is on at a time: radio semantics for assistive technology.
-        menu.querySelectorAll('.marks-menu-item').forEach(item => item.setAttribute('role', 'menuitemradio'));
+        const items = this._analysisMenuModel(panelId, plot).filter(item => !item.divider);
+        const make = (tag, className, text) => {
+            const node = document.createElement(tag);
+            node.className = className;
+            if (text != null) node.textContent = text;
+            return node;
+        };
+        const head = make('div', 'analysis-gallery-head');
+        head.append(
+            make('span', 'analysis-gallery-title', i18n.t('analysisMenuLabel')),
+            make('span', 'analysis-gallery-hint', i18n.t('analysisGalleryHint')),
+        );
+        const grid = make('div', 'analysis-gallery-grid');
+        for (const item of items) {
+            const card = make('button', `marks-menu-item marks-item-${item.key} analysis-card`);
+            card.type = 'button';
+            card.dataset.mark = item.key;
+            card.setAttribute('role', 'menuitemradio');
+            card.setAttribute('aria-checked', String(!!item.checked));
+            card.classList.toggle('checked', !!item.checked);
+            const picture = make('span', 'analysis-card-art');
+            picture.setAttribute('aria-hidden', 'true');
+            picture.innerHTML = ANALYSIS_ART[item.key] || '';
+            const name = make('span', 'analysis-card-name', i18n.t(item.label));
+            const desc = make('span', 'analysis-card-desc', i18n.t(analysisDescKey(item.key)));
+            const badge = make('span', 'analysis-card-badge', item.checked ? '✓' : '');
+            badge.setAttribute('aria-hidden', 'true');
+            card.append(picture, name, desc, badge);
+            card.addEventListener('click', (event) => {
+                event.stopPropagation();
+                item.run();
+            });
+            grid.appendChild(card);
+        }
+        menu.replaceChildren(head, grid);
+        if (menu._analysisKeys) return;
+        menu._analysisKeys = true;
+        // The arrows walk the cards the way they are laid out.
+        menu.addEventListener('keydown', (event) => {
+            const cards = [...menu.querySelectorAll('.analysis-card')];
+            const at = cards.indexOf(document.activeElement);
+            if (at < 0) return;
+            const top = cards[0].offsetTop;
+            const perRow = cards.filter(card => card.offsetTop === top).length || 1;
+            const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: perRow, ArrowUp: -perRow }[event.key];
+            let next = -1;
+            if (step) next = at + step;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = cards.length - 1;
+            if (next < 0 || next >= cards.length) return;
+            event.preventDefault();
+            cards[next].focus();
+        });
     };
 
     // Toolbar buttons and (when open) the menus, from the plot state.
