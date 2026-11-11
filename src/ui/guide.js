@@ -614,6 +614,8 @@ html.demo *{scroll-behavior:auto !important}`;
         if (!button) throw new Error('guide: no analysis button');
         await this.tap(button);
         await this.until(() => this.$('.panel-analysis-menu'), 2000);
+        // The gallery is larger than the zoom on the toolbar: all of it in view.
+        if (this.guide.camR) await this.cam([button, this.$('.panel-analysis-menu')], 1.15, 700);
         await this.wait(500);
         const item = this.$(`.panel-analysis-menu .marks-menu-item[data-mark="${mode}"]`);
         if (!item) throw new Error(`guide: no analysis ${mode}`);

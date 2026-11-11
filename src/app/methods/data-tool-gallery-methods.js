@@ -120,7 +120,16 @@ export function installDataToolGalleryMethods(TargetClass) {
             if (tile?.matches?.(':focus-visible')) this._showDataToolHovercard(tile);
         });
         gallery.addEventListener('focusout', () => this._hideDataToolHovercard());
-        document.getElementById('sidebar')?.addEventListener('scroll', () => this._hideDataToolHovercard(), { passive: true });
+        // Scrolling the panel moves the tiles from under the card, so the card
+        // goes; it comes back for the tile the pointer rests on once the
+        // scrolling stops. Without the second half, a tile reached by
+        // scrolling (the wheel, or a tile brought into view to be pointed at)
+        // never got its card: the scroll arrives after the pointer does.
+        document.getElementById('sidebar')?.addEventListener('scroll', () => {
+            this._hideDataToolHovercard();
+            const tile = gallery.querySelector('.data-tool-tile:hover');
+            if (tile) this._scheduleDataToolHovercard(tile);
+        }, { passive: true });
 
         document.getElementById('data-tool-active-close')?.addEventListener('click', () => {
             const tool = select.value;
