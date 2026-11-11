@@ -1,8 +1,11 @@
 import OpenModelicaViewer from './src/app/viewer-app.js';
 import { initializeAnalytics } from './src/analytics/analytics.js';
+import { DEMO_MODE } from './src/app/demo-mode.js';
 
 function startApplication() {
-    initializeAnalytics();
+    // The guide's frame is not a visit (src/app/demo-mode.js).
+    if (DEMO_MODE) document.documentElement.classList.add('demo');
+    else initializeAnalytics();
     window.app = new OpenModelicaViewer();
 }
 

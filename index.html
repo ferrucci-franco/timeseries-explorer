@@ -21,6 +21,9 @@
             try {
                 var override = null;
                 try { override = window.localStorage.getItem('omv_layout_override'); } catch (e) {}
+                // The animated guide's frame always shows the desktop layout
+                // (src/app/demo-mode.js).
+                if (/[?&]demo(=|&|$)/.test((window.location && window.location.search) || '')) override = 'full';
                 var w = window.innerWidth, h = window.innerHeight;
                 var sw = window.screen && window.screen.width, sh = window.screen && window.screen.height;
                 if (sw > 0 && sh > 0 && w > 0 && h > 0) {

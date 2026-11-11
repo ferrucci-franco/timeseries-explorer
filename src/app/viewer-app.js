@@ -35,6 +35,7 @@ import {
     plotlySeparators,
 } from '../utils/number-format.js';
 import { setPlotNumberSeparators } from '../vendor/plotly.js';
+import { DEMO_MODE, demoParam } from './demo-mode.js';
 
 class OpenModelicaViewer {
     constructor() {
@@ -42,7 +43,7 @@ class OpenModelicaViewer {
         this.csvParser   = new CsvParser(this.parser);
         this.files       = new Map();   // fileId → { file, name }
         this._nextFileId = 1;
-        this.theme       = OpenModelicaViewer.getStartupTheme();
+        this.theme       = ['light', 'dark'].includes(demoParam('theme')) ? demoParam('theme') : OpenModelicaViewer.getStartupTheme();
         this.language    = 'en';
         this.showDescriptions = false;
         this.showPointCounts = true;
@@ -95,6 +96,8 @@ class OpenModelicaViewer {
         this.initSidebarResize();
         this.initTopBarToggle();
         i18n.setLanguage('en');
+        // The guide's frame speaks the language of the app around it.
+        if (DEMO_MODE && demoParam('lang') && demoParam('lang') !== 'en') this.setLanguage(demoParam('lang'));
         // After the language and the stored settings are both in place: the
         // language supplies the default the overrides sit on.
         this._applyNumberFormat();
@@ -112,11 +115,11 @@ class OpenModelicaViewer {
         // Said once, on a device where it is the difference between a usable
         // app and a blank one: how to put a variable on a panel with a finger
         // (#110). After the first paint, so it does not hold the app up.
-        setTimeout(() => this._showTouchHintIfNeeded?.(), 800);
+        if (!DEMO_MODE) setTimeout(() => this._showTouchHintIfNeeded?.(), 800);
         // Full Desktop's Feedback command opens this page with the form
         // requested in the query (src/app/feedback-transport.js): that edition
         // transmits nothing itself, so the browser files the report for it.
-        this.openFeedbackFromUrl?.();
+        if (!DEMO_MODE) this.openFeedbackFromUrl?.();
     }
 
     // ─── File management ───────────────────────────────────────────
@@ -359,7 +362,7 @@ class OpenModelicaViewer {
         const defaults = this._defaultAdvancedSettings();
         let saved = null;
         try {
-            saved = JSON.parse(globalThis.localStorage?.getItem('omv_advanced_settings') || 'null');
+            if (!DEMO_MODE) saved = JSON.parse(globalThis.localStorage?.getItem('omv_advanced_settings') || 'null');
         } catch (_) {
             saved = null;
         }
@@ -418,6 +421,7 @@ class OpenModelicaViewer {
 
     _saveAdvancedSettings(settings = this.advancedSettings) {
         this.advancedSettings = this._normalizeAdvancedSettings(settings);
+        if (DEMO_MODE) return this.advancedSettings;
         try {
             globalThis.localStorage?.setItem('omv_advanced_settings', JSON.stringify({
                 ...this.advancedSettings,

@@ -3,6 +3,8 @@ import Modal from '../../ui/modal.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { initTopBarScroll, placeTopBarMenu } from '../../ui/top-bar-scroll.js';
 import { isTouchCapable } from '../../ui/touch-drag.js';
+import { createGuide, guideIsAvailable } from '../../ui/guide.js';
+import { DEMO_MODE } from '../demo-mode.js';
 import { copyTextToClipboard } from '../../utils/clipboard.js';
 import { NUMBER_DECIMAL_CHOICES, NUMBER_GROUP_CHOICES } from '../../utils/number-format.js';
 import {
@@ -1910,6 +1912,13 @@ proto._renderExtraMenu = function() {
         this.showHelp();
     });
 
+    // The animated guide (src/ui/guide.js): short demos of the features that
+    // are easy to miss. Its demos show the desktop layout, so it is not
+    // offered on the phone layout, nor where it cannot run.
+    const guideItem = this._guideIsOffered()
+        ? makeAction('▶', 'extraGuide', () => this.openGuide(), { titleKey: 'extraGuideTooltip' })
+        : null;
+
     // The phone layout on a large screen: to try it, or for a touch screen
     // that prefers it. The way back is in its More sheet (Layout), which is
     // why the item is not offered while that layout is on.
@@ -1991,7 +2000,9 @@ proto._renderExtraMenu = function() {
     }
     // A desktop application is nothing a phone can install.
     if (!this._compactIsActive?.()) items.push(desktopDownloadItem);
-    items.push(feedbackItem, versionRow, helpItem);
+    items.push(feedbackItem, versionRow);
+    if (guideItem) items.push(guideItem);
+    items.push(helpItem);
     menu.append(...items);
 };
 
@@ -3374,6 +3385,22 @@ proto._loadScriptOnce = function(src) {
     });
 };
 
+// ─── Animated guide ────────────────────────────────────────────
+
+proto._guideIsOffered = function() {
+    return !DEMO_MODE && guideIsAvailable() && !this._compactIsActive?.();
+};
+
+/**
+ * Open the animated guide, on one demo when its id is given ('csv-parsing',
+ * 'fft', 'temporal-profile', 'modelica', 'pypsa': see src/ui/guide-chapters.js).
+ */
+proto.openGuide = function(chapterId) {
+    if (!this._guideIsOffered()) return;
+    if (!this._guide) this._guide = createGuide(this);
+    this._guide.open(chapterId);
+};
+
 proto.showHelp = function() {
     const existingHelp = document.querySelector('.help-backdrop');
     if (existingHelp) {
@@ -3409,7 +3436,21 @@ proto.showHelp = function() {
     closeBtn.setAttribute('aria-label', i18n.t('helpClose'));
     closeBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>';
     heading.append(headingIcon, title);
-    header.append(heading, closeBtn);
+    header.append(heading);
+    if (this._guideIsOffered()) {
+        const guideBtn = document.createElement('button');
+        guideBtn.type = 'button';
+        guideBtn.className = 'help-guide-link';
+        guideBtn.title = i18n.t('extraGuideTooltip');
+        guideBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg><span></span>';
+        guideBtn.querySelector('span').textContent = i18n.t('extraGuide');
+        guideBtn.addEventListener('click', () => {
+            closeBtn.click();
+            this.openGuide();
+        });
+        header.append(guideBtn);
+    }
+    header.append(closeBtn);
 
     const main = document.createElement('div');
     main.className = 'help-modal-main';
