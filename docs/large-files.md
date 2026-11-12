@@ -1,5 +1,10 @@
 # Large files (≥ 500 MB)
 
+> How the app loads a CSV today, whole or in memory-saving mode, and when it
+> offers the conversion to Parquet: see [`csv-loading.md`](csv-loading.md).
+> This note predates the configurable limits; its Node converter script
+> (`bench/csv-to-parquet.mjs`) and the pandas section still apply.
+
 The browser tab DuckDB-WASM runs inside has a hard memory ceiling of about
 **3 GiB on Firefox / 4 GiB on Chrome**. Multi-GB CSV files do not fit there
 during parsing (the parser needs the file *plus* intermediate state).
