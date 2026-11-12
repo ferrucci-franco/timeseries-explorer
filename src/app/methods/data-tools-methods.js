@@ -931,6 +931,8 @@ proto._toggleInterpolateHelpPopover = function(show) {
     popover.hidden = !willShow;
     button.classList.toggle('active', willShow);
     button.setAttribute('aria-expanded', String(willShow));
+    // Wide, beside the sidebar, like every other data-tool help (filter-methods.js).
+    if (willShow) this._positionFilterHelpPopover?.(popover, button);
 };
 
 proto._syncMovingAverageSliderFromInput = function() {
@@ -3963,6 +3965,8 @@ proto._toggleOutlierHelpPopover = function(show) {
     popover.hidden = !willShow;
     button.classList.toggle('active', willShow);
     button.setAttribute('aria-expanded', String(willShow));
+    // Wide, beside the sidebar, like every other data-tool help (filter-methods.js).
+    if (willShow) this._positionFilterHelpPopover?.(popover, button);
 };
 
 // Keep HOW to produce the text, not the text. The panel message is written

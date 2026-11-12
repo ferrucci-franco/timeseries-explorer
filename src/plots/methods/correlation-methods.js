@@ -1183,11 +1183,11 @@ export function installPlotCorrelationMethods(TargetClass) {
     };
 
     proto._showCorrelationHelp = function() {
-        const body = `${PEARSON_FORMULA_HTML}<div class="correlation-help-modal">${i18n.t('correlationHelpModalBody')}</div>`;
+        const body = `<div class="help-doc">${PEARSON_FORMULA_HTML}<div class="correlation-help-modal">${i18n.t('correlationHelpModalBody')}</div></div>`;
         Modal.alert(i18n.t('correlationHelpTitle'), body, {
             html: true,
             icon: false,
-            className: 'correlation-help-dialog',
+            className: 'modal-dialog-help correlation-help-dialog',
         });
     };
 

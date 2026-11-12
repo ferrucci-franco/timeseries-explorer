@@ -1038,8 +1038,8 @@ export function installPlotCurveFitMethods(TargetClass) {
     proto._showCurveFitHelp = function() {
         Modal.alert(
             i18n.t('curveFitHelpTitle'),
-            `<div class="phase2d-fit-help-modal">${i18n.t('curveFitHelp')}<p>${i18n.t('fitExpFamilyHelp')}</p></div>`,
-            { html: true, icon: false, className: 'phase2d-fit-help-dialog' },
+            `<div class="help-doc">${i18n.t('curveFitHelp')}${i18n.t('fitExpFamilyHelp')}</div>`,
+            { html: true, icon: false, className: 'modal-dialog-help phase2d-fit-help-dialog' },
         );
     };
 

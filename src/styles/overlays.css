@@ -147,6 +147,110 @@
     text-align: left;
 }
 
+/* Help dialogs ("?" of an analysis): an explanation is read, not glanced at,
+   so it gets a page-like column — wide enough for ~90 characters a line,
+   left-aligned, sections with headings, air between paragraphs — and scrolls
+   inside the window instead of growing past it. Shared by every analysis help
+   so they all read the same way. */
+.modal-dialog.modal-dialog-help {
+    width: min(calc(100vw - 32px), 820px);
+    max-width: none;
+}
+
+.modal-dialog-help .modal-content {
+    padding: 1.6rem 2rem 1.4rem;
+}
+
+.modal-dialog-help .modal-title {
+    text-align: left;
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.modal-dialog-help .modal-message {
+    white-space: normal;
+    text-align: left;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    max-height: min(68vh, 720px);
+    overflow-y: auto;
+    padding-right: 0.4rem;
+    margin-bottom: 1.2rem;
+}
+
+.modal-dialog-help .help-doc section + section {
+    margin-top: 1.1rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.modal-dialog-help .help-doc h4 {
+    margin: 0 0 0.45rem;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.modal-dialog-help .help-doc p {
+    margin: 0 0 0.6rem;
+}
+
+.modal-dialog-help .help-doc p:last-child,
+.modal-dialog-help .help-doc ul:last-child,
+.modal-dialog-help .help-doc dl:last-child {
+    margin-bottom: 0;
+}
+
+.modal-dialog-help .help-doc ul {
+    margin: 0.2rem 0 0.6rem;
+    padding-left: 1.3rem;
+}
+
+.modal-dialog-help .help-doc li {
+    margin: 0 0 0.35rem;
+}
+
+.modal-dialog-help .help-doc dl {
+    margin: 0.2rem 0 0.6rem;
+    display: grid;
+    grid-template-columns: minmax(9rem, max-content) 1fr;
+    gap: 0.45rem 1.1rem;
+}
+
+.modal-dialog-help .help-doc dt {
+    font-weight: 700;
+}
+
+.modal-dialog-help .help-doc dd {
+    margin: 0;
+    color: var(--text-secondary);
+}
+
+/* A formula on its own line: monospace, in a light chip, never wrapped. */
+.modal-dialog-help .help-doc .help-formula {
+    display: block;
+    margin: 0.35rem 0 0.7rem;
+    padding: 0.45rem 0.8rem;
+    border-radius: 6px;
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9rem;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.modal-dialog-help .help-doc .help-note {
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+}
+
+@media (max-width: 560px) {
+    .modal-dialog-help .modal-content { padding: 1.2rem 1rem 1rem; }
+    .modal-dialog-help .help-doc dl { grid-template-columns: 1fr; gap: 0.15rem; }
+    .modal-dialog-help .help-doc dd { margin-bottom: 0.4rem; }
+}
+
 .modal-dialog-choice .modal-message {
     text-align: left;
     color: var(--text-secondary);
