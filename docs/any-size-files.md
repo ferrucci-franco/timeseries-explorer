@@ -1668,7 +1668,14 @@ una vez—; el costo es casi todo DuckDB leyendo el CSV de nuevo en cada pasada)
 |---|---|---|
 | 200 000 | 0,2 s | 0,6 s (2 pasadas, filas guardadas); 3,0 s leyendo en cada una (23) |
 | 6 M | 6,3 s | 16,4 s (2 pasadas, filas guardadas) |
-| 12 M | BENCH12L | BENCH12E |
+| 12 M | 17,7 s | 415 s (23 pasadas de ~18 s: pasado `FIT_KEEP_LAZY_ROWS`, cada evaluación del pulido relee el rango) |
+
+Por encima de 6 M filas un exponencial tarda minutos: muestra su progreso, y
+se cancela cambiando el pedido (modelo, rango, señal) o cerrando el análisis;
+no hay un botón propio. Bajarlo
+sin perder la igualdad bit a bit pide leer más rápido (un Parquet en lugar de
+un CSV) o guardar más filas; subir `FIT_KEEP_LAZY_ROWS` cuesta 24 bytes por
+fila de memoria transitoria, y queda para cuando se mida en el navegador.
 
 Pruebas:
 
