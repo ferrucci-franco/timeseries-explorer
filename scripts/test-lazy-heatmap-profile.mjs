@@ -47,11 +47,11 @@ const { buildTemporalProfile } = await import(new URL('../src/utils/temporal-pro
 // The panels hand the exact queries the axis they show and name what is left out.
 const heatmapSource = readFileSync(new URL('../src/plots/methods/heatmap-methods.js', import.meta.url), 'utf8');
 assert.match(heatmapSource, /const timeSql = this\._lazyCalendarTimeSql\(fileId\);/, 'the heatmap asks for the displayed axis');
-assert.match(heatmapSource, /transforms,\n\s*timeSql,\n\s*\}\);/, 'and buckets the lazy query by it');
+assert.match(heatmapSource, /transforms,\n\s*timeSql,\n\s*(signal,\n\s*)?\}\);/, 'and buckets the lazy query by it');
 assert.doesNotMatch(heatmapSource, /heatmapLazyUnsupported|heatmapLazyIntegralUnsupported/, 'no "not available yet" is left');
 const profileSource = readFileSync(new URL('../src/plots/methods/temporal-profile-methods.js', import.meta.url), 'utf8');
 assert.match(profileSource, /const timeSql = this\._lazyCalendarTimeSql\(fileId\);/, 'the profile asks for the displayed axis');
-assert.match(profileSource, /transforms,\n\s*timeSql,\n\s*\}\);/, 'and buckets the lazy query by it');
+assert.match(profileSource, /transforms,\n\s*timeSql,\n\s*(signal,\n\s*)?\}\);/, 'and buckets the lazy query by it');
 
 // PlotManager imports Plotly, so the few of its methods the data methods call
 // are sliced out of it (as scripts/test-lazy-histogram.mjs does).

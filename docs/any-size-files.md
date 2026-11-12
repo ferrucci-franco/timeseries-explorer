@@ -1651,8 +1651,8 @@ encima, cada evaluación del pulido es una lectura más. El ajuste temporal hace
 una pasada más para los residuos, diezmados al vuelo
 (`createMinMaxDecimator`, igual a `decimateMinMax`).
 
-Mientras tanto la línea de estado dice *"Ajustando todas las filas del archivo:
-pasada 3, 1 234 567 filas leídas…"*. Un pedido nuevo con otra clave cancela el
+Mientras tanto la píldora de cálculo dice *"Ajustando todas las filas del
+archivo: pasada 3, 1 234 567 filas leídas…"*. Un pedido nuevo con otra clave cancela el
 que reemplaza (`AbortSignal` hasta el stream de DuckDB); el mismo pedido otra
 vez (el panel se redibuja por muchas razones) deja seguir al que está en
 curso; cerrar el análisis lo detiene (`_stopLazyFits`). El 2D guarda sus
@@ -1670,9 +1670,11 @@ una vez—; el costo es casi todo DuckDB leyendo el CSV de nuevo en cada pasada)
 | 6 M | 6,3 s | 16,4 s (2 pasadas, filas guardadas) |
 | 12 M | 17,7 s | 415 s (23 pasadas de ~18 s: pasado `FIT_KEEP_LAZY_ROWS`, cada evaluación del pulido relee el rango) |
 
-Por encima de 6 M filas un exponencial tarda minutos: muestra su progreso, y
-se cancela cambiando el pedido (modelo, rango, señal) o cerrando el análisis;
-no hay un botón propio. Bajarlo
+Por encima de 6 M filas un exponencial tarda minutos: muestra su progreso en
+la píldora de cálculo, cuyo botón **Cancelar** lo detiene y deja el ajuste
+anterior a la vista (como en todo análisis: ver "Implementado: cancelar un
+análisis"); también lo detiene cambiar el pedido (modelo, rango, señal) o
+cerrar el análisis. Bajarlo
 sin perder la igualdad bit a bit pide leer más rápido (un Parquet en lugar de
 un CSV) o guardar más filas; subir `FIT_KEEP_LAZY_ROWS` cuesta 24 bytes por
 fila de memoria transitoria, y queda para cuando se mida en el navegador.
@@ -1696,6 +1698,45 @@ Pruebas:
   el ajuste por trozos en el navegador da el ajuste, los residuos y la curva
   que muestra el panel.
 
+### Implementado: cancelar un análisis
+
+Todo análisis (FFT, histograma, heatmap, perfil temporal, integral, ajuste de
+curvas; correlación y ajuste en el gráfico 2D) muestra, mientras recalcula, la
+misma píldora sobre su resultado (`src/plots/methods/analysis-busy-methods.js`),
+con un botón **Cancelar**. El resultado anterior sigue dibujado mientras tanto
+y se puede seguir explorando: la píldora deja pasar el puntero, solo su botón
+lo toma. Antes solo FFT, perfil e integral tenían píldora, sin botón, y el
+ajuste de curvas y el ajuste 2D borraban la curva anterior mientras esperaban
+la nueva en un archivo lazy; ahora la conservan.
+
+Cancelar detiene el trabajo de verdad, no solo lo ignora:
+
+- las consultas de análisis de `DuckDbSource` (`getRawColumnsRange`,
+  `getCalendarHeatmapAggregates`, `getTemporalProfileAggregates`,
+  `getDefiniteIntegralByDay`, `getPairCorrelations`,
+  `getPhaseRegressionStats`) aceptan `signal`, que cada análisis toma de
+  `_analysisSignal(plot)` y que `_interactiveQuery` convierte en una
+  cancelación de la consulta en DuckDB;
+- los streams (histograma, ajustes por trozos) se cortan por la misma vía, el
+  worker de la FFT se termina, y lo que esperaba el temporizador o el cuadro de
+  pintado se descarta (`_dropAnalysisRuns`, que también usa
+  `_cancelPanelAnalysis` al cerrar un panel o quitar un archivo, y que ahora
+  aborta además el histograma y los ajustes, que antes seguían).
+
+El resultado queda; la línea de estado dice *"Cálculo cancelado: el resultado
+que se ve es el anterior"*, y nada lo vuelve a lanzar hasta que cambie lo
+pedido. Un cálculo en memoria que ya empezó corre en el hilo principal y no
+puede interrumpirse: la píldora aparece antes de que empiece, y cancelado
+entonces no empieza. Una consulta compartida por caché entre dos paneles
+(heatmap, perfil) que se cancela en uno hace que el otro la vuelva a pedir.
+
+Prueba: `scripts/e2e-analysis-cancel.mjs` (Chromium, archivo lazy): para cada
+uno de los ocho análisis, las consultas que llevan la señal se cuelgan hasta
+abortarse —lo que prueba que la llevan—, se pide un recálculo, la píldora
+aparece sobre el resultado anterior, Cancelar aborta la consulta, quita la
+píldora, deja el resultado y el mensaje, nada se relanza solo, y luego el
+análisis vuelve a calcular.
+
 ### Regla: lo nuevo nace funcionando en lazy
 
 Este ajuste se escribió después de la fase 4 sin pensar en lazy, y reabrió una
@@ -1705,8 +1746,9 @@ sesiones de Claude Code y `CONTRIBUTING.md` para las personas—: **todo
 análisis, herramienta de datos o exportación nueva trabaja sobre todas las
 filas de un archivo lazy y da el resultado del modo estándar**, leyendo el
 archivo (SQL, o un stream por trozos con un núcleo que acumula), nunca el
-resumen en memoria; sin topes ni muestras silenciosas; con progreso y cancelar
-cuando tarda; y con su prueba de paridad sobre DuckDB-WASM real. Lo que no
+resumen en memoria; sin topes ni muestras silenciosas; con la píldora de
+cálculo y su botón Cancelar mientras trabaja, sin borrar el resultado
+anterior; y con su prueba de paridad sobre DuckDB-WASM real. Lo que no
 pueda ser exacto lo dice en la interfaz y queda anotado aquí.
 
 ### Implementado (fase 4b-5): los resultados en disco, conservados entre sesiones, y la continuación en vivo

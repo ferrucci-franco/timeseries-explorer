@@ -239,7 +239,17 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                     const curve = cached.fit.status === 'ok' ? buildFitCurve(cached.fit, undefined, curveOptions) : { x: [], y: [] };
                     results.push({ pair, index, label, model, fit: cached.fit, curve, nScope: cached.nScope, lazy: true });
                 } else {
-                    results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: true, lazyStatus: cached?.status });
+                    // Until the new fit arrives (or after it was cancelled from
+                    // the computing pill) the previous curve stays drawn; `fit`
+                    // stays null, so the drawer does not present it as current.
+                    const sameKey = cached?.key === key;
+                    const previous = sameKey ? cached?.previous : (cached?.fit || cached?.previous);
+                    const curve = previous?.status === 'ok' ? buildFitCurve(previous, undefined, curveOptions) : null;
+                    results.push({
+                        pair, index, label, model, fit: null, curve, nScope: NaN, lazy: true,
+                        lazyStatus: sameKey ? cached?.status : 'pending', stale: !!curve,
+                        curveModel: curve ? previous.model : null,
+                    });
                 }
                 return;
             }
@@ -288,7 +298,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const lazyPairs = (plot.phaseTraces || []).filter(p => {
             if (p.visible === false || this._phase2dPairModel(p) === 'none' || !this._isLazyFile?.(p.fileId)) return false;
             const cached = plot._phase2dLazyFits.get(this._phase2dPairId(p));
-            return !(cached && cached.status === 'ok' && cached.key === this._phase2dLazyFitKey(plot, p));
+            // Known for what is asked now, or cancelled from the pill for it:
+            // either way not fitted again until something changes.
+            const key = this._phase2dLazyFitKey(plot, p);
+            return !(cached && cached.key === key && (cached.status === 'ok' || cached.status === 'cancelled'));
         });
         const wanted = lazyPairs.map(p => this._phase2dLazyFitKey(plot, p)).join('\u0001');
         // The same fits already under way: let them finish. Anything else asked
@@ -304,6 +317,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const job = { wanted, controller };
         plot._phase2dLazyJob = job;
         const signal = controller?.signal || null;
+        this._setPhase2dFitStatus(plot, i18n.t('phase2dFitLazyPending'), 'loading');
 
         const [lo, hi] = this._phase2dFitActiveRange(plot);
         const byFile = new Map();
@@ -336,14 +350,14 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                                 signX: this.isVariableSignInverted?.(fileId, p.x) ? -1 : 1,
                                 signY: this.isVariableSignInverted?.(fileId, p.y) ? -1 : 1,
                             })),
-                            { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset },
+                            { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset, signal },
                         );
                         sqlPairs.forEach((p, i) => byPair.set(p, stats?.[i]));
                     }
                 }
                 for (const pair of rowPairs) {
                     const model = this._phase2dPairModel(pair);
-                    const rows = await this._fetchLazyFitRows(fileId, [pair.x, pair.y], [lo, hi]);
+                    const rows = await this._fetchLazyFitRows(fileId, [pair.x, pair.y], [lo, hi], undefined, signal);
                     if (rows.ok) {
                         const fit = fitPair(model, rows.valuesByVar.get(pair.x), rows.valuesByVar.get(pair.y));
                         byPair.set(pair, { status: 'ok', fit, nScope: rows.time.length });
@@ -379,6 +393,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot._phase2dLazyJob === job) plot._phase2dLazyJob = null;
         if (plot._phase2dLazyToken !== token) return; // superseded while awaiting
         if (settled.some(entry => entry.aborted)) return;
+        this._setPhase2dFitIdleStatus(plot);
 
         for (const job of settled) {
             job.pairs.forEach((pair, i) => {
@@ -412,7 +427,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const traces = [];
         for (const r of results) {
             if (!r.curve || !r.curve.x.length) continue;
-            const modelWord = i18n.t(FIT_MODEL_SHORT_KEYS[r.model] || 'phase2dFitLinear');
+            // Named by the model of the curve on screen (the previous one's,
+            // while a new fit is computed).
+            const modelWord = i18n.t(FIT_MODEL_SHORT_KEYS[r.curveModel || r.model] || 'phase2dFitLinear');
             traces.push({
                 x: r.curve.x,
                 y: r.curve.y,
@@ -1026,7 +1043,48 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         this._schedulePhase2dFitRecompute(panelId, { immediate: true });
     };
 
+    // The status line once nothing is computing: the auto-range pointer if
+    // the range was limited, else empty.
+    proto._setPhase2dFitIdleStatus = function(plot) {
+        const state = this._ensurePhase2dState(plot);
+        this._setPhase2dFitStatus(
+            plot,
+            state.autoRangeWarning ? i18n.t('phase2dFitWarningSeePanel') : '',
+            state.autoRangeWarning ? 'warning' : 'muted',
+            state.autoRangeWarning || '',
+        );
+    };
+
+    // Cancel from the pill: every lazy pair still being fitted is kept as
+    // cancelled under the key it was asked for (so a refresh does not start
+    // it again), with its previous fit, whose curve stays drawn.
+    proto._markPhase2dFitsCancelled = function(plot) {
+        if (!plot || plot.mode !== 'phase2d' || !plot._phase2dLazyJob) return;
+        if (!plot._phase2dLazyFits) plot._phase2dLazyFits = new Map();
+        let marked = 0;
+        for (const pair of plot.phaseTraces || []) {
+            if (pair.visible === false || this._phase2dPairModel(pair) === 'none' || !this._isLazyFile?.(pair.fileId)) continue;
+            const id = this._phase2dPairId(pair);
+            const key = this._phase2dLazyFitKey(plot, pair);
+            const cached = plot._phase2dLazyFits.get(id);
+            if (cached && cached.key === key && cached.status === 'ok') continue;
+            const previous = cached?.key === key ? cached?.previous : (cached?.fit || cached?.previous);
+            plot._phase2dLazyFits.set(id, { key, fit: null, nScope: NaN, status: 'cancelled', previous: previous || null });
+            marked++;
+        }
+        const panelId = this._panelIdForPlot?.(plot);
+        if (marked && panelId) {
+            queueMicrotask(() => {
+                if (this.plots.get(panelId) !== plot || plot.mode !== 'phase2d') return;
+                this._rerenderPhase2dPlot(panelId, plot);
+                this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });
+            });
+        }
+    };
+
     proto._setPhase2dFitStatus = function(plot, message, type = 'muted', tooltip = '') {
+        // While it loads, the shared computing pill with its Cancel button.
+        this._setAnalysisComputing?.(plot, type === 'loading', { label: message });
         const el = plot?.phase2dFitContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';
@@ -1156,6 +1214,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._phase2dFitWarningText = function(fit, lazy, lazyStatus) {
         if (!fit) {
             if (lazy) {
+                if (lazyStatus === 'cancelled') return i18n.t('analysisCancelled');
                 if (lazyStatus === 'error') return i18n.t('phase2dFitLazyError');
                 if (lazyStatus === 'noRegr' || lazyStatus === 'noSql') return i18n.t('phase2dFitLazyNoRegr');
                 if (lazyStatus === 'undefined') return i18n.t('phase2dFitNoData');

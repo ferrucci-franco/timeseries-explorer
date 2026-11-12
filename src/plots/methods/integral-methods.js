@@ -1159,6 +1159,7 @@ proto._queryLazyIntegralDays = async function(plot, lazy, state, range, warnings
         if (!byFile.has(candidate.trace.fileId)) byFile.set(candidate.trace.fileId, []);
         byFile.get(candidate.trace.fileId).push(candidate);
     }
+    const signal = this._analysisSignal(plot);
     for (const [fileId, candidates] of byFile) {
         const data = this.files.get(fileId)?.data;
         const source = data?._duckdb?.source;
@@ -1185,6 +1186,7 @@ proto._queryLazyIntegralDays = async function(plot, lazy, state, range, warnings
                 range,
                 missingPolicy: state.missingPolicy,
                 transforms,
+                signal,
             });
             if (!result?.ok) {
                 for (const candidate of candidates) warnings.push(`${candidate.name}: ${text('integralLazyUnsupported')}`);
@@ -1199,6 +1201,8 @@ proto._queryLazyIntegralDays = async function(plot, lazy, state, range, warnings
                 if (entry) byTrace.set(candidate.trace, entry);
             }
         } catch (error) {
+            // Cancelled from the computing pill: the caller's token is gone.
+            if (error?.name === 'AbortError') return byTrace;
             for (const candidate of candidates) {
                 warnings.push(`${candidate.name}: ${text('integralLazyFailed')}`);
             }
@@ -1208,30 +1212,12 @@ proto._queryLazyIntegralDays = async function(plot, lazy, state, range, warnings
     return byTrace;
 };
 
-// The same non-blocking pill the lazy FFT and Profile use: it sits above the
-// analysis pane with pointer-events:none, so the previous bars stay readable
-// and pannable while the replacement is being queried.
+// The shared computing pill (analysis-busy-methods.js): it sits above the
+// analysis pane with pointer-events off, so the previous bars stay readable
+// and pannable while the replacement is being computed; its Cancel button
+// stops the computation and keeps them.
 proto._setIntegralComputing = function(plot, loading) {
-    const pane = plot?.integralDiv?.parentElement;
-    if (!pane) return;
-    let pill = pane.querySelector('.integral-computing-indicator');
-    if (loading) {
-        if (!pill) {
-            pill = document.createElement('div');
-            pill.className = 'lazy-detail-indicator integral-computing-indicator';
-            pill.setAttribute('aria-live', 'polite');
-            pill.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
-            pane.appendChild(pill);
-        }
-        const label = text('integralCalculating');
-        const labelElement = pill.querySelector('.lazy-detail-text');
-        if (labelElement) labelElement.textContent = label;
-        pill.setAttribute('aria-label', label);
-        pill.classList.add('active');
-    } else if (pill) {
-        pill.classList.remove('active');
-        pill.remove();
-    }
+    this._setAnalysisComputing(plot, loading, { label: text('integralCalculating'), className: 'integral-computing-indicator' });
 };
 
 // ─── Calendar grouping ────────────────────────────────────────────────────

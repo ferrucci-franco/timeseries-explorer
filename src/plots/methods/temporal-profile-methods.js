@@ -792,6 +792,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
         // panel shows (_lazyCalendarTimeSql) with the file's transforms; a
         // signal with SQL over the file (a column, a data tool's output, a
         // formula) is exact, one that exists only on the overview is left out.
+        const signal = this._analysisSignal(plot);
         const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
             const data = this.files.get(fileId)?.data;
             const source = data?._duckdb?.source;
@@ -820,14 +821,24 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
                     selectionRange: state.rangeFull ? null : range,
                     transforms,
                     timeSql,
+                    signal,
                 });
                 return { fileId, entries, result };
             } catch (error) {
+                if (error?.name === 'AbortError') return { fileId, entries, aborted: true, foreign: this._isForeignAbort(error, signal) };
                 console.warn('[temporal-profile] lazy query failed:', error);
                 return { fileId, entries, error };
             }
         });
         const settled = await Promise.all(jobs);
+        // A query shared with a panel whose analysis was cancelled: this run
+        // did not ask for that, so it starts again. Cancelled here: its token
+        // is gone, and the check below drops it.
+        if (settled.some(job => job.foreign) && plot._temporalProfileToken === token) {
+            plot._temporalProfileToken += 1;
+            this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+            return;
+        }
         if (plot._temporalProfileToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'temporal-profile') return;
         if (!plot._temporalProfileLazyStepMs) plot._temporalProfileLazyStepMs = new Map();
         for (const job of settled) {
@@ -1072,26 +1083,8 @@ proto._setTemporalProfileStatus = function(plot, message, kind = 'muted') {
 // pane and has pointer-events:none, so the previous profile remains fully
 // pannable/zoomable until the replacement is ready.
 proto._setTemporalProfileComputing = function(plot, loading) {
-    const pane = plot?.temporalProfileDiv?.parentElement;
-    if (!pane) return;
-    let pill = pane.querySelector('.temporal-profile-computing-indicator');
-    if (loading) {
-        if (!pill) {
-            pill = document.createElement('div');
-            pill.className = 'lazy-detail-indicator temporal-profile-computing-indicator';
-            pill.setAttribute('aria-live', 'polite');
-            pill.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
-            pane.appendChild(pill);
-        }
-        const label = text('temporalProfileCalculating');
-        const labelElement = pill.querySelector('.lazy-detail-text');
-        if (labelElement) labelElement.textContent = label;
-        pill.setAttribute('aria-label', label);
-        pill.classList.add('active');
-    } else if (pill) {
-        pill.classList.remove('active');
-        pill.remove();
-    }
+    // The shared pill (analysis-busy-methods.js), with its Cancel button.
+    this._setAnalysisComputing(plot, loading, { label: text('temporalProfileCalculating'), className: 'temporal-profile-computing-indicator' });
 };
 
 proto._syncTemporalProfileMessage = function(plot) {

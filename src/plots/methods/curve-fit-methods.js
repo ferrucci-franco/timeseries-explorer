@@ -272,7 +272,14 @@ export function installPlotCurveFitMethods(TargetClass) {
                 return;
             }
             if (lazy) {
-                results.push({ ...base, lazy: true, lazyStatus: cached?.key === key ? cached.status : 'pending', key, range, info });
+                // Until the new fit arrives (or after it was cancelled) the
+                // previous one stays drawn — staleResult, never `result`: the
+                // drawer, the CSV and Save read `result`, which is the fit of
+                // what is asked now.
+                const sameKey = cached?.key === key;
+                const lazyStatus = sameKey ? cached.status : 'pending';
+                const staleResult = sameKey ? (cached.previous || null) : (cached?.result || cached?.previous || null);
+                results.push({ ...base, lazy: true, lazyStatus, key, range, info, staleResult });
                 return;
             }
             const rows = this._curveFitEagerRows(trace, range);
@@ -288,7 +295,8 @@ export function installPlotCurveFitMethods(TargetClass) {
     // panel's transforms), then fit like an eager one. Token-guarded so a
     // superseded query never paints.
     proto._refreshCurveFitLazy = async function(panelId, plot, results) {
-        const pending = (results || []).filter(r => r.lazy && !r.result && r.key);
+        // A fit cancelled from the pill waits for its inputs to change.
+        const pending = (results || []).filter(r => r.lazy && !r.result && r.key && r.lazyStatus !== 'cancelled');
         // One job per fit, under the key it was asked for. A refresh that asks
         // for the same key lets the job finish (a streamed fit of a large file
         // can take minutes, and the panel refreshes for many reasons); a job
@@ -312,7 +320,7 @@ export function installPlotCurveFitMethods(TargetClass) {
             const current = () => jobs.get(r.entry.id) === job;
             let entry;
             try {
-                const rows = await this._fetchLazyFitRows(r.trace.fileId, [r.trace.varName], r.range, FIT_MAX_LAZY_ROWS);
+                const rows = await this._fetchLazyFitRows(r.trace.fileId, [r.trace.varName], r.range, FIT_MAX_LAZY_ROWS, signal);
                 if (!current()) continue;
                 if (rows.ok) {
                     const result = this._curveFitFromRows(plot, r.entry, r.trace, r.range, r.info,
@@ -343,6 +351,28 @@ export function installPlotCurveFitMethods(TargetClass) {
             plot._curveFitCache.set(r.entry.id, entry);
             if (this.plots.get(panelId) !== plot || plot.mode !== 'curve-fit') return;
             this._paintCurveFits(panelId, plot, this._computeCurveFits(plot));
+        }
+    };
+
+    // Cancel from the pill: every lazy fit still pending is kept as cancelled
+    // under the key it was asked for (so a refresh does not start it again),
+    // with the fit drawn before it, which stays on screen.
+    proto._markCurveFitsCancelled = function(plot) {
+        if (!plot?._curveFitCache) return;
+        let marked = 0;
+        for (const r of plot._curveFitResults || []) {
+            if (!r.lazy || r.result || !r.key || r.lazyStatus !== 'pending') continue;
+            plot._curveFitCache.set(r.entry.id, { key: r.key, result: null, status: 'cancelled', previous: r.staleResult || null });
+            r.lazyStatus = 'cancelled';
+            marked++;
+        }
+        // Repaint what is already known (no fit is computed here): the
+        // previous curves stay, the drawer and the status say "cancelled".
+        const panelId = this._panelIdForPlot?.(plot);
+        if (marked && panelId && plot.mode === 'curve-fit' && plot.div) {
+            queueMicrotask(() => {
+                if (this.plots.get(panelId) === plot && plot.mode === 'curve-fit') this._paintCurveFits(panelId, plot, plot._curveFitResults || []);
+            });
         }
     };
 
@@ -377,7 +407,9 @@ export function installPlotCurveFitMethods(TargetClass) {
         this._renderCurveFitDrawer(panelId, plot, results);
         const fitted = results.filter(r => r.result?.fit?.status === 'ok').length;
         const pending = results.some(r => r.lazy && !r.result && r.lazyStatus === 'pending');
+        const cancelled = results.some(r => r.lazy && !r.result && r.lazyStatus === 'cancelled');
         if (pending) this._setCurveFitStatus(plot, i18n.t('phase2dFitLazyPending'), 'loading');
+        else if (cancelled) this._setCurveFitStatus(plot, i18n.t(results.some(r => r.staleResult) ? 'analysisCancelledKept' : 'analysisCancelled'), 'muted');
         else this._setCurveFitStatus(plot, fitted ? i18n.t('curveFitStatus').replace('{count}', String(fitted)) : '', 'muted');
     };
 
@@ -393,10 +425,16 @@ export function installPlotCurveFitMethods(TargetClass) {
     proto._buildCurveFitCurveTraces = function(plot, results = plot._curveFitResults || []) {
         const traces = [];
         const extrapolate = !!this._ensureCurveFitState(plot).extrapolate;
-        for (const r of results) {
+        for (const entry of results) {
+            // What is drawn: the fit, or while a new one is computed (or after
+            // it was cancelled) the previous one.
+            const shown = entry.result || entry.staleResult || null;
+            const r = shown === entry.result ? entry : { ...entry, result: shown };
             const curve = r.result?.curve;
             if (!curve?.x?.length) continue;
-            const name = `F${r.index + 1} · ${this._curveFitModelName(r.entry.model)}`;
+            // Named by the model of the curve on screen (the previous one's,
+            // while a new fit is computed).
+            const name = `F${r.index + 1} · ${this._curveFitModelName(r.result.fit?.model || r.entry.model)}`;
             traces.push({
                 x: curve.x,
                 y: curve.y,
@@ -579,7 +617,7 @@ export function installPlotCurveFitMethods(TargetClass) {
         if (!div) return Promise.resolve();
         const traces = [];
         for (const r of results) {
-            const residual = r.result?.residual;
+            const residual = (r.result || r.staleResult)?.residual;
             if (!residual?.x?.length) continue;
             const name = `F${r.index + 1}`;
             traces.push({
@@ -1034,6 +1072,8 @@ export function installPlotCurveFitMethods(TargetClass) {
     };
 
     proto._setCurveFitStatus = function(plot, message, type = 'muted') {
+        // While it loads, the shared computing pill with its Cancel button.
+        this._setAnalysisComputing?.(plot, type === 'loading', { label: message });
         const el = plot?.curveFitContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';
@@ -1102,6 +1142,7 @@ export function installPlotCurveFitMethods(TargetClass) {
 
     proto._curveFitWarningText = function(r) {
         if (!r.result) {
+            if (r.lazy && r.lazyStatus === 'cancelled') return i18n.t(r.staleResult ? 'analysisCancelledKept' : 'analysisCancelled');
             if (r.lazy) {
                 if (r.lazyStatus === 'error') return i18n.t('phase2dFitLazyError');
                 return i18n.t('phase2dFitLazyPending');

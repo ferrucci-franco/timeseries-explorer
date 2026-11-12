@@ -1131,6 +1131,7 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
         if (!byFile.has(trace.fileId)) byFile.set(trace.fileId, []);
         byFile.get(trace.fileId).push(trace);
     }
+    const signal = this._analysisSignal(plot);
     for (const [fileId, traces] of byFile) {
         if (plot._calendarHeatmapToken !== token) return;
         const data = this.files.get(fileId)?.data;
@@ -1161,6 +1162,7 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
                 selectionRange: ctx.rangeFull ? null : [ctx.rangeStart, ctx.rangeEnd],
                 transforms,
                 timeSql,
+                signal,
             });
             if (plot._calendarHeatmapToken !== token) return;
             if (!result?.ok) {
@@ -1203,6 +1205,16 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
                 ctx.modelByTrace.set(trace, { trace, grid: dense });
             }
         } catch (error) {
+            if (error?.name === 'AbortError') {
+                // Cancelled from the pill (its token is gone already), or a
+                // query shared with a panel whose analysis was cancelled: this
+                // run did not ask for that, so it starts again.
+                if (this._isForeignAbort(error, signal)) {
+                    plot._calendarHeatmapToken = (plot._calendarHeatmapToken || 0) + 1;
+                    this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
+                }
+                return;
+            }
             for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
         }
     }
@@ -1555,6 +1567,8 @@ proto._renderCalendarHeatmapModels = function(panelId, plot = this.plots.get(pan
 };
 
 proto._setCalendarHeatmapStatus = function(plot, message, kind = 'muted') {
+    // While it loads, the shared computing pill with its Cancel button.
+    this._setAnalysisComputing?.(plot, kind === 'loading', { label: message });
     const status = plot?.heatmapContainer?.querySelector('.heatmap-status');
     const displayKind = kind === 'blocked' ? 'warning' : kind;
     if (status) {

@@ -1121,7 +1121,7 @@ export default class DuckDbSource {
      * `maxRows + 1` rows; `truncated` tells the UI to reject the request before
      * running an expensive calculation on an oversized selection.
      */
-    async getRawColumnsRange(legacyData, varNames, t0, t1, maxRows = 500000) {
+    async getRawColumnsRange(legacyData, varNames, t0, t1, maxRows = 500000, { signal = null } = {}) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getRawColumnsRange: data is not DuckDB-backed (eager mode)');
         const requested = [...new Set(varNames || [])]
@@ -1141,7 +1141,7 @@ export default class DuckDbSource {
 
         const limit = Math.max(1, Math.round(Number(maxRows) || 1)) + 1;
         const sql = this._rawRowsSql(legacyData, requested, { lo, hi, limit, withRowIndex: true });
-        const result = await this._interactiveQuery(sql);
+        const result = await this._interactiveQuery(sql, { signal });
         const xFull = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
         const rowIndexFull = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
         const truncated = xFull.length > limit - 1;
@@ -3316,6 +3316,8 @@ export default class DuckDbSource {
      * Without it the file's datetime column is the axis.
      */
     async getCalendarHeatmapAggregates(legacyData, varNames, options = {}) {
+        // Cancelled with the analysis that asked (analysis-busy-methods.js).
+        const signal = options?.signal || null;
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getCalendarHeatmapAggregates: data is not DuckDB-backed (eager mode)');
         const calendarMode = options.calendarMode === 'day-hour' ? 'day-hour' : 'week-day';
@@ -3351,7 +3353,7 @@ export default class DuckDbSource {
         const cached = cacheKey ? this._heatmapCache.get(cacheKey) : null;
         if (cached) return (cached instanceof Promise) ? cached : cached;
 
-        const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql };
+        const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql, signal };
         const promise = integral
             ? this._queryCalendarHeatmapIntegral(meta, legacyData, usable, queryOpts)
             : this._queryCalendarHeatmapAggregates(meta, legacyData, usable, queryOpts);
@@ -3470,7 +3472,7 @@ export default class DuckDbSource {
             FROM bucketed
             GROUP BY col_start, row_idx`;
 
-        const result = await this._interactiveQuery(sql);
+        const result = await this._interactiveQuery(sql, { signal: opts?.signal || null });
         const rows = this._arrowRowsToObjects(result);
         const traces = usable.map(({ varName }, index) => {
             const cells = [];
@@ -3616,7 +3618,7 @@ export default class DuckDbSource {
                     (SELECT m FROM med)::DOUBLE AS median_step
                 FROM joined`;
 
-            const rows = this._arrowRowsToObjects(await this._interactiveQuery(sql));
+            const rows = this._arrowRowsToObjects(await this._interactiveQuery(sql, { signal: opts?.signal || null }));
             const violations = rows.length ? Number(rows[0].violations) : 0;
             const medianStep = rows.length ? rows[0].median_step : null;
             // Mirror the eager kernel: unsorted input or fewer than two finite
@@ -3670,6 +3672,8 @@ export default class DuckDbSource {
      * negativeDtCount, gapCount, nanSegmentCount }] }`.
      */
     async getDefiniteIntegralByDay(legacyData, varNames, options = {}) {
+        // Cancelled with the analysis that asked (analysis-busy-methods.js).
+        const signal = options?.signal || null;
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getDefiniteIntegralByDay: data is not DuckDB-backed (eager mode)');
         if (legacyData?.metadata?.timeKind !== 'datetime') {
@@ -3874,7 +3878,7 @@ export default class DuckDbSource {
                 FROM joined
                 ORDER BY day`;
 
-            const rows = this._arrowRowsToObjects(await this._interactiveQuery(sql));
+            const rows = this._arrowRowsToObjects(await this._interactiveQuery(sql, { signal }));
             const head = rows[0] || {};
             traces.push({
                 varName,
@@ -3917,6 +3921,8 @@ export default class DuckDbSource {
      * compact rows cross into JavaScript. Multiple variables share the scan.
      */
     async getTemporalProfileAggregates(legacyData, varNames, options = {}) {
+        // Cancelled with the analysis that asked (analysis-busy-methods.js).
+        const signal = options?.signal || null;
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getTemporalProfileAggregates: data is not DuckDB-backed (eager mode)');
         // The axis the panel shows, in epoch ms (`options.timeSql`, see
@@ -3978,11 +3984,11 @@ export default class DuckDbSource {
         const promise = (async () => {
             // The time axis alone, with the windows it may read (a row number).
             const statsArgs = { tableName: this._fromSql(legacyData, [{ _duckdbWindows: timeSql.windows }]), timeExpression: tExpr, whereSql };
-            let statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql(statsArgs)));
+            let statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql(statsArgs), { signal }));
             let stats = statsRows[0] || {};
             let ordered = Number(stats.order_violations) > 0;
             if (ordered) {
-                statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql({ ...statsArgs, ordered: true })));
+                statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql({ ...statsArgs, ordered: true }), { signal }));
                 stats = statsRows[0] || {};
             }
             const medianStepMs = stats.median_step == null ? null : Number(stats.median_step);
@@ -4018,7 +4024,7 @@ export default class DuckDbSource {
                 ordered,
             });
             if (!aggregate.ok) return { ...aggregate, blocked, traces: [] };
-            const rows = this._arrowRowsToObjects(await this._interactiveQuery(aggregate.sql));
+            const rows = this._arrowRowsToObjects(await this._interactiveQuery(aggregate.sql, { signal }));
             const reduced = temporalProfilesFromFinalRows(rows, {
                 period,
                 resolutionUnit,
@@ -4131,6 +4137,8 @@ export default class DuckDbSource {
     // applying pairwise deletion — exact parity with the eager kernel. Never
     // reads raw rows; returns O(pairs). All pairs are from `legacyData`.
     async getPairCorrelations(legacyData, pairs, options = {}) {
+        // Cancelled with the analysis that asked (analysis-busy-methods.js).
+        const signal = options?.signal || null;
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getPairCorrelations: data is not DuckDB-backed (eager mode)');
         const list = Array.isArray(pairs) ? pairs : [];
@@ -4173,7 +4181,7 @@ export default class DuckDbSource {
         const sql = buildPairCorrelationSql(tExpr, this._fromSql(legacyData, active.flatMap(r => [r.vx, r.vy])), where, pairExprs);
 
         const promise = (async () => {
-            const result = await this._interactiveQuery(sql);
+            const result = await this._interactiveQuery(sql, { signal });
             return parsePairCorrelations(
                 (name) => { const v = result?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
                 active.length,
@@ -4198,6 +4206,8 @@ export default class DuckDbSource {
     // kernel produces (linearFromMoments / quadraticFromMoments), or a status of
     // 'noSql' / 'noRegr' when unavailable.
     async getPhaseRegressionStats(legacyData, pairs, options = {}) {
+        // Cancelled with the analysis that asked (analysis-busy-methods.js).
+        const signal = options?.signal || null;
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getPhaseRegressionStats: data is not DuckDB-backed (eager mode)');
         const list = Array.isArray(pairs) ? pairs : [];
@@ -4251,7 +4261,7 @@ export default class DuckDbSource {
         });
 
         const promise = this._runRegressionQueries(
-            this._fromSql(legacyData, active.flatMap(r => [r.vx, r.vy])), where, pairExprs, active);
+            this._fromSql(legacyData, active.flatMap(r => [r.vx, r.vy])), where, pairExprs, active, signal);
         if (cacheKey) this._rememberRegressionCache(cacheKey, promise);
         try {
             const activeResults = await promise;
@@ -4263,10 +4273,10 @@ export default class DuckDbSource {
         }
     }
 
-    async _runRegressionQueries(tableName, where, pairExprs, active) {
+    async _runRegressionQueries(tableName, where, pairExprs, active, signal = null) {
         // Pass 1: moments + centre/scale for every pair.
         const sql1 = buildRegressionPass1Sql(tableName, where, pairExprs);
-        const res1 = await this._interactiveQuery(sql1);
+        const res1 = await this._interactiveQuery(sql1, { signal });
         const pass1 = parseRegressionPass1(
             (name) => { const v = res1?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
             pairExprs.length,
@@ -4283,7 +4293,7 @@ export default class DuckDbSource {
         let pass2 = new Map();
         if (quadExprs.length) {
             const sql2 = buildRegressionPass2Sql(tableName, where, quadExprs, (v) => this._numericLiteral(v));
-            const res2 = await this._interactiveQuery(sql2);
+            const res2 = await this._interactiveQuery(sql2, { signal });
             pass2 = parseRegressionPass2(
                 (name) => { const v = res2?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
                 quadExprs,

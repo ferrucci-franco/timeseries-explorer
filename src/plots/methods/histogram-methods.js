@@ -744,6 +744,8 @@ proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
 // paragraph — goes to the drawer box, exactly as FFT, Heatmap, Profile and
 // Integral do. The bar only points there and keeps the text as its tooltip.
 proto._setHistogramStatus = function(plot, text, kind = 'muted', warnings = []) {
+    // While it loads, the shared computing pill with its Cancel button.
+    this._setAnalysisComputing?.(plot, kind === 'loading', { label: text });
     const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
     plot._histogramWarningMessage = list.join(' | ');
     plot._histogramStatusKind = list.length ? 'warning' : kind;
