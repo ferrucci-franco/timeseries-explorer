@@ -44,6 +44,13 @@ export const ANALYSIS_ART = {
         + '<path class="art-fill" d="M24 48V26c6-8 10-12 16-8s10 12 16 8 8-10 14-12v34z"/>'
         + '<path class="art-line" d="M10 38c6-4 10-8 14-12 6-8 10-12 16-8s10 12 16 8 8-10 14-12c6-2 10 2 16 6"/>'
         + '<path class="art-bound" d="M24 12v36M70 8v40"/>'),
+    // A signal, two stretches of it, and the curve fitted to each.
+    'curve-fit': art(
+        '<path class="art-faint" d="M8 6v42h82"/>'
+        + '<path class="art-bound" d="M14 8v40M48 8v40M52 8v40M86 8v40"/>'
+        + '<path class="art-faint" d="M10 44h6c4 0 6-4 10-10s6-12 10-16 10-7 14-7 8 1 12 1 8 0 12-1 8 0 12 0"/>'
+        + '<path class="art-line" d="M14 42C24 32 36 18 48 13"/>'
+        + '<path class="art-line" d="M52 12c10-1 22-1 34-1"/>'),
     // The analyses of a 2D plot. "None" is the 2D plot itself.
     phase2d: art(
         '<path class="art-faint" d="M8 6v42h82"/>'

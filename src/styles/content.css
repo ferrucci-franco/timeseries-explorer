@@ -1578,6 +1578,48 @@
     text-overflow: ellipsis;
 }
 
+/* Time-series Curve Fit: a list of fits, each with its own range. */
+.curve-fit-options .phase2d-fit-field {
+    flex-wrap: wrap;
+}
+
+.curve-fit-options .phase2d-fit-field-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 3.6em;
+}
+
+.curve-fit-list-actions {
+    display: flex;
+    gap: 4px;
+    flex: 1 0 100%;
+    justify-content: flex-end;
+}
+
+.curve-fit-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+.curve-fit-origin {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    margin: 2px 0 4px;
+}
+
+.curve-fit-container.curve-fit-residuals-hidden .fft-plot-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+
+.curve-fit-residuals-hidden .curve-fit-residual-pane,
+.curve-fit-residuals-hidden .fft-splitter {
+    display: none;
+}
+
 .phase2d-fit-type-field .fft-help-btn {
     flex: 0 0 auto;
 }
