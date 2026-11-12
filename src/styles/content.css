@@ -1610,6 +1610,39 @@
     margin: 2px 0 4px;
 }
 
+.curve-fit-save {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.curve-fit-save-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.curve-fit-extrapolate {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.curve-fit-save-message {
+    font-size: 0.72rem;
+    overflow-wrap: anywhere;
+}
+
+.curve-fit-save-ok { color: color-mix(in srgb, #16a34a 78%, var(--text-primary)); }
+.curve-fit-save-warning { color: var(--warning-color); }
+.curve-fit-save-error { color: var(--error-color, #d32f2f); }
+
 .curve-fit-container.curve-fit-residuals-hidden .fft-plot-area {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
