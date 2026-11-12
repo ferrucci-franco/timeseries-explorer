@@ -95,7 +95,7 @@ const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'
     assert.match(interaction, /case 'curve-fit': return this\._curveFitDomain/, 'its time domain is known');
     const manager = read('src/plots/plot-manager.js');
     assert.match(manager, /installPlotCurveFitMethods\(PlotManager\);/);
-    assert.match(manager, /plot\.mode === 'curve-fit'\) \{\n\s+this\._createCurveFitChart/, 'built by the chart dispatcher');
+    assert.match(manager, /plot\.mode === 'curve-fit'\) \{\s+this\._createCurveFitChart/, 'built by the chart dispatcher');
     assert.match(manager, /closest\('\.curve-fit-container'\)/, 'torn down before the generic fft-container shell');
     assert.ok(manager.indexOf('if (curveFitContainer) {') < manager.indexOf('} else if (fftContainer) {'), 'its branch runs before the fft one');
     assert.match(manager, /plot\.mode === 'curve-fit' && this\._exportCurveFitCsv/, 'exports its own CSV');
