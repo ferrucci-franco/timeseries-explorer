@@ -207,6 +207,7 @@ html.demo *{scroll-behavior:auto !important}`;
             clientX: this.x, clientY: this.y, screenX: this.x, screenY: this.y,
             pointerId: 1, pointerType: 'mouse', isPrimary: true,
             button: type === 'pointermove' ? -1 : 0, buttons: this.isDown ? 1 : 0,
+            ctrlKey: !!this.ctrl, metaKey: false,
         }));
     }
 
@@ -215,7 +216,7 @@ html.demo *{scroll-behavior:auto !important}`;
         target.dispatchEvent(new W.MouseEvent(type, {
             bubbles: true, cancelable: true, composed: true, view: W,
             clientX: this.x, clientY: this.y, screenX: this.x, screenY: this.y,
-            button: 0, buttons: this.isDown ? 1 : 0, detail: 1, ...(extra || {}),
+            button: 0, buttons: this.isDown ? 1 : 0, detail: 1, ctrlKey: !!this.ctrl, metaKey: false, ...(extra || {}),
         }));
     }
 
@@ -301,13 +302,20 @@ html.demo *{scroll-behavior:auto !important}`;
         this.downEl = null;
     }
 
+    // opts.ctrl: with Ctrl held (shown as a key on the screen).
     async tap(t, opts = {}) {
         if (t != null) await this.move(t, opts.ms);
         await this.wait(opts.pre != null ? opts.pre : 140);
-        this.down();
-        this.ripple();
-        await this.wait(opts.hold || 90);
-        this.up(opts.click);
+        if (opts.ctrl) this.guide.showKey('Ctrl');
+        this.ctrl = !!opts.ctrl;
+        try {
+            this.down();
+            this.ripple();
+            await this.wait(opts.hold || 90);
+            this.up(opts.click);
+        } finally {
+            this.ctrl = false;
+        }
         await this.wait(opts.after != null ? opts.after : 300);
     }
 
@@ -594,6 +602,21 @@ html.demo *{scroll-behavior:auto !important}`;
         return item;
     }
 
+    /**
+     * Select these variables of the tree: a click to clear what was selected,
+     * then Ctrl+click on each, in order (the order is the X, Y, Z of a phase plot).
+     */
+    async select(names) {
+        if (this.app.selectedVariables?.size) {
+            const first = await this.variable(names[0]);
+            await this.tap({ el: first.querySelector('.tree-label') || first }, { after: 200 });
+        }
+        for (const name of names) {
+            const item = await this.variable(name);
+            await this.tap({ el: item.querySelector('.tree-label') || item }, { ctrl: true, after: 220 });
+        }
+    }
+
     /** Drag a variable from the tree onto a panel (ax, ay: where on the panel). */
     async plot(name, panelIndex = 0, { ax = 0.4, ay = 0.5, ...opts } = {}) {
         const item = await this.variable(name);
@@ -619,6 +642,12 @@ html.demo *{scroll-behavior:auto !important}`;
         const item = this.$(`.panel-type-menu .marks-menu-item[data-mark="${key}"]`);
         if (!item) throw new Error(`guide: no plot type ${key}`);
         await this.tap(item, { after: 200 });
+        // A change that empties the panel asks first: the demo confirms.
+        const confirm = () => this.panel(panelIndex)?.querySelector('.mode-change-warning-btn.confirm');
+        if (await this.until(confirm, 600)) {
+            await this.wait(700);
+            await this.tap(confirm());
+        }
         await this.until(() => this.panel(panelIndex)?.querySelector('.plot-type-btn')?.dataset.plotType === key, 4000);
     }
 

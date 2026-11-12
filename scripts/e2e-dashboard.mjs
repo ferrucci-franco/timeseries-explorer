@@ -366,6 +366,24 @@ try {
     assert.equal(await page.evaluate(id => window.app.plotManager.plots.get(id).dashboard.follow, left), true, 'double-click: Latest');
     assert.equal(await markIn(left), null, 'and the line goes');
 
+    // Through the dashboard to a phase plot: the 2D plot is not handed the
+    // time window the time series left behind (the dashboard draws no chart,
+    // so nothing took it on the way).
+    const phaseX = await page.evaluate(async id => {
+        const pm = window.app.plotManager;
+        const panelEl = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        pm._setMode(id, 'dashboard', null, { preserveTimeTraces: true });
+        await new Promise(r => setTimeout(r, 200));
+        pm._setMode(id, 'phase2d');
+        pm._handleVariableDrop(id, ['temp', 'pressure'], panelEl, {});
+        const start = performance.now();
+        while (!pm.plots.get(id)?.div?._fullLayout && performance.now() - start < 5000) await new Promise(r => setTimeout(r, 50));
+        // (the view is restored once the chart is drawn: give it the time)
+        await new Promise(r => setTimeout(r, 800));
+        return pm.plots.get(id).div._fullLayout.xaxis.range;
+    }, left);
+    assert.ok(phaseX[0] > 15 && phaseX[1] < 30, `the 2D plot's X range is temp's, not time's: ${phaseX}`);
+
     assert.deepEqual(errors, [], 'no page errors');
     console.log('Dashboard end-to-end checks passed.');
 } finally {
