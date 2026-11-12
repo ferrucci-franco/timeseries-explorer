@@ -3285,6 +3285,8 @@ proto._convertTextFileFromMenu = async function(file) {
             const reviewed = await this._openCsvParsingPreviewForFileObject(file, {
                 csvProfile,
                 title: file.name || '',
+                // From the menu, confirming the preview starts the conversion.
+                applyLabel: 'csvPreviewApplyAndConvert',
             });
             // Backing out of the preview is not backing out of converting.
             if (!reviewed) continue;
@@ -3346,6 +3348,7 @@ proto._convertSpreadsheetFromMenu = async function(file) {
                 sampleBuffer: spreadsheetPreviewSample(csvBuffer),
                 csvProfile,
                 title: file.name || sheetName,
+                applyLabel: 'csvPreviewApplyAndConvert',
             });
             if (!reviewed) continue;
             csvProfile = reviewed;
@@ -4980,6 +4983,7 @@ proto._openCsvParsingPreviewForFileObject = async function(file, options = {}) {
             : null,
         csvProfile: options.csvProfile || null,
         title: options.title || file?.name || '',
+        applyLabel: options.applyLabel || '',
     });
 };
 

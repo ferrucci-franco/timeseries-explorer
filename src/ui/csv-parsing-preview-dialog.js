@@ -828,8 +828,17 @@ export default class CsvParsingPreviewDialog {
         return dialog.open();
     }
 
-    constructor({ parser, sampleBuffer, sampleSegments = null, loadPreviewSegment = null, csvProfile = null, title = '' } = {}) {
+    constructor({ parser, sampleBuffer, sampleSegments = null, loadPreviewSegment = null, csvProfile = null, title = '', applyLabel = '' } = {}) {
         this.parser = parser;
+        // The confirm button says what happens next. From the converter it
+        // starts a conversion that can take minutes, and "Apply parsing"
+        // undersold that.
+        this.applyLabel = applyLabel || 'csvPreviewApply';
+        // A text field (date pattern, filter value, column name, unit) commits
+        // on blur or Enter. Typing one and going straight for the confirm
+        // button used to commit the edit and close the dialog in the same
+        // click: the reader never saw what their edit did to the preview.
+        this.uncommittedEdit = false;
         const normalizedSegments = Array.isArray(sampleSegments)
             ? sampleSegments.filter(segment => segment?.buffer)
             : [];
@@ -928,6 +937,7 @@ export default class CsvParsingPreviewDialog {
             this.overlay.classList.toggle('csv-preview-compact', this.compact);
 
             this._renderShell();
+            this._trackUncommittedEdits();
             this.overlay.appendChild(this.dialog);
             document.body.appendChild(this.overlay);
 
@@ -1114,7 +1124,16 @@ export default class CsvParsingPreviewDialog {
         loadSettings.textContent = i18n.t('csvPreviewLoadSettings');
         loadSettings.title = i18n.t('csvPreviewLoadSettingsTooltip');
         loadSettings.addEventListener('click', () => this._pickSettingsFile());
-        left.append(redetect, saveSettings, loadSettings);
+        // Most options redraw the preview as soon as they change; the typed
+        // ones wait for the field to lose focus. This is the visible way to
+        // say "show me what I typed" without leaving the dialog.
+        const refresh = document.createElement('button');
+        refresh.type = 'button';
+        refresh.className = 'csv-preview-refresh';
+        refresh.textContent = i18n.t('csvPreviewRefresh');
+        refresh.title = i18n.t('csvPreviewRefreshTooltip');
+        refresh.addEventListener('click', () => this._refreshFromButton());
+        left.append(refresh, redetect, saveSettings, loadSettings);
         const right = document.createElement('div');
         right.className = 'csv-preview-footer-right';
         const cancel = document.createElement('button');
@@ -1126,9 +1145,23 @@ export default class CsvParsingPreviewDialog {
         this.applyButton = document.createElement('button');
         this.applyButton.type = 'button';
         this.applyButton.className = 'modal-btn modal-btn-confirm';
-        this.applyButton.textContent = i18n.t('csvPreviewApply');
-        this.applyButton.title = i18n.t('csvPreviewApply');
-        this.applyButton.addEventListener('click', () => this._finish(this.resultProfile));
+        this.applyButton.textContent = i18n.t(this.applyLabel);
+        this.applyButton.title = i18n.t(this.applyLabel);
+        // pointerdown runs before the field loses focus, so it still knows
+        // whether this click is about to commit an edit nobody has seen yet.
+        this.applyButton.addEventListener('pointerdown', () => {
+            this.applyCommitsPendingEdit = this.uncommittedEdit;
+        });
+        this.applyButton.addEventListener('click', () => {
+            const pending = this.applyCommitsPendingEdit || this.uncommittedEdit;
+            this.applyCommitsPendingEdit = false;
+            if (pending) {
+                this._commitFocusedField();
+                this._showPendingEditNotice();
+                return;
+            }
+            this._finish(this.resultProfile);
+        });
         right.append(cancel, this.applyButton);
         footer.append(left, right);
 
@@ -3004,6 +3037,43 @@ export default class CsvParsingPreviewDialog {
         this.state.ignoredColumns = [];
         this.state.columnOverrides = {};
         if (options.render !== false) this._rebuildAndRender();
+    }
+
+    _trackUncommittedEdits() {
+        const isTypedField = target => target instanceof HTMLInputElement
+            && (target.type === 'text' || target.type === 'search' || target.type === 'number' || target.type === '');
+        this.dialog.addEventListener('input', event => {
+            if (isTypedField(event.target)) this.uncommittedEdit = true;
+        }, true);
+        this.dialog.addEventListener('change', event => {
+            if (isTypedField(event.target)) this.uncommittedEdit = false;
+        }, true);
+    }
+
+    // Blurring the focused field fires its own change handler, which is where
+    // each option knows how to store itself; nothing is duplicated here.
+    _commitFocusedField() {
+        const active = document.activeElement;
+        if (active && active !== document.body && this.dialog?.contains(active)
+            && typeof active.blur === 'function') {
+            active.blur();
+        }
+        this.uncommittedEdit = false;
+    }
+
+    _refreshFromButton() {
+        this._commitFocusedField();
+        this._refreshPreview({ preserveStructure: true });
+    }
+
+    _showPendingEditNotice() {
+        if (!this.statusBox) return;
+        const text = i18n.t('csvPreviewPendingEditApplied').replace('{apply}', i18n.t(this.applyLabel));
+        const notice = document.createElement('div');
+        notice.className = 'csv-preview-note csv-preview-pending-notice';
+        notice.textContent = text;
+        this.statusBox.prepend(notice);
+        if (this.statusStrip && this.validation?.ok) this.statusStrip.textContent = text;
     }
 
     _rebuildAndRender() {
