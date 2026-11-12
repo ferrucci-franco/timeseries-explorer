@@ -38,6 +38,7 @@ const ICON = {
     'temporal-profile': svg('<path d="M3 6.5c3.5 0 4.5 6 9 6s5.5-8 9-8M3 13.5c3.5 0 4.5 6 9 6s5.5-8 9-8" stroke-opacity=".45" stroke-dasharray="2 2.2"/><path d="M3 10c3.5 0 4.5 6 9 6s5.5-8 9-8"/>'),
     integral: svg('<path d="M10.5 4.6c-1.9-1-3.4 0-3.6 2.6l-.8 9.6c-.2 2.6-1.7 3.6-3.6 2.6"/><path d="M14 20v-5M17.5 20v-10M21 20v-7"/>'),
     correlation: svg('<path d="M4 19L20 5" stroke-opacity=".5"/><path stroke-width="3.2" d="M5.5 16h.01M9 16.5h.01M10.5 11.5h.01M14 12h.01M15 7.5h.01M18.5 8h.01"/>'),
+    'curve-fit': svg('<path d="M4 4v16h16"/><path stroke-dasharray="2.4 2" d="M7 17c2-5 4-8 7-9.5s4.5-1.5 6-1.5"/><path stroke-width="3.2" d="M7.5 15.5h.01M10 11h.01M13 9h.01M16.5 7.5h.01"/>'),
     'phase2d-fit': svg('<path d="M3.5 18.5c5 0 8-1.5 10-5.5s3.5-7 7-8"/><path stroke-width="3.2" d="M6 15.5h.01M10 18.5h.01M12 11h.01M16.5 11.5h.01M17 5h.01"/>'),
     // A mode set up on the full layout, which the sheet only names.
     other: svg('<path d="M4 4v16h16"/><path d="M7 16l4-5 3 3 5-7"/>'),
@@ -233,6 +234,36 @@ export const COMPACT_ANALYSES = [
                     pressed: hidden,
                     run: () => { pm._toggleIntegralTimeSeries(panelId); refresh(); },
                 },
+            ];
+        },
+    },
+    {
+        mode: 'curve-fit',
+        icon: ICON['curve-fit'],
+        // The sheet lists the 2D plot's Curve Fit too: this one says it is
+        // the one over time.
+        labelKey: 'compactAnalysisCurveFitTime',
+        signals: true,
+        fit: true,
+        windowZoom: true,
+        removeTrace: ({ pm, panelId, plot }, trace) => pm._removeCurveFitTraceFromLegend(panelId, plot, trace),
+        pane: {
+            name: 'residuals',
+            div: 'curveFitResidualDiv',
+            windowZoom: true,
+            fit: ({ pm, plot }, axis) => (axis === 'all'
+                ? pm._autoScaleCurveFitAxis(plot, 'y')
+                : pm._autoScaleCurveFitAxis(plot, axis)),
+        },
+        optionsTitleKey: 'compactFitOptions',
+        options: ({ pm, plot }) => pm._curveFitOptionsPanel(plot),
+        reset: { labelKey: 'fftResetLabel', titleKey: 'fftResetView', run: ({ pm, panelId }) => pm._resetCurveFitView(panelId) },
+        actions: ({ pm, panelId, plot, refresh }) => {
+            const hidden = !!pm._ensureCurveFitState(plot).residualsHidden;
+            const key = hidden ? 'curveFitShowResiduals' : 'curveFitHideResiduals';
+            return [
+                { label: 'V/H', titleKey: 'fftLayoutToggle', run: () => pm._setCurveFitLayout(panelId, flip(pm._ensureCurveFitState(plot).layout)) },
+                { labelKey: key, titleKey: 'curveFitResidualsTooltip', pressed: hidden, run: () => { pm._toggleCurveFitResiduals(panelId); refresh(); } },
             ];
         },
     },

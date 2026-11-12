@@ -40,6 +40,7 @@ export function installPlotViewHistoryMethods(TargetClass) {
             heatmap: plot.heatmapDiv,
             'temporal-profile': plot.temporalProfileDiv,
             integral: plot.integralDiv,
+            'curve-fit': plot.curveFitResidualDiv,
             correlation: plot.correlationDiv,
             phase2d: plot.phase2d?.fitEnabled ? plot.phase2dFitTimeDiv : null,
         }[plot.mode];

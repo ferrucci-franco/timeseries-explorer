@@ -37,7 +37,7 @@ proto._onRelayout = function(sourcePanelId, eventData) {
     }
     this._clearRelayoutingRefresh(plot);
 
-    if (plot?.mode === 'timeseries' || plot?.mode === 'fft' || plot?.mode === 'histogram' || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral') {
+    if (plot?.mode === 'timeseries' || plot?.mode === 'fft' || plot?.mode === 'histogram' || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral' || plot?.mode === 'curve-fit') {
         const autorangeRequested = update['xaxis.autorange'] === true
             || eventData?.['yaxis.autorange'] === true
             || eventData?.['yaxis2.autorange'] === true;
@@ -51,7 +51,7 @@ proto._onRelayout = function(sourcePanelId, eventData) {
                     sourcePanelId,
                     () => this._autoScalePlotTimeOnly(plot),
                 );
-            } else if (plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') {
+            } else if (plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral' || plot.mode === 'curve-fit') {
                 this._autoScalePlotTimeOnly(plot);
             }
             else this._autoScalePlot(sourcePanelId, plot);
@@ -306,7 +306,7 @@ proto._xAxisUpdateFromRelayout = function(eventData, plot = null) {
 // needs doing once the view settles (the Repeated marks, which ride along with
 // the axis by themselves) is left for the settling call.
 proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null, options = {}) {
-    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) return;
+    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(plot.mode)) return;
     const range = visibleRange
         || plot.div._fullLayout?.xaxis?.range
         || plot.div.layout?.xaxis?.range
@@ -1421,6 +1421,7 @@ proto._ownAnalysisTimeDomain = function(plot, mode = plot?.mode) {
         case 'heatmap': return this._calendarHeatmapDomain?.(plot);
         case 'temporal-profile': return this._temporalProfileDomain?.(plot);
         case 'integral': return this._integralDomain?.(plot);
+        case 'curve-fit': return this._curveFitDomain?.(plot);
         case 'correlation': return this._correlationDomain?.(plot);
         case 'phase2d': return this._phase2dFitDomain?.(plot);
         default: return null;
@@ -1854,7 +1855,7 @@ proto._autorangeRequestIsAnEcho = function(plot) {
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
-    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
+    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(plot.mode)) {
         return Promise.resolve();
     }
     const fid = this._primaryTimeFileId(plot);
@@ -1895,7 +1896,7 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
 
 proto._refreshAllTimeseriesVisuals = function() {
     for (const [panelId, plot] of this.plots) {
-        if (plot?.div && ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
+        if (plot?.div && ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(plot.mode)) {
             this._refreshTimeseriesVisuals(panelId, plot);
         }
     }
@@ -2437,7 +2438,7 @@ proto._defaultCursors = function() {
 proto._plotSupportsCursors = function(plot) {
     return plot?.mode === 'timeseries' || plot?.mode === 'fft'
         || plot?.mode === 'histogram' || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile'
-        || plot?.mode === 'integral';
+        || plot?.mode === 'integral' || plot?.mode === 'curve-fit';
 };
 
 // True while ANY cursor window is open. FFT has two (time + spectrum); the A|B
@@ -4719,7 +4720,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
-    const timeseriesFamilyModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
+    const timeseriesFamilyModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit']);
     const phase2dFamilyModes = new Set(['phase2d', 'correlation']);
     const isTimeseriesFamily = timeseriesFamilyModes.has(currentMode);
     const isPhase2dFamily = phase2dFamilyModes.has(currentMode);
@@ -4854,6 +4855,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         && plot.mode !== 'heatmap'
         && plot.mode !== 'temporal-profile'
         && plot.mode !== 'integral'
+        && plot.mode !== 'curve-fit'
         && plot.mode !== 'correlation'
         && this.files.size > 1;
     compareBtn.disabled = !canCompare;
@@ -4931,7 +4933,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 };
 
 proto._toggleTimeseriesAnalysisMode = function(panelId, analysisMode) {
-    if (!['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(analysisMode)) return;
+    if (!['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(analysisMode)) return;
     const plot = this.plots.get(panelId);
     if (!plot) return;
     const targetMode = plot.mode === analysisMode ? 'timeseries' : analysisMode;
@@ -4946,7 +4948,7 @@ proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
         this._dismissModeChangeWarning(panelId);
         return;
     }
-    const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'dashboard']);
+    const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'dashboard']);
     const preservesTimeTraces = timeTraceModes.has(plot.mode) && timeTraceModes.has(mode);
     if (preservesTimeTraces) {
         this._setMode(panelId, mode, stateAnimDim, { preserveTimeTraces: true });
@@ -5680,6 +5682,9 @@ proto._updatePlaceholder = function(panelId, panelEl) {
             break;
         case 'integral':
             msg = i18n.t('integralDrop');
+            break;
+        case 'curve-fit':
+            msg = i18n.t('curveFitDrop');
             break;
         case 'dashboard':
             msg = i18n.t('dashboardDrop');

@@ -15,12 +15,22 @@ import {
     PHASE2D_DISPLAY_MODES,
     PHASE2D_FIT_MODELS,
 } from '../phase2d-state.js';
-import { fitPair, buildFitCurve } from '../../utils/regression.js';
+import { fitPair, buildFitCurve, EXP_FAMILY_MODELS } from '../../utils/regression.js';
+import {
+    FIT_MODEL_OPTIONS,
+    FIT_MODEL_SHORT_KEYS,
+    FIT_CSV_COEFFICIENTS,
+    fitCsvCoefficient,
+    fitEquationParts,
+} from '../../utils/fit-models.js';
 import { csvValueCell } from '../../utils/csv-cell.js';
 
 // Range-input formatting / datetime conversion — mirrors the FFT & Correlation
 // panels so the Todo/Selección controls look and behave identically.
 const PHASE2D_FIT_LAYOUTS = new Set(['horizontal', 'vertical']);
+// The most rows a lazy file hands a fit computed outside SQL (the exponential
+// family): about two seconds of fitting.
+export const FIT_MAX_LAZY_ROWS = 2000000;
 const p2dFiniteOrNull = (value) => {
     if (value === '' || value === null || value === undefined) return null;
     const n = Number(value);
@@ -263,6 +273,34 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             && this._isLazyFile?.(p.fileId));
     };
 
+    // Every row of a lazy (DuckDB) file inside a display time range, with the
+    // panel's transforms applied — the rows a fit that no SQL aggregate can
+    // hold works from. Refuses past FIT_MAX_LAZY_ROWS rather than fit a sample.
+    proto._fetchLazyFitRows = async function(fileId, varNames, displayRange, maxRows = FIT_MAX_LAZY_ROWS) {
+        const data = this.files.get(fileId)?.data;
+        const source = data?._duckdb?.source;
+        if (!source?.getRawColumnsRange) return { ok: false, reason: 'noSql' };
+        const timeVar = this._getTimeVar(fileId);
+        const sourceRange = this._sourceRangeForDisplayRange(fileId, displayRange, timeVar);
+        if (!sourceRange || !sourceRange.every(Number.isFinite)) return { ok: false, reason: 'undefined' };
+        const raw = await source.getRawColumnsRange(data, varNames, sourceRange[0], sourceRange[1], maxRows);
+        if (raw.truncated) return { ok: false, reason: 'tooManyRows' };
+        const transformed = this._transformFetchedPhaseTrajectory(fileId, raw.x, raw.rowIndex, raw.yByVar, varNames);
+        const [lo, hi] = displayRange;
+        const keep = [];
+        for (let i = 0; i < transformed.time.length; i++) {
+            const t = transformed.time[i];
+            if (t >= lo && t <= hi) keep.push(i);
+        }
+        if (keep.length === transformed.time.length) return { ok: true, ...transformed };
+        const pick = (arr) => Float64Array.from(keep, i => arr[i]);
+        return {
+            ok: true,
+            time: pick(transformed.time),
+            valuesByVar: new Map([...transformed.valuesByVar].map(([name, arr]) => [name, pick(arr)])),
+        };
+    };
+
     // Query DuckDB for the exact fit of every lazy pair with a model, cache the
     // results on the plot, then re-render curves + drawer. Token-guarded so a
     // superseded query never paints stale coefficients.
@@ -290,21 +328,44 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const jobs = [...byFile.entries()].map(async ([fileId, pairs]) => {
             const data = this.files.get(fileId)?.data;
             const source = data?._duckdb?.source;
-            if (!source?.getPhaseRegressionStats) return { pairs, error: 'noSql' };
-            const transform = this._fileTransform(fileId);
-            const timeVar = this._getTimeVar(fileId);
-            const sourceTimeRange = state.rangeFull ? null : this._sourceRangeForDisplayRange(fileId, [lo, hi], timeVar);
+            // The exponential family is not linear in its coefficients, so no
+            // SQL aggregate holds it: those pairs read their rows and are
+            // fitted here, by the same kernel as an eager file.
+            const sqlPairs = pairs.filter(p => !EXP_FAMILY_MODELS.has(this._phase2dPairModel(p)));
+            const rowPairs = pairs.filter(p => EXP_FAMILY_MODELS.has(this._phase2dPairModel(p)));
+            const byPair = new Map();
             try {
-                const stats = await source.getPhaseRegressionStats(
-                    data,
-                    pairs.map(p => ({
-                        x: p.x, y: p.y, model: this._phase2dPairModel(p),
-                        signX: this.isVariableSignInverted?.(fileId, p.x) ? -1 : 1,
-                        signY: this.isVariableSignInverted?.(fileId, p.y) ? -1 : 1,
-                    })),
-                    { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset },
-                );
-                return { pairs, stats };
+                if (sqlPairs.length) {
+                    if (!source?.getPhaseRegressionStats) {
+                        sqlPairs.forEach(p => byPair.set(p, { status: 'noSql' }));
+                    } else {
+                        const transform = this._fileTransform(fileId);
+                        const timeVar = this._getTimeVar(fileId);
+                        const sourceTimeRange = state.rangeFull ? null : this._sourceRangeForDisplayRange(fileId, [lo, hi], timeVar);
+                        const stats = await source.getPhaseRegressionStats(
+                            data,
+                            sqlPairs.map(p => ({
+                                x: p.x, y: p.y, model: this._phase2dPairModel(p),
+                                signX: this.isVariableSignInverted?.(fileId, p.x) ? -1 : 1,
+                                signY: this.isVariableSignInverted?.(fileId, p.y) ? -1 : 1,
+                            })),
+                            { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset },
+                        );
+                        sqlPairs.forEach((p, i) => byPair.set(p, stats?.[i]));
+                    }
+                }
+                for (const pair of rowPairs) {
+                    const rows = await this._fetchLazyFitRows(fileId, [pair.x, pair.y], [lo, hi]);
+                    if (!rows.ok) {
+                        byPair.set(pair, rows.reason === 'tooManyRows'
+                            ? { status: 'ok', fit: { model: this._phase2dPairModel(pair), status: 'undefined', warning: 'too-many-rows', n: NaN, nExcluded: 0 }, nScope: NaN }
+                            : { status: rows.reason || 'noSql' });
+                        continue;
+                    }
+                    const fit = fitPair(this._phase2dPairModel(pair), rows.valuesByVar.get(pair.x), rows.valuesByVar.get(pair.y));
+                    byPair.set(pair, { status: 'ok', fit, nScope: rows.time.length });
+                }
+                return { pairs, stats: pairs.map(p => byPair.get(p)) };
             } catch (err) {
                 console.warn('[phase2d-fit] lazy query failed:', err);
                 return { pairs, error: 'error' };
@@ -346,8 +407,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const traces = [];
         for (const r of results) {
             if (!r.curve || !r.curve.x.length) continue;
-            const modelWord = r.model === 'quadratic' ? i18n.t('phase2dFitQuadratic')
-                : (r.model === 'power' ? i18n.t('phase2dFitPower') : i18n.t('phase2dFitLinear'));
+            const modelWord = i18n.t(FIT_MODEL_SHORT_KEYS[r.model] || 'phase2dFitLinear');
             traces.push({
                 x: r.curve.x,
                 y: r.curve.y,
@@ -1065,20 +1125,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     // Generic model formula + resolved coefficient values for a fit result.
     // Returns { generic: 'y = a·x + b', coeffs: [['a', '2.5'], ['b', '1.1']] }.
     proto._phase2dFitEquationParts = function(fit) {
-        if (!fit || fit.status !== 'ok') return null;
-        const g = (v) => {
-            if (!Number.isFinite(v)) return 'N/A';
-            const a = Math.abs(v);
-            return (a !== 0 && (a < 1e-3 || a >= 1e5)) ? v.toExponential(4) : String(Number(v.toPrecision(5)));
-        };
-        if (fit.model === 'linear') {
-            return { generic: 'y = a·x + b', coeffs: [['a', g(fit.b1)], ['b', g(fit.b0)]] };
-        }
-        if (fit.model === 'power') {
-            // b is the slope of the line a log-log plot shows.
-            return { generic: 'y = a·xᵇ', coeffs: [['a', g(fit.a)], ['b', g(fit.b)]] };
-        }
-        return { generic: 'y = a·x² + b·x + c', coeffs: [['a', g(fit.a)], ['b', g(fit.b)], ['c', g(fit.c)]] };
+        return fitEquationParts(fit, 'x');
     };
 
     // "About this fit" — the OLS methodology, in a modal (same help pattern as
@@ -1086,7 +1133,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._showPhase2dFitHelp = function() {
         Modal.alert(
             i18n.t('phase2dFitAboutTitle'),
-            `<div class="phase2d-fit-help-modal">${i18n.t('phase2dFitOlsHelp')}</div>`,
+            `<div class="phase2d-fit-help-modal">${i18n.t('phase2dFitOlsHelp')}<p>${i18n.t('fitExpFamilyHelp')}</p></div>`,
             { html: true, icon: false, className: 'phase2d-fit-help-dialog' },
         );
     };
@@ -1115,6 +1162,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             'x-constant': i18n.t('phase2dFitXConstant'),
             'y-constant': i18n.t('phase2dFitYConstant'),
             'singular': i18n.t('phase2dFitSingular'),
+            'coefficient-overflow': i18n.t('fitCoefficientOverflow'),
+            'too-many-rows': i18n.t('fitTooManyRows'),
         };
         return fit.warning ? (map[fit.warning] || fit.warning) : '';
     };
@@ -1306,7 +1355,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const typeSelect = document.createElement('select');
         typeSelect.className = 'phase2d-fit-type-select';
         typeSelect.setAttribute('aria-label', i18n.t('phase2dFitType'));
-        [['none', 'phase2dFitOff'], ['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic'], ['power', 'phase2dFitPower']].forEach(([m, key]) => {
+        FIT_MODEL_OPTIONS.forEach(({ id: m, key }) => {
             const opt = document.createElement('option');
             opt.value = m;
             opt.textContent = i18n.t(key);
@@ -1517,13 +1566,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             ['n_displayed', (r) => num(displayedCount(r))],
             ['min_x', (r) => num(fitOf(r, 'minX'))],
             ['max_x', (r) => num(fitOf(r, 'maxX'))],
-            ['linear_intercept', (r) => (r.model === 'linear' ? num(fitOf(r, 'b0')) : '')],
-            ['linear_slope', (r) => (r.model === 'linear' ? num(fitOf(r, 'b1')) : '')],
-            ['quadratic_a', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'a')) : '')],
-            ['quadratic_b', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'b')) : '')],
-            ['quadratic_c', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'c')) : '')],
-            ['power_a', (r) => (r.model === 'power' ? num(fitOf(r, 'a')) : '')],
-            ['power_b', (r) => (r.model === 'power' ? num(fitOf(r, 'b')) : '')],
+            ...FIT_CSV_COEFFICIENTS.map(([header, models, key]) => (
+                [header, (r) => (fitCsvCoefficient(r.model, models) ? num(fitOf(r, key)) : '')]
+            )),
             ['center_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'centerX')) : '')],
             ['scale_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'scaleX')) : '')],
             // For a power fit, r / R² / RMSE are those of the log-log line.

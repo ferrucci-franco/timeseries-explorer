@@ -13,6 +13,7 @@ import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
 import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
+import { installPlotCurveFitMethods } from './methods/curve-fit-methods.js';
 import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
 import { installPlotTemporalProfileMethods } from './methods/temporal-profile-methods.js';
 import { installPlotIntegralMethods } from './methods/integral-methods.js';
@@ -192,7 +193,7 @@ class PlotManager {
         const affectedPanels = new Set();
 
         for (const [panelId, plot] of this.plots) {
-            if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
+            if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(plot.mode)) {
                 const before = plot.traces.length;
                 plot.traces = plot.traces.filter(t => t.fileId !== fileId);
                 if (plot.traces.length < before) {
@@ -356,7 +357,7 @@ class PlotManager {
         // the original view handling untouched, so it can never be regressed here.
         const rowIndexInvolved = previousTransform.timeDisplayMode === 'index'
             || nextTransform.timeDisplayMode === 'index';
-        const mainTimePaneModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'correlation']);
+        const mainTimePaneModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'correlation']);
         const pendingViews = new Map();
         const pendingRowRanges = new Map();
         for (const [panelId, plot] of this.plots) {
@@ -556,7 +557,7 @@ class PlotManager {
             && typeof this._phase2dFitTimeDescriptors === 'function') {
             return this._phase2dFitTimeDescriptors(plot);
         }
-        if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
+        if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(plot.mode)) {
             return plot.traces || [];
         }
         return [];
@@ -963,7 +964,7 @@ class PlotManager {
         if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
         this._dismissModeChangeWarning?.(panelId);
         // The dashboard shows the same signals as cards: they go with it both ways.
-        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'dashboard']);
+        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'dashboard']);
         const preserveTimeTraces = !!options.preserveTimeTraces
             && timeTraceModes.has(previousMode)
             && timeTraceModes.has(mode);
@@ -1064,6 +1065,7 @@ class PlotManager {
             plot.heatmap = plot.heatmap || this._defaultHeatmapState?.();
             plot.temporalProfile = plot.temporalProfile || this._defaultTemporalProfileState?.();
             plot.integral = plot.integral || this._defaultIntegralState?.();
+            plot.curveFit = plot.curveFit || this._defaultCurveFitState?.();
             // Switching analysis tears down the chart (and the cursor overlay
             // with it). Keep cursor positions, but close the windows so the A|B
             // button is not left stuck "on" over a chart that has no cursors.
@@ -1077,6 +1079,7 @@ class PlotManager {
             plot.heatmap = this._defaultHeatmapState?.() || plot.heatmap;
             plot.temporalProfile = this._defaultTemporalProfileState?.() || plot.temporalProfile;
             plot.integral = this._defaultIntegralState?.() || plot.integral;
+            plot.curveFit = this._defaultCurveFitState?.() || plot.curveFit;
         }
         // Cached FFT spectra are only useful to the FFT panel and can hold tens
         // of megabytes of amplitudes; leaving the mode drops them.
@@ -1383,7 +1386,7 @@ class PlotManager {
             return;
         }
 
-        if (plot.mode === 'integral') {
+        if (plot.mode === 'integral' || plot.mode === 'curve-fit') {
             names.forEach(varName => this.addTrace(panelId, varName, panelEl));
             return;
         }
@@ -1507,6 +1510,12 @@ class PlotManager {
                 : i18n.t('dropToAddTrace');
         }
 
+        if (mode === 'curve-fit') {
+            return plot.traces.length === 0
+                ? i18n.t('curveFitDrop')
+                : i18n.t('dropToAddTrace');
+        }
+
         // State-anim mode
         if (mode === 'state-anim') {
             const sx = plot.stateSlots?.x || [];
@@ -1576,6 +1585,8 @@ class PlotManager {
             this._addTemporalProfileTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'integral') {
             this._addIntegralTrace(panelId, varName, panelEl, plot);
+        } else if (plot.mode === 'curve-fit') {
+            this._addCurveFitTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'state-anim') {
             this._addStateAnimVar(panelId, varName, panelEl, plot);
         } else {
@@ -1875,6 +1886,10 @@ class PlotManager {
         }
         if (plot.mode === 'integral') {
             this._createIntegralChart(panelId, panelEl);
+            return;
+        }
+        if (plot.mode === 'curve-fit') {
+            this._createCurveFitChart(panelId, panelEl);
             return;
         }
         if (plot.mode === 'correlation') {
@@ -2525,7 +2540,21 @@ class PlotManager {
             const heatmapContainer = plot.div.closest('.heatmap-container');
             const temporalProfileContainer = plot.div.closest('.temporal-profile-container');
             const integralContainer = plot.div.closest('.integral-container');
-            if (correlationContainer) {
+            const curveFitContainer = plot.div.closest('.curve-fit-container');
+            if (curveFitContainer) {
+                // Checked first: the shell reuses the fft-* CSS.
+                this._cleanupCurveFitDocListeners?.(plot);
+                if (plot.curveFitResidualDiv) Plotly.purge(plot.curveFitResidualDiv);
+                Plotly.purge(plot.div);
+                curveFitContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.curveFitOptionsEl?.remove();
+                plot.div = null;
+                plot.curveFitResidualDiv = null;
+                plot.curveFitContainer = null;
+                plot.curveFitOptionsEl = null;
+                plot._curveFitResults = [];
+            } else if (correlationContainer) {
                 // Checked before .fft-container: the shell reuses fft-* CSS but
                 // carries a distinct correlation-container marker.
                 if (plot.correlationDiv) Plotly.purge(plot.correlationDiv);
@@ -2765,6 +2794,7 @@ class PlotManager {
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
             existing.temporalProfile = this._defaultTemporalProfileState?.() || existing.temporalProfile;
             existing.integral = this._defaultIntegralState?.() || existing.integral;
+            existing.curveFit = this._defaultCurveFitState?.() || existing.curveFit;
             existing.correlation = this._defaultCorrelationState?.() || existing.correlation;
             existing.phase2d = this._defaultPhase2dState?.() || existing.phase2d;
             existing.pairDisplay3D = {};
@@ -2779,7 +2809,7 @@ class PlotManager {
             // family) is a toggle on top of a base view; clearing drops it and
             // returns to that base so its toolbar button un-presses. Other modes
             // (timeseries, 2D, 3D, state-anim) are kept.
-            if (['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(existing.mode)) { existing.mode = 'timeseries'; modeReset = true; }
+            if (['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(existing.mode)) { existing.mode = 'timeseries'; modeReset = true; }
             else if (existing.mode === 'correlation') { existing.mode = 'phase2d'; modeReset = true; }
         }
 
@@ -2800,7 +2830,7 @@ class PlotManager {
         if (!panelEl) return;
         const plot = this.plots.get(panelId);
         const has = this._hasContent(plot);
-        const isTimeseriesFamily = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot?.mode);
+        const isTimeseriesFamily = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'].includes(plot?.mode);
         if (!isTimeseriesFamily) {
             panelEl.querySelector('.timeseries-tools-group')?.remove();
         }
@@ -2836,12 +2866,12 @@ class PlotManager {
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
-            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral';
+            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral' || plot?.mode === 'curve-fit';
             if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
-            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && plot?.mode !== 'temporal-profile' && plot?.mode !== 'integral' && plot?.mode !== 'correlation' && this.files.size > 1);
+            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && plot?.mode !== 'temporal-profile' && plot?.mode !== 'integral' && plot?.mode !== 'curve-fit' && plot?.mode !== 'correlation' && this.files.size > 1);
         }
         const cursorBtn = panelEl.querySelector('.cursor-btn');
         if (cursorBtn) {
@@ -2877,6 +2907,10 @@ class PlotManager {
 
         // With the 2D Curve Fit workspace open, offer the fit-specific exports
         // (summary / curve / displayed points) instead of the raw X/Y dump.
+        if (plot.mode === 'curve-fit' && this._exportCurveFitCsv) {
+            this._exportCurveFitCsv(panelId, plot, { baseName: options.baseName });
+            return;
+        }
         if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && this._exportPhase2dFitCsv) {
             this._exportPhase2dFitCsv(panelId, plot, { baseName: options.baseName });
             return;
@@ -3657,7 +3691,7 @@ class PlotManager {
 
     _compareAcrossFiles(panelId) {
         const plot = this.plots.get(panelId);
-        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim' || plot.mode === 'fft' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') return;
+        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim' || plot.mode === 'fft' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral' || plot.mode === 'curve-fit') return;
         const usesTimeTraces = ['timeseries', 'histogram'].includes(plot.mode);
 
         // Collect variables used. Overlay must be decided per trace signature,
@@ -4158,6 +4192,7 @@ class PlotManager {
         if (plot.mode === 'heatmap') return plot.traces.length > 0;
         if (plot.mode === 'temporal-profile') return plot.traces.length > 0;
         if (plot.mode === 'integral') return plot.traces.length > 0;
+        if (plot.mode === 'curve-fit') return plot.traces.length > 0;
         if (plot.mode === 'dashboard') return plot.traces.length > 0;
         if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
         return plot.phaseTraces.length > 0;
@@ -4221,7 +4256,7 @@ class PlotManager {
     }
 
     _plotModeRequiresCompatibleTime(mode) {
-        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram' || mode === 'heatmap' || mode === 'temporal-profile' || mode === 'integral' || mode === 'correlation';
+        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram' || mode === 'heatmap' || mode === 'temporal-profile' || mode === 'integral' || mode === 'curve-fit' || mode === 'correlation';
     }
 
     _padRange(min, max, pad = 0.05) {
@@ -4590,6 +4625,7 @@ class PlotManager {
         if (plot.mode === 'heatmap') return this._autoScaleHeatmapAxis(plot, axis);
         if (plot.mode === 'temporal-profile') return this._autoScaleTemporalProfileAxis(plot, axis);
         if (plot.mode === 'integral') return this._autoScaleIntegralAxis(plot, axis);
+        if (plot.mode === 'curve-fit') return this._autoScaleCurveFitAxis(plot, axis);
         if (plot.mode === 'correlation') return this._autoScaleCorrelationAxis(plot, axis);
         return Promise.resolve();
     }
@@ -4615,6 +4651,10 @@ class PlotManager {
 
         if (plot.mode === 'integral') {
             return this._autoScaleIntegralPanel(panelId, plot);
+        }
+
+        if (plot.mode === 'curve-fit') {
+            return this._autoScaleCurveFitPanel(panelId, plot);
         }
 
         if (plot.mode === 'correlation') {
@@ -4871,6 +4911,9 @@ class PlotManager {
             integralPieDiv: null,
             integralContainer: null,
             integral: this._defaultIntegralState?.() || null,
+            curveFitResidualDiv: null,
+            curveFitContainer: null,
+            curveFit: this._defaultCurveFitState?.() || null,
             correlationDiv: null,
             correlationContainer: null,
             correlation: this._defaultCorrelationState?.() || null,
@@ -5580,6 +5623,7 @@ installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);
 installPlotTemporalProfileMethods(PlotManager);
 installPlotIntegralMethods(PlotManager);
+installPlotCurveFitMethods(PlotManager);
 installPlotExportMethods(PlotManager);
 installPlotDashboardMethods(PlotManager);
 installPlotStateBandMethods(PlotManager);
