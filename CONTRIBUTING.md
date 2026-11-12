@@ -155,6 +155,21 @@ every row in its range, never over the overview. When you add or change one:
 
 `CLAUDE.md` states the same rule for Claude Code sessions.
 
+### Every analysis shows a computing pill with a Cancel button
+
+While an analysis recomputes, the result already drawn stays on screen and can
+still be explored. A pill over it says the analysis is calculating, and its
+**Cancel** button stops the calculation and keeps what is shown. A new analysis
+does the same:
+
+- show the shared pill (`_setAnalysisComputing` in
+  `src/plots/methods/analysis-busy-methods.js`);
+- pass `_analysisSignal(plot)` to its DuckDB queries and streams;
+- register its pane and its tokens there;
+- extend `scripts/e2e-analysis-cancel.mjs`.
+
+`CLAUDE.md` has the details.
+
 ## Sanity checks after changes
 
 At minimum:

@@ -32,8 +32,9 @@ file too, before the pull request:
    file is a defect unless the UI says so plainly — and then it is recorded as
    a known gap in `docs/any-size-files.md`. Prefer streaming past a limit over
    refusing.
-4. **Long work shows progress and can be cancelled** (an `AbortSignal` through
-   the stream; a newer request aborts the one it replaces).
+4. **Long work shows progress and can be cancelled**: the computing pill and
+   its Cancel button (next section), an `AbortSignal` through the stream, and
+   a newer request replacing the one it supersedes.
 5. **A parity test** that loads the same CSV lazily on a real DuckDB-WASM
    engine (the Node build) and in memory, and compares the results:
    `scripts/test-lazy-histogram.mjs` and `scripts/test-lazy-curve-fit.mjs` are
@@ -43,6 +44,37 @@ file too, before the pull request:
 
 `docs/any-size-files.md` is the plan and the record of what already works in
 lazy mode; update it when you close or open a gap.
+
+## Every analysis shows a computing pill with a Cancel button
+
+While an analysis recomputes (a parameter, the range or the data changed), the
+user keeps exploring what is on screen. So **every analysis, existing or new**:
+
+1. **Keeps the previous result drawn** until the new one replaces it — never
+   clear the plot first. A lazy result that is still coming is drawn from the
+   previous one (see `staleResult` in curve-fit, `previous` in the 2D fit).
+2. **Shows the shared computing pill** while it works:
+   `_setAnalysisComputing(plot, true|false, { label })` in
+   `src/plots/methods/analysis-busy-methods.js` — or a status setter that calls
+   it when the status is `'loading'`, as every analysis' setter does. Register
+   the pane its result is drawn in, in `_analysisComputingTarget`. The pill
+   lets the pointer through to the plot; only its **Cancel** button takes it.
+3. **Can be stopped:**
+   - DuckDB queries carry `this._analysisSignal(plot)` (`DuckDbSource` methods
+     take `{ signal }`);
+   - streams take the same `signal`; workers are terminated;
+   - results are dropped by the analysis' token;
+   - list the analysis' token, debounce timer and paint-wait run slot in
+     `_dropAnalysisRuns`;
+   - an `AbortError` is silent; one the run did not ask for (a shared cached
+     query) means: run again.
+4. **On Cancel** (`_cancelAnalysisComputation`) the work stops, the result stays,
+   and the status says "Calculation cancelled — the result shown is the
+   previous one". Add the analysis' status line to its `switch`. Nothing starts
+   the cancelled computation again until its inputs change.
+5. **Is tested:** add the analysis to `scripts/e2e-analysis-cancel.mjs`. That e2e
+   makes the analysis' queries hang until aborted, presses Cancel, and checks
+   that the work stopped and the previous result stayed.
 
 ## Other standing rules
 

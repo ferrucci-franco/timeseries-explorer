@@ -40,14 +40,14 @@ export function installPlotFitLazyMethods(TargetClass) {
     // panel's transforms applied — the rows a fit that no SQL aggregate can
     // hold works from. Returns { ok: false, reason: 'tooManyRows' } past
     // FIT_MAX_LAZY_ROWS (never a sample): the caller then streams the fit.
-    proto._fetchLazyFitRows = async function(fileId, varNames, displayRange, maxRows = FIT_MAX_LAZY_ROWS) {
+    proto._fetchLazyFitRows = async function(fileId, varNames, displayRange, maxRows = FIT_MAX_LAZY_ROWS, signal = null) {
         const data = this.files.get(fileId)?.data;
         const source = data?._duckdb?.source;
         if (!source?.getRawColumnsRange) return { ok: false, reason: 'noSql' };
         const timeVar = this._getTimeVar(fileId);
         const sourceRange = this._sourceRangeForDisplayRange(fileId, displayRange, timeVar);
         if (!sourceRange || !sourceRange.every(Number.isFinite)) return { ok: false, reason: 'undefined' };
-        const raw = await source.getRawColumnsRange(data, varNames, sourceRange[0], sourceRange[1], maxRows);
+        const raw = await source.getRawColumnsRange(data, varNames, sourceRange[0], sourceRange[1], maxRows, { signal });
         if (raw.truncated) return { ok: false, reason: 'tooManyRows' };
         const transformed = this._transformFetchedPhaseTrajectory(fileId, raw.x, raw.rowIndex, raw.yByVar, varNames);
         const [lo, hi] = displayRange;

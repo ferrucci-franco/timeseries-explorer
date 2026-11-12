@@ -3919,6 +3919,42 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     white-space: nowrap;
 }
 
+/* The computing pill every analysis shows (analysis-busy-methods.js): the pill
+   lets the pointer through to the result under it, its Cancel button takes it. */
+.analysis-computing-host {
+    position: relative;
+}
+
+.analysis-computing-indicator {
+    gap: 10px;
+    padding-right: 5px;
+}
+
+.analysis-cancel-btn {
+    pointer-events: auto;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+    cursor: pointer;
+}
+
+.analysis-cancel-btn:hover {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+    color: #fff;
+}
+
+.analysis-cancel-btn:focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 1px;
+}
+
 /* "Missing data too dense — zoom in" hint: same pill, amber-tinted to match the
    missing-data bands, and no spinner. */
 .missing-dense-indicator {

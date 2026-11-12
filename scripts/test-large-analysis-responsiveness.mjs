@@ -332,12 +332,16 @@ assert.match(manager, /plot\.mode === 'timeseries'[\s\S]*_installEagerTimeseries
 assert.match(interaction, /_installEagerTimeseriesAutoscaleGuards[\s\S]*_runWithEagerDetailLoading/);
 assert.match(interaction, /_installEagerTimeseriesAutoscaleGuards[\s\S]*addEventListener\('mousedown'[\s\S]*capture: true/);
 assert.match(interaction, /_isPlotlyAutoscaleModebarTarget[\s\S]*name === 'autoscale2d' \|\| name === 'resetscale2d'/);
+// Panel cancellation and the computing pill's Cancel share one stop
+// (analysis-busy-methods.js), which invalidates every analysis' token.
+const busy = read('src/plots/methods/analysis-busy-methods.js');
+assert.match(manager, /\n    _cancelPanelAnalysis\(panelId[\s\S]*?this\._dropAnalysisRuns\(plot, reason\)/, 'panel cancellation uses the shared stop');
 for (const token of [
     '_fftToken', '_histToken', '_calendarHeatmapToken',
     '_temporalProfileToken', '_integralToken', '_correlationToken',
     '_phase2dLazyToken',
 ]) {
-    assert.ok(manager.includes(token), `panel cancellation invalidates ${token}`);
+    assert.ok(busy.includes(`'${token}'`), `panel cancellation invalidates ${token}`);
 }
 
 const analysisHooks = {

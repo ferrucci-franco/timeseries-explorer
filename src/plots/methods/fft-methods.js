@@ -1493,8 +1493,10 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         if (!spectrum) {
             let series;
             try {
-                series = await this._fftSeriesForTrace(trace, range, state);
+                series = await this._fftSeriesForTrace(trace, range, state, this._analysisSignal(plot));
             } catch (err) {
+                // Cancelled from the computing pill: its token is already gone.
+                if (err?.name === 'AbortError') return;
                 console.warn('[fft] failed to fetch series:', err);
                 series = { ok: false, reason: 'fetchFailed' };
             }
@@ -1758,7 +1760,7 @@ proto._refreshFftSpectrumWindow = function(panelId, plot = this.plots.get(panelI
     Plotly.restyle(plot.fftDiv, { x: xs, y: ys, customdata: customs, text: texts }, indices);
 };
 
-proto._fftSeriesForTrace = async function(trace, range, state) {
+proto._fftSeriesForTrace = async function(trace, range, state, signal = null) {
     const fileData = this.files.get(trace.fileId)?.data;
     if (!fileData?.variables?.[trace.varName]) return { ok: false, reason: 'missingVariable' };
     const lazyMeta = fileData._duckdb;
@@ -1768,7 +1770,7 @@ proto._fftSeriesForTrace = async function(trace, range, state) {
         const sourceRange = this._sourceRangeForDisplayRange(trace.fileId, range, timeVar);
         if (!sourceRange || !sourceRange.every(Number.isFinite)) return { ok: false, reason: 'invalidRange' };
         const maxRows = this._fftMaxRawRowsForState(state);
-        const raw = await source.getRawColumnsRange(fileData, [trace.varName], sourceRange[0], sourceRange[1], maxRows);
+        const raw = await source.getRawColumnsRange(fileData, [trace.varName], sourceRange[0], sourceRange[1], maxRows, { signal });
         if (raw.truncated) return { ok: false, reason: 'tooManyPoints' };
         const transformed = this._transformFetchedPhaseTrajectory(trace.fileId, raw.x, raw.rowIndex, raw.yByVar, [trace.varName]);
         const selected = selectFftRange(transformed.time, transformed.valuesByVar.get(trace.varName), range);
@@ -3221,26 +3223,8 @@ proto._syncFftOptionsPanel = function(plot, options = {}) {
 // Plotly.react, the user can keep panning/zooming the spectrum already shown
 // while a new range recomputes. Reuses the lazy-detail indicator styling.
 proto._setFftComputing = function(plot, loading) {
-    const pane = plot?.fftDiv?.parentElement; // .fft-spectrum-pane
-    if (!pane) return;
-    let pill = pane.querySelector('.fft-computing-indicator');
-    if (loading) {
-        if (!pill) {
-            pill = document.createElement('div');
-            pill.className = 'lazy-detail-indicator fft-computing-indicator';
-            pill.setAttribute('aria-live', 'polite');
-            pill.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
-            pane.appendChild(pill);
-        }
-        const label = i18n.t('fftCalculating');
-        const text = pill.querySelector('.lazy-detail-text');
-        if (text) text.textContent = label;
-        pill.setAttribute('aria-label', label);
-        pill.classList.add('active');
-    } else if (pill) {
-        pill.classList.remove('active');
-        pill.remove();
-    }
+    // The shared pill (analysis-busy-methods.js), with its Cancel button.
+    this._setAnalysisComputing(plot, loading, { label: i18n.t('fftCalculating'), className: 'fft-computing-indicator' });
 };
 
 proto._setFftStatus = function(plot, message, type = 'muted') {

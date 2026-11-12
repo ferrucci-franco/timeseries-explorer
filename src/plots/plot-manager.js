@@ -13,6 +13,7 @@ import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
+import { installPlotAnalysisBusyMethods } from './methods/analysis-busy-methods.js';
 import { installPlotFitLazyMethods } from './methods/fit-lazy-methods.js';
 import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
 import { installPlotCurveFitMethods } from './methods/curve-fit-methods.js';
@@ -2782,32 +2783,10 @@ class PlotManager {
 
     _cancelPanelAnalysis(panelId, plot = this.plots.get(panelId), reason = 'Analysis cancelled') {
         if (!plot) return;
-        plot._fftToken = (plot._fftToken || 0) + 1;
-        plot._fftPreparationToken = (plot._fftPreparationToken || 0) + 1;
-        plot._histToken = (plot._histToken || 0) + 1;
-        plot._calendarHeatmapToken = (plot._calendarHeatmapToken || 0) + 1;
-        plot._temporalProfileToken = (plot._temporalProfileToken || 0) + 1;
-        plot._integralToken = (plot._integralToken || 0) + 1;
-        plot._correlationToken = (plot._correlationToken || 0) + 1;
-        plot._phase2dLazyToken = (plot._phase2dLazyToken || 0) + 1;
-        for (const key of [
-            '_fftRecomputeTimer', '_histRecomputeTimer', '_calendarHeatmapRecomputeTimer',
-            '_temporalProfileRecomputeTimer', '_integralRecomputeTimer',
-            '_correlationRecomputeTimer', '_corrVisualTimer',
-            '_phase2dFitRecomputeTimer', '_phase2dFitVisualTimer',
-        ]) {
-            clearTimeout(plot[key]);
-            plot[key] = null;
-        }
-        // Recomputes that are waiting for a paint frame are not timers: they
-        // hold a token slot, and clearing it is what drops the pending run.
-        for (const key of [
-            '_histRecomputeRun', '_calendarHeatmapRecomputeRun', '_temporalProfileRecomputeRun',
-            '_integralRecomputeRun', '_correlationRecomputeRun', '_phase2dFitRecomputeRun',
-        ]) {
-            plot[key] = null;
-        }
-        this._abortFftWorkerJob?.(plot, reason);
+        // The same stop as the pill's Cancel (analysis-busy-methods.js), plus
+        // the panel's lazy detail: the panel or its file is going away.
+        this._dropAnalysisRuns(plot, reason);
+        this._setAnalysisComputing(plot, false);
         this._cleanupLazyDetailForPanel?.(panelId, plot);
     }
 
@@ -5671,6 +5650,7 @@ installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotHistogramLazyMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);
+installPlotAnalysisBusyMethods(PlotManager);
 installPlotFitLazyMethods(PlotManager);
 installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);

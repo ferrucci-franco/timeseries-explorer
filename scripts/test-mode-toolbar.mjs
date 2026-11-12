@@ -435,10 +435,11 @@ assert.match(
 );
 assert.match(
     temporalMethodAssignment('_setTemporalProfileComputing'),
-    /lazy-detail-indicator temporal-profile-computing-indicator/,
-    'Temporal Profile reuses the non-blocking FFT calculation pill',
+    /_setAnalysisComputing\(plot, loading, \{[^}]*className: 'temporal-profile-computing-indicator'/,
+    'Temporal Profile uses the shared calculation pill (with its Cancel button)',
 );
 assert.match(contentCss, /\.lazy-detail-indicator[\s\S]*?pointer-events:\s*none/, 'Calculation pills do not intercept plot pan/zoom');
+assert.match(contentCss, /\.analysis-cancel-btn \{[\s\S]*?pointer-events:\s*auto/, 'only their Cancel button takes the pointer');
 assert.match(
     interactionSource,
     /querySelector\('\.lazy-data-detail-indicator'\)[\s\S]*?lazy-detail-indicator lazy-data-detail-indicator/,

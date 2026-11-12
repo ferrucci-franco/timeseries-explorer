@@ -745,6 +745,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (measured.superseded) return;
 
         if (lazyByFile.size) {
+            const signal = this._analysisSignal(plot);
             const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
                 const data = this.files.get(fileId)?.data;
                 const source = data?._duckdb?.source;
@@ -756,7 +757,7 @@ export function installPlotCorrelationMethods(TargetClass) {
                     const stats = await source.getPairCorrelations(
                         data,
                         entries.map(e => ({ x: e.pair.x, y: e.pair.y })),
-                        { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset },
+                        { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset, signal },
                     );
                     for (let index = 0; index < (stats?.length || 0); index++) {
                         const pair = entries[index]?.pair;
@@ -775,6 +776,8 @@ export function installPlotCorrelationMethods(TargetClass) {
                     }
                     return { entries, stats };
                 } catch (err) {
+                    // Cancelled from the computing pill: the token is gone.
+                    if (err?.name === 'AbortError') return { entries, error: true };
                     console.warn('[correlation] lazy query failed:', err);
                     return { entries, error: true };
                 }
@@ -952,6 +955,8 @@ export function installPlotCorrelationMethods(TargetClass) {
     };
 
     proto._setCorrelationStatus = function(plot, message, type = 'muted', tooltip = '') {
+        // While it loads, the shared computing pill with its Cancel button.
+        this._setAnalysisComputing?.(plot, type === 'loading', { label: message });
         const el = plot?.correlationContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';
