@@ -80,6 +80,9 @@ class OpenModelicaViewer {
         this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
         this.layoutManager.onPanelDetach  = (id)     => this.plotManager.onPanelDetach(id);
         this.plotManager.onTimeAxisVariableDrop = (timeVarName) => this._handleTimeAxisDrop(timeVarName);
+        // An analysis that hands a result back as a signal (Curve Fit) does it as
+        // a formula variable, which the app owns.
+        this.plotManager.onCreateFormulaVariable = (fileId, name, formula) => this._createFormulaVariableFor(fileId, name, formula);
         // Long jobs inside PlotManager borrow the app's loading overlay. Kept
         // as a hook, like the one above: the plot manager owns no UI of its own.
         this.plotManager.onBusyOverlay = (options) => this._showBusyOverlay(options);

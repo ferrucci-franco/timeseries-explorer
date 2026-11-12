@@ -19,6 +19,7 @@ import {
     defaultCurveFitEntry,
     defaultCurveFitState,
     normalizeCurveFitState,
+    curveFitFormula,
     rangeIndices,
     shiftedTime,
 } from '../curve-fit-state.js';
@@ -1037,8 +1038,8 @@ export function installPlotCurveFitMethods(TargetClass) {
     proto._showCurveFitHelp = function() {
         Modal.alert(
             i18n.t('curveFitHelpTitle'),
-            `<div class="phase2d-fit-help-modal">${i18n.t('curveFitHelp')}<p>${i18n.t('fitExpFamilyHelp')}</p></div>`,
-            { html: true, icon: false, className: 'phase2d-fit-help-dialog' },
+            `<div class="help-doc">${i18n.t('curveFitHelp')}${i18n.t('fitExpFamilyHelp')}</div>`,
+            { html: true, icon: false, className: 'modal-dialog-help phase2d-fit-help-dialog' },
         );
     };
 
@@ -1331,6 +1332,7 @@ export function installPlotCurveFitMethods(TargetClass) {
                 stats.append(dt, dd);
             }
             block.appendChild(stats);
+            block.appendChild(this._curveFitSaveControls(panelId, plot, entry));
         }
         const warning = this._curveFitWarningText(r);
         if (warning) {
@@ -1341,6 +1343,53 @@ export function installPlotCurveFitMethods(TargetClass) {
             block.appendChild(w);
         }
         drawer.appendChild(block);
+    };
+
+    // "Save as signal": the fitted curve or the residual, NaN outside the range
+    // unless Extrapolate is ticked.
+    proto._curveFitSaveControls = function(panelId, plot, entry) {
+        const state = this._ensureCurveFitState(plot);
+        const wrap = document.createElement('div');
+        wrap.className = 'curve-fit-save';
+        const title = document.createElement('div');
+        title.className = 'phase2d-fit-field-label curve-fit-save-title';
+        title.textContent = i18n.t('curveFitSaveTitle');
+        const buttons = document.createElement('div');
+        buttons.className = 'curve-fit-save-buttons';
+        const make = (labelKey, tipKey, kind) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `fft-tool-btn curve-fit-save-${kind}`;
+            button.textContent = i18n.t(labelKey);
+            button.title = i18n.t(tipKey);
+            button.addEventListener('click', () => this._saveCurveFitSignal(panelId, kind));
+            return button;
+        };
+        buttons.append(
+            make('curveFitSaveFit', 'curveFitSaveFitTip', 'fit'),
+            make('curveFitSaveResidual', 'curveFitSaveResidualTip', 'residual'),
+        );
+        const label = document.createElement('label');
+        label.className = 'curve-fit-extrapolate';
+        label.title = i18n.t('curveFitExtrapolateTip');
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.className = 'curve-fit-extrapolate-box';
+        box.checked = !!state.extrapolate;
+        box.addEventListener('change', () => { state.extrapolate = box.checked; });
+        const text = document.createElement('span');
+        text.textContent = i18n.t('curveFitExtrapolate');
+        label.append(box, text);
+        wrap.append(title, buttons, label);
+        const message = plot._curveFitSignalMessage;
+        if (message && message.fitId === entry?.id) {
+            const line = document.createElement('div');
+            line.className = `curve-fit-save-message curve-fit-save-${message.type}`;
+            line.setAttribute('role', 'status');
+            line.textContent = message.text;
+            wrap.appendChild(line);
+        }
+        return wrap;
     };
 
     // Refresh the Start/End inputs from the active fit without stealing focus.
@@ -1356,6 +1405,81 @@ export function installPlotCurveFitMethods(TargetClass) {
             if (input && document.activeElement !== input) {
                 input.value = usesCalendar ? msToDatetimeInput(value) : formatInputValue(value);
             }
+        }
+    };
+
+    // ── Saving a fit as a signal ──────────────────────────────────
+    // The active fit's curve (or its residual) becomes a formula variable of
+    // the signal's file: listed in the sidebar, usable in any panel and in
+    // formulas, saved with the view. The formula is written over the file's
+    // own time column, so it is recomputed — the same numbers — on reload and
+    // over a lazy file in SQL. Outside the fit's range it is NaN unless the
+    // drawer's Extrapolate box is ticked.
+    proto._curveFitSignalFormula = function(plot, r, kind) {
+        const state = this._ensureCurveFitState(plot);
+        const trace = r.trace;
+        const data = this.files.get(trace.fileId)?.data;
+        const timeEntry = Object.entries(data?.variables || {}).find(([, v]) => v?.kind === 'abscissa');
+        if (!timeEntry) throw new Error('no-time');
+        const range = this._curveFitRange(plot, r.entry);
+        const timeVar = this._getTimeVar(trace.fileId);
+        // The panel's times are the file's stored times after its transform
+        // (time shift, a generated axis' step); map the range back to them.
+        const source = this._sourceRangeForDisplayRange(trace.fileId, range, timeVar) || range;
+        const span = range[1] - range[0];
+        const sourceSpan = source[1] - source[0];
+        const k = span > 0 && sourceSpan > 0 ? span / sourceSpan : 1;
+        const transform = this._fileTransform(trace.fileId);
+        return curveFitFormula(r.result.fit, {
+            kind,
+            signal: trace.varName,
+            gain: Number(transform.gain),
+            yOffset: Number(transform.yOffset),
+            sign: this.isVariableSignInverted?.(trace.fileId, trace.varName) ? -1 : 1,
+            extrapolate: !!state.extrapolate,
+            time: {
+                name: timeEntry[0],
+                origin: source[0] + (r.result.t0 - range[0]) / k,
+                divisor: r.result.scale / k,
+                lo: source[0],
+                hi: source[1],
+            },
+        });
+    };
+
+    proto._curveFitSignalName = function(plot, r, kind) {
+        const variables = this.files.get(r.trace.fileId)?.data?.variables || {};
+        const base = `${String(r.trace.varName).replace(/[^A-Za-z0-9_]+/g, '_')}_${kind === 'residual' ? 'res' : 'fit'}${r.index + 1}`;
+        let name = base;
+        for (let k = 2; variables[name]; k++) name = `${base}_${k}`;
+        return name;
+    };
+
+    proto._saveCurveFitSignal = function(panelId, kind = 'fit') {
+        const plot = this.plots.get(panelId);
+        if (!plot) return null;
+        const entry = this._curveFitActiveEntry(plot);
+        const r = (plot._curveFitResults || []).find(candidate => candidate.entry === entry);
+        const say = (text, type) => {
+            plot._curveFitSignalMessage = { text, type, fitId: entry?.id };
+            this._renderCurveFitDrawer(panelId, plot, plot._curveFitResults || []);
+        };
+        if (!r?.result?.fit || r.result.fit.status !== 'ok') {
+            say(i18n.t('curveFitSaveNoFit'), 'error');
+            return null;
+        }
+        if (typeof this.onCreateFormulaVariable !== 'function') return null;
+        try {
+            const formula = this._curveFitSignalFormula(plot, r, kind);
+            const name = this._curveFitSignalName(plot, r, kind);
+            const created = this.onCreateFormulaVariable(r.trace.fileId, name, formula);
+            const key = created?.lazyOverviewOnly ? 'curveFitSavedOverviewOnly' : 'curveFitSaved';
+            say(i18n.t(key).replace('{name}', name), created?.lazyOverviewOnly ? 'warning' : 'ok');
+            return { name, formula };
+        } catch (err) {
+            const reason = err?.message === 'coefficient-overflow' ? i18n.t('fitCoefficientOverflow') : (err?.message || String(err));
+            say(i18n.t('curveFitSaveFailed').replace('{reason}', reason), 'error');
+            return null;
         }
     };
 

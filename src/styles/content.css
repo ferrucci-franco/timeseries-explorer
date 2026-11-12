@@ -1610,6 +1610,39 @@
     margin: 2px 0 4px;
 }
 
+.curve-fit-save {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.curve-fit-save-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.curve-fit-extrapolate {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.curve-fit-save-message {
+    font-size: 0.72rem;
+    overflow-wrap: anywhere;
+}
+
+.curve-fit-save-ok { color: color-mix(in srgb, #16a34a 78%, var(--text-primary)); }
+.curve-fit-save-warning { color: var(--warning-color); }
+.curve-fit-save-error { color: var(--error-color, #d32f2f); }
+
 .curve-fit-container.curve-fit-residuals-hidden .fft-plot-area {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
@@ -1723,23 +1756,6 @@
 .phase2d-fit-empty {
     color: var(--text-secondary);
     font-size: 0.68rem;
-}
-
-/* Help modal body (About this fit / metrics), matching the Correlation help. */
-.phase2d-fit-help-modal {
-    font-size: 0.85rem;
-    line-height: 1.5;
-    text-align: left;
-}
-
-.phase2d-fit-help-modal dt {
-    font-weight: 700;
-    margin-top: 8px;
-}
-
-.phase2d-fit-help-modal dd {
-    margin: 0 0 4px;
-    color: var(--text-secondary);
 }
 
 .layout-toolbar-btn:disabled {
@@ -3445,13 +3461,15 @@ body.cursor-box-dragging {
 
 .fft-help-popover {
     margin: 0 0 8px;
-    padding: 8px 9px;
+    padding: 9px 11px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     background: var(--bg-secondary);
-    font-size: 0.72rem;
-    line-height: 1.45;
-    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    /* The help is written as short paragraphs separated by blank lines. */
+    white-space: pre-line;
 }
 
 .fft-help-popover[hidden] {
@@ -3694,12 +3712,14 @@ body.fft-selection-dragging.fft-selection-moving {
 .plotly-mode-integral-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-phase2d-fit-time.fft-cursor-ew .nsewdrag,
+.plotly-mode-curve-fit-time.fft-cursor-ew .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-profile-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-integral-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-correlation-time .nsewdrag,
-body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-time .nsewdrag {
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-time .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-curve-fit-time .nsewdrag {
     cursor: ew-resize !important;
 }
 
@@ -3708,7 +3728,8 @@ body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-
 .plotly-mode-profile-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-integral-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-grab .nsewdrag,
-.plotly-mode-phase2d-fit-time.fft-cursor-grab .nsewdrag {
+.plotly-mode-phase2d-fit-time.fft-cursor-grab .nsewdrag,
+.plotly-mode-curve-fit-time.fft-cursor-grab .nsewdrag {
     cursor: grab !important;
 }
 
@@ -3717,7 +3738,8 @@ body.fft-selection-dragging.fft-selection-moving .plotly-mode-hist-time .nsewdra
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-profile-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-integral-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-correlation-time .nsewdrag,
-body.fft-selection-dragging.fft-selection-moving .plotly-mode-phase2d-fit-time .nsewdrag {
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-phase2d-fit-time .nsewdrag,
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-curve-fit-time .nsewdrag {
     cursor: grabbing !important;
 }
 

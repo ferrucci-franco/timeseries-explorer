@@ -162,6 +162,28 @@ proto.createDerivedVariable = function() {
     }
 };
 
+// Create a formula variable on a file without the sidebar form: the way an
+// analysis hands back a result (the Curve Fit's fitted curve and residual).
+// It is an ordinary derived variable from then on — listed, editable, saved
+// with the view and recomputed on reload — so the formula is the whole record
+// of where it came from. Returns { name, lazyOverviewOnly } or throws.
+proto._createFormulaVariableFor = function(fileId, name, formula) {
+    const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+    if (!data) throw new Error('Load a result or text file first.');
+    const nameProblem = variableNameProblem(name);
+    if (nameProblem) throw new Error(i18n.t(nameProblem));
+    if (data.variables[name]) throw new Error(i18n.t('derivedNameTaken').replace('{name}', name));
+    const result = this._evaluateDerivedFormula(formula, data);
+    const variable = this._formulaDerivedVariable(name, formula, result);
+    data.variables[name] = variable;
+    if (!this.derivedByFile.has(fileId)) this.derivedByFile.set(fileId, new Map());
+    this.derivedByFile.get(fileId).set(name, { name, formula, variable });
+    this._renderFilteredTree();
+    this._rebuildPlotsUsingVariable(fileId, name);
+    if (variable._duckdbWindows?.length) this._refreshLazyOverviewSoon(fileId, data);
+    return { name, lazyOverviewOnly: !!data._duckdb && !variable._duckdbExpr };
+};
+
 proto._formulaDerivedVariable = function(name, formula, result) {
     // On a lazy file a formula reading neighbouring rows (diff, cumsum, a
     // lazy derivative) has no meaning over the overview: its samples are

@@ -66,6 +66,8 @@ export function defaultCurveFitState() {
         split: 0.68,
         optionsVisible: true,
         residualsHidden: false,
+        // A fit saved as a signal is NaN outside its own range unless asked.
+        extrapolate: false,
         timeUnit: 's',
         activeFit: 0,
         fits: [defaultCurveFitEntry()],
@@ -84,6 +86,7 @@ export function normalizeCurveFitState(raw = {}) {
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.85, split)) : defaults.split,
         optionsVisible: raw.optionsVisible !== false,
         residualsHidden: raw.residualsHidden === true,
+        extrapolate: raw.extrapolate === true,
         timeUnit: Object.hasOwn(CURVE_FIT_TIME_UNITS, raw.timeUnit) ? raw.timeUnit : defaults.timeUnit,
         activeFit: Math.max(0, Math.min(fits.length - 1, active)),
         fits,
@@ -157,4 +160,75 @@ export function decimateMinMax(x, y, buckets = 2000) {
         }
     }
     return { x: outX, y: outY };
+}
+
+// How a variable name is written into a formula: bare when the tokenizer reads
+// it back as that one name, in backticks otherwise (src/expr/parse.js).
+export function formulaName(name) {
+    return /^[A-Za-z_][A-Za-z0-9_.]*$/.test(name) ? name : `\`${name}\``;
+}
+
+// A number as a formula literal, at full precision; negatives in parentheses
+// so they can follow any operator.
+export function formulaNumber(value) {
+    const text = String(Number(value));
+    return value < 0 ? `(${text})` : text;
+}
+
+/**
+ * The fitted curve of one result as a derived-variable formula over the
+ * file's own time column — the record a saved signal keeps, which the app
+ * recomputes on reload and over a lazy file in SQL.
+ *
+ *   fit       ŷ(t′), mapped back through the file's gain/offset so that the
+ *             new variable DISPLAYS as ŷ (the panel transform applies to it
+ *             like to any other variable of the file)
+ *   residual  y − ŷ, the same way
+ *
+ * `time` maps the stored time column to t′: t′ = (T − origin) / divisor.
+ * Outside [lo, hi] (stored-time units) the value is NaN unless `extrapolate`:
+ * 0·sqrt(min(T − lo, hi − T)) is 0 inside and NaN outside, in JavaScript and
+ * in the SQL translation alike. Throws when the fit cannot be written.
+ */
+export function curveFitFormula(fit, { kind = 'fit', time, signal = null, gain = 1, yOffset = 0, sign = 1, extrapolate = false } = {}) {
+    if (!fit || fit.status !== 'ok') throw new Error('no-fit');
+    const n = formulaNumber;
+    const T = formulaName(time.name);
+    const tp = time.divisor === 1
+        ? `(${T} - ${n(time.origin)})`
+        : `((${T} - ${n(time.origin)}) / ${n(time.divisor)})`;
+    // Euler's number as a literal: a file may have a variable called e.
+    const E = String(Math.E);
+    let expr;
+    switch (fit.model) {
+        case 'linear': expr = `${n(fit.b0)} + ${n(fit.b1)}*${tp}`; break;
+        case 'quadratic': expr = `${n(fit.a)}*${tp}^2 + ${n(fit.b)}*${tp} + ${n(fit.c)}`; break;
+        case 'power': expr = `${n(fit.a)}*${tp}^${n(fit.b)}`; break;
+        case 'exponential': expr = `${n(fit.a)}*${E}^(${n(fit.b)}*${tp})`; break;
+        case 'exponential-offset': expr = `${n(fit.a)}*${E}^(${n(fit.b)}*${tp}) + ${n(fit.c)}`; break;
+        case 'first-order': expr = `${n(fit.K)}*(1 - ${E}^(${n(fit.alpha)}*${tp}))`; break;
+        case 'first-order-offset': expr = `${n(fit.y0)} + ${n(fit.K)}*(1 - ${E}^(${n(fit.alpha)}*${tp}))`; break;
+        default: throw new Error('no-fit');
+    }
+    const coefficients = ['a', 'b', 'c', 'b0', 'b1', 'K', 'alpha', 'y0']
+        .filter(key => fit[key] !== undefined && fit[key] !== null && !Number.isNaN(fit[key]));
+    if (coefficients.some(key => !Number.isFinite(fit[key]))) throw new Error('coefficient-overflow');
+    const g = Number.isFinite(gain) && gain !== 0 ? gain : 1;
+    const off = Number.isFinite(yOffset) ? yOffset : 0;
+    let out;
+    if (kind === 'residual') {
+        if (!signal) throw new Error('no-signal');
+        const y = sign < 0 ? `(-${formulaName(signal)})` : formulaName(signal);
+        out = g === 1 ? `${y} - (${expr})` : `${y} - (${expr}) / ${n(g)}`;
+    } else if (g === 1 && off === 0) {
+        out = expr;
+    } else {
+        out = `((${expr}) - ${n(off)}) / ${n(g)}`;
+    }
+    if (!extrapolate) {
+        const lo = n(time.lo);
+        const hi = n(time.hi);
+        out = `${out} + 0*sqrt(min(${T} - ${lo}, ${hi} - ${T}))`;
+    }
+    return out;
 }

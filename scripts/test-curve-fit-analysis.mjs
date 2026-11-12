@@ -17,6 +17,10 @@ import {
 import { FIT_MODELS, fitEquationParts } from '../src/utils/fit-models.js';
 import { fitPair } from '../src/utils/regression.js';
 import { COMPACT_ANALYSES } from '../src/app/methods/compact-analyses.js';
+import { curveFitFormula, formulaName, formulaNumber } from '../src/plots/curve-fit-state.js';
+import { getCompiledFormula } from '../src/expr/compile.js';
+import { formulaToSql } from '../src/expr/sql.js';
+import { predict } from '../src/utils/regression.js';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -84,6 +88,58 @@ const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'
     for (let i = 1; i < d.x.length; i++) assert.ok(d.x[i] >= d.x[i - 1], 'time order is kept');
     const small = decimateMinMax([1, 2, 3], [1, NaN, 3], 100);
     assert.deepEqual(small.y, [1, null, 3], 'a short series is kept whole, with gaps as gaps');
+}
+
+// ── A fit saved as a signal: the formula reproduces ŷ, NaN outside ──
+{
+    assert.equal(formulaName('Date Time'), '`Date Time`');
+    assert.equal(formulaName('HEATER_E_IMP'), 'HEATER_E_IMP');
+    assert.equal(formulaNumber(-0.5), '(-0.5)');
+    assert.equal(formulaNumber(1e-7), '1e-7');
+
+    // A calendar axis in ms, t′ in seconds from t₀.
+    const t0 = Date.UTC(2026, 10, 10, 17, 9, 11);
+    const time = Float64Array.from({ length: 400 }, (_, i) => t0 - 100e3 + i * 10e3);
+    const y = Float64Array.from(time, t => (t < t0 ? 0 : 0.1 + 2.4 * (1 - Math.exp(-(t - t0) / 1000 / 900))));
+    const inRange = [...time.keys()].filter(i => time[i] >= t0 && time[i] <= t0 + 3000e3);
+    const tp = Float64Array.from(inRange, i => (time[i] - t0) / 1000);
+    const evaluate = (formula) => {
+        const variables = {
+            'Date Time': { kind: 'abscissa', data: time },
+            HEATER: { kind: 'variable', data: y },
+        };
+        const compiled = getCompiledFormula(formula, variables, () => 'series');
+        return compiled.run({ 'Date Time': time, HEATER: y }, {}, time.length);
+    };
+    const timeMap = { name: 'Date Time', origin: t0, divisor: 1000, lo: t0, hi: t0 + 3000e3 };
+    for (const model of ['linear', 'quadratic', 'power', 'exponential', 'exponential-offset', 'first-order', 'first-order-offset']) {
+        const fit = fitPair(model, tp, Float64Array.from(inRange, i => y[i]));
+        if (fit.status !== 'ok') continue;
+        const values = evaluate(curveFitFormula(fit, { time: timeMap }));
+        let err = 0;
+        for (const i of inRange) {
+            const p = predict(fit, (time[i] - t0) / 1000);
+            if (Number.isFinite(p)) err = Math.max(err, Math.abs(values[i] - p) / Math.max(1, Math.abs(p)));
+        }
+        assert.ok(err < 1e-9, `${model}: the formula is the fit (${err})`);
+        assert.ok(Number.isNaN(values[0]) && Number.isNaN(values[time.length - 1]), `${model}: NaN outside the range`);
+        const residual = evaluate(curveFitFormula(fit, { kind: 'residual', signal: 'HEATER', time: timeMap }));
+        const i = inRange[50];
+        assert.ok(Math.abs(residual[i] - (y[i] - predict(fit, (time[i] - t0) / 1000))) < 1e-9, `${model}: the residual is y − ŷ`);
+    }
+    const fit = fitPair('first-order-offset', tp, Float64Array.from(inRange, i => y[i]));
+    const everywhere = evaluate(curveFitFormula(fit, { time: timeMap, extrapolate: true }));
+    assert.ok(everywhere.every(Number.isFinite), 'extrapolated: defined on the whole axis');
+    // Displayed through gain 2 and offset 1, the stored formula must undo both.
+    const stored = evaluate(curveFitFormula(fit, { time: timeMap, gain: 2, yOffset: 1 }));
+    const k = inRange[100];
+    assert.ok(Math.abs(stored[k] * 2 + 1 - predict(fit, (time[k] - t0) / 1000)) < 1e-9, 'the transform is undone');
+    // It has a SQL form, so a lazy file computes it over the file.
+    const sql = formulaToSql(curveFitFormula(fit, { time: timeMap }), {
+        'Date Time': { kind: 'abscissa', data: time },
+    }, () => ({ sql: '"t"', windows: [] }));
+    assert.ok(typeof sql === 'string' && sql.length > 0, 'it translates to SQL');
+    assert.throws(() => curveFitFormula({ status: 'undefined' }, { time: timeMap }), /no-fit/);
 }
 
 // ── Wiring ──

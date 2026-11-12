@@ -2942,7 +2942,7 @@ class PlotManager {
             if (lazyPlan) {
                 // Some traces could not be read in full (below). Said, not
                 // hidden: the file still goes out, and the user knows what it is.
-                Modal.alert(i18n.t('exportDialogTitle'), i18n.t('csvExportOverviewNotice'), { icon: '⚠️' });
+                Modal.alert(i18n.t('exportDialogTitle'), i18n.t('csvExportOverviewNotice'), { icon: '⚠️', className: 'modal-dialog-wide' });
             }
             this._appendTimeseriesExportColumns(plot, headers, columns);
         } else if (plot.mode === 'fft') {
@@ -3432,7 +3432,7 @@ class PlotManager {
         const lazyPlan = this._lazyTimeseriesCsvPlan(plot);
         if (lazyPlan && !lazyPlan.exact) {
             // The same notice, for the same reason, as the per-trace layout.
-            Modal.alert(i18n.t('exportDialogTitle'), i18n.t('csvExportOverviewNotice'), { icon: '⚠️' });
+            Modal.alert(i18n.t('exportDialogTitle'), i18n.t('csvExportOverviewNotice'), { icon: '⚠️', className: 'modal-dialog-wide' });
         }
         const readsFromDisk = (fileId) => !!(lazyPlan?.exact && this.files.get(fileId)?.data?._duckdb);
 

@@ -75,6 +75,8 @@ proto._toggleResampleHelpPopover = function(show) {
     popover.hidden = !willShow;
     button.classList.toggle('active', willShow);
     button.setAttribute('aria-expanded', String(willShow));
+    // Wide, beside the sidebar, like every other data-tool help (filter-methods.js).
+    if (willShow) this._positionFilterHelpPopover?.(popover, button);
 };
 
 // ─── Reading the form ─────────────────────────────────────────────────────

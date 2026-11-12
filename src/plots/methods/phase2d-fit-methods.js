@@ -1133,8 +1133,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._showPhase2dFitHelp = function() {
         Modal.alert(
             i18n.t('phase2dFitAboutTitle'),
-            `<div class="phase2d-fit-help-modal">${i18n.t('phase2dFitOlsHelp')}<p>${i18n.t('fitExpFamilyHelp')}</p></div>`,
-            { html: true, icon: false, className: 'phase2d-fit-help-dialog' },
+            `<div class="help-doc">${i18n.t('phase2dFitOlsHelp')}${i18n.t('fitExpFamilyHelp')}</div>`,
+            { html: true, icon: false, className: 'modal-dialog-help phase2d-fit-help-dialog' },
         );
     };
 
@@ -1142,8 +1142,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._showPhase2dFitMetricsHelp = function() {
         Modal.alert(
             i18n.t('phase2dFitMetricsHelpTitle'),
-            `<div class="phase2d-fit-help-modal">${i18n.t('phase2dFitMetricsHelpBody')}</div>`,
-            { html: true, icon: false, className: 'phase2d-fit-help-dialog' },
+            `<div class="help-doc">${i18n.t('phase2dFitMetricsHelpBody')}</div>`,
+            { html: true, icon: false, className: 'modal-dialog-help phase2d-fit-help-dialog' },
         );
     };
 
