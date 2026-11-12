@@ -388,6 +388,7 @@ export function installPlotCurveFitMethods(TargetClass) {
 
     proto._buildCurveFitCurveTraces = function(plot, results = plot._curveFitResults || []) {
         const traces = [];
+        const extrapolate = !!this._ensureCurveFitState(plot).extrapolate;
         for (const r of results) {
             const curve = r.result?.curve;
             if (!curve?.x?.length) continue;
@@ -405,8 +406,58 @@ export function installPlotCurveFitMethods(TargetClass) {
                     + '<br>ŷ = %{y:.4g}<extra></extra>',
                 meta: { curveFitIndex: r.index },
             });
+            const outside = extrapolate ? this._curveFitExtrapolatedCurve(r) : null;
+            if (outside) {
+                traces.push({
+                    x: outside.x,
+                    y: outside.y,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: `${name} (${i18n.t('curveFitExtrapolatedShort')})`,
+                    showlegend: false,
+                    yaxis: this._traceYAxis(r.trace, plot),
+                    line: { color: r.color, width: 1.5, dash: 'dot' },
+                    opacity: 0.8,
+                    customdata: outside.tPrime,
+                    hovertemplate: `<b>${this._escapeHTML(name)}</b> (${this._escapeHTML(i18n.t('curveFitExtrapolatedShort'))})`
+                        + `<br>t′ = %{customdata:.4g} ${this._escapeHTML(r.result.unit || '')}`
+                        + '<br>ŷ = %{y:.4g}<extra></extra>',
+                    meta: { curveFitIndex: r.index, curveFitExtrapolated: true },
+                });
+            }
         }
         return traces;
+    };
+
+    // The fit's equation over the rest of its signal's time axis: before and
+    // after the fitted stretch, joined by a gap, in the panel's time units.
+    proto._curveFitExtrapolatedCurve = function(r) {
+        const fit = r.result?.fit;
+        if (fit?.status !== 'ok' || !r.trace) return null;
+        const domain = this._curveFitTraceDomain(r.trace);
+        const { t0, scale } = r.result;
+        if (!domain || !Number.isFinite(t0) || !(scale > 0)) return null;
+        const pMin = (domain.min - t0) / scale;
+        const pMax = (domain.max - t0) / scale;
+        const span = (fit.maxX - fit.minX) || (pMax - pMin) || 1;
+        const tPrime = [];
+        const y = [];
+        const segment = (a, b) => {
+            if (!(b > a)) return;
+            // As dense as the fitted curve, at least a handful of points.
+            const count = Math.max(8, Math.min(2000, Math.ceil(200 * (b - a) / span)));
+            const sampled = buildFitCurve({ ...fit, minX: a, maxX: b }, count);
+            if (tPrime.length) { tPrime.push(NaN); y.push(null); }
+            tPrime.push(...sampled.x);
+            y.push(...sampled.y.map(v => (Number.isFinite(v) ? v : null)));
+        };
+        segment(pMin, fit.minX);
+        segment(fit.maxX, pMax);
+        if (!tPrime.length) return null;
+        const timeVar = this._getTimeVar(r.trace.fileId);
+        const t = tPrime.map(v => (Number.isFinite(v) ? t0 + v * scale : NaN));
+        const x = this._plotlyTimeArray(r.trace.fileId, t, timeVar);
+        return { x: Array.from(x, (v, i) => (Number.isFinite(t[i]) ? v : null)), y, tPrime };
     };
 
     // The fit curves sit after the panel's own traces, so the time-series
@@ -1244,6 +1295,23 @@ export function installPlotCurveFitMethods(TargetClass) {
         };
         rangeGrid.append(bound('fftRangeStart', 'x1', lo), bound('fftRangeEnd', 'x2', hi));
         drawer.appendChild(rangeGrid);
+        // Extrapolate: the drawn curves run over the whole signal (dotted
+        // outside their range), and a saved fit is not NaN outside it.
+        const extrapolateLabel = document.createElement('label');
+        extrapolateLabel.className = 'curve-fit-extrapolate';
+        extrapolateLabel.title = i18n.t('curveFitExtrapolateTip');
+        const extrapolateBox = document.createElement('input');
+        extrapolateBox.type = 'checkbox';
+        extrapolateBox.className = 'curve-fit-extrapolate-box';
+        extrapolateBox.checked = !!state.extrapolate;
+        extrapolateBox.addEventListener('change', () => {
+            state.extrapolate = extrapolateBox.checked;
+            this._replaceCurveFitTraces(plot, plot._curveFitResults || []);
+        });
+        const extrapolateText = document.createElement('span');
+        extrapolateText.textContent = i18n.t('curveFitExtrapolate');
+        extrapolateLabel.append(extrapolateBox, extrapolateText);
+        drawer.appendChild(extrapolateLabel);
 
         // 5) Unit of t′
         const info = this._curveFitTimeInfo(plot, trace);
@@ -1359,10 +1427,9 @@ export function installPlotCurveFitMethods(TargetClass) {
         drawer.appendChild(block);
     };
 
-    // "Save as signal": the fitted curve or the residual, NaN outside the range
-    // unless Extrapolate is ticked.
+    // "Save fit as a signal": the fitted curve or the residual, NaN outside the
+    // range unless Extrapolate (under the range) is ticked.
     proto._curveFitSaveControls = function(panelId, plot, entry) {
-        const state = this._ensureCurveFitState(plot);
         const wrap = document.createElement('div');
         wrap.className = 'curve-fit-save';
         const title = document.createElement('div');
@@ -1383,18 +1450,7 @@ export function installPlotCurveFitMethods(TargetClass) {
             make('curveFitSaveFit', 'curveFitSaveFitTip', 'fit'),
             make('curveFitSaveResidual', 'curveFitSaveResidualTip', 'residual'),
         );
-        const label = document.createElement('label');
-        label.className = 'curve-fit-extrapolate';
-        label.title = i18n.t('curveFitExtrapolateTip');
-        const box = document.createElement('input');
-        box.type = 'checkbox';
-        box.className = 'curve-fit-extrapolate-box';
-        box.checked = !!state.extrapolate;
-        box.addEventListener('change', () => { state.extrapolate = box.checked; });
-        const text = document.createElement('span');
-        text.textContent = i18n.t('curveFitExtrapolate');
-        label.append(box, text);
-        wrap.append(title, buttons, label);
+        wrap.append(title, buttons);
         const message = plot._curveFitSignalMessage;
         if (message && message.fitId === entry?.id) {
             const line = document.createElement('div');

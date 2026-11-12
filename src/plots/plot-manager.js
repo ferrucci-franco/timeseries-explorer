@@ -1983,8 +1983,12 @@ class PlotManager {
         div.className = `plotly-container plotly-mode-${plot.mode}`;
         panelEl.appendChild(div);
         plot.div = div;
-        if (plot.mode === 'timeseries') {
+        if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
             // Install before Plotly registers native dblclick/modebar handlers.
+            // On a 2D plot Plotly's own double click ('reset+autosize') would
+            // otherwise run after ours: away from the first view it resets to
+            // the ranges of the first render (often just the first pair), at
+            // that view it autoranges, so each double click flipped between them.
             this._installEagerTimeseriesAutoscaleGuards(panelId, plot, div);
         }
 
@@ -2071,6 +2075,10 @@ class PlotManager {
             if (plot.mode !== 'timeseries') {
                 div.on('plotly_doubleclick', () => {
                     this._autoScalePlot(panelId, plot);
+                    // A double tap reaches Plotly unguarded, and Plotly applies its
+                    // own reset/autorange after this event: autoscale once more
+                    // after it, so the full extent of every trace is what stays.
+                    if (plot.mode === 'phase2d') setTimeout(() => this._autoScalePlot(panelId, plot), 0);
                     return false;
                 });
             }
