@@ -894,7 +894,7 @@ try {
             drawerInSheet: !!plot?.phase2dFitOptions && !!document.querySelector('.compact-sheet')?.contains(plot.phase2dFitOptions),
         };
     });
-    await page.locator('.compact-radio', { hasText: 'Curve Fit' }).click();
+    await page.locator('.compact-radio', { hasText: /^\s*Curve Fit\s*$/ }).click();
     await page.waitForFunction(() => {
         const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
         return plot?.phase2d?.fitEnabled && !!plot.phase2dFitOptions
@@ -961,7 +961,7 @@ try {
     // Curve Fit asked of a plot that is not 2D takes it there and opens with
     // it; empty, so nothing is asked and the sheet says what it needs.
     await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
-    await page.locator('.compact-radio', { hasText: 'Curve Fit' }).click();
+    await page.locator('.compact-radio', { hasText: /^\s*Curve Fit\s*$/ }).click();
     await page.waitForFunction(() => {
         const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
         return plot?.mode === 'phase2d' && plot.phase2d?.fitEnabled === true;

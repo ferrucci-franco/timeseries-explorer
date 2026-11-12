@@ -362,6 +362,7 @@ proto._capturePlotSessions = function(source = this.plotManager.plots) {
             heatmap: this._cloneSerializable(plot.heatmap || this.plotManager._defaultCalendarHeatmapState?.()),
             temporalProfile: this._cloneSerializable(plot.temporalProfile || this.plotManager._defaultTemporalProfileState?.()),
             integral: this._cloneSerializable(plot.integral || this.plotManager._defaultIntegralState?.()),
+            curveFit: this._cloneSerializable(plot.curveFit || this.plotManager._defaultCurveFitState?.()),
             correlation: this._cloneSerializable(plot.correlation || this.plotManager._defaultCorrelationState?.()),
             phase2d: this._cloneSerializable(plot.phase2d || this.plotManager._defaultPhase2dState?.()),
             pairDisplay3D: this._cloneSerializable(plot.pairDisplay3D || {}),
@@ -1263,6 +1264,9 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         // Totals are recomputed from the restored range, so a saved warning list
         // would describe a computation that has not run yet.
         if (plot.integral) plot.integral.warnings = [];
+        plot.curveFit = this.plotManager._normalizeCurveFitState
+            ? this.plotManager._normalizeCurveFitState(saved.curveFit || plot.curveFit || {})
+            : this._cloneSerializable(saved.curveFit || plot.curveFit);
         plot.correlation = this.plotManager._normalizeCorrelationState
             ? this.plotManager._normalizeCorrelationState(saved.correlation || plot.correlation || {})
             : this._cloneSerializable(saved.correlation || plot.correlation);

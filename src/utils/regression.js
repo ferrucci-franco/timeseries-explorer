@@ -10,6 +10,9 @@
 // rows actually fitted.
 
 import { pairwiseMoments } from './correlation.js';
+import { EXP_FAMILY_MODELS, expFamilyFit, predictExpFamily } from './exp-fit.js';
+
+export { EXP_FAMILY_MODELS, expFamilyFit, expFamilyMinN } from './exp-fit.js';
 
 export const FIT_CURVE_POINTS = 200;
 
@@ -300,6 +303,7 @@ export function predict(fit, x) {
         return fit.A * u * u + fit.B * u + fit.C;
     }
     if (fit.model === 'power') return x > 0 ? fit.a * x ** fit.b : NaN;
+    if (EXP_FAMILY_MODELS.has(fit.model)) return predictExpFamily(fit, x);
     return NaN;
 }
 
@@ -340,5 +344,6 @@ export function fitPair(model, x, y) {
     if (model === 'linear') return linearFit(x, y);
     if (model === 'quadratic') return quadraticFitCentered(x, y);
     if (model === 'power') return powerFit(x, y);
+    if (EXP_FAMILY_MODELS.has(model)) return expFamilyFit(model, x, y);
     return null;
 }

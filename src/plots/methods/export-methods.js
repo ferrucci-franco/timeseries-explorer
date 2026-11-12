@@ -68,7 +68,7 @@ export function installPlotExportMethods(TargetClass) {
     // Every live Plotly chart in the panel, in the order they are drawn.
     proto._exportableCharts = function(plot) {
         if (!plot) return [];
-        const analysisMode = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'correlation'].includes(plot.mode);
+        const analysisMode = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'correlation'].includes(plot.mode);
         const inFitWorkspace = plot.mode === 'phase2d' && !!plot.phase2dFitTimeDiv;
         // In the 2D fit workspace plot.div is the scatter and the extra chart is
         // the time series; in the analysis modes plot.div is the time series.
@@ -108,6 +108,7 @@ export function installPlotExportMethods(TargetClass) {
         // one must not be offered: exporting it would hand back a blank square.
         if (plot._integralPieVisible) add(plot.integralPieDiv, 'pie', 'exportChartPie');
         add(plot.correlationDiv, 'correlation', 'modeCorrelationLabel');
+        add(plot.curveFitResidualDiv, 'residuals', 'curveFitResidualAxis');
 
         charts.sort((a, b) => (
             (a.div.compareDocumentPosition(b.div) & DOCUMENT_POSITION_FOLLOWING) ? -1 : 1
@@ -158,6 +159,7 @@ export function installPlotExportMethods(TargetClass) {
     // wrote before, so an established workflow keeps finding its files.
     proto._defaultExportBaseName = function(plot, format, chart, chartCount) {
         if (format === 'csv') {
+            if (plot.mode === 'curve-fit') return 'curve_fit';
             return (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled)
                 ? 'phase2d_fit'
                 : `${plot.mode}_export`;
