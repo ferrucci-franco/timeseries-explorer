@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
+import { createCopyButton } from '../../ui/copy-button.js';
 import { fitPair, buildFitCurve, predict } from '../../utils/regression.js';
 import {
     FIT_MODEL_OPTIONS,
@@ -1276,7 +1277,11 @@ export function installPlotCurveFitMethods(TargetClass) {
         const title = document.createElement('h3');
         title.className = 'phase2d-fit-drawer-title';
         title.textContent = i18n.t('phase2dFitResultsTitle');
-        head.append(title, helpButton('phase2dFitMetricsHelpTitle', () => this._showPhase2dFitMetricsHelp?.()));
+        // What the block below says, as text: the signal, the model in t′,
+        // where t′ starts, the coefficients with their units and the fit.
+        const copyLines = [];
+        const copyBtn = createCopyButton(() => copyLines.join('\n'), { className: 'curve-fit-copy-btn' });
+        head.append(title, helpButton('phase2dFitMetricsHelpTitle', () => this._showPhase2dFitMetricsHelp?.()), copyBtn);
         drawer.appendChild(head);
 
         const r = results.find(candidate => candidate.entry === entry) || { entry };
@@ -1290,6 +1295,11 @@ export function installPlotCurveFitMethods(TargetClass) {
             eq.className = 'phase2d-fit-equation';
             eq.textContent = parts.generic;
             block.appendChild(eq);
+            copyLines.push(
+                ...(trace ? [this._traceName(trace.varName, trace.fileId, { units: false })] : []),
+                parts.generic,
+                `t′ = t − t₀${unit ? ` [${unit}]` : ''}`,
+            );
             const origin = document.createElement('div');
             origin.className = 'curve-fit-origin';
             origin.textContent = `t′ = t − t₀${unit ? ` [${unit}]` : ''}`;
@@ -1314,6 +1324,7 @@ export function installPlotCurveFitMethods(TargetClass) {
                 vEl.textContent = `= ${v}${suffix}`;
                 row.append(kEl, vEl);
                 coeffs.appendChild(row);
+                copyLines.push(`${k} = ${v}${suffix}`);
             }
             block.appendChild(coeffs);
             const stats = document.createElement('dl');
@@ -1329,9 +1340,12 @@ export function installPlotCurveFitMethods(TargetClass) {
                 const dt = document.createElement('dt'); dt.textContent = k;
                 const dd = document.createElement('dd'); dd.textContent = v;
                 stats.append(dt, dd);
+                copyLines.push(`${k}: ${v}`);
             }
             block.appendChild(stats);
         }
+        // Not fitted yet, or the fit failed: nothing worth copying.
+        copyBtn.disabled = !copyLines.length;
         const warning = this._curveFitWarningText(r);
         if (warning) {
             const w = document.createElement('div');

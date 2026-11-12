@@ -5,16 +5,19 @@
 //    dropped so far — on an empty panel (the placeholder) and over a chart
 //    that already has pairs (the pending overlay, which otherwise lets every
 //    pointer event through to the plot).
-// 2. The copy buttons of the analyses whose results are text: the curve fit's
-//    results and the Σ statistics dialog.
+// 2. The copy buttons of the analyses whose results are text: the 2D curve
+//    fit's results, the time-series curve fit's and the Σ statistics dialog.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:pending-cancel-copy`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 
-const rows = ['time,a,b,c'];
-for (let i = 0; i < 50; i++) rows.push(`${i * 0.1},${i},${2 * i + 1},${Math.sin(i)}`);
+const rows = ['time,a,b,c,d'];
+for (let i = 0; i < 50; i++) {
+    const t = i * 0.1;
+    rows.push(`${t},${i},${2 * i + 1},${Math.sin(i)},${3 * (1 - Math.exp(-t / 0.5)) + 1}`);
+}
 const file = { name: 'pairs.csv', mimeType: 'text/csv', buffer: Buffer.from(rows.join('\n') + '\n') };
 
 const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
@@ -98,6 +101,30 @@ try {
     const statsLines = statsText.split('\n');
     assert.ok(statsLines.length >= 3, `a header and one row per variable:\n${statsText}`);
     assert.ok(statsLines.every(line => line.split('\t').length >= 6), 'cells separated by tabs');
+
+    // ── Time-series curve fit: copy the results, units included ──
+    // d = 3·(1 − e^(−t/0.5)) + 1, a first-order response with offset.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.modal-overlay', { state: 'detached' });
+    await page.evaluate(id => window.app.plotManager._clearPanel(id), panelId);
+    await page.evaluate(id => window.app.plotManager.setModeAsync(id, 'timeseries'), panelId);
+    await page.evaluate(id => {
+        const el = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        window.app.plotManager.addTrace(id, 'd', el);
+    }, panelId);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout, panelId);
+    await page.evaluate(id => window.app.plotManager._toggleTimeseriesAnalysisMode(id, 'curve-fit'), panelId);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.curveFitResidualDiv?._fullLayout, panelId, { timeout: 30000 });
+    await page.evaluate(id => window.app.plotManager._updateCurveFitEntry(id, { model: 'first-order-offset' }), panelId);
+    await page.waitForSelector('.curve-fit-copy-btn:not([disabled])', { timeout: 30000 });
+    await page.locator('.curve-fit-copy-btn').click();
+    await page.waitForSelector('.curve-fit-copy-btn.copied');
+    const tsText = await page.evaluate(() => navigator.clipboard.readText());
+    const tsLines = tsText.split('\n');
+    assert.equal(tsLines[0], 'd', `the signal first:\n${tsText}`);
+    assert.ok(tsLines.some(line => line.startsWith('t′ = t − t₀')), `where t′ starts:\n${tsText}`);
+    assert.ok(tsLines.some(line => /^τ = 0\.5\b/.test(line)), `the time constant:\n${tsText}`);
+    assert.ok(tsLines.some(line => /^R².*: 1(\.0+)?$/.test(line)), `R² = 1 for an exact response:\n${tsText}`);
 
     assert.deepEqual(errors, [], 'no page errors');
     console.log('pending cancel and results copy: ok');

@@ -1,7 +1,7 @@
-// Copying an analysis' text results: the curve fit, the integral table, the
-// histogram and profile summaries, the Σ statistics. The cursors' readout has
-// its own test (test-cursor-copy.mjs); these pin down the shared helpers and
-// where the buttons are.
+// Copying an analysis' text results: the curve fits (2D and time series), the
+// integral table, the histogram and profile summaries, the Σ statistics. The
+// cursors' readout has its own test (test-cursor-copy.mjs); these pin down the
+// shared helpers and where the buttons are.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { blockText, tableText } from '../src/utils/clipboard.js';
@@ -39,6 +39,8 @@ assert.equal(blockText(null), '');
 const src = (path) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
 assert.match(src('plots/methods/phase2d-fit-methods.js'), /resultsHead\.append\(title, metricsHelpBtn, copyBtn\)/,
     'curve fit: in the results heading, beside its help');
+assert.match(src('plots/methods/curve-fit-methods.js'), /head\.append\(title, helpButton\('phase2dFitMetricsHelpTitle'[^\n]*\), copyBtn\)/,
+    'time-series curve fit: in the results heading, beside its help');
 assert.match(src('plots/methods/integral-methods.js'), /appendCopyButton\(options\.lastElementChild, \(\) => tableText\(summary\.querySelector\('table'\)\)\)/,
     'integral: the summary table, tab-separated');
 assert.match(src('plots/methods/histogram-methods.js'), /appendCopyButton\(options\.lastElementChild, \(\) => blockText\(summaryBox\)\)/);
