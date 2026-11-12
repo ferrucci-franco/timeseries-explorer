@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
+import { tableText } from '../../utils/clipboard.js';
 import {
     pearsonCorrelation,
     CORRELATION_MANY_PAIRS_WARNING,
@@ -1231,7 +1232,10 @@ export function installPlotCorrelationMethods(TargetClass) {
                     <tbody>${rowsHTML}</tbody>
                 </table>
             </div>`;
-        Modal.alert(i18n.t('panelStatsTitle'), body, { icon: 'Σ', html: true, className: 'modal-dialog-stats' });
+        Modal.alert(i18n.t('panelStatsTitle'), body, {
+            icon: 'Σ', html: true, className: 'modal-dialog-stats',
+            copyText: dialog => tableText(dialog.querySelector('.stats-table')),
+        });
     };
 
     proto._syncCorrelationRangeInputs = function(plot, options = {}) {

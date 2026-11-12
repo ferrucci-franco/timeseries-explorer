@@ -1,5 +1,7 @@
 import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
+import { appendCopyButton } from '../../ui/copy-button.js';
+import { tableText } from '../../utils/clipboard.js';
 import Plotly from '../../vendor/plotly.js';
 import {
     calendarPeriodWindows,
@@ -2054,6 +2056,8 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
     }));
 
     section(text('integralSummary'));
+    // Tab-separated, so it pastes into a spreadsheet as the table it is.
+    appendCopyButton(options.lastElementChild, () => tableText(summary.querySelector('table')));
     const summary = document.createElement('div');
     summary.className = 'integral-summary';
     options.appendChild(summary);

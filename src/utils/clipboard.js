@@ -37,3 +37,30 @@ export function cursorReadoutText(valuesEl, traceLines = []) {
         .filter(Boolean);
     return [...traceLines.map(clean).filter(Boolean), ...rows].join('\n');
 }
+
+// A results table as tab-separated text, one line per row: pasted into a
+// spreadsheet, every cell lands in a cell of its own. A cell spanning several
+// columns is followed by empty ones, so the columns below it stay aligned;
+// trailing empties are dropped (a group heading is just its name).
+export function tableText(table) {
+    const clean = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+    return Array.from(table?.rows || []).map(row => {
+        const cells = [];
+        for (const cell of Array.from(row.cells || [])) {
+            cells.push(clean(cell.textContent));
+            for (let i = 1; i < (Number(cell.colSpan) || 1); i++) cells.push('');
+        }
+        return cells.join('\t').replace(/\t+$/, '');
+    }).filter(line => line.trim()).join('\n');
+}
+
+// Visible text as lines: blank lines and the template's indentation dropped.
+// innerText follows the line breaks the reader sees (a <br> is one); outside
+// a laid-out page there is only textContent.
+export function blockText(el) {
+    const raw = el ? (typeof el.innerText === 'string' ? el.innerText : el.textContent) : '';
+    return String(raw || '').split('\n')
+        .map(line => line.replace(/[ \t ]+/g, ' ').trim())
+        .filter(Boolean)
+        .join('\n');
+}

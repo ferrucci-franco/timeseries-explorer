@@ -76,6 +76,18 @@ try {
     assert.equal(saved.nanOutside, saved.outside, 'and are NaN outside the range');
     // Extrapolate: the equation everywhere.
     await page2.evaluate(() => { const box = document.querySelector('.curve-fit-extrapolate-box'); box.checked = true; box.dispatchEvent(new Event('change')); });
+    // ...and the drawn curve runs on, dotted, over the rest of the signal.
+    await page2.waitForTimeout(300);
+    const drawn = await page2.evaluate(id => {
+      const pm = window.app.plotManager; const plot = pm.plots.get(id);
+      const ext = plot.div.data.find(tr => tr.meta?.curveFitExtrapolated);
+      if (!ext) return null;
+      const xs = Array.from(ext.x).filter(Number.isFinite);
+      const t = pm._getTransformedTimeDataForVariable(plot.traces[0].fileId, plot.traces[0].varName);
+      return { lo: Math.min(...xs), hi: Math.max(...xs), tLo: t[0], tHi: t[t.length - 1], dash: ext.line.dash };
+    }, id2);
+    assert.ok(drawn && Math.abs(drawn.lo - drawn.tLo) < 1e-6 && Math.abs(drawn.hi - drawn.tHi) < 1e-6 && drawn.dash === 'dot',
+      `the drawn fit is extrapolated over the whole signal (${JSON.stringify(drawn)})`);
     await page2.click('.curve-fit-save-fit');
     const extrapolated = await page2.evaluate(id => {
       const pm = window.app.plotManager; const fileId = pm.plots.get(id).traces[0].fileId;

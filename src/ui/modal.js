@@ -4,6 +4,7 @@
  */
 
 import i18n from '../i18n/index.js';
+import { copyTextToClipboard } from '../utils/clipboard.js';
 
 // An icon spelled in letters ("CSV") rather than drawn as an emoji reads as a
 // shouted heading at emoji size. Marked, it is drawn as a small badge instead.
@@ -492,6 +493,29 @@ const Modal = {
 
             const buttons = document.createElement('div');
             buttons.className = 'modal-buttons';
+
+            // A dialog that reports results (the Σ statistics) can hand them
+            // over as text. copyText(dialog) is called on the click.
+            if (typeof options.copyText === 'function') {
+                const copyBtn = document.createElement('button');
+                copyBtn.type = 'button';
+                copyBtn.className = 'modal-btn modal-btn-cancel modal-copy-btn';
+                copyBtn.textContent = i18n.t('copyResults');
+                copyBtn.addEventListener('click', async () => {
+                    let text = '';
+                    try { text = String(options.copyText(modal) || ''); } catch (_) { text = ''; }
+                    const copied = text ? await copyTextToClipboard(text) : false;
+                    clearTimeout(copyBtn._copiedTimer);
+                    copyBtn.textContent = i18n.t(copied ? 'cursorCopied' : 'cursorCopyFailed');
+                    copyBtn.classList.toggle('copied', copied);
+                    copyBtn.classList.toggle('copy-failed', !copied);
+                    copyBtn._copiedTimer = setTimeout(() => {
+                        copyBtn.textContent = i18n.t('copyResults');
+                        copyBtn.classList.remove('copied', 'copy-failed');
+                    }, 1500);
+                });
+                buttons.appendChild(copyBtn);
+            }
 
             const closeBtn = document.createElement('button');
             closeBtn.className = 'modal-btn modal-btn-confirm';
