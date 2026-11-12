@@ -50,7 +50,7 @@ try {
     assert.match(await page.locator('.csv-preview-folder-summary').textContent(), /3 folder/);
     const [download] = await Promise.all([
         page.waitForEvent('download'),
-        page.locator('.csv-preview-footer-left button').nth(1).click(),
+        page.locator('.csv-preview-save-settings').click(),
     ]);
     assert.equal(download.suggestedFilename(), 'report.parsing.json');
     const settingsPath = join(dir, download.suggestedFilename());
@@ -71,7 +71,7 @@ try {
     await page.waitForSelector('.csv-preview-dialog');
     const [chooser] = await Promise.all([
         page.waitForEvent('filechooser'),
-        page.locator('.csv-preview-footer-left button').nth(2).click(),
+        page.locator('.csv-preview-load-settings').click(),
     ]);
     await chooser.setFiles(settingsPath);
     await page.waitForFunction(() => /report\.parsing\.json/.test(document.querySelector('.csv-preview-status')?.textContent || ''));

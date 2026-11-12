@@ -1105,6 +1105,7 @@ export default class CsvParsingPreviewDialog {
         left.className = 'csv-preview-footer-left';
         const redetect = document.createElement('button');
         redetect.type = 'button';
+        redetect.className = 'csv-preview-redetect';
         redetect.textContent = i18n.t('csvPreviewRedetect');
         redetect.title = i18n.t('csvPreviewRedetectTooltip');
         redetect.addEventListener('click', () => this._refreshPreview({
@@ -1116,11 +1117,13 @@ export default class CsvParsingPreviewDialog {
         }));
         const saveSettings = document.createElement('button');
         saveSettings.type = 'button';
+        saveSettings.className = 'csv-preview-save-settings';
         saveSettings.textContent = i18n.t('csvPreviewSaveSettings');
         saveSettings.title = i18n.t('csvPreviewSaveSettingsTooltip');
         saveSettings.addEventListener('click', () => this._saveSettingsFile());
         const loadSettings = document.createElement('button');
         loadSettings.type = 'button';
+        loadSettings.className = 'csv-preview-load-settings';
         loadSettings.textContent = i18n.t('csvPreviewLoadSettings');
         loadSettings.title = i18n.t('csvPreviewLoadSettingsTooltip');
         loadSettings.addEventListener('click', () => this._pickSettingsFile());
