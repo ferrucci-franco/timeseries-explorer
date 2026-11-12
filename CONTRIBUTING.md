@@ -136,6 +136,25 @@ Start in:
 - Keep translation keys centralized in `src/i18n/translations.js`.
 - If a file starts getting too large, split by responsibility rather than by arbitrary line count.
 
+### New analyses and data tools must work in memory-saving (lazy) mode
+
+A large file can be opened in memory-saving mode: it stays in DuckDB-WASM and
+only a decimated overview is held in memory. Every analysis, data tool and
+export must give the same result there as for a file loaded in memory, over
+every row in its range, never over the overview. When you add or change one:
+
+- read the file, not the overview: SQL in `src/data/duckdb-source.js`, or a
+  chunked stream (`streamColumns`, `src/data/column-stream.js`) through a kernel
+  that accumulates chunk by chunk (for several passes, `src/utils/fit-passes.js`);
+- run the same kernel code on both paths, so the results match;
+- do not cap or sample silently; prefer streaming past a limit, and if a gap
+  remains, say so in the UI and record it in `docs/any-size-files.md`;
+- show progress and allow cancelling when it takes time;
+- add a parity test on a real DuckDB-WASM engine, like
+  `scripts/test-lazy-histogram.mjs` or `scripts/test-lazy-curve-fit.mjs`.
+
+`CLAUDE.md` states the same rule for Claude Code sessions.
+
 ## Sanity checks after changes
 
 At minimum:

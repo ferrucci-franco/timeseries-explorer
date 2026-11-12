@@ -8,11 +8,17 @@
 // stable OLS system. It fits Y on X (vertical residuals); swapping X/Y changes
 // the model. It never extrapolates: fit curves span only [minX, maxX] of the
 // rows actually fitted.
+//
+// Each fit is also written as the passes it makes over its rows (fitSteps,
+// src/utils/fit-passes.js): the in-memory functions below run those passes
+// over their arrays, and a lazy file streams its rows through the very same
+// passes, so it gets the same numbers whatever its size.
 
-import { pairwiseMoments } from './correlation.js';
-import { EXP_FAMILY_MODELS, expFamilyFit, predictExpFamily } from './exp-fit.js';
+import { createPairwiseMoments } from './correlation.js';
+import { EXP_FAMILY_MODELS, expFamilyFitSteps, predictExpFamily } from './exp-fit.js';
+import { runPassesOnArrays } from './fit-passes.js';
 
-export { EXP_FAMILY_MODELS, expFamilyFit, expFamilyMinN } from './exp-fit.js';
+export { EXP_FAMILY_MODELS, expFamilyFit, expFamilyFitSteps, expFamilyMinN } from './exp-fit.js';
 
 export const FIT_CURVE_POINTS = 200;
 
@@ -40,7 +46,13 @@ export function regressionMetrics(sse, sst, n) {
 // when the slope is defined (≥2 rows and X has variance) and 'undefined'
 // otherwise; a warning code is attached for the degenerate cases.
 export function linearFit(x, y) {
-    return linearFromMoments(pairwiseMoments(x, y));
+    return runPassesOnArrays(linearFitSteps(), x, y);
+}
+
+export function* linearFitSteps() {
+    const moments = createPairwiseMoments();
+    yield moments;
+    return linearFromMoments(moments.result());
 }
 
 // Same linear OLS result, built from already-accumulated pairwise moments.
@@ -148,7 +160,15 @@ function solve3x3(A, rhs) {
 // converted to display a/b/c only at the end. SSE comes from the sufficient
 // statistics, not per-row residuals, so it matches the lazy DuckDB path.
 export function quadraticFitCentered(x, y) {
-    const moments = pairwiseMoments(x, y);
+    return runPassesOnArrays(quadraticFitSteps(), x, y);
+}
+
+// Two passes: the pairwise moments (centre and scale of X), then the
+// sufficient statistics in u.
+export function* quadraticFitSteps() {
+    const accumulator = createPairwiseMoments();
+    yield accumulator;
+    const moments = accumulator.result();
     const { n, nExcluded, meanX, m2x, m2y, minX, maxX } = moments;
 
     const base = {
@@ -186,19 +206,25 @@ export function quadraticFitCentered(x, y) {
     }
 
     // Second pass: sufficient statistics in u. S_k = Σ u^k, T_k = Σ u^k·y.
-    const len = Math.min(x?.length || 0, y?.length || 0);
     let S0 = 0, S1 = 0, S2 = 0, S3 = 0, S4 = 0;
     let T0 = 0, T1 = 0, T2 = 0, YY = 0;
-    for (let i = 0; i < len; i++) {
-        const xi = Number(x[i]);
-        const yi = Number(y[i]);
-        if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue;
-        const u = (xi - centerX) / scaleX;
-        const u2 = u * u;
-        S0 += 1; S1 += u; S2 += u2; S3 += u2 * u; S4 += u2 * u2;
-        T0 += yi; T1 += u * yi; T2 += u2 * yi;
-        YY += yi * yi;
-    }
+    yield {
+        chunk(x, y) {
+            const len = Math.min(x?.length || 0, y?.length || 0);
+            let s0 = S0, s1 = S1, s2 = S2, s3 = S3, s4 = S4, t0 = T0, t1 = T1, t2 = T2, yy = YY;
+            for (let i = 0; i < len; i++) {
+                const xi = Number(x[i]);
+                const yi = Number(y[i]);
+                if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue;
+                const u = (xi - centerX) / scaleX;
+                const u2 = u * u;
+                s0 += 1; s1 += u; s2 += u2; s3 += u2 * u; s4 += u2 * u2;
+                t0 += yi; t1 += u * yi; t2 += u2 * yi;
+                yy += yi * yi;
+            }
+            S0 = s0; S1 = s1; S2 = s2; S3 = s3; S4 = s4; T0 = t0; T1 = t1; T2 = t2; YY = yy;
+        },
+    };
 
     return quadraticFromMoments({
         n, nExcluded, centerX, scaleX,
@@ -256,16 +282,26 @@ export function quadraticFromMoments(stats) {
 // (RMSE in decades), not of y itself — the fit minimises relative, not
 // absolute, error.
 export function powerFit(x, y) {
-    const len = Math.min(x?.length || 0, y?.length || 0);
-    const lx = new Float64Array(len);
-    const ly = new Float64Array(len);
-    for (let i = 0; i < len; i++) {
-        const xi = Number(x[i]);
-        const yi = Number(y[i]);
-        lx[i] = xi > 0 ? Math.log10(xi) : NaN;
-        ly[i] = yi > 0 ? Math.log10(yi) : NaN;
-    }
-    return powerFromMoments(pairwiseMoments(lx, ly));
+    return runPassesOnArrays(powerFitSteps(), x, y);
+}
+
+export function* powerFitSteps() {
+    const moments = createPairwiseMoments();
+    yield {
+        chunk(x, y) {
+            const len = Math.min(x?.length || 0, y?.length || 0);
+            const lx = new Float64Array(len);
+            const ly = new Float64Array(len);
+            for (let i = 0; i < len; i++) {
+                const xi = Number(x[i]);
+                const yi = Number(y[i]);
+                lx[i] = xi > 0 ? Math.log10(xi) : NaN;
+                ly[i] = yi > 0 ? Math.log10(yi) : NaN;
+            }
+            moments.chunk(lx, ly);
+        },
+    };
+    return powerFromMoments(moments.result());
 }
 
 // The power fit from pairwise moments of (log10 x, log10 y). Shared by the eager
@@ -339,11 +375,22 @@ export function buildFitCurve(fit, count = FIT_CURVE_POINTS, options = {}) {
     return { x: xs, y: ys };
 }
 
+// The passes of the requested model (null for an unknown one): run them with
+// runPassesOnArrays or runPassesOnChunks (src/utils/fit-passes.js).
+//
+// `keepRows` tells a kernel the rows are in memory anyway: the exponential
+// family then keeps its scaled copy of them after one pass instead of asking
+// for them again on every evaluation. Same numbers either way.
+export function fitSteps(model, { keepRows = false } = {}) {
+    if (model === 'linear') return linearFitSteps();
+    if (model === 'quadratic') return quadraticFitSteps();
+    if (model === 'power') return powerFitSteps();
+    if (EXP_FAMILY_MODELS.has(model)) return expFamilyFitSteps(model, { keepRows });
+    return null;
+}
+
 // Dispatch helper: run the requested model over aligned arrays.
 export function fitPair(model, x, y) {
-    if (model === 'linear') return linearFit(x, y);
-    if (model === 'quadratic') return quadraticFitCentered(x, y);
-    if (model === 'power') return powerFit(x, y);
-    if (EXP_FAMILY_MODELS.has(model)) return expFamilyFit(model, x, y);
-    return null;
+    const steps = fitSteps(model, { keepRows: true });
+    return steps ? runPassesOnArrays(steps, x, y) : null;
 }

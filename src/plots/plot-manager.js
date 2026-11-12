@@ -13,6 +13,7 @@ import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
+import { installPlotFitLazyMethods } from './methods/fit-lazy-methods.js';
 import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
 import { installPlotCurveFitMethods } from './methods/curve-fit-methods.js';
 import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
@@ -2662,6 +2663,7 @@ class PlotManager {
                 // the container next to a temporal div. Checked before the
                 // generic fft-container branch (it reuses that CSS) so the fit
                 // refs are cleared and the shell can be rebuilt later.
+                this._stopLazyFits?.(plot);
                 if (plot.phase2dFitTimeDiv) Plotly.purge(plot.phase2dFitTimeDiv);
                 Plotly.purge(plot.div);
                 phase2dFitContainer.remove();
@@ -5669,6 +5671,7 @@ installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotHistogramLazyMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);
+installPlotFitLazyMethods(PlotManager);
 installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);
 installPlotTemporalProfileMethods(PlotManager);

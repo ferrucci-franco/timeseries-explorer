@@ -23,11 +23,20 @@
 // one pass over the rows and keeps no per-row state, so a million rows cost
 // some tens of passes.
 //
+// The fit is written as those passes (expFamilyFitSteps, a generator that
+// yields one pass at a time; see src/utils/fit-passes.js). In memory every
+// pass runs over the arrays; over a lazy file each one streams the rows from
+// DuckDB, a chunk at a time, so a fit of any number of rows holds a few
+// thousand of them at once — and gives the same numbers, bit for bit, because
+// every sum is taken over the same rows in the same order.
+//
 // The rate is searched in a scaled coordinate u = (x − x₀)/s, where s is the
 // span of x, so the same grid fits a transient measured in milliseconds or in
 // days. The exponential models are invariant to a shift of x and use x₀ =
 // min x; the first-order models are NOT (their 1 − e^(α·x) starts at x = 0),
 // so they keep x₀ = 0 and only scale.
+
+import { runPassesOnArrays } from './fit-passes.js';
 
 export const EXP_FAMILY_MODELS = new Set(['exponential', 'exponential-offset', 'first-order', 'first-order-offset']);
 
@@ -78,16 +87,52 @@ const withOffset = (model) => model.endsWith('-offset');
 // Without an offset the exponential uses g + 1 = e^(Bu) as its basis.
 function solveForRate(model, B, us, ys, n, sumY, sumYY) {
     if (!(Math.abs(B) > 1e-12)) return null;
-    const offset = withOffset(model);
+    const sums = createRateSums(model, [B]);
+    sums.add(us, ys, n);
+    return sums.solve(0, n, sumY, sumYY);
+}
+
+// The three sums a rate's closed form needs (Σg, Σg², Σg·y), for one or
+// several rates at once, accumulated row by row in the order the rows come:
+// over in-memory arrays or chunk after chunk of a stream, the same numbers.
+function createRateSums(model, rates) {
     const plainExp = model === 'exponential';
-    let Sg = 0, Sgg = 0, Sgy = 0;
-    for (let i = 0; i < n; i++) {
-        let g = basis(model, B, us[i]);
-        if (plainExp) g += 1;
-        Sg += g;
-        Sgg += g * g;
-        Sgy += g * ys[i];
-    }
+    const k = rates.length;
+    const Sg = new Float64Array(k);
+    const Sgg = new Float64Array(k);
+    const Sgy = new Float64Array(k);
+    return {
+        add(us, ys, n) {
+            for (let r = 0; r < k; r++) {
+                const B = rates[r];
+                let sg = Sg[r], sgg = Sgg[r], sgy = Sgy[r];
+                for (let i = 0; i < n; i++) {
+                    let g = basis(model, B, us[i]);
+                    if (plainExp) g += 1;
+                    sg += g;
+                    sgg += g * g;
+                    sgy += g * ys[i];
+                }
+                Sg[r] = sg; Sgg[r] = sgg; Sgy[r] = sgy;
+            }
+        },
+        read(r) {
+            return [Sg[r], Sgg[r], Sgy[r]];
+        },
+        write(r, sg, sgg, sgy) {
+            Sg[r] = sg;
+            Sgg[r] = sgg;
+            Sgy[r] = sgy;
+        },
+        solve(r, n, sumY, sumYY) {
+            if (!(Math.abs(rates[r]) > 1e-12)) return null;
+            return solveFromSums(model, Sg[r], Sgg[r], Sgy[r], n, sumY, sumYY);
+        },
+    };
+}
+
+function solveFromSums(model, Sg, Sgg, Sgy, n, sumY, sumYY) {
+    const offset = withOffset(model);
     if (!Number.isFinite(Sgg) || !Number.isFinite(Sgy)) return null;
     if (!offset) {
         if (!(Sgg > 0)) return null;
@@ -105,13 +150,16 @@ function solveForRate(model, B, us, ys, n, sumY, sumYY) {
 
 // Brent's minimiser (golden section with parabolic steps): on the smooth SSE
 // curve of one rate it converges in a dozen or so evaluations, each one pass.
-function brent(f, ax, bx, tol = 1e-10, maxIter = 100) {
+// Written as a generator that yields each point it wants evaluated and is
+// sent back the value, so the evaluation can be a pass over a stream; brent()
+// drives it with a plain function.
+function* brentSteps(ax, bx, tol = 1e-10, maxIter = 100) {
     let a = Math.min(ax, bx);
     let b = Math.max(ax, bx);
     let x = a + GOLDEN_C * (b - a);
     let w = x;
     let v = x;
-    let fx = f(x);
+    let fx = yield x;
     let fw = fx;
     let fv = fx;
     let d = 0;
@@ -144,7 +192,7 @@ function brent(f, ax, bx, tol = 1e-10, maxIter = 100) {
             d = GOLDEN_C * e;
         }
         const u = Math.abs(d) >= tol1 ? x + d : x + (d >= 0 ? tol1 : -tol1);
-        const fu = f(u);
+        const fu = yield u;
         if (fu <= fx) {
             if (u >= x) a = x; else b = x;
             v = w; fv = fw;
@@ -161,6 +209,13 @@ function brent(f, ax, bx, tol = 1e-10, maxIter = 100) {
         }
     }
     return x;
+}
+
+function brent(f, ax, bx, tol, maxIter) {
+    const steps = brentSteps(ax, bx, tol, maxIter);
+    let step = steps.next();
+    while (!step.done) step = steps.next(f(step.value));
+    return step.value;
 }
 
 function emptyResult(model, extra = {}) {
@@ -190,79 +245,135 @@ function emptyResult(model, extra = {}) {
  */
 export function expFamilyFit(model, x, y) {
     if (!EXP_FAMILY_MODELS.has(model)) return null;
-    const len = Math.min(x?.length || 0, y?.length || 0);
-    const xs = new Float64Array(len);
-    const ys = new Float64Array(len);
+    return runPassesOnArrays(expFamilyFitSteps(model, { keepRows: true }), x, y);
+}
+
+/**
+ * The same fit, as the passes it makes over the rows: a generator that yields
+ * one pass at a time — an object whose chunk(x, y) takes the rows, in order,
+ * in as many chunks as the caller likes — and returns the result once the
+ * passes are done. expFamilyFit feeds each pass the whole arrays; a lazy file
+ * feeds it a stream (src/utils/fit-passes.js).
+ *
+ *   1. statistics: count, span of x, mean and spread of y, Σy, Σy²;
+ *   2. the rows the rate is first located on: every row when there are no
+ *      more than COARSE_ROWS, else every stride-th finite row, kept in memory;
+ *   3. when they were a subset, one pass per evaluation of the polish on every
+ *      row, and one that compares its answer with the subset's;
+ *   4. the residuals, for the exact SSE.
+ *
+ * `keepRows` lets pass 2 keep every row, scaled (three doubles a row), so
+ * passes 3 and 4 run over those copies instead of asking for the rows again —
+ * the old in-memory kernel's shape, and the same numbers. `true` for rows
+ * already in memory; a number for a stream, which keeps them when there are
+ * no more than that many (known after pass 1) and reads them again otherwise.
+ */
+export function* expFamilyFitSteps(model, { keepRows = false } = {}) {
+    if (!EXP_FAMILY_MODELS.has(model)) return null;
+    const offset = withOffset(model);
+    const firstOrder = model.startsWith('first-order');
+
+    // ── Pass 1: statistics ──
+    let len = 0;
     let n = 0;
     let minX = Infinity;
     let maxX = -Infinity;
     let meanY = 0;
     let m2y = 0;
-    for (let i = 0; i < len; i++) {
-        const xi = toFinite(x[i]);
-        const yi = toFinite(y[i]);
-        if (xi === null || yi === null) continue;
-        xs[n] = xi;
-        ys[n] = yi;
-        n++;
-        const dy = yi - meanY;
-        meanY += dy / n;
-        m2y += dy * (yi - meanY);
-        if (xi < minX) minX = xi;
-        if (xi > maxX) maxX = xi;
-    }
+    let sumY = 0;
+    let sumYY = 0;
+    yield {
+        chunk(x, y) {
+            const count = Math.min(x?.length || 0, y?.length || 0);
+            len += count;
+            let cn = n, cMin = minX, cMax = maxX, cMean = meanY, cM2 = m2y, cSum = sumY, cSum2 = sumYY;
+            for (let i = 0; i < count; i++) {
+                const xi = toFinite(x[i]);
+                const yi = toFinite(y[i]);
+                if (xi === null || yi === null) continue;
+                cn++;
+                const dy = yi - cMean;
+                cMean += dy / cn;
+                cM2 += dy * (yi - cMean);
+                if (xi < cMin) cMin = xi;
+                if (xi > cMax) cMax = xi;
+                cSum += yi;
+                cSum2 += yi * yi;
+            }
+            n = cn; minX = cMin; maxX = cMax; meanY = cMean; m2y = cM2; sumY = cSum; sumYY = cSum2;
+        },
+    };
     const nExcluded = len - n;
     const base = { n, nExcluded, minX: n ? minX : NaN, maxX: n ? maxX : NaN, sst: n ? m2y : NaN };
     if (n < expFamilyMinN(model)) return emptyResult(model, { ...base, warning: 'insufficient-n' });
     if (!(maxX > minX)) return emptyResult(model, { ...base, warning: 'x-constant' });
 
-    const firstOrder = model.startsWith('first-order');
     const x0 = firstOrder ? 0 : minX;
     const scale = firstOrder ? Math.max(Math.abs(minX), Math.abs(maxX)) : (maxX - minX);
     if (!(scale > 0) || !Number.isFinite(scale)) return emptyResult(model, { ...base, warning: 'x-constant' });
 
-    // Center Y for the sums (the SSE is shift-invariant only with an offset;
+    // With an offset, Y is centred on its mean so Σy² carries no huge
+    // constant to cancel (the SSE is shift-invariant only with an offset;
     // without one, Y is used as is).
-    const offset = withOffset(model);
-    const us = new Float64Array(n);
-    let sumY = 0;
-    let sumYY = 0;
-    for (let i = 0; i < n; i++) {
-        us[i] = (xs[i] - x0) / scale;
-        sumY += ys[i];
-        sumYY += ys[i] * ys[i];
-    }
     if (offset) {
-        // Shift Y by its mean so Σy² carries no huge constant to cancel.
-        for (let i = 0; i < n; i++) ys[i] -= meanY;
         sumY = 0;
         sumYY = m2y;
     }
+    // Every later pass sees each finite row as (u, y′): u the scaled abscissa,
+    // y′ the centred value. The loops are written out in each pass rather than
+    // through a callback per row, which costs as much as the arithmetic.
+    const shiftY = offset ? meanY : 0;
 
-    const sseOver = (uArr, yArr, m, sY, sYY) => (B) => {
-        const s = solveForRate(model, B, uArr, yArr, m, sY, sYY);
+    // ── Pass 2: the rows the rate is located on ──
+    // On every row when there are few, on a strided subset when there are
+    // many (the rate is a property of the curve's shape, which a few thousand
+    // evenly spread rows already pin down).
+    const whole = n <= COARSE_ROWS;
+    const stride = whole ? 1 : Math.ceil(n / COARSE_ROWS);
+    const m = Math.ceil(n / stride);
+    const su = new Float64Array(m);
+    const sy = new Float64Array(m);
+    let sY = 0;
+    let sYY = 0;
+    let seen = 0;
+    let k = 0;
+    const keep = !whole && (keepRows === true || (typeof keepRows === 'number' && n <= keepRows));
+    const fx = keep ? new Float64Array(n) : null;
+    const fu = keep ? new Float64Array(n) : null;
+    const fy = keep ? new Float64Array(n) : null;
+    let f = 0;
+    yield {
+        chunk(x, y) {
+            const count = Math.min(x?.length || 0, y?.length || 0);
+            for (let i = 0; i < count; i++) {
+                const xi = toFinite(x[i]);
+                const yi = toFinite(y[i]);
+                if (xi === null || yi === null) continue;
+                if (keep) {
+                    fx[f] = xi;
+                    fu[f] = (xi - x0) / scale;
+                    fy[f] = offset ? yi - shiftY : yi;
+                    f++;
+                }
+                if (seen++ % stride !== 0) continue;
+                const u = (xi - x0) / scale;
+                const yc = offset ? yi - shiftY : yi;
+                su[k] = u;
+                sy[k] = yc;
+                k++;
+                sY += yc;
+                sYY += yc * yc;
+            }
+        },
+    };
+
+    const sseOver = (uArr, yArr, count, sumA, sumB) => (B) => {
+        const s = solveForRate(model, B, uArr, yArr, count, sumA, sumB);
         return s && Number.isFinite(s.sse) ? s.sse : Infinity;
     };
-    const sseAt = sseOver(us, ys, n, sumY, sumYY);
-    // The coarse search: on every row when there are few, on a strided subset
-    // when there are many (the rate is a property of the curve's shape, which
-    // a few thousand evenly spread rows already pin down).
-    let coarse = sseAt;
-    if (n > COARSE_ROWS) {
-        const stride = Math.ceil(n / COARSE_ROWS);
-        const m = Math.ceil(n / stride);
-        const su = new Float64Array(m);
-        const sy = new Float64Array(m);
-        let sY = 0;
-        let sYY = 0;
-        for (let i = 0, k = 0; i < n; i += stride, k++) {
-            su[k] = us[i];
-            sy[k] = ys[i];
-            sY += ys[i];
-            sYY += ys[i] * ys[i];
-        }
-        coarse = sseOver(su, sy, m, sY, sYY);
-    }
+    // Every row in memory: the full SSE needs no pass of its own.
+    const sseAt = whole ? sseOver(su, sy, n, sumY, sumYY) : null;
+    const coarse = whole ? sseAt : sseOver(su, sy, m, sY, sYY);
     let bestIndex = -1;
     let bestSse = Infinity;
     RATE_GRID.forEach((B, i) => {
@@ -279,14 +390,99 @@ export function expFamilyFit(model, x, y) {
     if (lo < 0 && Bgrid > 0) lo = Bgrid / 4;
     if (hi > 0 && Bgrid < 0) hi = Bgrid / 4;
     let B = brent(coarse, lo, hi);
-    if (coarse !== sseAt) {
-        // Polish on every row, close around the subset's answer.
-        const near = brent(sseAt, B * 0.9, B * 1.1, 1e-8, 40);
-        if (sseAt(near) <= sseAt(B)) B = near;
-    } else if (!(sseAt(B) <= sseAt(Bgrid))) {
-        B = Bgrid;
+    let sol;
+    if (keep) {
+        // Every row in memory: the polish and the comparison as the passes
+        // below would make them, over the kept rows.
+        const sseFull = sseOver(fu, fy, n, sumY, sumYY);
+        const near = brent(sseFull, B * 0.9, B * 1.1, 1e-8, 40);
+        const atNear = solveForRate(model, near, fu, fy, n, sumY, sumYY);
+        const atB = solveForRate(model, B, fu, fy, n, sumY, sumYY);
+        const sseNear = atNear && Number.isFinite(atNear.sse) ? atNear.sse : Infinity;
+        const sseB = atB && Number.isFinite(atB.sse) ? atB.sse : Infinity;
+        if (sseNear <= sseB) {
+            B = near;
+            sol = atNear;
+        } else {
+            sol = atB;
+        }
+    } else if (!whole) {
+        // ── Pass 3: polish on every row, close around the subset's answer ──
+        // One pass per point Brent asks for.
+        // One pass for one or two rates (the polish asks for one at a time;
+        // the final comparison for two). Each rate's sums run over the rows
+        // in order, as solveForRate's do.
+        const ratePass = (rates) => {
+            const sums = createRateSums(model, rates);
+            const two = rates.length === 2;
+            const B0 = rates[0];
+            const B1 = two ? rates[1] : 0;
+            const plainExp = model === 'exponential';
+            return {
+                sums,
+                pass: {
+                    chunk(x, y) {
+                        const count = Math.min(x?.length || 0, y?.length || 0);
+                        let g0s = 0, g0q = 0, g0y = 0, g1s = 0, g1q = 0, g1y = 0;
+                        [g0s, g0q, g0y] = sums.read(0);
+                        if (two) [g1s, g1q, g1y] = sums.read(1);
+                        for (let i = 0; i < count; i++) {
+                            const xi = toFinite(x[i]);
+                            const yi = toFinite(y[i]);
+                            if (xi === null || yi === null) continue;
+                            const u = (xi - x0) / scale;
+                            const yc = offset ? yi - shiftY : yi;
+                            let g = basis(model, B0, u);
+                            if (plainExp) g += 1;
+                            g0s += g;
+                            g0q += g * g;
+                            g0y += g * yc;
+                            if (two) {
+                                let h = basis(model, B1, u);
+                                if (plainExp) h += 1;
+                                g1s += h;
+                                g1q += h * h;
+                                g1y += h * yc;
+                            }
+                        }
+                        sums.write(0, g0s, g0q, g0y);
+                        if (two) sums.write(1, g1s, g1q, g1y);
+                    },
+                },
+            };
+        };
+        const polish = brentSteps(B * 0.9, B * 1.1, 1e-8, 40);
+        let step = polish.next();
+        while (!step.done) {
+            const rate = step.value;
+            let sse = Infinity;
+            if (Math.abs(rate) > 1e-12) {
+                const { sums, pass } = ratePass([rate]);
+                yield pass;
+                const s = sums.solve(0, n, sumY, sumYY);
+                sse = s && Number.isFinite(s.sse) ? s.sse : Infinity;
+            }
+            step = polish.next(sse);
+        }
+        const near = step.value;
+        // One more pass for the polished and the subset's rate side by side,
+        // whose sums also give the chosen rate's coefficients.
+        const { sums, pass } = ratePass([near, B]);
+        yield pass;
+        const atNear = sums.solve(0, n, sumY, sumYY);
+        const atB = sums.solve(1, n, sumY, sumYY);
+        const sseNear = atNear && Number.isFinite(atNear.sse) ? atNear.sse : Infinity;
+        const sseB = atB && Number.isFinite(atB.sse) ? atB.sse : Infinity;
+        if (sseNear <= sseB) {
+            B = near;
+            sol = atNear;
+        } else {
+            sol = atB;
+        }
+    } else {
+        if (!(sseAt(B) <= sseAt(Bgrid))) B = Bgrid;
+        sol = solveForRate(model, B, su, sy, n, sumY, sumYY);
     }
-    const sol = solveForRate(model, B, us, ys, n, sumY, sumYY);
     if (!sol) return emptyResult(model, { ...base, warning: 'singular' });
 
     // Coefficients of the scaled model y = A·g(u) + C (+ meanY when centred).
@@ -295,13 +491,33 @@ export function expFamilyFit(model, x, y) {
     const rate = B / scale;
     const internal = { x0, scale, A, B, C };
 
-    // SSE from the residuals themselves: the sufficient-statistic form above
-    // is good for ranking rates, the direct one is exact.
+    // ── Pass 4: SSE from the residuals themselves ──
+    // The sufficient-statistic form above is good for ranking rates, the
+    // direct one is exact.
     let sse = 0;
-    for (let i = 0; i < n; i++) {
-        const yi = ys[i] + (offset ? meanY : 0);
-        const r = yi - predictInternal(model, internal, xs[i]);
-        sse += r * r;
+    if (keep) {
+        for (let i = 0; i < n; i++) {
+            const yi = fy[i] + (offset ? meanY : 0);
+            const r = yi - predictInternal(model, internal, fx[i]);
+            sse += r * r;
+        }
+    } else {
+        yield {
+            chunk(x, y) {
+                const count = Math.min(x?.length || 0, y?.length || 0);
+                let total = sse;
+                for (let i = 0; i < count; i++) {
+                    const xi = toFinite(x[i]);
+                    const yi0 = toFinite(y[i]);
+                    if (xi === null || yi0 === null) continue;
+                    const yc = offset ? yi0 - shiftY : yi0;
+                    const yi = yc + (offset ? meanY : 0);
+                    const r = yi - predictInternal(model, internal, xi);
+                    total += r * r;
+                }
+                sse = total;
+            },
+        };
     }
     const sst = m2y;
 

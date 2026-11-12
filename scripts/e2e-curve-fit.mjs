@@ -117,6 +117,29 @@ try {
   
   assert.ok(fit.lazy && fit.n > 300000, 'every row in range');
 
+  // Past the one-piece fetch (2 M rows) the fit streams its passes over the
+  // file instead. The same rows streamed here, in small chunks through the
+  // browser's DuckDB, give the very fit the panel holds.
+  const streamed = await page.evaluate(async id => {
+    const pm = window.app.plotManager; const plot = pm.plots.get(id); const r = plot._curveFitResults[0];
+    const range = pm._curveFitRange(plot, r.entry);
+    const info = pm._curveFitTimeInfo(plot, r.trace);
+    const same = (a, b) => JSON.stringify(a, (k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)) === JSON.stringify(b, (k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v));
+    // Rows kept after the second pass (the default at this size), and read
+    // again on every pass.
+    const run = async (keepRows) => {
+      let passes = 0;
+      const result = await pm._curveFitStreamed(plot, { ...r, range, info }, { chunkRows: 50000, keepRows, onProgress: (pass) => { if (typeof pass === 'number') passes = Math.max(passes, pass); } });
+      return { passes, fit: same(result.fit, r.result.fit), residual: same(result.residual, r.result.residual), curve: same(result.curve, r.result.curve), nScope: result.nScope === r.result.nScope };
+    };
+    return { kept: await run(undefined), reread: await run(0) };
+  }, panelId);
+  assert.equal(streamed.kept.passes, 2, 'rows kept after the second pass: two reads of the file');
+  assert.ok(streamed.reread.passes >= 6, `read again on every pass otherwise (${streamed.reread.passes})`);
+  for (const [name, check] of Object.entries(streamed)) {
+    assert.deepEqual({ ...check, passes: undefined }, { passes: undefined, fit: true, residual: true, curve: true, nScope: true }, `streamed in the browser (${name}): the same fit, residuals and curve`);
+  }
+
   // Saved from a lazy file: SQL over the file, exact against the fit.
   await page.click('.curve-fit-save-fit');
   await page.waitForTimeout(500);
