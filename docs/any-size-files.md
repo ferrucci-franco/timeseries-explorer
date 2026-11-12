@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -1612,6 +1612,95 @@ Pruebas:
   300 000 filas del archivo y sus 299 750 valores finitos, sin avisos; el eje
   reindexado desde 2024-01-01 a 1 min pone las filas de enero a julio de 2024
   en los dos paneles; sin errores de página.
+
+### Implementado: ajuste de curvas exacto sobre todas las filas
+
+Los dos análisis de ajuste (el de pares del gráfico 2D y el de series
+temporales) tenían un tope en un archivo lazy. Los modelos con forma SQL del
+2D (lineal, cuadrático, potencial) ya eran exactos (`getPhaseRegressionStats`),
+pero la familia exponencial del 2D y **todos** los modelos del ajuste temporal
+leían las filas del rango en una consulta (`_fetchLazyFitRows`) y, pasados
+2 M de filas (`FIT_MAX_LAZY_ROWS`), se negaban: *"Demasiadas filas en este
+rango para este ajuste"*. El modo estándar, en cambio, ajustaba siempre.
+
+Ahora cada ajuste está escrito como **las pasadas que hace sobre sus filas**
+(`src/utils/fit-passes.js`): un generador que entrega una pasada (un objeto con
+`chunk(x, y)`) y, al retomarse, lee lo que acumuló. Las sumas siguen de un
+trozo al siguiente, así que darle los arreglos enteros o un stream en trozos
+da **los mismos números, bit a bit**:
+
+- lineal y potencial: una pasada (los momentos de `createPairwiseMoments`,
+  ahora acumulables, que también usa la correlación); cuadrático: dos;
+- exponencial y primer orden (`expFamilyFitSteps`): estadísticas; las filas
+  donde se ubica la tasa (todas hasta 20 000, una de cada *k* por encima);
+  el pulido de Brent sobre todas las filas, una pasada por evaluación (Brent
+  es ahora un generador que pide cada punto); la comparación final, y los
+  residuos para el SSE exacto. Con `keepRows`, la segunda pasada guarda las
+  filas escaladas y el resto se hace en memoria: es la forma del núcleo
+  anterior, que en memoria sigue igual de rápido.
+
+En memoria, `fitPair` corre las pasadas sobre los arreglos. En lazy
+(`src/plots/methods/fit-lazy-methods.js`, sin Plotly para poder probarlo en
+Node): hasta `FIT_MAX_LAZY_ROWS` las filas se leen de una vez y se ajustan
+como antes; por encima, **cada pasada es un stream del rango**
+(`_lazyFitPass`: la misma consulta que `_fetchLazyFitRows` —las dos usan
+`_rawRowsSql`—, las mismas transformaciones, el mismo corte por tiempo
+mostrado). Un exponencial de no más de `FIT_KEEP_LAZY_ROWS` filas (6 M: unos
+140 MB transitorios) las guarda tras la segunda pasada y pule en memoria; por
+encima, cada evaluación del pulido es una lectura más. El ajuste temporal hace
+una pasada más para los residuos, diezmados al vuelo
+(`createMinMaxDecimator`, igual a `decimateMinMax`).
+
+Mientras tanto la línea de estado dice *"Ajustando todas las filas del archivo:
+pasada 3, 1 234 567 filas leídas…"*. Un pedido nuevo con otra clave cancela el
+que reemplaza (`AbortSignal` hasta el stream de DuckDB); el mismo pedido otra
+vez (el panel se redibuja por muchas razones) deja seguir al que está en
+curso; cerrar el análisis lo detiene (`_stopLazyFits`). El 2D guarda sus
+resultados con la versión de los datos en la clave y no vuelve a ajustar un
+par cuyo resultado sigue valiendo. El aviso de *"demasiadas filas"* desapareció
+de las cinco traducciones.
+
+Medido (Node, DuckDB-WASM, un CSV registrado en memoria, el camino por trozos
+llamado directamente sobre todo el rango —en la app, hasta 2 M filas se leen de
+una vez—; el costo es casi todo DuckDB leyendo el CSV de nuevo en cada pasada):
+
+| filas | lineal (1 pasada) | primer orden con offset |
+|---|---|---|
+| 200 000 | 0,2 s | 0,6 s (2 pasadas, filas guardadas); 3,0 s leyendo en cada una (23) |
+| 6 M | 6,3 s | 16,4 s (2 pasadas, filas guardadas) |
+| 12 M | BENCH12L | BENCH12E |
+
+Pruebas:
+
+- `scripts/test-fit-passes.mjs`: los siete modelos, con huecos e infinitos,
+  por debajo y por encima de las 20 000 filas, en arreglos y en trozos de
+  tamaño al azar —leyendo en cada pasada, guardando las filas y guardándolas
+  solo bajo un límite superado—: los mismos números con `Object.is`. El
+  diezmado punto a punto igual al de arreglos.
+- `scripts/test-lazy-curve-fit.mjs` (DuckDB-WASM real, 60 013 filas): las filas
+  del stream son las de la consulta única; cada modelo del ajuste temporal por
+  trozos (guardando y sin guardar) igual al de las filas leídas de una vez y
+  al de memoria —coeficientes, métricas, curva, residuos, filas en el
+  rango—; cada modelo del 2D igual a `fitPair` en memoria; con recorte,
+  desplazamiento, ganancia, offset y signo; en todo el archivo y en una
+  selección; en un eje generado; el pulido realmente lee en cada pasada sin
+  guardar; cancelar detiene; el cableado de los dos análisis.
+- `scripts/e2e-curve-fit.mjs` (Chromium): sobre el CSV lazy de 300 000 filas,
+  el ajuste por trozos en el navegador da el ajuste, los residuos y la curva
+  que muestra el panel.
+
+### Regla: lo nuevo nace funcionando en lazy
+
+Este ajuste se escribió después de la fase 4 sin pensar en lazy, y reabrió una
+diferencia que la fase 4 había cerrado en todo lo demás. Para que no vuelva a
+pasar, la regla está escrita donde se lee al trabajar —`CLAUDE.md` para las
+sesiones de Claude Code y `CONTRIBUTING.md` para las personas—: **todo
+análisis, herramienta de datos o exportación nueva trabaja sobre todas las
+filas de un archivo lazy y da el resultado del modo estándar**, leyendo el
+archivo (SQL, o un stream por trozos con un núcleo que acumula), nunca el
+resumen en memoria; sin topes ni muestras silenciosas; con progreso y cancelar
+cuando tarda; y con su prueba de paridad sobre DuckDB-WASM real. Lo que no
+pueda ser exacto lo dice en la interfaz y queda anotado aquí.
 
 ### Implementado (fase 4b-5): los resultados en disco, conservados entre sesiones, y la continuación en vivo
 

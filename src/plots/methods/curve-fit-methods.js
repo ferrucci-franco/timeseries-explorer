@@ -3,7 +3,8 @@ import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
 import { createCopyButton } from '../../ui/copy-button.js';
-import { fitPair, buildFitCurve, predict } from '../../utils/regression.js';
+import { buildFitCurve } from '../../utils/regression.js';
+import { FIT_MAX_LAZY_ROWS } from './fit-lazy-methods.js';
 import {
     FIT_MODEL_OPTIONS,
     FIT_MODEL_SHORT_KEYS,
@@ -16,13 +17,11 @@ import {
     CURVE_FIT_LAYOUTS,
     CURVE_FIT_MAX_FITS,
     CURVE_FIT_TIME_UNITS,
-    decimateMinMax,
     defaultCurveFitEntry,
     defaultCurveFitState,
     normalizeCurveFitState,
     curveFitFormula,
     rangeIndices,
-    shiftedTime,
 } from '../curve-fit-state.js';
 import { csvValueCell } from '../../utils/csv-cell.js';
 
@@ -48,9 +47,6 @@ import { csvValueCell } from '../../utils/csv-cell.js';
 // good fit leaves noise there; a wrong model leaves a shape.
 
 const RECOMPUTE_DEBOUNCE_MS = 150;
-// The most rows a lazy (DuckDB) file hands one fit: about two seconds of
-// fitting for the exponential models.
-const MAX_LAZY_ROWS = 2000000;
 const FIT_COLORS = ['#e53935', '#8e24aa', '#f57c00', '#00897b', '#3949ab', '#6d4c41', '#c2185b', '#7cb342'];
 
 const finiteOrNull = (value) => {
@@ -244,29 +240,6 @@ export function installPlotCurveFitMethods(TargetClass) {
     // Fit one stretch: rows inside [lo, hi], time shifted to t₀ = lo and
     // scaled to the chosen unit. Returns everything the panes and the drawer
     // draw from, so they never refit.
-    proto._curveFitFromRows = function(plot, entry, trace, range, info, times, values) {
-        const t0 = range[0];
-        const tPrime = shiftedTime(times, t0, info.scale);
-        const fit = fitPair(entry.model, tPrime, values);
-        const timeVar = this._getTimeVar(trace.fileId);
-        const toPlot = (arr) => this._plotlyTimeArray(trace.fileId, arr, timeVar);
-        let curve = { x: [], y: [], tPrime: [] };
-        let residual = { x: [], y: [] };
-        if (fit?.status === 'ok') {
-            const sampled = buildFitCurve(fit);
-            const t = sampled.x.map(v => t0 + v * info.scale);
-            curve = { x: toPlot(t), y: sampled.y, t, tPrime: sampled.x };
-            const r = new Float64Array(tPrime.length);
-            for (let i = 0; i < tPrime.length; i++) {
-                const y = Number(values[i]);
-                r[i] = Number.isFinite(y) && Number.isFinite(tPrime[i]) ? y - predict(fit, tPrime[i]) : NaN;
-            }
-            const decimated = decimateMinMax(times, r, 2000);
-            residual = { x: toPlot(decimated.x), y: decimated.y };
-        }
-        return { fit, t0, scale: info.scale, unit: info.unit, calendar: info.calendar, curve, residual, nScope: times.length };
-    };
-
     proto._curveFitEagerRows = function(trace, range) {
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
         const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
@@ -316,30 +289,61 @@ export function installPlotCurveFitMethods(TargetClass) {
     // superseded query never paints.
     proto._refreshCurveFitLazy = async function(panelId, plot, results) {
         const pending = (results || []).filter(r => r.lazy && !r.result && r.key);
-        if (!pending.length) return;
-        const token = (plot._curveFitLazyToken || 0) + 1;
-        plot._curveFitLazyToken = token;
-        for (const r of pending) {
+        // One job per fit, under the key it was asked for. A refresh that asks
+        // for the same key lets the job finish (a streamed fit of a large file
+        // can take minutes, and the panel refreshes for many reasons); a job
+        // whose fit now wants another key, or none, is stopped.
+        if (!plot._curveFitLazyJobs) plot._curveFitLazyJobs = new Map();
+        const jobs = plot._curveFitLazyJobs;
+        const wanted = new Map(pending.map(r => [r.entry.id, r.key]));
+        for (const [id, job] of jobs) {
+            if (wanted.get(id) === job.key) continue;
+            job.controller?.abort();
+            jobs.delete(id);
+        }
+        const fresh = pending.filter(r => !jobs.has(r.entry.id));
+        for (const r of fresh) {
+            jobs.set(r.entry.id, { key: r.key, controller: typeof AbortController === 'function' ? new AbortController() : null });
+        }
+        for (const r of fresh) {
+            const job = jobs.get(r.entry.id);
+            if (!job || job.key !== r.key) continue;
+            const signal = job.controller?.signal || null;
+            const current = () => jobs.get(r.entry.id) === job;
             let entry;
             try {
-                const rows = await this._fetchLazyFitRows(r.trace.fileId, [r.trace.varName], r.range, MAX_LAZY_ROWS);
-                if (plot._curveFitLazyToken !== token) return;
-                if (!rows.ok) {
-                    entry = { key: r.key, result: null, status: rows.reason === 'tooManyRows' ? 'tooManyRows' : 'error' };
-                } else {
+                const rows = await this._fetchLazyFitRows(r.trace.fileId, [r.trace.varName], r.range, FIT_MAX_LAZY_ROWS);
+                if (!current()) continue;
+                if (rows.ok) {
                     const result = this._curveFitFromRows(plot, r.entry, r.trace, r.range, r.info,
                         rows.time, rows.valuesByVar.get(r.trace.varName) || []);
                     entry = { key: r.key, result, status: 'ok' };
+                } else if (rows.reason === 'tooManyRows') {
+                    const result = await this._curveFitStreamed(plot, r, {
+                        signal,
+                        onProgress: (pass, read) => {
+                            if (!current()) return;
+                            const text = pass === 'residuals'
+                                ? i18n.t('fitLazyResiduals').replace('{rows}', i18n.formatNumber(read))
+                                : i18n.t('fitLazyStreaming').replace('{pass}', String(pass)).replace('{rows}', i18n.formatNumber(read));
+                            this._setCurveFitStatus(plot, `F${r.index + 1}: ${text}`, 'loading');
+                        },
+                    });
+                    entry = { key: r.key, result, status: 'ok' };
+                } else {
+                    entry = { key: r.key, result: null, status: 'error' };
                 }
             } catch (err) {
+                if (err?.name === 'AbortError') continue;
                 console.warn('[curve-fit] lazy query failed:', err);
                 entry = { key: r.key, result: null, status: 'error' };
             }
-            if (plot._curveFitLazyToken !== token) return;
+            if (!current()) continue;
+            jobs.delete(r.entry.id);
             plot._curveFitCache.set(r.entry.id, entry);
+            if (this.plots.get(panelId) !== plot || plot.mode !== 'curve-fit') return;
+            this._paintCurveFits(panelId, plot, this._computeCurveFits(plot));
         }
-        if (this.plots.get(panelId) !== plot || plot.mode !== 'curve-fit') return;
-        this._paintCurveFits(panelId, plot, this._computeCurveFits(plot));
     };
 
     proto._scheduleCurveFitRecompute = function(panelId, options = {}) {
@@ -958,6 +962,7 @@ export function installPlotCurveFitMethods(TargetClass) {
             plot[key] = null;
         }
         clearTimeout(plot?._curveFitRecomputeTimer);
+        this._stopLazyFits?.(plot);
     };
 
     // ── Top bar ───────────────────────────────────────────────────
@@ -1098,7 +1103,6 @@ export function installPlotCurveFitMethods(TargetClass) {
     proto._curveFitWarningText = function(r) {
         if (!r.result) {
             if (r.lazy) {
-                if (r.lazyStatus === 'tooManyRows') return i18n.t('fitTooManyRows');
                 if (r.lazyStatus === 'error') return i18n.t('phase2dFitLazyError');
                 return i18n.t('phase2dFitLazyPending');
             }

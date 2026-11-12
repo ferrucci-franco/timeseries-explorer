@@ -117,6 +117,21 @@ try {
   
   assert.ok(fit.lazy && fit.n > 300000, 'every row in range');
 
+  // Past the one-piece fetch (2 M rows) the fit streams its passes over the
+  // file instead. The same rows streamed here, in small chunks through the
+  // browser's DuckDB, give the very fit the panel holds.
+  const streamed = await page.evaluate(async id => {
+    const pm = window.app.plotManager; const plot = pm.plots.get(id); const r = plot._curveFitResults[0];
+    const range = pm._curveFitRange(plot, r.entry);
+    const info = pm._curveFitTimeInfo(plot, r.trace);
+    let passes = 0;
+    const result = await pm._curveFitStreamed(plot, { ...r, range, info }, { chunkRows: 50000, onProgress: (pass) => { if (typeof pass === 'number') passes = Math.max(passes, pass); } });
+    const same = (a, b) => JSON.stringify(a, (k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)) === JSON.stringify(b, (k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v));
+    return { passes, fit: same(result.fit, r.result.fit), residual: same(result.residual, r.result.residual), curve: same(result.curve, r.result.curve), nScope: result.nScope === r.result.nScope };
+  }, panelId);
+  assert.ok(streamed.passes >= 6, `the exponential streamed pass after pass (${streamed.passes})`);
+  assert.deepEqual({ ...streamed, passes: undefined }, { passes: undefined, fit: true, residual: true, curve: true, nScope: true }, 'streamed in the browser: the same fit, residuals and curve');
+
   // Saved from a lazy file: SQL over the file, exact against the fit.
   await page.click('.curve-fit-save-fit');
   await page.waitForTimeout(500);

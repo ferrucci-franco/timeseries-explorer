@@ -125,41 +125,73 @@ export function shiftedTime(times, t0, unitScale = 1) {
  */
 export function decimateMinMax(x, y, buckets = 2000) {
     const n = Math.min(x?.length || 0, y?.length || 0);
-    if (n <= buckets * 2) {
-        return {
-            x: Array.from({ length: n }, (_, i) => x[i]),
-            y: Array.from({ length: n }, (_, i) => (Number.isFinite(y[i]) ? y[i] : null)),
-        };
-    }
+    const decimator = createMinMaxDecimator(n, buckets);
+    for (let i = 0; i < n; i++) decimator.push(x[i], y[i]);
+    return decimator.result();
+}
+
+/**
+ * The same decimation, fed one point at a time in order — for residuals that
+ * are never held whole (a lazy file's, computed a chunk at a time). `n` is
+ * the number of points that will be pushed: it fixes the buckets. Pushing the
+ * points of an array gives exactly decimateMinMax's output.
+ */
+export function createMinMaxDecimator(n, buckets = 2000) {
     const outX = [];
     const outY = [];
+    const all = n <= buckets * 2;
     const size = n / buckets;
-    for (let b = 0; b < buckets; b++) {
-        const start = Math.floor(b * size);
-        const end = Math.min(n, Math.floor((b + 1) * size));
-        let iMin = -1;
-        let iMax = -1;
-        for (let i = start; i < end; i++) {
-            const v = y[i];
-            if (!Number.isFinite(v)) continue;
-            if (iMin < 0 || v < y[iMin]) iMin = i;
-            if (iMax < 0 || v > y[iMax]) iMax = i;
-        }
-        if (iMin < 0) {
-            outX.push(x[start]);
+    let i = 0;
+    let bucket = 0;
+    let end = all ? n : Math.min(n, Math.floor(size));
+    let startX;
+    let minI = -1, minX, minY;
+    let maxI = -1, maxX, maxY;
+    const flush = () => {
+        if (minI < 0) {
+            outX.push(startX);
             outY.push(null);
-            continue;
+        } else if (minI === maxI) {
+            outX.push(minX);
+            outY.push(minY);
+        } else if (minI < maxI) {
+            outX.push(minX, maxX);
+            outY.push(minY, maxY);
+        } else {
+            outX.push(maxX, minX);
+            outY.push(maxY, minY);
         }
-        const first = Math.min(iMin, iMax);
-        const second = Math.max(iMin, iMax);
-        outX.push(x[first]);
-        outY.push(y[first]);
-        if (second !== first) {
-            outX.push(x[second]);
-            outY.push(y[second]);
-        }
-    }
-    return { x: outX, y: outY };
+        minI = -1;
+        maxI = -1;
+    };
+    return {
+        push(x, y) {
+            if (all) {
+                outX.push(x);
+                outY.push(Number.isFinite(y) ? y : null);
+                i++;
+                return;
+            }
+            if (bucket >= buckets) return;
+            const start = Math.floor(bucket * size);
+            if (i === start) startX = x;
+            if (Number.isFinite(y)) {
+                if (minI < 0 || y < minY) { minI = i; minX = x; minY = y; }
+                if (maxI < 0 || y > maxY) { maxI = i; maxX = x; maxY = y; }
+            }
+            i++;
+            while (bucket < buckets && i >= end) {
+                flush();
+                bucket++;
+                // More than two points per bucket here (n > 2·buckets), so
+                // none is empty.
+                end = Math.min(n, Math.floor((bucket + 1) * size));
+            }
+        },
+        result() {
+            return { x: outX, y: outY };
+        },
+    };
 }
 
 // How a variable name is written into a formula: bare when the tokenizer reads

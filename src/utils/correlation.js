@@ -31,9 +31,17 @@ const toFinite = (v) => {
 // Returns { n, nRowsSeen, nExcluded, meanX, meanY, m2x, m2y, cMoment,
 // minX, maxX }. A row participates only when BOTH x[i] and y[i] are finite.
 export function pairwiseMoments(x, y) {
-    const len = Math.min(x?.length || 0, y?.length || 0);
+    return createPairwiseMoments().chunk(x, y).result();
+}
 
+// The same moments, fed a chunk at a time: rows pushed in order, chunk after
+// chunk, give exactly the numbers pairwiseMoments gives for the concatenated
+// arrays (the running sums simply carry on). This is what lets a fit read a
+// lazy file of any size in pieces and still match the in-memory result bit
+// for bit (src/utils/fit-passes.js).
+export function createPairwiseMoments() {
     let n = 0;
+    let len = 0;
     let meanX = 0;
     let meanY = 0;
     let m2x = 0;
@@ -41,39 +49,52 @@ export function pairwiseMoments(x, y) {
     let cMoment = 0;
     let minX = Infinity;
     let maxX = -Infinity;
+    const acc = {
+        chunk(x, y) {
+            const count = Math.min(x?.length || 0, y?.length || 0);
+            len += count;
+            // The running state in locals for the loop (a closure's variables
+            // are slower to reach), written back after: the same operations
+            // in the same order.
+            let cn = n, cMeanX = meanX, cMeanY = meanY, cM2x = m2x, cM2y = m2y, cC = cMoment, cMin = minX, cMax = maxX;
+            for (let i = 0; i < count; i++) {
+                const xi = toFinite(x[i]);
+                const yi = toFinite(y[i]);
+                if (xi === null || yi === null) continue;
 
-    for (let i = 0; i < len; i++) {
-        const xi = toFinite(x[i]);
-        const yi = toFinite(y[i]);
-        if (xi === null || yi === null) continue;
-
-        n++;
-        const dx = xi - meanX;
-        meanX += dx / n;
-        const dy = yi - meanY;
-        meanY += dy / n;
-        // C accumulates dx * (yi - meanY_new); M2 terms use the "new mean" form.
-        cMoment += dx * (yi - meanY);
-        m2x += dx * (xi - meanX);
-        m2y += dy * (yi - meanY);
-        if (xi < minX) minX = xi;
-        if (xi > maxX) maxX = xi;
-    }
-
-    return {
-        n,
-        nRowsSeen: len,
-        // nExcluded is only meaningful relative to the rows actually seen; rows
-        // beyond the shorter array are a length mismatch, not an exclusion.
-        nExcluded: len - n,
-        meanX: n ? meanX : NaN,
-        meanY: n ? meanY : NaN,
-        m2x,
-        m2y,
-        cMoment,
-        minX: n ? minX : NaN,
-        maxX: n ? maxX : NaN,
+                cn++;
+                const dx = xi - cMeanX;
+                cMeanX += dx / cn;
+                const dy = yi - cMeanY;
+                cMeanY += dy / cn;
+                // C accumulates dx * (yi - meanY_new); M2 terms use the "new mean" form.
+                cC += dx * (yi - cMeanY);
+                cM2x += dx * (xi - cMeanX);
+                cM2y += dy * (yi - cMeanY);
+                if (xi < cMin) cMin = xi;
+                if (xi > cMax) cMax = xi;
+            }
+            n = cn; meanX = cMeanX; meanY = cMeanY; m2x = cM2x; m2y = cM2y; cMoment = cC; minX = cMin; maxX = cMax;
+            return acc;
+        },
+        result() {
+            return {
+                n,
+                nRowsSeen: len,
+                // nExcluded is only meaningful relative to the rows actually seen; rows
+                // beyond the shorter array are a length mismatch, not an exclusion.
+                nExcluded: len - n,
+                meanX: n ? meanX : NaN,
+                meanY: n ? meanY : NaN,
+                m2x,
+                m2y,
+                cMoment,
+                minX: n ? minX : NaN,
+                maxX: n ? maxX : NaN,
+            };
+        },
     };
+    return acc;
 }
 
 // Pearson r over the aligned rows of x and y.

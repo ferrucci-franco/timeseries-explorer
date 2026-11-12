@@ -29,9 +29,6 @@ import { csvValueCell } from '../../utils/csv-cell.js';
 // Range-input formatting / datetime conversion — mirrors the FFT & Correlation
 // panels so the Todo/Selección controls look and behave identically.
 const PHASE2D_FIT_LAYOUTS = new Set(['horizontal', 'vertical']);
-// The most rows a lazy file hands a fit computed outside SQL (the exponential
-// family): about two seconds of fitting.
-export const FIT_MAX_LAZY_ROWS = 2000000;
 const p2dFiniteOrNull = (value) => {
     if (value === '' || value === null || value === undefined) return null;
     const n = Number(value);
@@ -259,12 +256,15 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._phase2dPairId = function(pair) {
         return `${pair?.x}\u0000${pair?.y}\u0000${pair?.fileId}`;
     };
-    // Identity of a lazy fit result: recompute when pair, model or range change.
+    // Identity of a lazy fit result: recompute when pair, model, range or the
+    // file's data and transforms (its data token) change — and only then: a
+    // fit streamed over a large file can take minutes.
     proto._phase2dLazyFitKey = function(plot, pair) {
         const state = this._ensurePhase2dState(plot);
         const model = this._phase2dPairModel(pair);
         const range = state.rangeFull ? 'full' : `${state.x1}_${state.x2}`;
-        return `${this._phase2dPairId(pair)}\u0000${model}\u0000${range}`;
+        const token = this._fftDataToken?.(pair.fileId) ?? '';
+        return `${this._phase2dPairId(pair)}\u0000${model}\u0000${range}\u0000${token}`;
     };
 
     proto._hasLazyPhase2dPairs = function(plot) {
@@ -274,34 +274,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             && this._isLazyFile?.(p.fileId));
     };
 
-    // Every row of a lazy (DuckDB) file inside a display time range, with the
-    // panel's transforms applied — the rows a fit that no SQL aggregate can
-    // hold works from. Refuses past FIT_MAX_LAZY_ROWS rather than fit a sample.
-    proto._fetchLazyFitRows = async function(fileId, varNames, displayRange, maxRows = FIT_MAX_LAZY_ROWS) {
-        const data = this.files.get(fileId)?.data;
-        const source = data?._duckdb?.source;
-        if (!source?.getRawColumnsRange) return { ok: false, reason: 'noSql' };
-        const timeVar = this._getTimeVar(fileId);
-        const sourceRange = this._sourceRangeForDisplayRange(fileId, displayRange, timeVar);
-        if (!sourceRange || !sourceRange.every(Number.isFinite)) return { ok: false, reason: 'undefined' };
-        const raw = await source.getRawColumnsRange(data, varNames, sourceRange[0], sourceRange[1], maxRows);
-        if (raw.truncated) return { ok: false, reason: 'tooManyRows' };
-        const transformed = this._transformFetchedPhaseTrajectory(fileId, raw.x, raw.rowIndex, raw.yByVar, varNames);
-        const [lo, hi] = displayRange;
-        const keep = [];
-        for (let i = 0; i < transformed.time.length; i++) {
-            const t = transformed.time[i];
-            if (t >= lo && t <= hi) keep.push(i);
-        }
-        if (keep.length === transformed.time.length) return { ok: true, ...transformed };
-        const pick = (arr) => Float64Array.from(keep, i => arr[i]);
-        return {
-            ok: true,
-            time: pick(transformed.time),
-            valuesByVar: new Map([...transformed.valuesByVar].map(([name, arr]) => [name, pick(arr)])),
-        };
-    };
-
     // Query DuckDB for the exact fit of every lazy pair with a model, cache the
     // results on the plot, then re-render curves + drawer. Token-guarded so a
     // superseded query never paints stale coefficients.
@@ -309,15 +281,29 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (!plot || plot.mode !== 'phase2d' || !plot.phase2dFitContainer) return;
         const state = this._ensurePhase2dState(plot);
         if (!state.fitEnabled) return;
-        const token = (plot._phase2dLazyToken || 0) + 1;
-        plot._phase2dLazyToken = token;
         if (!plot._phase2dLazyFits) plot._phase2dLazyFits = new Map();
 
-        const lazyPairs = (plot.phaseTraces || []).filter(p =>
-            p.visible !== false
-            && this._phase2dPairModel(p) !== 'none'
-            && this._isLazyFile?.(p.fileId));
+        // Pairs whose fit is not known yet for what is asked now. A pair whose
+        // result is cached under its current key is not fitted again.
+        const lazyPairs = (plot.phaseTraces || []).filter(p => {
+            if (p.visible === false || this._phase2dPairModel(p) === 'none' || !this._isLazyFile?.(p.fileId)) return false;
+            const cached = plot._phase2dLazyFits.get(this._phase2dPairId(p));
+            return !(cached && cached.status === 'ok' && cached.key === this._phase2dLazyFitKey(plot, p));
+        });
+        const wanted = lazyPairs.map(p => this._phase2dLazyFitKey(plot, p)).join('\u0001');
+        // The same fits already under way: let them finish. Anything else asked
+        // now replaces them — a newer request stops the one it supersedes
+        // rather than queue behind it.
+        if (wanted && plot._phase2dLazyJob?.wanted === wanted) return;
+        plot._phase2dLazyJob?.controller?.abort();
+        plot._phase2dLazyJob = null;
         if (!lazyPairs.length) return;
+        const token = (plot._phase2dLazyToken || 0) + 1;
+        plot._phase2dLazyToken = token;
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const job = { wanted, controller };
+        plot._phase2dLazyJob = job;
+        const signal = controller?.signal || null;
 
         const [lo, hi] = this._phase2dFitActiveRange(plot);
         const byFile = new Map();
@@ -356,25 +342,43 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                     }
                 }
                 for (const pair of rowPairs) {
+                    const model = this._phase2dPairModel(pair);
                     const rows = await this._fetchLazyFitRows(fileId, [pair.x, pair.y], [lo, hi]);
-                    if (!rows.ok) {
-                        byPair.set(pair, rows.reason === 'tooManyRows'
-                            ? { status: 'ok', fit: { model: this._phase2dPairModel(pair), status: 'undefined', warning: 'too-many-rows', n: NaN, nExcluded: 0 }, nScope: NaN }
-                            : { status: rows.reason || 'noSql' });
+                    if (rows.ok) {
+                        const fit = fitPair(model, rows.valuesByVar.get(pair.x), rows.valuesByVar.get(pair.y));
+                        byPair.set(pair, { status: 'ok', fit, nScope: rows.time.length });
                         continue;
                     }
-                    const fit = fitPair(this._phase2dPairModel(pair), rows.valuesByVar.get(pair.x), rows.valuesByVar.get(pair.y));
-                    byPair.set(pair, { status: 'ok', fit, nScope: rows.time.length });
+                    if (rows.reason !== 'tooManyRows') {
+                        byPair.set(pair, { status: rows.reason || 'noSql' });
+                        continue;
+                    }
+                    // Past what one fetch should hold: the same kernel, its
+                    // passes streamed over every row (the same numbers).
+                    const streamed = await this._streamLazyFit(fileId, [pair.x, pair.y], [lo, hi], model,
+                        (time, byVar) => [byVar.get(pair.x), byVar.get(pair.y)], {
+                            signal,
+                            onProgress: (pass, read) => {
+                                if (plot._phase2dLazyToken !== token) return;
+                                this._setPhase2dFitStatus(plot, i18n.t('fitLazyStreaming')
+                                    .replace('{pass}', String(pass))
+                                    .replace('{rows}', i18n.formatNumber(read)), 'loading');
+                            },
+                        });
+                    byPair.set(pair, { status: 'ok', fit: streamed.fit, nScope: streamed.nScope });
                 }
                 return { pairs, stats: pairs.map(p => byPair.get(p)) };
             } catch (err) {
+                if (err?.name === 'AbortError') return { pairs, aborted: true };
                 console.warn('[phase2d-fit] lazy query failed:', err);
                 return { pairs, error: 'error' };
             }
         });
 
         const settled = await Promise.all(jobs);
+        if (plot._phase2dLazyJob === job) plot._phase2dLazyJob = null;
         if (plot._phase2dLazyToken !== token) return; // superseded while awaiting
+        if (settled.some(entry => entry.aborted)) return;
 
         for (const job of settled) {
             job.pairs.forEach((pair, i) => {
@@ -690,6 +694,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (div && panelEl) panelEl.appendChild(div);
         if (plot.phase2dFitTimeDiv) { Plotly.purge(plot.phase2dFitTimeDiv); }
         this._cleanupPhase2dFitDocListeners(plot);
+        this._stopLazyFits?.(plot);
         container.remove();
         // Lent to the phone's Analyze sheet, the drawer is outside the shell.
         plot.phase2dFitOptions?.remove();
@@ -1164,7 +1169,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             'y-constant': i18n.t('phase2dFitYConstant'),
             'singular': i18n.t('phase2dFitSingular'),
             'coefficient-overflow': i18n.t('fitCoefficientOverflow'),
-            'too-many-rows': i18n.t('fitTooManyRows'),
         };
         return fit.warning ? (map[fit.warning] || fit.warning) : '';
     };
