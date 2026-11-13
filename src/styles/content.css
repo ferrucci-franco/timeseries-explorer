@@ -1658,6 +1658,207 @@
     flex: 0 0 auto;
 }
 
+/* ── Trend analysis ─────────────────────────────────────────────────────
+   The panel reuses the fft-* shell; its second pane is a table of the
+   segments rather than a chart, so it scrolls instead of being resized. */
+.trend-container.trend-table-hidden .fft-plot-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+
+.trend-table-hidden .trend-table-pane,
+.trend-table-hidden .fft-splitter {
+    display: none;
+}
+
+.trend-table-pane {
+    overflow: hidden;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+}
+
+.trend-table-wrap {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 4px 6px 8px;
+    min-width: 0;
+    min-height: 0;
+}
+
+.trend-table-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 2px 0 4px;
+    background: var(--bg-primary);
+}
+
+.trend-table {
+    border-collapse: collapse;
+    font-size: 0.74rem;
+    white-space: nowrap;
+}
+
+.trend-table th,
+.trend-table td {
+    padding: 2px 7px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+    max-width: 16em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.trend-table th {
+    position: sticky;
+    top: 26px;
+    z-index: 1;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.trend-table .trend-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.trend-table .trend-row {
+    cursor: pointer;
+}
+
+.trend-table .trend-row:hover td {
+    background: var(--bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+.trend-table .trend-row-active td {
+    background: rgba(67, 160, 71, 0.14);
+    font-weight: 600;
+}
+
+.trend-swatch {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    margin-right: 5px;
+    vertical-align: baseline;
+}
+
+.trend-table-notes {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.trend-table-note {
+    font-size: 0.72rem;
+    color: var(--warning-color);
+    overflow-wrap: anywhere;
+}
+
+.trend-options .phase2d-fit-field {
+    flex-wrap: wrap;
+}
+
+.trend-options .phase2d-fit-field-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 3.6em;
+}
+
+/* The two handles of the value band: one on each dashed line, at the right
+   end of the segment. A finger-sized target that also takes the keyboard —
+   each is a slider over the value axis. */
+.trend-band-handles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.trend-band-handle {
+    position: absolute;
+    width: 26px;
+    height: 18px;
+    margin: -9px 0 0 -13px;
+    padding: 0;
+    border: 1px solid var(--bg-primary);
+    border-radius: 9px;
+    background: #d81b60;
+    opacity: 0.85;
+    cursor: ns-resize;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.trend-band-handle::before {
+    content: '';
+    display: block;
+    width: 12px;
+    height: 0;
+    margin: 8px auto 0;
+    border-top: 2px solid var(--bg-primary);
+    border-bottom: 2px solid var(--bg-primary);
+}
+
+.trend-band-handle:hover,
+.trend-band-handle:focus-visible {
+    opacity: 1;
+}
+
+/* Its line is out of view: the handle waits at the edge it went past. */
+.trend-band-handle-edge {
+    opacity: 0.55;
+    border-style: dashed;
+}
+
+.trend-band-handle:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+.trend-band-block,
+.trend-curves-block {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.trend-band-toggle,
+.trend-curve-toggle {
+    margin: 0;
+}
+
+.trend-band-sigma {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.trend-sigma-input {
+    width: 4.5em;
+    flex: 0 0 auto;
+}
+
+.trend-fit-block {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dotted var(--border-color);
+}
+
+.trend-result .trend-stats dd {
+    font-variant-numeric: tabular-nums;
+}
+
 .phase2d-fit-results-head {
     display: flex;
     align-items: center;
@@ -3762,13 +3963,15 @@ body.fft-selection-dragging.fft-selection-moving {
 .plotly-mode-correlation-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-phase2d-fit-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-curve-fit-time.fft-cursor-ew .nsewdrag,
+.plotly-mode-trend-time.fft-cursor-ew .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-profile-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-integral-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-correlation-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-time .nsewdrag,
-body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-curve-fit-time .nsewdrag {
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-curve-fit-time .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-trend-time .nsewdrag {
     cursor: ew-resize !important;
 }
 
@@ -3778,8 +3981,14 @@ body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-curve-fit-ti
 .plotly-mode-integral-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-phase2d-fit-time.fft-cursor-grab .nsewdrag,
-.plotly-mode-curve-fit-time.fft-cursor-grab .nsewdrag {
+.plotly-mode-curve-fit-time.fft-cursor-grab .nsewdrag,
+.plotly-mode-trend-time.fft-cursor-grab .nsewdrag {
     cursor: grab !important;
+}
+
+/* The Trend analysis' value band: its two lines are dragged up and down. */
+.plotly-mode-trend-time.trend-cursor-ns .nsewdrag {
+    cursor: ns-resize !important;
 }
 
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag,
@@ -3788,7 +3997,8 @@ body.fft-selection-dragging.fft-selection-moving .plotly-mode-profile-time .nsew
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-integral-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-correlation-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-phase2d-fit-time .nsewdrag,
-body.fft-selection-dragging.fft-selection-moving .plotly-mode-curve-fit-time .nsewdrag {
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-curve-fit-time .nsewdrag,
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-trend-time .nsewdrag {
     cursor: grabbing !important;
 }
 

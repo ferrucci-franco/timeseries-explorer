@@ -34,12 +34,16 @@ const STATE_KEY = {
     'temporal-profile': 'temporalProfile',
     integral: 'integral',
     'curve-fit': 'curveFit',
+    trend: 'trend',
     correlation: 'correlation',
     phase2d: 'phase2d',
 };
 // Settings that are the panel's layout, not what a result is computed from:
 // Cancel leaves them as the user set them.
-const LAYOUT_KEYS = new Set(['layout', 'split', 'optionsVisible', 'timeSeriesHidden', 'residualsHidden', 'dirty', 'warnings']);
+const LAYOUT_KEYS = new Set(['layout', 'split', 'optionsVisible', 'timeSeriesHidden', 'residualsHidden',
+    // The Trend analysis: which pane is shown and which curves are drawn.
+    'tableHidden', 'curves', 'bandSigma',
+    'dirty', 'warnings']);
 
 const cloneSettings = (value) => {
     try {
@@ -91,6 +95,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         case 'integral': anchor = pane(plot.integralDiv); break;
         case 'correlation': anchor = pane(plot.correlationDiv); break;
         case 'curve-fit': anchor = pane(plot.div); break;
+        case 'trend': anchor = pane(plot.div); break;
         case 'phase2d': anchor = pane(plot.div); break;
         case 'heatmap': {
             anchor = pane(plot.heatmapDiv);
@@ -167,6 +172,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         const hasData = (div) => Array.isArray(div?.data) && div.data.some(trace =>
             (trace?.x?.length || 0) > 0 || (trace?.y?.length || 0) > 0 || (trace?.z?.length || 0) > 0 || (trace?.values?.length || 0) > 0);
         if (mode === 'curve-fit') return [...(plot?._curveFitCache?.values() || [])].some(entry => entry?.result?.fit?.status === 'ok');
+        if (mode === 'trend') return [...(plot?._trendCache?.values() || [])].some(entry => !!entry?.result);
         if (mode === 'phase2d') return [...(plot?._phase2dLazyFits?.values() || [])].some(entry => entry?.fit?.status === 'ok') || (plot?._phase2dFits || []).some(r => r?.fit?.status === 'ok');
         return hasData(plot?.[RESULT_DIV[mode]]);
     };
@@ -183,6 +189,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         for (const key of [
             '_fftToken', '_fftPreparationToken', '_histToken', '_calendarHeatmapToken',
             '_temporalProfileToken', '_integralToken', '_correlationToken', '_phase2dLazyToken',
+            '_trendToken',
         ]) {
             plot[key] = (plot[key] || 0) + 1;
         }
@@ -191,6 +198,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
             '_temporalProfileRecomputeTimer', '_integralRecomputeTimer',
             '_correlationRecomputeTimer', '_corrVisualTimer',
             '_phase2dFitRecomputeTimer', '_phase2dFitVisualTimer', '_curveFitRecomputeTimer',
+            '_trendRecomputeTimer',
         ]) {
             clearTimeout(plot[key]);
             plot[key] = null;
@@ -200,7 +208,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         for (const key of [
             '_histRecomputeRun', '_calendarHeatmapRecomputeRun', '_temporalProfileRecomputeRun',
             '_integralRecomputeRun', '_correlationRecomputeRun', '_phase2dFitRecomputeRun',
-            '_curveFitRecomputeRun',
+            '_curveFitRecomputeRun', '_trendRecomputeRun',
         ]) {
             plot[key] = null;
         }
@@ -208,6 +216,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         plot._analysisAbort = null;
         plot._histAbort?.abort();
         this._stopLazyFits?.(plot);
+        this._stopLazyTrends?.(plot);
         this._abortFftWorkerJob?.(plot, reason);
     };
 
@@ -232,6 +241,9 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
     proto._analysisSettled = function(plot, mode = plot?.mode) {
         if (mode === 'curve-fit') {
             return !(plot._curveFitResults || []).some(r => r.lazy && !r.result && r.lazyStatus === 'pending');
+        }
+        if (mode === 'trend') {
+            return !(plot._trendResults || []).some(r => r.lazy && !r.result && r.lazyStatus === 'pending');
         }
         if (mode === 'phase2d') {
             if (plot._phase2dLazyJob) return false;
@@ -314,6 +326,13 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
             call('_updateCurveFitSelectionShapes', plot);
             call('_paintCurveFits', panelId, plot, this._computeCurveFits?.(plot) || []);
             break;
+        case 'trend':
+            // The numbers on screen become the numbers of those settings
+            // again, so no refresh asks for them a second time.
+            call('_rekeyTrendsAfterRestore', plot);
+            call('_updateTrendSelectionShapes', plot);
+            call('_paintTrends', panelId, plot, this._computeTrends?.(plot) || []);
+            break;
         case 'correlation':
             call('_renderCorrelationOptionsPanel', panelId, plot);
             call('_updateCorrelationSelectionShapes', panelId, plot);
@@ -341,6 +360,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
             // What a cancelled lazy fit must not start again on the next refresh
             // (the panel refreshes for many reasons): its key, as cancelled.
             if (mode === 'curve-fit') this._markCurveFitsCancelled?.(plot);
+            if (mode === 'trend') this._markTrendsCancelled?.(plot);
             if (mode === 'phase2d') this._markPhase2dFitsCancelled?.(plot);
             this._dropAnalysisRuns(plot, 'Analysis cancelled by the user');
             this._setAnalysisComputing(plot, false);
@@ -349,6 +369,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
                 // Settings unchanged (or no result yet): repaint what is known,
                 // the previous curves drawn and the drawer saying "cancelled".
                 if (mode === 'curve-fit' && plot.div) this._paintCurveFits?.(panelId, plot, plot._curveFitResults || []);
+                if (mode === 'trend' && plot.div) this._paintTrends?.(panelId, plot, plot._trendResults || []);
                 if (mode === 'phase2d') {
                     this._rerenderPhase2dPlot?.(panelId, plot);
                     this._renderPhase2dFitDrawer?.(panelId, plot, { results: plot._phase2dFits || [] });
@@ -370,6 +391,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
                 break;
             case 'integral': this._setIntegralStatus?.(plot, message, [], 'muted'); break;
             case 'curve-fit': this._setCurveFitStatus?.(plot, message, 'muted'); break;
+            case 'trend': this._setTrendStatus?.(plot, message, 'muted'); break;
             case 'correlation': this._setCorrelationStatus?.(plot, message, 'muted'); break;
             case 'phase2d': this._setPhase2dFitStatus?.(plot, message, 'muted'); break;
             default: break;

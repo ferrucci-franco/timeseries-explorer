@@ -49,6 +49,7 @@ const showsPill = {
     histogram: ['src/plots/methods/histogram-methods.js', statusNotes('_setHistogramStatus', 'kind', true)],
     heatmap: ['src/plots/methods/heatmap-methods.js', statusNotes('_setCalendarHeatmapStatus', 'kind', true)],
     'curve-fit': ['src/plots/methods/curve-fit-methods.js', statusNotes('_setCurveFitStatus', 'type', true)],
+    trend: ['src/plots/methods/trend-methods.js', statusNotes('_setTrendStatus', 'type', true)],
     correlation: ['src/plots/methods/correlation-methods.js', statusNotes('_setCorrelationStatus', 'type', true)],
     'phase2d-fit': ['src/plots/methods/phase2d-fit-methods.js', statusNotes('_setPhase2dFitStatus', 'type', true)],
 };
@@ -77,11 +78,12 @@ const queries = {
     'src/plots/methods/correlation-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getPairCorrelations\([\s\S]*?signal \}/,
     'src/plots/methods/phase2d-fit-methods.js': /getPhaseRegressionStats\([\s\S]*?signal \}/,
     'src/plots/methods/fit-lazy-methods.js': /getRawColumnsRange\([^\n]*\{ signal \}\)/,
+    'src/plots/methods/trend-lazy-methods.js': /getTrendStats\([\s\S]*?signal,\n/,
 };
 for (const [file, pattern] of Object.entries(queries)) has(read(file), pattern, `${file}: its queries carry the signal`);
 const source = read('src/data/duckdb-source.js');
 has(source, /async getRawColumnsRange\([^)]*\{ signal = null \} = \{\}\)[\s\S]*?this\._interactiveQuery\(sql, \{ signal \}\)/, 'getRawColumnsRange passes it on');
-for (const method of ['getCalendarHeatmapAggregates', 'getDefiniteIntegralByDay', 'getTemporalProfileAggregates', 'getPairCorrelations', 'getPhaseRegressionStats']) {
+for (const method of ['getCalendarHeatmapAggregates', 'getDefiniteIntegralByDay', 'getTemporalProfileAggregates', 'getPairCorrelations', 'getPhaseRegressionStats', 'getTrendStats']) {
     has(source, new RegExp(`async ${method}\\([^)]*\\) \\{\\n[^\\n]*\\n\\s*const signal = options\\?\\.signal \\|\\| null;`), `${method} reads the signal`);
 }
 has(source, /pairExprs, active, signal\);/, 'the regression queries get it');
@@ -92,10 +94,11 @@ for (const key of [
     '_fftToken', '_fftPreparationToken', '_histToken', '_calendarHeatmapToken', '_temporalProfileToken',
     '_integralToken', '_correlationToken', '_phase2dLazyToken',
     '_curveFitRecomputeTimer', '_curveFitRecomputeRun', '_histRecomputeRun', '_phase2dFitRecomputeRun',
+    '_trendRecomputeTimer', '_trendRecomputeRun',
 ]) {
     assert.ok(busy.includes(`'${key}'`), `_dropAnalysisRuns covers ${key}`);
 }
-has(busy, /plot\._analysisAbort\?\.abort\(\);[\s\S]*?plot\._histAbort\?\.abort\(\);[\s\S]*?this\._stopLazyFits\?\.\(plot\);[\s\S]*?this\._abortFftWorkerJob\?\.\(plot, reason\);/, 'and stops the work itself');
+has(busy, /plot\._analysisAbort\?\.abort\(\);[\s\S]*?plot\._histAbort\?\.abort\(\);[\s\S]*?this\._stopLazyFits\?\.\(plot\);[\s\S]*?this\._stopLazyTrends\?\.\(plot\);[\s\S]*?this\._abortFftWorkerJob\?\.\(plot, reason\);/, 'and stops the work itself');
 const manager = read('src/plots/plot-manager.js');
 has(manager, /\n    _cancelPanelAnalysis\(panelId[\s\S]*?this\._dropAnalysisRuns\(plot, reason\);\s*this\._setAnalysisComputing\(plot, false\);/, 'closing a panel uses the same stop and hides the pill');
 has(manager, /installPlotAnalysisBusyMethods\(PlotManager\);/);

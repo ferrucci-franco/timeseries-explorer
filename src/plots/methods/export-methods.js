@@ -68,7 +68,7 @@ export function installPlotExportMethods(TargetClass) {
     // Every live Plotly chart in the panel, in the order they are drawn.
     proto._exportableCharts = function(plot) {
         if (!plot) return [];
-        const analysisMode = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'correlation'].includes(plot.mode);
+        const analysisMode = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend', 'correlation'].includes(plot.mode);
         const inFitWorkspace = plot.mode === 'phase2d' && !!plot.phase2dFitTimeDiv;
         // In the 2D fit workspace plot.div is the scatter and the extra chart is
         // the time series; in the analysis modes plot.div is the time series.
@@ -160,6 +160,7 @@ export function installPlotExportMethods(TargetClass) {
     proto._defaultExportBaseName = function(plot, format, chart, chartCount) {
         if (format === 'csv') {
             if (plot.mode === 'curve-fit') return 'curve_fit';
+            if (plot.mode === 'trend') return 'trend_segments';
             return (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled)
                 ? 'phase2d_fit'
                 : `${plot.mode}_export`;

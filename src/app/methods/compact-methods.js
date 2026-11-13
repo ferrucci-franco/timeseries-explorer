@@ -123,7 +123,7 @@ const PAIR_MODES = new Set(['phase2d', 'phase2dt', 'phase3d', ...COMPACT_PAIR_MO
 const PHASE2D_FAMILY = new Set(['phase2d', ...COMPACT_PAIR_MODES]);
 const STATE_SLOT_LABELS = ['x₁', 'x₂', 'x₃'];
 
-const TIME_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit']);
+const TIME_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend']);
 // The plots that keep their signals when switched from one to another: the
 // time-series family, and the dashboard that shows the same signals as cards.
 const TRACE_FAMILY = new Set([...TIME_FAMILY, 'dashboard']);
@@ -136,6 +136,7 @@ const MODE_LABEL_KEYS = {
     'temporal-profile': 'analysisItemProfile',
     integral: 'analysisItemIntegral',
     'curve-fit': 'analysisItemCurveFit',
+    trend: 'analysisItemTrend',
     phase2d: 'modePhase2d',
     phase2dt: 'modePhase2dt',
     phase3d: 'modePhase3d',

@@ -1173,7 +1173,7 @@ export function installPlotMarksMethods(TargetClass) {
             ];
         }
         // Heatmap, Profile, Integral, Correlation: nothing but going back.
-        if (['heatmap', 'temporal-profile', 'integral', 'curve-fit', 'correlation'].includes(mode)) return [lastView];
+        if (['heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend', 'correlation'].includes(mode)) return [lastView];
         return [];
     };
 
@@ -1241,6 +1241,7 @@ export function installPlotMarksMethods(TargetClass) {
             { id: 'temporal-profile', label: 'analysisItemProfile', title: 'temporalProfileMode', short: 'temporalProfileModeLabel' },
             { id: 'integral', label: 'analysisItemIntegral', title: 'integralMode', short: 'integralModeLabel' },
             { id: 'curve-fit', label: 'analysisItemCurveFit', title: 'curveFitMode', short: 'analysisItemCurveFit' },
+            { id: 'trend', label: 'analysisItemTrend', title: 'trendMode', short: 'analysisItemTrend' },
         ];
     };
 

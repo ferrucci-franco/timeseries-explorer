@@ -56,7 +56,14 @@ import {
     buildRegressionPass2Sql,
     parseRegressionPass2,
 } from './pair-regression-sql.js';
+import {
+    buildTrendPass1Sql,
+    parseTrendPass1,
+    buildTrendPass2Sql,
+    parseTrendPass2,
+} from './trend-sql.js';
 import { linearFromMoments, quadraticFromMoments, powerFromMoments } from '../utils/regression.js';
+import { assembleTrend, trendBand } from '../utils/trend-fit.js';
 import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } from './missing-buckets-sql.js';
 import { buildStateChangesSql, buildStateColumnsSql, buildStateValuesSql } from './state-runs-sql.js';
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
@@ -4354,6 +4361,127 @@ export default class DuckDbSource {
             const first = this._regressionCache.keys().next().value;
             this._regressionCache.delete(first);
         }
+    }
+
+    /**
+     * Exact per-segment trend statistics over the source rows (never the
+     * overview): what the Trend analysis puts in its table. One scan per pass
+     * for ALL the segments given, whatever their ranges (src/data/trend-sql.js).
+     *
+     * `segments` is [{ varName, sign, sourceRange: [lo, hi], origin, divisor,
+     * band, quadratic }] where t′ = (t − origin) / divisor over the file's own
+     * time column and `band` is { lower, upper } or null. Returns one result per
+     * segment, aligned to the input: `{ status: 'ok', trend }` with `trend` in
+     * the shape the kernel gives (src/utils/trend-fit.js, assembleTrend), or
+     * `{ status: 'noSql' | 'noRegr' }`.
+     *
+     * A file whose time axis is generated from the row number has no time
+     * column to filter or shift, so it is not served here: the panel streams
+     * the kernel over its rows instead, which is exact as well.
+     */
+    async getTrendStats(legacyData, segments, options = {}) {
+        // Cancelled with the analysis that asked (analysis-busy-methods.js).
+        const signal = options?.signal || null;
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getTrendStats: data is not DuckDB-backed (eager mode)');
+        const list = Array.isArray(segments) ? segments : [];
+        const tExpr = this.timeValueSql(legacyData);
+        const resolved = list.map((input) => {
+            const variable = legacyData.variables?.[input?.varName];
+            const range = Array.isArray(input?.sourceRange) ? input.sourceRange.map(Number) : null;
+            const ok = !!tExpr
+                && !!variable
+                && this.hasSqlValue(variable)
+                && !!range && range.length >= 2 && range.every(Number.isFinite)
+                && Number.isFinite(Number(input?.origin))
+                && Number.isFinite(Number(input?.divisor)) && Number(input.divisor) !== 0;
+            return { input, variable, range, ok };
+        });
+        const active = resolved.filter(r => r.ok);
+        if (!active.length) return resolved.map(() => ({ status: 'noSql' }));
+        if (!(await this._supportsRegr())) {
+            return resolved.map(r => ({ status: r.ok ? 'noRegr' : 'noSql' }));
+        }
+
+        const gain = Number.isFinite(Number(options.gain)) ? Number(options.gain) : 1;
+        const yOffset = Number.isFinite(Number(options.yOffset)) ? Number(options.yOffset) : 0;
+        const oLit = this._numericLiteral(yOffset);
+        const lit = (value) => this._numericLiteral(value);
+        // Gain, per-variable sign and offset baked in, so the numbers match the
+        // eager transformed data: transformed = raw * gain * sign + yOffset.
+        const segExprs = active.map((r, i) => {
+            const gLit = this._numericLiteral(gain * (Number(r.input.sign) < 0 ? -1 : 1));
+            const value = this._valueExpressionSql(r.variable, r.input.varName, { castDouble: true });
+            // What an open bound is, decided by the kernel's own reader: an
+            // empty, absent or non-finite bound is ±∞ (and Number(null) is 0,
+            // which must never pass as a bound of zero).
+            const band = trendBand(r.input.band);
+            return {
+                i,
+                y: `(${value} * ${gLit} + ${oLit})`,
+                lo: Math.min(r.range[0], r.range[1]),
+                hi: Math.max(r.range[0], r.range[1]),
+                origin: Number(r.input.origin),
+                divisor: Number(r.input.divisor),
+                lower: Number.isFinite(band.lower) ? band.lower : NaN,
+                upper: Number.isFinite(band.upper) ? band.upper : NaN,
+            };
+        });
+        // The union of the segments' ranges: the rows any of them can use.
+        const union = [
+            Math.min(...segExprs.map(s => s.lo)),
+            Math.max(...segExprs.map(s => s.hi)),
+        ];
+        const where = this._phaseWhereSql(tExpr, union);
+        const from = this._fromSql(legacyData, active.map(r => r.variable));
+
+        const sql1 = buildTrendPass1Sql(from, where, tExpr, segExprs, lit);
+        const res1 = await this._interactiveQuery(sql1, { signal });
+        const pass1 = parseTrendPass1(
+            (name) => { const v = res1?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
+            segExprs,
+        );
+
+        // Pass 2 only for the segments that want a parabola and whose centre
+        // and scale pass 1 could define (three rows and some spread in t′).
+        const quadExprs = pass1.filter((p, i) => (
+            active[i].input.quadratic !== false && Number.isFinite(p.centerX) && p.scaleX > 0
+        ));
+        let pass2 = new Map();
+        if (quadExprs.length) {
+            const sql2 = buildTrendPass2Sql(from, where, tExpr, segExprs, quadExprs, lit);
+            const res2 = await this._interactiveQuery(sql2, { signal });
+            pass2 = parseTrendPass2(
+                (name) => { const v = res2?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
+                quadExprs,
+            );
+        }
+
+        const activeResults = active.map((r, i) => {
+            const { nScope, nOutliers, moments, minY, maxY, centerX, scaleX } = pass1[i];
+            let quadratic = null;
+            if (r.input.quadratic !== false) {
+                const stats = pass2.get(i);
+                quadratic = quadraticFromMoments({
+                    n: moments.n, nExcluded: moments.nExcluded, centerX, scaleX,
+                    ...(stats || { S0: NaN, S1: NaN, S2: NaN, S3: NaN, S4: NaN, T0: NaN, T1: NaN, T2: NaN, YY: NaN }),
+                    minX: moments.minX, maxX: moments.maxX,
+                });
+            }
+            return {
+                status: 'ok',
+                trend: assembleTrend({
+                    nScope,
+                    nOutliers,
+                    moments,
+                    minY: moments.n ? minY : NaN,
+                    maxY: moments.n ? maxY : NaN,
+                    quadratic,
+                }),
+            };
+        });
+        let k = 0;
+        return resolved.map(r => (r.ok ? (activeResults[k++] ?? { status: 'noSql' }) : { status: 'noSql' }));
     }
 
     async _supportsRegr() {

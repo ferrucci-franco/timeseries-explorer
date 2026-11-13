@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -76,6 +76,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Heatmap calendario | exacto en SQL desde la 3a para las columnas; las señales derivadas con SQL (derivada, media móvil, integral, fórmulas) ya entraban; **resuelto** lo que faltaba (sección "Implementado: heatmap y perfil temporal exactos"): un eje calendario generado desde una fecha de origen o un eje numérico promovido a calendario se agregan por el eje que el panel muestra, en vez de dibujarse desde el resumen o rechazarse como "aún no disponible"; solo se deja fuera, con aviso, una señal que existe únicamente en el resumen | `heatmapLazyDerivedUnsupported` |
 | Perfil temporal | exacto en SQL desde la 3a; **resuelto** lo mismo que el heatmap, más *fines de semana combinados* (que la consulta lazy ignoraba) y los períodos cortados por la selección, que los dos modos cuentan ahora igual | `temporalProfileLazyDerivedUnsupported` |
 | Derivadas del eje de tiempo (`index`, `delta`) | ~~calculadas sobre el overview~~ **SQL sobre el archivo desde la 4a** (el número de fila y la diferencia de filas consecutivas, `rowIndexWindow` y `timeAxisDeltaWindows`); esta fila había quedado vieja | — |
+| Análisis de tendencia | **exacto sobre todas las filas de cada tramo** (sección "Implementado: análisis de tendencia exacto"): los agregados de las dos pasadas en una consulta por pasada para todos los tramos; se rechaza, diciéndolo, una señal que solo está en el resumen y un eje generado del número de fila | `trendLazyOverviewOnly`, `trendLazyGeneratedAxis` |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
 | Guardar proyecto | rechazado | *"A complete project cannot be saved while these files are using memory-saving mode. Increase their full-load limit in Settings and reload them, or save a view instead"* |
@@ -1697,6 +1698,89 @@ Pruebas:
 - `scripts/e2e-curve-fit.mjs` (Chromium): sobre el CSV lazy de 300 000 filas,
   el ajuste por trozos en el navegador da el ajuste, los residuos y la curva
   que muestra el panel.
+
+### Implementado: análisis de tendencia exacto sobre todas las filas
+
+El **análisis de tendencia** (`src/plots/methods/trend-methods.js`, el cómputo
+en `trend-lazy-methods.js`) parte un registro en **tramos** y, de cada uno, da
+su valor medio, su dispersión, su tendencia lineal, su cuadrática y —a pedido—
+una exponencial, con una **banda de valores** que deja los outliers afuera. Lo
+importante para este documento: cada número sale de **todas las filas del
+rango**, nunca del resumen, y el usuario arrastra el rango y los ve cambiar.
+
+- **Dos pasadas de sumas, un agregado por pasada.** El kernel
+  (`src/utils/trend-fit.js`) es un generador de pasadas: la primera son los
+  momentos de pares de (t′, y) —de ahí la media, el desvío y el ajuste lineal,
+  por `linearFromMoments`—, y la segunda las sumas suficientes centradas que
+  resuelve `quadraticFromMoments`. Son exactamente las pasadas que ya hacía
+  `quadraticFitSteps`: el kernel **conduce ese generador** con las mismas filas
+  en vez de volver a resolver el sistema, así que la cuadrática de un tramo es
+  la del ajuste de curvas sobre el mismo tramo, bit a bit, y hay un solo solver
+  en la app.
+- **En lazy, las mismas sumas en SQL** (`src/data/trend-sql.js`,
+  `DuckDbSource.getTrendStats`): una consulta de agregados por pasada que
+  alimenta la misma función de armado y los mismos solvers. **Todos los tramos
+  del archivo entran en una sola consulta** por pasada, cada uno enmascarado
+  por su propio rango (`CASE WHEN t BETWEEN lo AND hi …`): en un CSV el costo
+  es el escaneo, y un panel con ocho tramos leería el archivo ocho veces por
+  pasada si no. Eso es lo que hace que arrastrar un rango sobre un archivo de
+  cualquier tamaño se conteste con una consulta y no con una lectura entera a
+  JavaScript.
+- **Tolerancia.** Las sumas de DuckDB se acumulan en otro orden que el Welford
+  del kernel, así que la paridad es al redondeo, no al bit: conteos, extremos y
+  el tramo de t′ **exactos**; media, desvío y recta a 1e−9 relativo; parábola a
+  1e−6 (la misma tolerancia que la regresión por pares de la fase 3).
+- **La banda de outliers** es un predicado sobre el valor en la misma
+  subconsulta (`vy >= cota AND vy <= cota`), y las filas que descarta se
+  cuentan aparte de las que no tienen valor: la tabla dice `n (−k ∅m)`. El
+  criterio es el del detector por cotas de las herramientas de datos
+  (`detectBoundsOutliers`), y una cota vacía es abierta — con el cuidado de que
+  `Number(null)` es 0, que no debe pasar por una cota de cero.
+- **Sin agregados de regresión** (un motor sin `regr_*`), el tramo no se
+  rechaza: se **streamea el kernel** por trozos sobre las filas del rango
+  (`_streamLazyTrend` sobre `_lazyFitPass`), lo que da los números en memoria
+  **bit a bit**, al costo de leerlas.
+- **La exponencial** es por tramo y apagada por defecto: es un ajuste iterativo
+  (`src/utils/exp-fit.js`), así que en lazy son las filas en una sola pieza
+  bajo `FIT_MAX_LAZY_ROWS` y, por encima, las pasadas streameadas del ajuste de
+  curvas (`_streamLazyFit`) — una veintena de lecturas del rango. Corre sobre
+  las filas que la banda deja (`maskTrendValues`), las mismas que la media.
+- **"Todo" quiere decir el archivo entero.** El dominio de un archivo lazy sale
+  del MIN y el MAX de su escaneo (`metadata.timeStart/timeEnd`), acotado por el
+  recorte, **no de la extensión del resumen**: en modo de ahorro de memoria el
+  resumen es un muestreo reservoir y sus filas primera y última no son las del
+  archivo, así que tomar el dominio de ahí dejaba "Todo" corto de los dos lados.
+- **Progreso y cancelación**: la píldora compartida con su botón Cancelar, un
+  `AbortController` por lote de consultas, y los resultados descartados por la
+  clave con la que se pidieron (sección "Implementado: cancelar un análisis").
+
+**Huecos conocidos, dichos en la UI** (regla 3 de `CLAUDE.md`):
+
+| Caso | Qué hace | Cadena |
+|---|---|---|
+| Una señal que en lazy existe **solo en el resumen** (una fórmula que el traductor no escribe) | el tramo no da números: no hay filas que leer, y el resumen daría una respuesta equivocada que parece correcta | `trendLazyOverviewOnly` |
+| Un archivo lazy cuyo **eje de tiempo se genera del número de fila** | el tramo se rechaza y dice por qué: en lazy ese eje numera las filas del *resumen*, no las del archivo, así que el tramo que se ve en pantalla y las filas que el archivo tiene en esas posiciones no son las mismas filas. Con una columna de tiempo propia, o cargado entero, es exacto | `trendLazyGeneratedAxis` |
+
+Pruebas:
+- `scripts/test-trend-analysis.mjs`: el kernel contra `linearFit` y
+  `quadraticFitCentered` sobre las mismas filas, **bit a bit**; las mismas
+  cuentas alimentando el kernel en trozos de 1, 7 y 1000 filas; la banda
+  descarta exactamente lo que descarta `detectBoundsOutliers`; el estado se
+  normaliza y sobrevive el viaje por una vista guardada; y el SQL de las dos
+  pasadas, conducido con los agregados que devolvería DuckDB, cae en los
+  números del kernel.
+- `scripts/test-lazy-trend.mjs`: el mismo CSV (50 021 filas, con huecos, un
+  `inf` y picos) abierto en lazy sobre **DuckDB-WASM real** (la build de Node) y
+  en memoria. El camino de agregados contra el kernel, sobre seis rangos y con
+  todas las transformaciones puestas (recorte, desplazamiento, ganancia,
+  offset, signo invertido); los tres tramos de un archivo en una sola pasada
+  dan lo que da uno por consulta; el eje generado se rechaza; sin `regr_*`, el
+  kernel streameado da los números en memoria **bit a bit**; la exponencial a
+  pedido, bit a bit, con y sin banda; cancelar detiene; y una señal que solo
+  está en el resumen se rechaza.
+- `scripts/e2e-analysis-cancel.mjs` (Chromium): el análisis de tendencia es uno
+  de los nueve que prueba la píldora, el Cancelar, el resultado que queda y los
+  ajustes que vuelven.
 
 ### Implementado: cancelar un análisis
 
