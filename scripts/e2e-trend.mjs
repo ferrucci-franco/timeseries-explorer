@@ -365,6 +365,40 @@ try {
     const moved = await result();
     assert.ok(moved.nScope > 9001, 'and it now reads more rows of the file');
 
+    // ── The controls say what they are ──
+    {
+        // The band's seed: a number and a button said neither what "3" was nor
+        // what pressing it would do.
+        const sigma = page.locator('.trend-band-sigma');
+        assert.ok((await sigma.locator('.trend-band-sigma-label').innerText()).trim(), 'the σ row is labelled');
+        assert.equal((await sigma.locator('.trend-band-sigma-unit').innerText()).trim(), 'σ', 'and the number is in σ');
+        assert.ok((await page.locator('.trend-band-hint').innerText()).trim().length > 40, 'with a line saying what it does to the result');
+        assert.notEqual((await sigma.locator('.trend-sigma-btn').innerText()).trim(), '± σ', 'the button says what it does');
+
+        // The analysis help is by the numbers it explains, not by the signal
+        // picker, where it read as help about choosing a signal.
+        const signalRow = page.locator('.trend-options .phase2d-fit-field', { hasText: 'Signal' }).first();
+        assert.equal(await signalRow.locator('.fft-help-btn').count(), 0, 'no help button beside the signal');
+        assert.equal(await page.locator('.trend-result .phase2d-fit-results-head .fft-help-btn').count(), 1,
+            'the block of numbers carries it');
+
+        // The exponential menu explains itself, with the four shapes drawn.
+        const expHelp = page.locator('.trend-options .phase2d-fit-field', { hasText: 'Exponential' }).locator('.fft-help-btn');
+        assert.equal(await expHelp.count(), 1, 'the exponential menu has its own help');
+        await expHelp.click();
+        await page.waitForSelector('.trend-exp-gallery');
+        const cards = page.locator('.trend-exp-card');
+        assert.equal(await cards.count(), 4, 'one card per model');
+        assert.equal(await page.locator('.trend-exp-card .trend-exp-art .art-line').count(), 4, 'each with its shape drawn');
+        const captions = await cards.locator('figcaption').allInnerTexts();
+        assert.ok(captions.every(text => text.includes('y =')), `each with its equation (${captions.join(' | ')})`);
+        if (process.env.OMV_SHOTS) {
+            await page.locator('.modal-dialog-help').screenshot({ path: `${process.env.OMV_SHOTS}/trend-exp-help.png` });
+        }
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.querySelector('.trend-exp-gallery'));
+    }
+
     // ── The table as CSV ──
     const csv = await page.evaluate(id => {
         const pm = window.app.plotManager;
@@ -377,6 +411,8 @@ try {
 
     if (process.env.OMV_SHOTS) {
         await page.locator(`.layout-panel[data-id="${panelId}"]`).screenshot({ path: `${process.env.OMV_SHOTS}/trend-panel.png` });
+        await page.locator('.trend-options').screenshot({ path: `${process.env.OMV_SHOTS}/trend-drawer.png` });
+        await page.locator('.trend-table-pane').screenshot({ path: `${process.env.OMV_SHOTS}/trend-table.png` });
         await page.locator('.trend-table tbody tr').first().click();
         await page.waitForTimeout(400);
         await page.locator(`.layout-panel[data-id="${panelId}"] .fft-time-pane`).screenshot({ path: `${process.env.OMV_SHOTS}/trend-band.png` });

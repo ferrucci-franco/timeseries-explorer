@@ -1086,6 +1086,48 @@ export function installPlotTrendMethods(TargetClass) {
         );
     };
 
+    /**
+     * What each exponential model looks like, before choosing one: a small
+     * drawing of its shape, its name and its equation, over the prose the
+     * Curve Fit analysis already has about the family.
+     *
+     * The shapes are drawn here rather than described, because the question
+     * the menu raises — "which of these four is my stretch?" — is answered by
+     * a glance and not by a sentence.
+     */
+    proto._showTrendExpHelp = function() {
+        const art = (body) => `<svg viewBox="0 0 120 56" class="trend-exp-art" aria-hidden="true" focusable="false">`
+            + `<path class="art-faint" d="M10 6v42h102"/>${body}</svg>`;
+        // Each curve starts at t′ = 0 (the left edge) and runs to the right;
+        // a dashed line marks the value it settles at.
+        const SHAPES = {
+            exponential: art('<path class="art-line" d="M12 11C32 38 56 46 110 47"/>'),
+            'exponential-offset': art('<path class="art-bound" d="M12 36h98"/>'
+                + '<path class="art-line" d="M12 11C32 31 56 36 110 36"/>'),
+            'first-order': art('<path class="art-bound" d="M12 12h98"/>'
+                + '<path class="art-line" d="M12 47C40 47 56 15 110 12"/>'),
+            'first-order-offset': art('<path class="art-bound" d="M12 12h98M12 36h98"/>'
+                + '<path class="art-line" d="M12 36C40 36 56 15 110 12"/>'),
+        };
+        const cards = TREND_EXP_OPTIONS
+            .filter(option => option.id !== 'none')
+            .map(option => {
+                const parts = fitEquationParts({ status: 'ok', model: option.id }, 't′');
+                return '<figure class="trend-exp-card">'
+                    + SHAPES[option.id]
+                    + `<figcaption><b>${this._escapeHTML(i18n.t(option.key))}</b>`
+                    + `<span>${this._escapeHTML(parts?.generic || '')}</span></figcaption>`
+                    + '</figure>';
+            })
+            .join('');
+        Modal.alert(
+            i18n.t('trendExpHelpTitle'),
+            `<div class="help-doc"><p>${i18n.t('trendExpHelpLead')}</p>`
+            + `<div class="trend-exp-gallery">${cards}</div>${i18n.t('fitExpFamilyHelp')}</div>`,
+            { html: true, icon: false, className: 'modal-dialog-help phase2d-fit-help-dialog' },
+        );
+    };
+
     proto._trendExpModelName = function(model) {
         const option = TREND_EXP_OPTIONS.find(candidate => candidate.id === model);
         return i18n.t(option ? option.key : 'trendExpOff');
@@ -1382,8 +1424,7 @@ export function installPlotTrendMethods(TargetClass) {
             const picked = plot.traces[Number(signalSelect.value)];
             if (picked) this._updateTrendSegment(panelId, { varName: picked.varName, fileId: picked.fileId });
         });
-        const signalField = field('trendSignal', signalSelect, helpButton('trendHelpTitle', () => this._showTrendHelp()));
-        drawer.appendChild(signalField);
+        drawer.appendChild(field('trendSignal', signalSelect));
 
         // 3) Range
         const usesCalendar = !!trace && this._canonicalFftKind(trace.fileId) === 'datetime';
@@ -1499,27 +1540,42 @@ export function installPlotTrendMethods(TargetClass) {
             bandGrid.appendChild(wrap);
         }
         bandBlock.appendChild(bandGrid);
+        // Where the bounds go when they are asked for rather than placed:
+        // the segment's mean, plus and minus so many of its own standard
+        // deviations. Spelled out, because "3" and a σ on a button said
+        // neither what it was nor what it would do.
         const sigmaRow = document.createElement('div');
         sigmaRow.className = 'trend-band-sigma';
+        const sigmaLabel = document.createElement('span');
+        sigmaLabel.className = 'trend-band-sigma-label';
+        sigmaLabel.textContent = i18n.t('trendBandSeedLabel');
         const sigmaInput = document.createElement('input');
         sigmaInput.type = 'number';
         sigmaInput.step = '0.5';
         sigmaInput.min = '0.1';
         sigmaInput.className = 'fft-number-input trend-sigma-input';
         sigmaInput.value = String(state.bandSigma);
+        sigmaInput.setAttribute('aria-label', i18n.t('trendBandSeedLabel'));
         sigmaInput.addEventListener('change', () => {
             const n = Number(sigmaInput.value);
             if (Number.isFinite(n) && n > 0) state.bandSigma = n;
             sigmaInput.value = String(state.bandSigma);
         });
+        const sigmaUnit = document.createElement('span');
+        sigmaUnit.className = 'trend-band-sigma-unit';
+        sigmaUnit.textContent = 'σ';
         const sigmaBtn = document.createElement('button');
         sigmaBtn.type = 'button';
         sigmaBtn.className = 'fft-tool-btn trend-sigma-btn';
         sigmaBtn.textContent = i18n.t('trendBandSeed');
         sigmaBtn.title = i18n.t('trendBandSeedTip');
         sigmaBtn.addEventListener('click', () => this._seedTrendBandFromResult(panelId));
-        sigmaRow.append(sigmaInput, sigmaBtn);
+        sigmaRow.append(sigmaLabel, sigmaInput, sigmaUnit, sigmaBtn);
         bandBlock.appendChild(sigmaRow);
+        const sigmaHint = document.createElement('p');
+        sigmaHint.className = 'trend-band-hint';
+        sigmaHint.textContent = i18n.t('trendBandSeedHint');
+        bandBlock.appendChild(sigmaHint);
         drawer.appendChild(bandBlock);
 
         // 5) The exponential of this segment
@@ -1534,7 +1590,7 @@ export function installPlotTrendMethods(TargetClass) {
             expSelect.appendChild(el);
         }
         expSelect.addEventListener('change', () => this._updateTrendSegment(panelId, { expModel: expSelect.value }));
-        const expField = field('trendExp', expSelect);
+        const expField = field('trendExp', expSelect, helpButton('trendExpHelpTitle', () => this._showTrendExpHelp()));
         expField.title = i18n.t('trendExpTip');
         drawer.appendChild(expField);
 
@@ -1616,7 +1672,14 @@ export function installPlotTrendMethods(TargetClass) {
         title.textContent = i18n.t('trendResultsTitle');
         const copyLines = [];
         const copyBtn = createCopyButton(() => copyLines.join('\n'), { className: 'curve-fit-copy-btn' });
-        head.append(title, copyBtn);
+        const help = document.createElement('button');
+        help.type = 'button';
+        help.className = 'fft-help-btn';
+        help.textContent = '?';
+        help.title = i18n.t('trendHelpTitle');
+        help.setAttribute('aria-label', help.title);
+        help.addEventListener('click', () => this._showTrendHelp());
+        head.append(title, help, copyBtn);
         block.appendChild(head);
 
         const unit = shown.unit || '';
