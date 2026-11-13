@@ -393,7 +393,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot._phase2dLazyJob === job) plot._phase2dLazyJob = null;
         if (plot._phase2dLazyToken !== token) return; // superseded while awaiting
         if (settled.some(entry => entry.aborted)) return;
-        this._setPhase2dFitIdleStatus(plot);
 
         for (const job of settled) {
             job.pairs.forEach((pair, i) => {
@@ -414,6 +413,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         }
         this._rerenderPhase2dPlot(panelId, plot);
         this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });
+        // Last: the results are in the cache and drawn, so the status line
+        // notes the settings they came from (for Cancel).
+        this._setPhase2dFitIdleStatus(plot);
     };
 
     // Plotly traces for the fit curves: same colour as the pair, thicker dashed
@@ -1061,30 +1063,38 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._markPhase2dFitsCancelled = function(plot) {
         if (!plot || plot.mode !== 'phase2d' || !plot._phase2dLazyJob) return;
         if (!plot._phase2dLazyFits) plot._phase2dLazyFits = new Map();
-        let marked = 0;
         for (const pair of plot.phaseTraces || []) {
             if (pair.visible === false || this._phase2dPairModel(pair) === 'none' || !this._isLazyFile?.(pair.fileId)) continue;
             const id = this._phase2dPairId(pair);
             const key = this._phase2dLazyFitKey(plot, pair);
             const cached = plot._phase2dLazyFits.get(id);
             if (cached && cached.key === key && cached.status === 'ok') continue;
-            const previous = cached?.key === key ? cached?.previous : (cached?.fit || cached?.previous);
-            plot._phase2dLazyFits.set(id, { key, fit: null, nScope: NaN, status: 'cancelled', previous: previous || null });
-            marked++;
+            const fresh = cached?.key !== key && cached?.fit;
+            const previous = fresh ? cached.fit : (cached?.previous || null);
+            const previousNScope = fresh ? cached.nScope : cached?.previousNScope;
+            plot._phase2dLazyFits.set(id, { key, fit: null, nScope: NaN, status: 'cancelled', previous, previousNScope });
         }
-        const panelId = this._panelIdForPlot?.(plot);
-        if (marked && panelId) {
-            queueMicrotask(() => {
-                if (this.plots.get(panelId) !== plot || plot.mode !== 'phase2d') return;
-                this._rerenderPhase2dPlot(panelId, plot);
-                this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });
+    };
+
+    // After Cancel put the previous models and range back: each cancelled
+    // pair's previous fit is the fit of those settings again, under their key.
+    proto._rekeyPhase2dFitsAfterRestore = function(plot) {
+        for (const pair of plot?.phaseTraces || []) {
+            const id = this._phase2dPairId(pair);
+            const cached = plot._phase2dLazyFits?.get(id);
+            if (cached?.status !== 'cancelled' || !cached.previous) continue;
+            plot._phase2dLazyFits.set(id, {
+                key: this._phase2dLazyFitKey(plot, pair),
+                fit: cached.previous,
+                nScope: cached.previousNScope ?? NaN,
+                status: 'ok',
             });
         }
     };
 
     proto._setPhase2dFitStatus = function(plot, message, type = 'muted', tooltip = '') {
         // While it loads, the shared computing pill with its Cancel button.
-        this._setAnalysisComputing?.(plot, type === 'loading', { label: message });
+        this._noteAnalysisStatus?.(plot, type, { label: message });
         const el = plot?.phase2dFitContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';

@@ -41,16 +41,26 @@ for (const id of offered) {
 }
 
 // ── Every analysis shows the shared pill ──
+const statusNotes = (fn, kindVar, pill) => new RegExp(`proto\\.${fn} = function[^{]*\\{\\s*(//[^\\n]*\\n\\s*)*this\\._noteAnalysisStatus\\?\\.\\(plot, ${kindVar}, \\{ ${pill ? 'label' : 'pill: false'}`);
 const showsPill = {
     fft: ['src/plots/methods/fft-methods.js', /proto\._setFftComputing = function\(plot, loading\) \{[\s\S]*?this\._setAnalysisComputing\(plot, loading/],
     'temporal-profile': ['src/plots/methods/temporal-profile-methods.js', /proto\._setTemporalProfileComputing = function\(plot, loading\) \{[\s\S]*?this\._setAnalysisComputing\(plot, loading/],
     integral: ['src/plots/methods/integral-methods.js', /proto\._setIntegralComputing = function\(plot, loading\) \{[\s\S]*?this\._setAnalysisComputing\(plot, loading/],
-    histogram: ['src/plots/methods/histogram-methods.js', /proto\._setHistogramStatus = function[^{]*\{\s*\/\/[^\n]*\n\s*this\._setAnalysisComputing\?\.\(plot, kind === 'loading'/],
-    heatmap: ['src/plots/methods/heatmap-methods.js', /proto\._setCalendarHeatmapStatus = function[^{]*\{\s*\/\/[^\n]*\n\s*this\._setAnalysisComputing\?\.\(plot, kind === 'loading'/],
-    'curve-fit': ['src/plots/methods/curve-fit-methods.js', /proto\._setCurveFitStatus = function[^{]*\{\s*\/\/[^\n]*\n\s*this\._setAnalysisComputing\?\.\(plot, type === 'loading'/],
-    correlation: ['src/plots/methods/correlation-methods.js', /proto\._setCorrelationStatus = function[^{]*\{\s*\/\/[^\n]*\n\s*this\._setAnalysisComputing\?\.\(plot, type === 'loading'/],
-    'phase2d-fit': ['src/plots/methods/phase2d-fit-methods.js', /proto\._setPhase2dFitStatus = function[^{]*\{\s*\/\/[^\n]*\n\s*this\._setAnalysisComputing\?\.\(plot, type === 'loading'/],
+    histogram: ['src/plots/methods/histogram-methods.js', statusNotes('_setHistogramStatus', 'kind', true)],
+    heatmap: ['src/plots/methods/heatmap-methods.js', statusNotes('_setCalendarHeatmapStatus', 'kind', true)],
+    'curve-fit': ['src/plots/methods/curve-fit-methods.js', statusNotes('_setCurveFitStatus', 'type', true)],
+    correlation: ['src/plots/methods/correlation-methods.js', statusNotes('_setCorrelationStatus', 'type', true)],
+    'phase2d-fit': ['src/plots/methods/phase2d-fit-methods.js', statusNotes('_setPhase2dFitStatus', 'type', true)],
 };
+// Every status line notes the settings of the result it reports, for Cancel
+// to put back; the three with their own pill function too.
+for (const [file, fn, kindVar] of [
+    ['src/plots/methods/fft-methods.js', '_setFftStatus', 'type'],
+    ['src/plots/methods/temporal-profile-methods.js', '_setTemporalProfileStatus', 'kind'],
+    ['src/plots/methods/integral-methods.js', '_setIntegralStatus', 'kind'],
+]) {
+    has(read(file), statusNotes(fn, kindVar, false), `${fn} notes the settings of its result`);
+}
 for (const id of offered) assert.ok(showsPill[id], `${id}: listed here, with how it shows the pill`);
 for (const [id, [file, pattern]] of Object.entries(showsPill)) {
     const source = read(file);
@@ -90,14 +100,34 @@ const manager = read('src/plots/plot-manager.js');
 has(manager, /\n    _cancelPanelAnalysis\(panelId[\s\S]*?this\._dropAnalysisRuns\(plot, reason\);\s*this\._setAnalysisComputing\(plot, false\);/, 'closing a panel uses the same stop and hides the pill');
 has(manager, /installPlotAnalysisBusyMethods\(PlotManager\);/);
 
+// ── Cancel puts the settings of the result on screen back ──
+const stateBlock = busy.slice(busy.indexOf('const STATE_KEY = {'), busy.indexOf('};', busy.indexOf('const STATE_KEY = {')));
+const restoreBlock = busy.slice(busy.indexOf('proto._restoreAnalysisSettings'), busy.indexOf('proto._cancelAnalysisComputation'));
+for (const id of offered) {
+    const mode = id === 'phase2d-fit' ? 'phase2d' : id;
+    has(stateBlock, new RegExp(`(^|\\s)'?${mode}'?: '`), `${id}: where its settings live is known`);
+    has(restoreBlock, new RegExp(`case '${mode}':`), `${id}: its controls and range are refreshed after a restore`);
+}
+has(busy, /if \(kind !== 'loading'\) this\._rememberAnalysisSettings\(plot\);/, 'a settled result notes its settings');
+has(busy, /if \(!plot \|\| plot\._analysisCancelling\) return;/, 'but not the status Cancel writes');
+has(busy, /const restored = this\._restoreAnalysisSettings\(panelId, plot\);[\s\S]*?'analysisCancelledRestored'/, 'Cancel restores and says so');
+has(read('src/plots/methods/curve-fit-methods.js'), /proto\._rekeyCurveFitsAfterRestore = function/, 'a restored curve fit is current again');
+has(read('src/plots/methods/phase2d-fit-methods.js'), /proto\._rekeyPhase2dFitsAfterRestore = function/, 'and a restored 2D fit');
+
+// ── Picking the analysis that is on, from the menu, changes nothing ──
+has(marks, /if \(id === 'timeseries'\) \{[\s\S]*?\}\n\s*\/\/[^\n]*\n\s*if \(id === mode\) return;/, 'time series: the active card is inert');
+has(marks, /if \(id === 'phase2d'\) return backTo2d\(\);\n\s*if \(id === active\) return;/, '2D: the active card is inert, None goes back');
+
 // ── Words and pointer ──
 const translations = read('src/i18n/translations.js');
-for (const key of ['analysisCalculating', 'analysisCancel', 'analysisCancelTitle', 'analysisCancelled', 'analysisCancelledKept']) {
+for (const key of ['analysisCalculating', 'analysisCancel', 'analysisCancelTitle', 'analysisCancelled', 'analysisCancelledKept', 'analysisCancelledRestored']) {
     assert.equal((translations.match(new RegExp(`\\b${key}:`, 'g')) || []).length, 5, `${key} in every language`);
 }
 const css = read('src/styles/content.css');
 has(css, /\.lazy-detail-indicator \{[\s\S]*?pointer-events: none;/, 'the pill lets the pointer through');
 has(css, /\.analysis-cancel-btn \{[\s\S]*?pointer-events: auto;/, 'its button takes it');
+hasNot(css, /var\(--accent-color\)/, 'no colour from a variable the themes do not define');
+has(css, /\.analysis-cancel-btn:hover \{[\s\S]*?background: var\(--primary-color\);/, 'its hover is the theme\'s primary colour');
 has(busy, /cancel\.addEventListener\('click'[\s\S]*?this\._cancelAnalysisComputation\(/, 'the button cancels');
 
 // ── The rule is written where it is read ──

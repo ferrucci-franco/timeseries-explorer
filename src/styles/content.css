@@ -3911,7 +3911,7 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     flex: 0 0 auto;
     border-radius: 999px;
     border: 2px solid var(--border-color);
-    border-top-color: var(--accent-color);
+    border-top-color: var(--primary-color);
     animation: lazy-detail-spin 0.8s linear infinite;
 }
 
@@ -3944,14 +3944,22 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     cursor: pointer;
 }
 
+/* The theme's primary colour, as the dialogs' confirm buttons: there is no
+   --accent-color, and with it the hover drew white on the light theme's white
+   pill. */
 .analysis-cancel-btn:hover {
-    background: var(--accent-color);
-    border-color: var(--accent-color);
+    background: var(--primary-color);
+    border-color: var(--primary-color);
     color: #fff;
 }
 
+.analysis-cancel-btn:active {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+}
+
 .analysis-cancel-btn:focus-visible {
-    outline: 2px solid var(--accent-color);
+    outline: 2px solid var(--primary-color);
     outline-offset: 1px;
 }
 

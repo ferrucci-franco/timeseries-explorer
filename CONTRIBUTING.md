@@ -159,13 +159,14 @@ every row in its range, never over the overview. When you add or change one:
 
 While an analysis recomputes, the result already drawn stays on screen and can
 still be explored. A pill over it says the analysis is calculating, and its
-**Cancel** button stops the calculation and keeps what is shown. A new analysis
+**Cancel** button stops the calculation and keeps what is shown, with the
+settings it was computed with put back in the options panel. A new analysis
 does the same:
 
 - show the shared pill (`_setAnalysisComputing` in
   `src/plots/methods/analysis-busy-methods.js`);
 - pass `_analysisSignal(plot)` to its DuckDB queries and streams;
-- register its pane and its tokens there;
+- register its pane, its tokens and where its settings live there;
 - extend `scripts/e2e-analysis-cancel.mjs`.
 
 `CLAUDE.md` has the details.

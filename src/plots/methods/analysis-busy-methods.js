@@ -8,7 +8,10 @@
 // queries and streams of a lazy file (through the panel's analysis signal),
 // the FFT worker, the streamed curve fits, a run still waiting for its paint
 // frame — and drops whatever that work would have drawn. The previous result
-// stays, and the status line says it is the previous one.
+// stays, and so do its settings: each time a result settles on screen its
+// settings are noted (_rememberAnalysisSettings), and Cancel puts them back in
+// the options panel and the range selection, so what the panel says is what
+// it shows.
 //
 // Work already running synchronously on the main thread (an in-memory kernel)
 // cannot be interrupted; the pill shows before it starts, and a run cancelled
@@ -22,6 +25,31 @@
 import i18n from '../../i18n/index.js';
 
 const PILL_CLASS = 'analysis-computing-indicator';
+
+// Where each analysis keeps its settings on the plot.
+const STATE_KEY = {
+    fft: 'fft',
+    histogram: 'histogram',
+    heatmap: 'heatmap',
+    'temporal-profile': 'temporalProfile',
+    integral: 'integral',
+    'curve-fit': 'curveFit',
+    correlation: 'correlation',
+    phase2d: 'phase2d',
+};
+// Settings that are the panel's layout, not what a result is computed from:
+// Cancel leaves them as the user set them.
+const LAYOUT_KEYS = new Set(['layout', 'split', 'optionsVisible', 'timeSeriesHidden', 'residualsHidden', 'dirty', 'warnings']);
+
+const cloneSettings = (value) => {
+    try {
+        return structuredClone(value);
+    } catch (_) {
+        return JSON.parse(JSON.stringify(value));
+    }
+};
+// A comparable text of settings (NaN and ±Infinity kept apart from null).
+const settingsText = (value) => JSON.stringify(value, (key, v) => (typeof v === 'number' && !Number.isFinite(v) ? `#${v}` : v));
 const HOST_CLASS = 'analysis-computing-host';
 
 // What each analysis draws its result into, for "is there a previous result
@@ -183,6 +211,124 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         this._abortFftWorkerJob?.(plot, reason);
     };
 
+    // The settings a result of `mode` is computed from: the analysis' state
+    // minus its layout, and for the 2D fit each pair's model (kept on the pair).
+    proto._analysisSettings = function(plot, mode = plot?.mode) {
+        const state = plot?.[STATE_KEY[mode]];
+        if (!state || typeof state !== 'object') return null;
+        const settings = {};
+        for (const [key, value] of Object.entries(state)) {
+            if (LAYOUT_KEYS.has(key) || typeof value === 'function') continue;
+            settings[key] = value;
+        }
+        const pairs = mode === 'phase2d'
+            ? (plot.phaseTraces || []).map(pair => ({ pair, fitModel: pair.fitModel }))
+            : null;
+        return { settings: cloneSettings(settings), pairs };
+    };
+
+    // Whether what the panel shows is the result of its current settings: not
+    // while a lazy fit is still coming (its previous curve is on screen).
+    proto._analysisSettled = function(plot, mode = plot?.mode) {
+        if (mode === 'curve-fit') {
+            return !(plot._curveFitResults || []).some(r => r.lazy && !r.result && r.lazyStatus === 'pending');
+        }
+        if (mode === 'phase2d') {
+            if (plot._phase2dLazyJob) return false;
+            return !(plot.phaseTraces || []).some((pair) => {
+                if (pair.visible === false || this._phase2dPairModel?.(pair) === 'none' || !this._isLazyFile?.(pair.fileId)) return false;
+                const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
+                return !(cached && cached.status === 'ok' && cached.key === this._phase2dLazyFitKey(plot, pair));
+            });
+        }
+        return true;
+    };
+
+    // Noted each time a result settles on screen (every status line that is
+    // not 'loading'): the settings Cancel puts back.
+    proto._rememberAnalysisSettings = function(plot) {
+        if (!plot || plot._analysisCancelling) return;
+        const mode = plot.mode;
+        if (!STATE_KEY[mode] || !this._analysisSettled(plot, mode)) return;
+        const noted = this._analysisSettings(plot, mode);
+        if (noted) plot._analysisApplied = { mode, ...noted };
+    };
+
+    /**
+     * What every analysis' status line calls: the computing pill while it is
+     * 'loading' (`pill: false` for an analysis that drives its pill itself),
+     * and, once a result is there, its settings noted for Cancel.
+     */
+    proto._noteAnalysisStatus = function(plot, kind, { label = '', pill = true } = {}) {
+        if (!plot) return;
+        if (pill) this._setAnalysisComputing(plot, kind === 'loading', { label });
+        if (kind !== 'loading') this._rememberAnalysisSettings(plot);
+    };
+
+    // Cancel: the settings of the result on screen back in the analysis' state,
+    // its options panel and its range selection. False when there is nothing
+    // to put back (no result yet, or the settings did not change).
+    proto._restoreAnalysisSettings = function(panelId, plot) {
+        const mode = plot?.mode;
+        const applied = plot?._analysisApplied;
+        const state = plot?.[STATE_KEY[mode]];
+        if (!applied || applied.mode !== mode || !state) return false;
+        const now = this._analysisSettings(plot, mode);
+        const pairsChanged = (applied.pairs || []).some(({ pair, fitModel }) => pair.fitModel !== fitModel);
+        if (settingsText(now?.settings) === settingsText(applied.settings) && !pairsChanged) return false;
+        for (const key of Object.keys(state)) {
+            if (!LAYOUT_KEYS.has(key) && !(key in applied.settings)) delete state[key];
+        }
+        Object.assign(state, cloneSettings(applied.settings));
+        for (const { pair, fitModel } of applied.pairs || []) {
+            if ((plot.phaseTraces || []).includes(pair)) pair.fitModel = fitModel;
+        }
+        const call = (name, ...args) => {
+            try { this[name]?.(...args); } catch (error) { console.warn(`[analysis] ${name} after cancel:`, error); }
+        };
+        switch (mode) {
+        case 'fft':
+            call('_syncFftOptionsPanel', plot);
+            call('_updateFftSelectionShapes', panelId, plot);
+            break;
+        case 'histogram':
+            call('_syncHistogramOptionsPanel', plot);
+            call('_updateHistogramSelectionShapes', panelId, plot);
+            break;
+        case 'heatmap':
+            call('_syncCalendarHeatmapOptionsPanel', plot);
+            call('_updateCalendarHeatmapSelectionShapes', panelId, plot);
+            break;
+        case 'temporal-profile':
+            call('_syncTemporalProfileOptionsPanel', plot);
+            call('_updateTemporalProfileSelectionShapes', panelId, plot);
+            break;
+        case 'integral':
+            call('_syncIntegralOptionsPanel', plot);
+            call('_updateIntegralSelectionShapes', panelId, plot);
+            break;
+        case 'curve-fit':
+            // The fit on screen becomes the fit of its settings again, so no
+            // refresh asks for it a second time.
+            call('_rekeyCurveFitsAfterRestore', plot);
+            call('_updateCurveFitSelectionShapes', plot);
+            call('_paintCurveFits', panelId, plot, this._computeCurveFits?.(plot) || []);
+            break;
+        case 'correlation':
+            call('_renderCorrelationOptionsPanel', panelId, plot);
+            call('_updateCorrelationSelectionShapes', panelId, plot);
+            break;
+        case 'phase2d':
+            call('_rekeyPhase2dFitsAfterRestore', plot);
+            call('_rerenderPhase2dPlot', panelId, plot);
+            call('_renderPhase2dFitDrawer', panelId, plot);
+            call('_updatePhase2dFitSelectionShapes', panelId, plot);
+            break;
+        default: break;
+        }
+        return true;
+    };
+
     /**
      * The Cancel button: stop what the panel's analysis is computing, keep
      * what it shows, and say so.
@@ -190,29 +336,46 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
     proto._cancelAnalysisComputation = function(panelId, plot = this.plots?.get(panelId)) {
         if (!plot) return;
         const mode = plot.mode;
-        // What a cancelled lazy fit must not start again on the next refresh
-        // (the panel refreshes for many reasons): its key, as cancelled.
-        if (mode === 'curve-fit') this._markCurveFitsCancelled?.(plot);
-        if (mode === 'phase2d') this._markPhase2dFitsCancelled?.(plot);
-        this._dropAnalysisRuns(plot, 'Analysis cancelled by the user');
-        this._setAnalysisComputing(plot, false);
-        const message = i18n.t(this._analysisHasResult(plot, mode) ? 'analysisCancelledKept' : 'analysisCancelled');
-        switch (mode) {
-        case 'fft': this._setFftStatus?.(plot, message, 'muted'); break;
-        case 'histogram': this._setHistogramStatus?.(plot, message, 'muted'); break;
-        case 'heatmap':
-            plot.heatmapContainer?.setAttribute('aria-busy', 'false');
-            this._setCalendarHeatmapStatus?.(plot, message, 'muted');
-            break;
-        case 'temporal-profile':
-            plot.temporalProfileContainer?.setAttribute('aria-busy', 'false');
-            this._setTemporalProfileStatus?.(plot, message, 'muted');
-            break;
-        case 'integral': this._setIntegralStatus?.(plot, message, [], 'muted'); break;
-        case 'curve-fit': this._setCurveFitStatus?.(plot, message, 'muted'); break;
-        case 'correlation': this._setCorrelationStatus?.(plot, message, 'muted'); break;
-        case 'phase2d': this._setPhase2dFitStatus?.(plot, message, 'muted'); break;
-        default: break;
+        plot._analysisCancelling = true;
+        try {
+            // What a cancelled lazy fit must not start again on the next refresh
+            // (the panel refreshes for many reasons): its key, as cancelled.
+            if (mode === 'curve-fit') this._markCurveFitsCancelled?.(plot);
+            if (mode === 'phase2d') this._markPhase2dFitsCancelled?.(plot);
+            this._dropAnalysisRuns(plot, 'Analysis cancelled by the user');
+            this._setAnalysisComputing(plot, false);
+            const restored = this._restoreAnalysisSettings(panelId, plot);
+            if (!restored) {
+                // Settings unchanged (or no result yet): repaint what is known,
+                // the previous curves drawn and the drawer saying "cancelled".
+                if (mode === 'curve-fit' && plot.div) this._paintCurveFits?.(panelId, plot, plot._curveFitResults || []);
+                if (mode === 'phase2d') {
+                    this._rerenderPhase2dPlot?.(panelId, plot);
+                    this._renderPhase2dFitDrawer?.(panelId, plot, { results: plot._phase2dFits || [] });
+                }
+            }
+            const message = i18n.t(restored
+                ? 'analysisCancelledRestored'
+                : (this._analysisHasResult(plot, mode) ? 'analysisCancelledKept' : 'analysisCancelled'));
+            switch (mode) {
+            case 'fft': this._setFftStatus?.(plot, message, 'muted'); break;
+            case 'histogram': this._setHistogramStatus?.(plot, message, 'muted'); break;
+            case 'heatmap':
+                plot.heatmapContainer?.setAttribute('aria-busy', 'false');
+                this._setCalendarHeatmapStatus?.(plot, message, 'muted');
+                break;
+            case 'temporal-profile':
+                plot.temporalProfileContainer?.setAttribute('aria-busy', 'false');
+                this._setTemporalProfileStatus?.(plot, message, 'muted');
+                break;
+            case 'integral': this._setIntegralStatus?.(plot, message, [], 'muted'); break;
+            case 'curve-fit': this._setCurveFitStatus?.(plot, message, 'muted'); break;
+            case 'correlation': this._setCorrelationStatus?.(plot, message, 'muted'); break;
+            case 'phase2d': this._setPhase2dFitStatus?.(plot, message, 'muted'); break;
+            default: break;
+            }
+        } finally {
+            plot._analysisCancelling = false;
         }
     };
 

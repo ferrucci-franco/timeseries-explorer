@@ -1568,7 +1568,7 @@ proto._renderCalendarHeatmapModels = function(panelId, plot = this.plots.get(pan
 
 proto._setCalendarHeatmapStatus = function(plot, message, kind = 'muted') {
     // While it loads, the shared computing pill with its Cancel button.
-    this._setAnalysisComputing?.(plot, kind === 'loading', { label: message });
+    this._noteAnalysisStatus?.(plot, kind, { label: message });
     const status = plot?.heatmapContainer?.querySelector('.heatmap-status');
     const displayKind = kind === 'blocked' ? 'warning' : kind;
     if (status) {

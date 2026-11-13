@@ -69,12 +69,24 @@ user keeps exploring what is on screen. So **every analysis, existing or new**:
    - an `AbortError` is silent; one the run did not ask for (a shared cached
      query) means: run again.
 4. **On Cancel** (`_cancelAnalysisComputation`) the work stops, the result stays,
-   and the status says "Calculation cancelled — the result shown is the
-   previous one". Add the analysis' status line to its `switch`. Nothing starts
+   **and so do its settings**: every status line that is not `'loading'`
+   notes the settings of the result it reports (`_noteAnalysisStatus` →
+   `_rememberAnalysisSettings`), and Cancel puts them back in the analysis'
+   state, its options panel and its range selection, so the panel never says
+   one thing and shows another. The status says "Calculation cancelled — the
+   previous result and its settings are back". A new analysis registers where
+   its settings live (`STATE_KEY`), how its controls and range are refreshed
+   (`_restoreAnalysisSettings`) and its status line (the `switch` in
+   `_cancelAnalysisComputation`); a lazy result keyed by its settings is
+   re-keyed after the restore (`_rekeyCurveFitsAfterRestore`). Nothing starts
    the cancelled computation again until its inputs change.
 5. **Is tested:** add the analysis to `scripts/e2e-analysis-cancel.mjs`. That e2e
-   makes the analysis' queries hang until aborted, presses Cancel, and checks
-   that the work stopped and the previous result stayed.
+   changes a setting with the analysis' queries hanging until aborted, presses
+   Cancel, and checks that the work stopped, the previous result stayed and
+   the setting is back.
+
+In the Analysis menu, picking the analysis that is already on changes
+nothing; only None turns it off.
 
 ## Other standing rules
 

@@ -1593,6 +1593,9 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
 // here (the panel can be closed) plus the full text in the tooltip — a topbar
 // that reads like a log of concatenated sentences tells the user nothing.
 proto._setIntegralStatus = function(plot, summary, warnings = [], kind = 'muted', notes = []) {
+    // A result on screen: its settings noted for Cancel (the pill is driven
+    // by _setIntegralComputing).
+    this._noteAnalysisStatus?.(plot, kind, { pill: false });
     const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
     const noteList = Array.isArray(notes) ? notes.filter(Boolean) : [];
     plot._integralWarningMessage = list.join(' | ');

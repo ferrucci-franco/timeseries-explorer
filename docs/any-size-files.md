@@ -1723,9 +1723,17 @@ Cancelar detiene el trabajo de verdad, no solo lo ignora:
   `_cancelPanelAnalysis` al cerrar un panel o quitar un archivo, y que ahora
   aborta además el histograma y los ajustes, que antes seguían).
 
-El resultado queda; la línea de estado dice *"Cálculo cancelado: el resultado
-que se ve es el anterior"*, y nada lo vuelve a lanzar hasta que cambie lo
-pedido. Un cálculo en memoria que ya empezó corre en el hilo principal y no
+El resultado queda, y también sus parámetros: cada vez que un resultado queda
+a la vista, su línea de estado anota los parámetros con que se calculó
+(`_rememberAnalysisSettings`, sin la disposición del panel), y Cancelar los
+devuelve al estado del análisis, a su panel de opciones y a su selección de
+rango (`_restoreAnalysisSettings`). Así el panel nunca dice una cosa y muestra
+otra. En el ajuste de curvas y el 2D el resultado anterior vuelve a quedar
+guardado bajo la clave de esos parámetros, para que ningún refresco lo pida de
+nuevo. La línea de estado dice *"Cálculo cancelado: vuelven el resultado
+anterior y sus parámetros"*, y nada se relanza hasta que cambie lo pedido. En
+el menú Análisis, elegir el análisis que ya está activo no hace nada; solo
+*Ninguno* lo apaga. Un cálculo en memoria que ya empezó corre en el hilo principal y no
 puede interrumpirse: la píldora aparece antes de que empiece, y cancelado
 entonces no empieza. Una consulta compartida por caché entre dos paneles
 (heatmap, perfil) que se cancela en uno hace que el otro la vuelva a pedir.
@@ -1734,8 +1742,9 @@ Prueba: `scripts/e2e-analysis-cancel.mjs` (Chromium, archivo lazy): para cada
 uno de los ocho análisis, las consultas que llevan la señal se cuelgan hasta
 abortarse —lo que prueba que la llevan—, se pide un recálculo, la píldora
 aparece sobre el resultado anterior, Cancelar aborta la consulta, quita la
-píldora, deja el resultado y el mensaje, nada se relanza solo, y luego el
-análisis vuelve a calcular.
+píldora, deja el resultado, devuelve el parámetro que se había cambiado (el
+rango, el modelo) y lo dice; nada se relanza solo, y luego el análisis vuelve
+a calcular. Elegir de nuevo el análisis activo en el menú lo deja como está.
 
 ### Regla: lo nuevo nace funcionando en lazy
 
