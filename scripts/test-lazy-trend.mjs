@@ -326,6 +326,38 @@ for (const { name: tName, transform, inverted } of TRANSFORMS) {
     console.log('  one pass for every segment: ok');
 }
 
+// ── The file in memory: the panel's own path ────────────────────────────────
+// _computeTrends over the arrays, which is what an eager file runs: the same
+// kernel, so the same numbers, and the curves the panes draw.
+{
+    const hEager = harness(eagerData);
+    const specs = [
+        { varName: 'a', x1: 30, x2: 300 },
+        // b falls from ~5.4 to ~2.5 over this stretch: the band cuts its tail.
+        { varName: 'b', x1: 100, x2: 260, bandOn: true, lower: 3, upper: 9, expModel: 'exponential-offset' },
+    ];
+    const plot = plotFor(specs);
+    const results = hEager._computeTrends(plot);
+    assert.equal(results.length, 2, 'one result per segment');
+    for (const r of results) {
+        assert.ok(!r.lazy, 'an in-memory file computes in place');
+        assert.ok(r.result, 'and has its numbers at once');
+        const want = eagerTrend(hEager, r.segment, r.trace, r.result.range, r.info ?? hEager._trendTimeInfo(plot, r.trace));
+        assertTrendParity(r.result.trend, want, `in memory / ${r.segment.varName}`, { exact: true });
+        // The curves the panes draw: the mean is a line across the stretch.
+        assert.equal(r.result.curves.mean.x.length, 2, 'a mean line');
+        assert.equal(r.result.curves.linear.x.length, 2, 'a trend line');
+        assert.ok(r.result.curves.quadratic.x.length > 2, 'a parabola');
+    }
+    assert.ok(results[1].result.exp?.status === 'ok', 'the exponential of the segment that asked for one');
+    assert.ok(results[1].result.curves.exp?.x.length > 2, 'and its curve');
+    assert.ok(results[1].result.trend.nOutliers > 0, 'the band took something out in memory too');
+    // Asked again with nothing changed, the numbers come from the cache.
+    const again = hEager._computeTrends(plot);
+    assert.equal(again[0].result, results[0].result, 'the same result object, not a second computation');
+    console.log('  in memory, the panel path: ok');
+}
+
 // ── A generated time axis is refused, not answered from the overview ────────
 {
     const lazyGen = await loadLazy(generatedProfile);
