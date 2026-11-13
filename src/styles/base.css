@@ -2,6 +2,14 @@
    CSS Variables for Theming
    ============================================ */
 :root {
+    /* Every analysis' side panel reads at one size — the controls, the labels
+       and the numbers they report — rather than the handful of sizes between
+       0.62 and 0.78rem that each drawer had grown on its own. A step above
+       what the oldest of them (Fourier) used, because the panel is where the
+       numbers are read, often on a laptop screen. */
+    --analysis-font: 0.82rem;
+    --analysis-font-title: 0.9rem;
+    --analysis-font-formula: 1rem;
     --primary-color: #2196F3;
     --primary-hover: #1976D2;
     --success-color: #4CAF50;
