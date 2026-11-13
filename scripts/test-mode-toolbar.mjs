@@ -586,7 +586,7 @@ for (const [mode, dim, key, label] of [
 
 // Fourier, Histogram and Heatmap are contextual actions of the time-series family,
 // not primary plot types alongside 2D/3D/state animation.
-for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit']) {
+for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend']) {
     const { manager, toolbar } = renderToolbar(mode);
     // The plot types are one button, first in the toolbar's own group, and
     // a gallery behind it.
@@ -677,13 +677,13 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     const expectedLabel = {
         timeseries: 'analysisMenuLabel', fft: 'Fourier', histogram: 'analysisItemHistogram',
         heatmap: 'modeHeatmapLabel', 'temporal-profile': 'temporalProfileModeLabel', integral: 'integralModeLabel',
-        'curve-fit': 'analysisItemCurveFit',
+        'curve-fit': 'analysisItemCurveFit', trend: 'analysisItemTrend',
     }[mode];
     assert.equal(analysisBtn.textContent, `${expectedLabel} ▾`, `${mode}: the button names it`);
     const menu = renderAnalysisMenu(manager);
     const items = menu.querySelectorAll('.marks-menu-item');
     assert.deepEqual(items.map(item => item.dataset.mark),
-        ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'],
+        ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend'],
         `${mode}: None, then every analysis of the family`);
     // Each is a card: a drawing of what comes out, its name, what it shows.
     for (const item of items) {
@@ -1056,7 +1056,7 @@ for (const [mode, dim, cameras] of [['phase3d', 2, ['XY', 'XZ', 'YZ']], ['phase2
     const refreshSource = plotManagerSource.slice(refreshStart, refreshEnd);
     assert.match(
         refreshSource,
-        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap',\s*'temporal-profile',\s*'integral',\s*'curve-fit'\]\.includes\(plot\?\.mode\)/,
+        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap',\s*'temporal-profile',\s*'integral',\s*'curve-fit',\s*'trend'\]\.includes\(plot\?\.mode\)/,
         'toolbar refresh recognizes every member of the time-series family',
     );
     assert.match(
