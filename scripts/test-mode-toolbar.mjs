@@ -847,11 +847,11 @@ for (const [mode, fitEnabled, on] of [
         return calls;
     };
     assert.deepEqual(run('phase2d', false, 'phase2d-fit'), ['toggleFit'], 'Curve fit opens the workspace');
-    assert.deepEqual(run('phase2d', true, 'phase2d-fit'), ['toggleFit'], 'and picking it again closes it');
+    assert.deepEqual(run('phase2d', true, 'phase2d-fit'), [], 'picking it again changes nothing: it stays open');
     assert.deepEqual(run('phase2d', true, 'phase2d'), ['toggleFit'], 'None closes it too');
     assert.deepEqual(run('phase2d', false, 'phase2d'), [], 'None on a plain 2D plot does nothing');
     assert.deepEqual(run('phase2d', true, 'correlation'), ['mode:correlation:fit=false'], 'Correlation closes the fit on the way');
-    assert.deepEqual(run('correlation', false, 'correlation'), ['mode:phase2d:fit=false'], 'picking Correlation again goes back to 2D');
+    assert.deepEqual(run('correlation', false, 'correlation'), [], 'picking Correlation again changes nothing');
     assert.deepEqual(run('correlation', false, 'phase2d'), ['mode:phase2d:fit=false'], 'so does None');
     assert.deepEqual(run('correlation', false, 'phase2d-fit'), ['mode:phase2d:fit=true'], 'Curve fit from Correlation: 2D with the workspace open');
 }
@@ -1085,18 +1085,19 @@ for (const [mode, dim, cameras] of [['phase3d', 2, ['XY', 'XZ', 'YZ']], ['phase2
     );
 }
 
-// Picking the analysis that is on (or None) returns to the original
-// time-series view. Another analysis switches directly, and every family
-// transition keeps using the established preserveTimeTraces path.
+// Picking the analysis that is on changes nothing (null: no mode change); None
+// returns to the original time-series view. Another analysis switches
+// directly, and every family transition keeps using the established
+// preserveTimeTraces path.
 for (const [from, clicked, expected] of [
     ['timeseries', 'fft', 'fft'],
     ['timeseries', 'histogram', 'histogram'],
     ['timeseries', 'heatmap', 'heatmap'],
     ['timeseries', 'temporal-profile', 'temporal-profile'],
-    ['fft', 'fft', 'timeseries'],
-    ['histogram', 'histogram', 'timeseries'],
-    ['heatmap', 'heatmap', 'timeseries'],
-    ['temporal-profile', 'temporal-profile', 'timeseries'],
+    ['fft', 'fft', null],
+    ['histogram', 'histogram', null],
+    ['heatmap', 'heatmap', null],
+    ['temporal-profile', 'temporal-profile', null],
     ['fft', 'histogram', 'histogram'],
     ['histogram', 'fft', 'fft'],
     ['fft', 'heatmap', 'heatmap'],
@@ -1106,12 +1107,12 @@ for (const [from, clicked, expected] of [
     ['histogram', 'temporal-profile', 'temporal-profile'],
     ['temporal-profile', 'fft', 'fft'],
     ['timeseries', 'integral', 'integral'],
-    ['integral', 'integral', 'timeseries'],
+    ['integral', 'integral', null],
     ['integral', 'temporal-profile', 'temporal-profile'],
     ['temporal-profile', 'integral', 'integral'],
     ['fft', 'integral', 'integral'],
     ['timeseries', 'curve-fit', 'curve-fit'],
-    ['curve-fit', 'curve-fit', 'timeseries'],
+    ['curve-fit', 'curve-fit', null],
     ['integral', 'curve-fit', 'curve-fit'],
     ['fft', 'timeseries', 'timeseries'],
     ['heatmap', 'timeseries', 'timeseries'],
@@ -1122,6 +1123,10 @@ for (const [from, clicked, expected] of [
     const heatmapConfig = manager.plot.heatmap;
     const temporalProfileConfig = manager.plot.temporalProfile;
     pickAnalysis(manager, clicked);
+    if (expected === null) {
+        assert.equal(manager.modeChanges.length, 0, `${from} -> ${clicked}: the analysis that is on stays on`);
+        continue;
+    }
     assert.equal(manager.modeChanges.length, 1, `${from} -> ${clicked}: exactly one mode change is requested`);
     assert.equal(manager.modeChanges[0].mode, expected, `${from} -> ${clicked}: resolves to ${expected}`);
     assert.equal(

@@ -359,20 +359,26 @@ export function installPlotCurveFitMethods(TargetClass) {
     // with the fit drawn before it, which stays on screen.
     proto._markCurveFitsCancelled = function(plot) {
         if (!plot?._curveFitCache) return;
-        let marked = 0;
         for (const r of plot._curveFitResults || []) {
             if (!r.lazy || r.result || !r.key || r.lazyStatus !== 'pending') continue;
             plot._curveFitCache.set(r.entry.id, { key: r.key, result: null, status: 'cancelled', previous: r.staleResult || null });
             r.lazyStatus = 'cancelled';
-            marked++;
         }
-        // Repaint what is already known (no fit is computed here): the
-        // previous curves stay, the drawer and the status say "cancelled".
-        const panelId = this._panelIdForPlot?.(plot);
-        if (marked && panelId && plot.mode === 'curve-fit' && plot.div) {
-            queueMicrotask(() => {
-                if (this.plots.get(panelId) === plot && plot.mode === 'curve-fit') this._paintCurveFits(panelId, plot, plot._curveFitResults || []);
-            });
+    };
+
+    // After Cancel put the previous settings back: each cancelled fit's
+    // previous result is the result of those settings again, under their key,
+    // so it is drawn as current and no refresh asks for it a second time.
+    proto._rekeyCurveFitsAfterRestore = function(plot) {
+        const state = this._ensureCurveFitState(plot);
+        for (const entry of state.fits || []) {
+            const cached = plot._curveFitCache?.get(entry.id);
+            if (cached?.status !== 'cancelled' || !cached.previous) continue;
+            const trace = this._curveFitTraceFor(plot, entry);
+            if (!trace) continue;
+            const range = this._curveFitRange(plot, entry);
+            const info = this._curveFitTimeInfo(plot, trace);
+            plot._curveFitCache.set(entry.id, { key: this._curveFitKey(plot, entry, trace, range, info), result: cached.previous, status: 'ok' });
         }
     };
 
@@ -1073,7 +1079,7 @@ export function installPlotCurveFitMethods(TargetClass) {
 
     proto._setCurveFitStatus = function(plot, message, type = 'muted') {
         // While it loads, the shared computing pill with its Cancel button.
-        this._setAnalysisComputing?.(plot, type === 'loading', { label: message });
+        this._noteAnalysisStatus?.(plot, type, { label: message });
         const el = plot?.curveFitContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';

@@ -1257,15 +1257,17 @@ export function installPlotMarksMethods(TargetClass) {
         const mode = plot?.mode;
         const active = this._activeAnalysisId(plot);
         if (mode === 'phase2d' || mode === 'correlation') {
-            // Picking the analysis that is on, or None, goes back to the plain
-            // 2D plot; the pairs are kept across the whole family.
+            // None goes back to the plain 2D plot; the pairs are kept across
+            // the whole family. Picking the analysis that is on changes
+            // nothing: it stays on, as it is.
             const backTo2d = () => {
                 if (mode === 'correlation') this._requestModeChange(panelId, 'phase2d');
                 else if (active === 'phase2d-fit') this._togglePhase2dFit(panelId);
             };
             const pick = (id) => {
                 this._closeMarksMenu();
-                if (id === 'phase2d' || id === active) return backTo2d();
+                if (id === 'phase2d') return backTo2d();
+                if (id === active) return;
                 const state = this._ensurePhase2dState(plot);
                 if (id === 'correlation') {
                     // The fit workspace belongs to the 2D plot: closed on the way out.
@@ -1294,6 +1296,8 @@ export function installPlotMarksMethods(TargetClass) {
                 if (mode !== 'timeseries') this._requestModeChange(panelId, 'timeseries');
                 return;
             }
+            // The analysis that is on stays on, as it is: None turns it off.
+            if (id === mode) return;
             this._toggleTimeseriesAnalysisMode(panelId, id);
         };
         return [

@@ -1066,6 +1066,9 @@ proto._buildTemporalProfileLayout = function(plot, units = {}, models = []) {
 };
 
 proto._setTemporalProfileStatus = function(plot, message, kind = 'muted') {
+    // A result on screen: its settings noted for Cancel (the pill is driven
+    // by _setTemporalProfileComputing).
+    this._noteAnalysisStatus?.(plot, kind, { pill: false });
     const status = plot?.temporalProfileContainer?.querySelector('.hist-status');
     if (status) {
         status.textContent = kind === 'warning' && message

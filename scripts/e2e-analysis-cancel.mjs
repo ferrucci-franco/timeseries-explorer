@@ -10,8 +10,9 @@
 //      to hang until that signal is aborted (so the test also proves the
 //      analysis hands its queries the signal), and a recompute is asked for;
 //   3. the pill shows with its Cancel button, over the previous result;
-//   4. Cancel: the hung query is aborted, the pill goes, the status says the
-//      calculation was cancelled, and the previous result is still drawn;
+//   4. Cancel: the hung query is aborted, the pill goes, the previous result
+//      is still drawn, and the setting the recompute was asked with is back to
+//      the one of that result — the status says so;
 //   5. with queries answering again, the analysis computes as before.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:analysis-cancel`.
@@ -148,15 +149,18 @@ try {
         throw new Error(`${mode} did not settle: ${JSON.stringify(state)} (${error.message})`);
     });
 
-    async function checkCancel({ name, id, mode, open, recompute }) {
+    // `setting()` reads what the recompute changes; Cancel must put it back.
+    async function checkCancel({ name, id, mode, open, recompute, setting }) {
         await open();
         await settled(id, mode);
         const before = await drawn(id, mode);
         assert.ok(before > 0, `${name}: a first result is drawn (${before} points)`);
 
         const hang = await page.evaluate(() => ({ ...window.__hang }));
+        const settingBefore = await setting();
         await page.evaluate(() => { window.__hang.on = true; });
         await recompute();
+        assert.notDeepEqual(await setting(), settingBefore, `${name}: the recompute changes a setting`);
         await page.waitForFunction(({ id, started }) => {
             const panel = document.querySelector(`.layout-panel[data-id="${id}"]`);
             return window.__hang.started > started
@@ -172,8 +176,23 @@ try {
         await page.waitForFunction(id => !document.querySelector(`.layout-panel[data-id="${id}"] .analysis-computing-indicator`), id, { timeout: 15000 });
         const after = await page.evaluate(() => ({ ...window.__hang }));
         assert.ok(after.aborted > hang.aborted, `${name}: Cancel aborted the hung query`);
-        assert.match(await statusText(id), /Calculation cancelled/, `${name}: the status says it was cancelled`);
-        assert.equal(await drawn(id, mode), before, `${name}: the previous result is still drawn`);
+        assert.match(await statusText(id), /Calculation cancelled — the previous result and its settings are back/, `${name}: the status says it was cancelled, and the settings put back`);
+        const drawnAfter = await drawn(id, mode);
+        if (drawnAfter !== before) {
+            const traces = await page.evaluate(id => {
+                const manager = window.app.plotManager;
+                const plot = manager.plots.get(id);
+                return {
+                    traces: (plot.div?.data || []).map(t => ({ name: t.name, dash: t.line?.dash, n: t.x?.length })),
+                    models: (plot.phaseTraces || []).map(p => p.fitModel),
+                    applied: (plot._analysisApplied?.pairs || []).map(p => [p.fitModel, plot.phaseTraces.includes(p.pair)]),
+                    lazy: [...(plot._phase2dLazyFits?.entries() || [])].map(([k, v]) => ({ status: v.status, fit: !!v.fit, prev: !!v.previous, keyOk: (plot.phaseTraces || []).some(p => manager._phase2dLazyFitKey(plot, p) === v.key) })),
+                    fits: (plot._phase2dFits || []).map(r => ({ model: r.model, fit: r.fit?.status, curve: r.curve?.x?.length, lazy: r.lazy, st: r.lazyStatus })),
+                };
+            }, id);
+            assert.fail(`${name}: the previous result is still drawn (${drawnAfter} points, ${before} before): ${JSON.stringify(traces)}`);
+        }
+        assert.deepEqual(await setting(), settingBefore, `${name}: the settings are those of the result on screen again`);
         // Nothing restarts it behind the user's back.
         await page.waitForTimeout(600);
         assert.equal(await pillShown(id), false, `${name}: no recompute starts by itself`);
@@ -189,6 +208,23 @@ try {
         const manager = window.app.plotManager;
         return manager[fn](...args);
     }, { fn, args });
+    const stateOf = (id, key, read) => page.evaluate(({ id, key, read }) => {
+        const state = window.app.plotManager.plots.get(id)[key];
+        return read.map(field => state[field]);
+    }, { id, key, read });
+    const patchState = (id, key, patch) => page.evaluate(({ id, key, patch }) => {
+        Object.assign(window.app.plotManager.plots.get(id)[key], patch);
+    }, { id, key, patch });
+    // A selection of the middle of the panel's time axis, in display units.
+    const middleRange = (id) => page.evaluate((id) => {
+        const manager = window.app.plotManager;
+        const plot = manager.plots.get(id);
+        const trace = plot.traces?.[0] || plot.phaseTraces?.[0];
+        const times = manager._getTransformedTimeDataForVariable(trace.fileId, trace.varName || trace.x);
+        const lo = Number(times[0]);
+        const hi = Number(times[times.length - 1]);
+        return { rangeFull: false, x1: lo + (hi - lo) * 0.3, x2: lo + (hi - lo) * 0.7 };
+    }, id);
     const clearCaches = (id) => page.evaluate(id => window.__clearAnalysisCaches(window.app.plotManager.plots.get(id)), id);
     const toggle = (id, mode) => page.evaluate(({ id, mode }) => window.app.plotManager._toggleTimeseriesAnalysisMode(id, mode), { id, mode });
     // A 2D plot's analyses, picked as its Analysis menu picks them.
@@ -198,31 +234,29 @@ try {
         item.run();
     }, { id, key });
 
-    await checkCancel({
-        name: 'FFT', id: timeId, mode: 'fft',
-        open: () => toggle(timeId, 'fft'),
-        recompute: async () => { await clearCaches(timeId); await pm('_scheduleFftRecompute', timeId, { immediate: true }); },
-    });
-    await checkCancel({
-        name: 'Histogram', id: timeId, mode: 'histogram',
-        open: () => toggle(timeId, 'histogram'),
-        recompute: () => pm('_scheduleHistogramRecompute', timeId, { immediate: true }),
-    });
-    await checkCancel({
-        name: 'Heatmap', id: timeId, mode: 'heatmap',
-        open: () => toggle(timeId, 'heatmap'),
-        recompute: async () => { await clearCaches(timeId); await pm('_scheduleCalendarHeatmapRecompute', timeId, { immediate: true }); },
-    });
-    await checkCancel({
-        name: 'Temporal profile', id: timeId, mode: 'temporal-profile',
-        open: () => toggle(timeId, 'temporal-profile'),
-        recompute: async () => { await clearCaches(timeId); await pm('_scheduleTemporalProfileRecompute', timeId, { immediate: true }); },
-    });
-    await checkCancel({
-        name: 'Integral', id: timeId, mode: 'integral',
-        open: () => toggle(timeId, 'integral'),
-        recompute: () => pm('_scheduleIntegralRecompute', timeId, { immediate: true }),
-    });
+    // The time-series analyses are asked to recompute by a change of their
+    // range: the whole file ↔ the middle of it. Cancel must put it back.
+    const toggleRange = async (id, key, schedule) => {
+        const [rangeFull] = await stateOf(id, key, ['rangeFull']);
+        await patchState(id, key, rangeFull ? await middleRange(id) : { rangeFull: true });
+        await clearCaches(id);
+        await pm(schedule, id, { immediate: true });
+    };
+    const rangeOf = (id, key) => () => stateOf(id, key, ['rangeFull', 'x1', 'x2']);
+    for (const [name, mode, key, schedule] of [
+        ['FFT', 'fft', 'fft', '_scheduleFftRecompute'],
+        ['Histogram', 'histogram', 'histogram', '_scheduleHistogramRecompute'],
+        ['Heatmap', 'heatmap', 'heatmap', '_scheduleCalendarHeatmapRecompute'],
+        ['Temporal profile', 'temporal-profile', 'temporalProfile', '_scheduleTemporalProfileRecompute'],
+        ['Integral', 'integral', 'integral', '_scheduleIntegralRecompute'],
+    ]) {
+        await checkCancel({
+            name, id: timeId, mode,
+            open: () => toggle(timeId, mode),
+            recompute: () => toggleRange(timeId, key, schedule),
+            setting: rangeOf(timeId, key),
+        });
+    }
     let curveModel = 'linear';
     await checkCancel({
         name: 'Curve fit', id: timeId, mode: 'curve-fit',
@@ -235,6 +269,7 @@ try {
             curveModel = curveModel === 'quadratic' ? 'power' : 'quadratic';
             await pm('_updateCurveFitEntry', timeId, { model: curveModel });
         },
+        setting: () => page.evaluate(id => window.app.plotManager.plots.get(id).curveFit.fits.map(fit => fit.model), timeId),
     });
 
     // The 2D plot: a against b.
@@ -250,7 +285,8 @@ try {
     await checkCancel({
         name: 'Correlation', id: twoDId, mode: 'correlation',
         open: () => pick2d(twoDId, 'correlation'),
-        recompute: async () => { await clearCaches(twoDId); await pm('_scheduleCorrelationRecompute', twoDId, { immediate: true }); },
+        recompute: () => toggleRange(twoDId, 'correlation', '_scheduleCorrelationRecompute'),
+        setting: rangeOf(twoDId, 'correlation'),
     });
     let pairModel = 'linear';
     const setPairModel = (model) => page.evaluate(({ id, model }) => {
@@ -270,7 +306,23 @@ try {
             pairModel = pairModel === 'quadratic' ? 'exponential-offset' : 'quadratic';
             await setPairModel(pairModel);
         },
+        setting: () => page.evaluate(id => window.app.plotManager.plots.get(id).phaseTraces.map(pair => pair.fitModel), twoDId),
     });
+
+    // The Analysis menu: picking the analysis that is on changes nothing.
+    for (const [id, key, mode] of [[timeId, 'curve-fit', 'curve-fit'], [twoDId, 'phase2d-fit', 'phase2d']]) {
+        await page.evaluate(({ id, key }) => {
+            const manager = window.app.plotManager;
+            manager._analysisMenuModel(id, manager.plots.get(id)).find(entry => entry.key === key).run();
+        }, { id, key });
+        await page.waitForTimeout(400);
+        const now = await page.evaluate(id => {
+            const plot = window.app.plotManager.plots.get(id);
+            return { mode: plot.mode, fit: !!plot.phase2d?.fitEnabled };
+        }, id);
+        assert.equal(now.mode, mode, `${key}: picked again from the menu, it stays on`);
+        if (key === 'phase2d-fit') assert.equal(now.fit, true, 'the 2D fit workspace stays open');
+    }
 
     assert.deepEqual(errors, [], 'no page errors');
     console.log('analysis cancel e2e: ok');

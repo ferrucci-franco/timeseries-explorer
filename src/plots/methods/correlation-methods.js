@@ -956,7 +956,7 @@ export function installPlotCorrelationMethods(TargetClass) {
 
     proto._setCorrelationStatus = function(plot, message, type = 'muted', tooltip = '') {
         // While it loads, the shared computing pill with its Cancel button.
-        this._setAnalysisComputing?.(plot, type === 'loading', { label: message });
+        this._noteAnalysisStatus?.(plot, type, { label: message });
         const el = plot?.correlationContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';

@@ -3228,6 +3228,9 @@ proto._setFftComputing = function(plot, loading) {
 };
 
 proto._setFftStatus = function(plot, message, type = 'muted') {
+    // A result on screen: its settings noted for Cancel (the pill is driven
+    // by _setFftComputing).
+    this._noteAnalysisStatus?.(plot, type, { pill: false });
     const el = plot?.fftContainer?.querySelector('.fft-status');
     if (el) {
         // Warnings show in full only in the side panel; the topbar just
