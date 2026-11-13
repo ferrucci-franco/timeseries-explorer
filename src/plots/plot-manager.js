@@ -4175,6 +4175,14 @@ class PlotManager {
         Promise.resolve(restyled)
             .then(() => {
                 if (!current()) return;
+                // The Y axis carries the name of the one curve drawn against
+                // it: it is renamed too, or the axis would keep the old name
+                // while the legend shows the new one.
+                const titles = this._timeseriesAxisTitleUpdate(plot, div);
+                return Object.keys(titles).length ? Plotly.relayout(div, titles) : null;
+            })
+            .then(() => {
+                if (!current()) return;
                 this._syncCursorDisplay?.(panelId, plot);
                 this._refreshPanelDomOverlays(plot);
             })

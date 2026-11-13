@@ -2295,6 +2295,49 @@ proto._timeseriesSampleMarker = function(t) {
     return { color: t.color, size: PlotManager.SAMPLE_MARKER_SIZE };
 };
 
+/**
+ * The title of a time pane's Y axis: the one curve drawn against it names it,
+ * with its unit; several curves, or none, leave it blank — their names are in
+ * the legend.
+ *
+ * A state band has its own lane, not a Y axis, so it does not count for the
+ * "one curve names the axis" rule.
+ */
+proto._timeseriesAxisTitle = function(plot, axis = 'y') {
+    const curves = (plot?.traces || []).filter(trace => (
+        !this._isStateBandTrace?.(trace) && this._traceYAxis(trace, plot) === axis
+    ));
+    if (curves.length !== 1) return '';
+    const trace = curves[0];
+    const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+    const unit = variable ? this._extractUnit(variable.description) : '';
+    const label = this._variableLabel(trace.varName, trace.fileId);
+    return unit ? `${label} [${unit}]` : label;
+};
+
+/**
+ * What a chart's axis titles have to become, as a relayout update, or an empty
+ * object when they already say the right thing.
+ *
+ * A rename relabels the curves in place instead of rebuilding the panel
+ * (relabelTimeseriesTraces), and the Y axis carries the name of the one curve
+ * drawn against it: without this the axis would keep the old name while the
+ * legend shows the new one.
+ */
+proto._timeseriesAxisTitleUpdate = function(plot, div = plot?.div) {
+    const layout = div?._fullLayout;
+    if (!layout) return {};
+    const update = {};
+    for (const [axis, key] of [['y', 'yaxis'], ['y2', 'yaxis2']]) {
+        if (!layout[key]) continue;
+        if (axis === 'y2' && !plot?.timeseriesY2Enabled) continue;
+        const wanted = this._timeseriesAxisTitle(plot, axis);
+        const shown = layout[key].title?.text ?? '';
+        if (shown !== wanted) update[`${key}.title.text`] = wanted;
+    }
+    return update;
+};
+
 proto._buildTimeLayout = function(plot, options = {}) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
     const margin = this._marginConfig();
@@ -2342,24 +2385,8 @@ proto._buildTimeLayout = function(plot, options = {}) {
             autorange: false,
         }
         : {};
-    // A state band has its own lane, not a Y axis: it does not count for
-    // the "one curve names the axis" rule.
-    const curves = plot.traces.filter(t => !this._isStateBandTrace?.(t));
-    const axisTraces = {
-        y: curves.filter(t => this._traceYAxis(t, plot) === 'y'),
-        y2: curves.filter(t => this._traceYAxis(t, plot) === 'y2'),
-    };
-    const axisTitle = (traces) => {
-        if (traces.length !== 1) return '';
-        const trace = traces[0];
-        const d = this.files.get(trace.fileId)?.data;
-        const v = d?.variables[trace.varName];
-        const unit = v ? this._extractUnit(v.description) : '';
-        const label = this._variableLabel(trace.varName, trace.fileId);
-        return unit ? `${label} [${unit}]` : label;
-    };
-    const yTitle = axisTitle(axisTraces.y);
-    const y2Title = plot.timeseriesY2Enabled ? axisTitle(axisTraces.y2) : '';
+    const yTitle = this._timeseriesAxisTitle(plot, 'y');
+    const y2Title = plot.timeseriesY2Enabled ? this._timeseriesAxisTitle(plot, 'y2') : '';
     // Log Y is a time-series view setting. The analysis modes (and the 2D
     // fit's time pane) draw their time pane through this builder too, linear.
     const timeLogY = plot.mode === 'timeseries' && !!this._axisIsLog?.(plot, 'y');
