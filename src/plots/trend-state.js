@@ -148,6 +148,32 @@ export function normalizeTrendState(raw = {}) {
 }
 
 /**
+ * Where a key press puts a band bound, or null when that key does not move it.
+ *
+ * The two bounds are lines on the plot: the pointer and the finger drag them,
+ * and these keys do the same without either. The arrows move a step, Shift or
+ * Page ten of them, and Home and End take the bound to the ends of what is
+ * drawn — the slider keys, since each bound is announced as one.
+ */
+export function trendBandKeyMove({ key, shiftKey = false }, { value, step, min, max }) {
+    // An open bound has nothing to move (and Number(null) is 0, which must
+    // never pass as a bound of zero).
+    const from = finiteOrNull(value);
+    const by = Number(step);
+    if (from === null || !(by > 0)) return null;
+    const far = shiftKey ? 10 : 1;
+    switch (key) {
+    case 'ArrowUp': case 'Up': return from + by * far;
+    case 'ArrowDown': case 'Down': return from - by * far;
+    case 'PageUp': return from + by * 10;
+    case 'PageDown': return from - by * 10;
+    case 'Home': return Number.isFinite(min) ? min : null;
+    case 'End': return Number.isFinite(max) ? max : null;
+    default: return null;
+    }
+}
+
+/**
  * The value band of a segment as the kernel and the SQL read it: `null` when it
  * is off or has no bound at all, `{ lower, upper }` otherwise (an open side is
  * null, which both paths take as ±∞).

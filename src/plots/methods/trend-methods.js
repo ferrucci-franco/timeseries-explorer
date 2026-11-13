@@ -11,6 +11,7 @@ import {
     TREND_EXP_OPTIONS,
     TREND_LAYOUTS,
     TREND_MAX_SEGMENTS,
+    trendBandKeyMove,
     trendColor,
     trendSegmentBand,
 } from '../trend-state.js';
@@ -338,7 +339,177 @@ export function installPlotTrendMethods(TargetClass) {
         if (!plot?.div?._fullLayout || plot.mode !== 'trend') return Promise.resolve();
         const overlay = this._trendSelectionOverlay(plot);
         const kept = (plot.div.layout?.annotations || []).filter(a => !a._trendLabel && !/^<b>T\d+<\/b>$/.test(String(a.text || '')));
-        return Plotly.relayout(plot.div, { shapes: overlay.shapes, annotations: [...kept, ...overlay.annotations] });
+        return Plotly.relayout(plot.div, { shapes: overlay.shapes, annotations: [...kept, ...overlay.annotations] })
+            .then(() => this._refreshTrendBandHandles(plot));
+    };
+
+    // ── The band's handles ────────────────────────────────────────
+    /**
+     * How far one press of an arrow key moves a bound: a hundredth of the
+     * value axis as it is drawn, so a press is a small move on the screen
+     * whatever the signal's units are — and ten presses cross a tenth of it.
+     * Shift and the Page keys move ten steps at once.
+     *
+     * Without a laid-out axis (a panel that has not been drawn yet) the
+     * segment's own spread stands in for it.
+     */
+    proto._trendBandStep = function(plot, segment, yref = 'y') {
+        const key = yref === 'y2' ? 'yaxis2' : 'yaxis';
+        const axis = plot?.div?._fullLayout?.[key];
+        const lo = this._coerceAxisValue(axis?.range?.[0]);
+        const hi = this._coerceAxisValue(axis?.range?.[1]);
+        if (Number.isFinite(lo) && Number.isFinite(hi) && hi !== lo) return Math.abs(hi - lo) / 100;
+        const r = (plot?._trendResults || []).find(candidate => candidate.segment === segment);
+        const trend = (r?.result || r?.staleResult)?.trend;
+        const std = Number(trend?.std);
+        if (std > 0) return std / 10;
+        const span = Number(trend?.maxY) - Number(trend?.minY);
+        if (span > 0) return span / 100;
+        const mean = Math.abs(Number(trend?.mean));
+        return mean > 0 ? mean / 100 : 1;
+    };
+
+    // What the ends of a bound's travel are: the value axis as it is drawn.
+    proto._trendBandRange = function(plot, yref = 'y') {
+        const key = yref === 'y2' ? 'yaxis2' : 'yaxis';
+        const axis = plot?.div?._fullLayout?.[key];
+        const lo = this._coerceAxisValue(axis?.range?.[0]);
+        const hi = this._coerceAxisValue(axis?.range?.[1]);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { min: NaN, max: NaN };
+        return lo <= hi ? { min: lo, max: hi } : { min: hi, max: lo };
+    };
+
+    /**
+     * A key press on a bound: the arrows (and Shift, Page, Home and End) move
+     * it, anything else is left to the field or the button it was pressed on.
+     * Returns true when the bound moved.
+     *
+     * `ends` is off in a text field, where Home and End belong to the caret;
+     * `focusHandle` keeps the handle on the line under the finger of whoever
+     * pressed it, and is off when the press came from the drawer's field.
+     */
+    proto._moveTrendBandByKey = function(panelId, which, event, { ends = true, focusHandle = true } = {}) {
+        const plot = this.plots.get(panelId);
+        const segment = plot ? this._trendActiveSegment(plot) : null;
+        const band = segment ? trendSegmentBand(segment) : null;
+        if (!band) return false;
+        const trace = this._trendTraceFor(plot, segment);
+        const yref = this._traceYAxis(trace, plot);
+        if (!ends && (event.key === 'Home' || event.key === 'End')) return false;
+        const { min, max } = this._trendBandRange(plot, yref);
+        const next = trendBandKeyMove(event, {
+            value: band[which],
+            step: this._trendBandStep(plot, segment, yref),
+            min,
+            max,
+        });
+        if (next === null || !Number.isFinite(next)) return false;
+        event.preventDefault();
+        const other = which === 'upper' ? finiteOrNull(segment.lower) : finiteOrNull(segment.upper);
+        const patch = { [which]: next };
+        // A bound pushed past the other one swaps them, as dragging it does,
+        // so the band never turns inside out and throws everything away.
+        if (other !== null && ((which === 'upper' && next < other) || (which === 'lower' && next > other))) {
+            patch[which] = other;
+            patch[which === 'upper' ? 'lower' : 'upper'] = next;
+        }
+        this._updateTrendSegment(panelId, patch);
+        // The handle the press came from keeps the focus, under its new value.
+        if (focusHandle) this._refreshTrendBandHandles(plot, { focus: which });
+        return true;
+    };
+
+    /**
+     * The two handles of the active segment's band: a target on each line, at
+     * the right end of the segment, that takes the pointer, the finger and the
+     * keyboard. Each is announced as a slider over the value axis, so the
+     * bounds can be placed without ever reaching for the drawer's fields.
+     *
+     * Placed in pixels, so they are re-placed whenever the plot is (a zoom, a
+     * pan, a resize), like every other overlay the panel draws.
+     */
+    proto._refreshTrendBandHandles = function(plot, { focus = null } = {}) {
+        const div = plot?.div;
+        if (!div?.isConnected) return;
+        let host = plot._trendBandHandles;
+        if (host && host.parentElement !== div) { host.remove(); host = null; }
+        const layout = div._fullLayout;
+        const segment = plot.mode === 'trend' ? this._trendActiveSegment(plot) : null;
+        const band = segment ? trendSegmentBand(segment) : null;
+        if (!layout?.xaxis || !band) {
+            host?.remove();
+            plot._trendBandHandles = null;
+            return;
+        }
+        if (!host) {
+            host = document.createElement('div');
+            host.className = 'trend-band-handles';
+            div.appendChild(host);
+            plot._trendBandHandles = host;
+        }
+        const trace = this._trendTraceFor(plot, segment);
+        const yref = this._traceYAxis(trace, plot);
+        const yAxis = layout[yref === 'y2' ? 'yaxis2' : 'yaxis'];
+        const xAxis = layout.xaxis;
+        if (!yAxis?.d2p || !xAxis?.d2p) { host.replaceChildren(); return; }
+        const [lo, hi] = this._trendRange(plot, segment);
+        const first = plot.traces?.[0];
+        const timeVar = first ? this._getTimeVar(first.fileId) : null;
+        const toX = (v) => (first ? this._plotlyTimeValue(first.fileId, v, timeVar) : v);
+        const left = xAxis._offset || 0;
+        const right = left + (xAxis._length || 0);
+        const top = yAxis._offset || 0;
+        const bottom = top + (yAxis._length || 0);
+        // Just inside the segment's left edge: the right one carries the
+        // bound's value, and the handle would sit on top of it there.
+        const edge = Math.min(left + xAxis.d2p(toX(hi)), right);
+        const start = Math.max(left + xAxis.d2p(toX(lo)), left);
+        const x = Math.min(start + 18, Math.max(edge - 2, start + 2));
+        const { min, max } = this._trendBandRange(plot, yref);
+        const wanted = [];
+        for (const which of ['upper', 'lower']) {
+            const value = band[which];
+            if (!Number.isFinite(value)) continue;
+            const y = top + yAxis.d2p(value);
+            if (!Number.isFinite(y)) continue;
+            // A bound whose line is out of view leaves its handle at the edge
+            // it went past, so it can be brought back instead of being lost
+            // off screen — as a cursor's tab does (utils/cursor-handles.js).
+            const edged = y < top ? 'above' : (y > bottom ? 'below' : null);
+            wanted.push({ which, value, x, y: Math.max(top + 10, Math.min(bottom - 10, y)), edged });
+        }
+        const existing = new Map([...host.children].map(el => [el.dataset.bound, el]));
+        for (const [which, el] of existing) {
+            if (!wanted.some(handle => handle.which === which)) el.remove();
+        }
+        for (const { which, value, x: px, y, edged } of wanted) {
+            let handle = existing.get(which);
+            if (!handle) {
+                handle = document.createElement('button');
+                handle.type = 'button';
+                handle.className = 'trend-band-handle';
+                handle.dataset.bound = which;
+                handle.setAttribute('role', 'slider');
+                handle.setAttribute('aria-orientation', 'vertical');
+                handle.addEventListener('keydown', (event) => {
+                    const panelId = this._panelIdForPlot?.(plot);
+                    if (panelId == null) return;
+                    this._moveTrendBandByKey(panelId, which, event);
+                });
+                host.appendChild(handle);
+            }
+            handle.style.left = `${Math.round(px)}px`;
+            handle.style.top = `${Math.round(y)}px`;
+            handle.classList.toggle('trend-band-handle-edge', !!edged);
+            if (edged) handle.dataset.edge = edged; else delete handle.dataset.edge;
+            handle.title = i18n.t(which === 'upper' ? 'trendBandHandleUpper' : 'trendBandHandleLower');
+            handle.setAttribute('aria-label', handle.title);
+            handle.setAttribute('aria-valuenow', String(value));
+            if (Number.isFinite(min)) handle.setAttribute('aria-valuemin', String(min));
+            if (Number.isFinite(max)) handle.setAttribute('aria-valuemax', String(max));
+            handle.setAttribute('aria-valuetext', formatFitCoefficient(value));
+        }
+        if (focus) host.querySelector(`.trend-band-handle[data-bound="${focus}"]`)?.focus({ preventScroll: true });
     };
 
     proto._refreshTrendAll = function(panelId, plot = this.plots.get(panelId), options = {}) {
@@ -484,7 +655,10 @@ export function installPlotTrendMethods(TargetClass) {
             const observer = new ResizeObserver(() => {
                 clearTimeout(timer);
                 timer = setTimeout(() => {
-                    if (plot.div?.isConnected) Plotly.Plots.resize(plot.div);
+                    if (!plot.div?.isConnected) return;
+                    Promise.resolve(Plotly.Plots.resize(plot.div))
+                        .then(() => this._refreshTrendBandHandles(plot))
+                        .catch(() => {});
                 }, 50);
             });
             observer.observe(panelEl);
@@ -519,7 +693,12 @@ export function installPlotTrendMethods(TargetClass) {
             return false;
         });
         plot.div.on('plotly_legenddoubleclick', () => false);
-        plot.div.on('plotly_afterplot', () => this._installLegendHoverHint?.(plot.div));
+        plot.div.on('plotly_afterplot', () => {
+            this._installLegendHoverHint?.(plot.div);
+            // The band's handles are placed in pixels: a zoom, a pan or a
+            // redraw moves the lines they sit on.
+            this._refreshTrendBandHandles(plot);
+        });
         plot.div.on('plotly_relayout', eventData => this._onRelayout(panelId, eventData));
         plot.div.on('plotly_doubleclick', () => { this._autoScalePlotTimeOnly(plot); return false; });
     };
@@ -614,6 +793,10 @@ export function installPlotTrendMethods(TargetClass) {
             if (!domain) return null;
             const [lo, hi] = this._trendRange(plot, segment);
             const band = trendSegmentBand(segment);
+            // A press on a bound's own handle grabs that bound, even where its
+            // line is out of view and the pointer is nowhere near its value.
+            const onHandle = event.target?.closest?.('.trend-band-handle')?.dataset?.bound;
+            if (band && onHandle && Number.isFinite(band[onHandle])) return `band-${onHandle}`;
             if (band && x >= lo && x <= hi) {
                 const trace = this._trendTraceFor(plot, segment);
                 const yref = this._traceYAxis(trace, plot);
@@ -756,6 +939,8 @@ export function installPlotTrendMethods(TargetClass) {
             plot[key] = null;
         }
         clearTimeout(plot?._trendRecomputeTimer);
+        plot?._trendBandHandles?.remove();
+        if (plot) plot._trendBandHandles = null;
         this._stopLazyTrends?.(plot);
     };
 
@@ -1090,6 +1275,19 @@ export function installPlotTrendMethods(TargetClass) {
         const drawer = plot?.trendOptionsEl;
         if (!drawer) return;
         const state = this._ensureTrendState(plot);
+        // The drawer is drawn again on every paint — a lazy segment settling,
+        // a key moving a bound — and the field being worked in must survive
+        // that: which one it was, and where the caret sat in it.
+        const active = document.activeElement;
+        const held = drawer.contains(active) && active?.dataset
+            ? {
+                selector: active.dataset.trendBandKey
+                    ? `.fft-number-input[data-trend-band-key="${active.dataset.trendBandKey}"]`
+                    : (active.dataset.trendKey ? `.fft-number-input[data-trend-key="${active.dataset.trendKey}"]` : null),
+                start: active.selectionStart,
+                end: active.selectionEnd,
+            }
+            : null;
         drawer.replaceChildren();
         if (!plot.traces.length) {
             const empty = document.createElement('p');
@@ -1281,9 +1479,15 @@ export function installPlotTrendMethods(TargetClass) {
             input.value = value === null ? '' : formatInputValue(value);
             input.disabled = !segment.bandOn;
             input.placeholder = i18n.t('trendBandOpen');
+            input.title = i18n.t('trendBandKeysTip');
             input.addEventListener('change', () => {
                 this._updateTrendSegment(panelId, { [key]: finiteOrNull(input.value) });
             });
+            // The arrows move the bound by a step of the value axis, Shift and
+            // the Page keys by ten — the same move as the handle on its line,
+            // instead of the browser's step of one, which means nothing to a
+            // signal in millivolts or megawatts.
+            input.addEventListener('keydown', (event) => this._moveTrendBandByKey(panelId, key, event, { ends: false, focusHandle: false }));
             return input;
         };
         const bandGrid = document.createElement('div');
@@ -1381,6 +1585,13 @@ export function installPlotTrendMethods(TargetClass) {
         // 8) The active segment in full
         const r = results.find(candidate => candidate.segment === segment) || { segment, index: state.activeSegment };
         drawer.appendChild(this._renderTrendResultBlock(plot, r, trace));
+
+        const refocus = held?.selector ? drawer.querySelector(held.selector) : null;
+        if (refocus) {
+            refocus.focus({ preventScroll: true });
+            // A number field has no selection to restore in every browser.
+            try { refocus.setSelectionRange(held.start, held.end); } catch (_) { /* no selection here */ }
+        }
     };
 
     // The numbers of one segment, written out: the mean with its spread, each
@@ -1530,7 +1741,11 @@ export function installPlotTrendMethods(TargetClass) {
         return map[fit.warning] || fit.warning || i18n.t('phase2dFitNoData');
     };
 
-    // Refresh the inputs from the active segment without stealing focus.
+    // Refresh the drawer's fields from the active segment while it is being
+    // dragged. These are called from a drag and from nowhere else: the pointer
+    // is on the plot, so there is no one typing in the field to fight with,
+    // and a field left saying what the line said before the drag would be a
+    // field that lies.
     proto._syncTrendRangeInputs = function(plot) {
         const drawer = plot?.trendOptionsEl;
         const segment = this._trendActiveSegment(plot);
@@ -1540,9 +1755,7 @@ export function installPlotTrendMethods(TargetClass) {
         const [lo, hi] = this._trendRange(plot, segment);
         for (const [key, value] of [['x1', lo], ['x2', hi]]) {
             const input = drawer.querySelector(`.fft-number-input[data-trend-key="${key}"]`);
-            if (input && document.activeElement !== input) {
-                input.value = usesCalendar ? msToDatetimeInput(value) : formatInputValue(value);
-            }
+            if (input) input.value = usesCalendar ? msToDatetimeInput(value) : formatInputValue(value);
         }
     };
 
@@ -1552,10 +1765,9 @@ export function installPlotTrendMethods(TargetClass) {
         if (!drawer || !segment) return;
         for (const key of ['lower', 'upper']) {
             const input = drawer.querySelector(`.fft-number-input[data-trend-band-key="${key}"]`);
-            if (input && document.activeElement !== input) {
-                const value = finiteOrNull(segment[key]);
-                input.value = value === null ? '' : formatInputValue(value);
-            }
+            if (!input) continue;
+            const value = finiteOrNull(segment[key]);
+            input.value = value === null ? '' : formatInputValue(value);
         }
     };
 

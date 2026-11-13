@@ -1773,6 +1773,56 @@
     min-width: 3.6em;
 }
 
+/* The two handles of the value band: one on each dashed line, at the right
+   end of the segment. A finger-sized target that also takes the keyboard —
+   each is a slider over the value axis. */
+.trend-band-handles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.trend-band-handle {
+    position: absolute;
+    width: 26px;
+    height: 18px;
+    margin: -9px 0 0 -13px;
+    padding: 0;
+    border: 1px solid var(--bg-primary);
+    border-radius: 9px;
+    background: #d81b60;
+    opacity: 0.85;
+    cursor: ns-resize;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.trend-band-handle::before {
+    content: '';
+    display: block;
+    width: 12px;
+    height: 0;
+    margin: 8px auto 0;
+    border-top: 2px solid var(--bg-primary);
+    border-bottom: 2px solid var(--bg-primary);
+}
+
+.trend-band-handle:hover,
+.trend-band-handle:focus-visible {
+    opacity: 1;
+}
+
+/* Its line is out of view: the handle waits at the edge it went past. */
+.trend-band-handle-edge {
+    opacity: 0.55;
+    border-style: dashed;
+}
+
+.trend-band-handle:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
 .trend-band-block,
 .trend-curves-block {
     margin-top: 8px;

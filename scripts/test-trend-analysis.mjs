@@ -32,6 +32,7 @@ import {
     defaultTrendSegment,
     defaultTrendState,
     normalizeTrendState,
+    trendBandKeyMove,
     trendColor,
     trendSegmentBand,
 } from '../src/plots/trend-state.js';
@@ -235,6 +236,31 @@ for (const size of [1, 7, 1000, ROWS]) {
     assert.equal(trendSegmentBand({ bandOn: false, lower: 1, upper: 2 }), null, 'a band that is off is no band');
     assert.equal(trendSegmentBand({ bandOn: true, lower: null, upper: null }), null, 'nor one with no bounds');
     assert.deepEqual(trendSegmentBand({ bandOn: true, lower: 1, upper: null }), { lower: 1, upper: null }, 'one bound is enough');
+}
+
+// ── Moving a bound with the keyboard ────────────────────────────────────────
+// The two bounds are lines the pointer and the finger drag; the same move has
+// to be possible with the keys alone.
+{
+    const at = { value: 10, step: 0.5, min: -100, max: 100 };
+    const move = (key, shiftKey = false) => trendBandKeyMove({ key, shiftKey }, at);
+    assert.equal(move('ArrowUp'), 10.5, 'an arrow moves it a step');
+    assert.equal(move('ArrowDown'), 9.5, 'the other way too');
+    assert.equal(move('ArrowUp', true), 15, 'with Shift, ten steps');
+    assert.equal(move('ArrowDown', true), 5, 'ten steps down');
+    assert.equal(move('PageUp'), 15, 'Page is ten steps as well');
+    assert.equal(move('PageDown'), 5, 'and down');
+    assert.equal(move('Home'), -100, 'Home is the bottom of what is drawn');
+    assert.equal(move('End'), 100, 'End is the top');
+    assert.equal(move('Enter'), null, 'anything else is not a move');
+    assert.equal(move('a'), null, 'nor is a letter');
+    // Old browsers call the arrows something else.
+    assert.equal(trendBandKeyMove({ key: 'Up' }, at), 10.5, 'the old name of the key still moves it');
+    // Nothing to move, or nothing to move it by.
+    assert.equal(trendBandKeyMove({ key: 'ArrowUp' }, { ...at, value: null }), null, 'an open bound does not move');
+    assert.equal(trendBandKeyMove({ key: 'ArrowUp' }, { ...at, step: 0 }), null, 'nor does a step of zero');
+    assert.equal(trendBandKeyMove({ key: 'ArrowUp' }, { ...at, step: NaN }), null, 'nor one that is not a number');
+    assert.equal(trendBandKeyMove({ key: 'Home' }, { ...at, min: NaN }), null, 'no axis, no ends');
 }
 
 // ── The SQL of the two passes ───────────────────────────────────────────────

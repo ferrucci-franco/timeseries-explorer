@@ -13,8 +13,8 @@
 //     R² of 1, a mean of 25 and a Δ of 20 across it.
 //
 // Driven through the panel the way a person does: the Analysis menu, the
-// drawer's controls, the table's rows, and the pointer dragging the band's
-// dashed line up the plot.
+// drawer's controls, the table's rows, and the band's dashed line moved all
+// three ways it can be — the pointer, a finger, and the keys alone.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:trend`.
 // OMV_SHOTS=<dir> also writes a picture of the panel.
@@ -39,7 +39,11 @@ const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.
 await server.listen();
 const browser = await chromium.launch();
 try {
-    const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
+    // Not a touch context: on a touch device the app offers its phone
+    // layout, and this is the desktop panel. The finger below turns touch
+    // on through the protocol once the panel is up.
+    const context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
+    const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/`);
@@ -92,6 +96,17 @@ try {
         return !!r?.result && !document.querySelector(`.layout-panel[data-id="${id}"] .analysis-computing-indicator`);
     }, { id: panelId, index }, { timeout: 60000 });
     const setSegment = (patch) => page.evaluate(({ id, patch }) => window.app.plotManager._updateTrendSegment(id, patch), { id: panelId, patch });
+    const setBand = async (which, value) => {
+        await page.evaluate(({ which, value }) => {
+            const input = document.querySelector(`.fft-number-input[data-trend-band-key="${which}"]`);
+            input.value = String(value);
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }, { which, value });
+        await page.waitForFunction(({ id, which, value }) => {
+            const segment = window.app.plotManager.plots.get(id).trend.segments[0];
+            return Math.abs(Number(segment[which]) - value) < 1e-9;
+        }, { id: panelId, which, value }, { timeout: 15000 });
+    };
     const tableRows = () => page.evaluate(() => [...document.querySelectorAll('.trend-table tbody tr')]
         .map(tr => ({ active: tr.classList.contains('trend-row-active'), cells: [...tr.querySelectorAll('td')].map(td => td.textContent) })));
     // The counts are grouped the way the locale groups them.
@@ -116,10 +131,8 @@ try {
 
     // ── The value band leaves the spikes out ──
     await page.locator('.trend-band-box').check();
-    await page.locator('.fft-number-input[data-trend-band-key="lower"]').fill('0');
-    await page.locator('.fft-number-input[data-trend-band-key="lower"]').dispatchEvent('change');
-    await page.locator('.fft-number-input[data-trend-band-key="upper"]').fill('10');
-    await page.locator('.fft-number-input[data-trend-band-key="upper"]').dispatchEvent('change');
+    await setBand('lower', 0);
+    await setBand('upper', 10);
     await settled();
     flat = await result();
     assert.deepEqual(flat.band, { lower: 0, upper: 10 }, 'the band is what was typed');
@@ -173,18 +186,101 @@ try {
     assert.equal(dragged.nOutliers, 10, 'so they are still counted out');
 
     // A bound above them takes nothing out.
-    await page.locator('.fft-number-input[data-trend-band-key="upper"]').fill('60');
-    await page.locator('.fft-number-input[data-trend-band-key="upper"]').dispatchEvent('change');
+    await setBand('upper', 60);
     await settled();
     const wide = await result();
     assert.equal(wide.n, 9001, 'with the band over the spikes, every row counts');
     assert.equal(wide.nOutliers, 0, 'and nothing is an outlier');
 
     // Back to the band that leaves the spikes out.
-    await page.locator('.fft-number-input[data-trend-band-key="upper"]').fill('10');
-    await page.locator('.fft-number-input[data-trend-band-key="upper"]').dispatchEvent('change');
+    await setBand('upper', 10);
     await settled();
     assert.equal((await result()).n, 8991, 'and back out again');
+
+    // ── The same line, moved with the keys alone ──
+    // Each bound has a handle on its line: a slider the keyboard can reach.
+    const handle = (which) => page.locator(`.trend-band-handle[data-bound="${which}"]`);
+    assert.equal(await handle('upper').count(), 1, 'the upper bound has a handle');
+    assert.equal(await handle('lower').count(), 1, 'and so does the lower one');
+    assert.equal(await handle('upper').getAttribute('role'), 'slider', 'announced as a slider');
+    assert.equal(Number(await handle('upper').getAttribute('aria-valuenow')), 10, 'reading the bound it holds');
+    await handle('upper').focus();
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.bound), 'upper', 'the handle takes the focus');
+    const beforeKeys = await page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments[0].upper, panelId);
+    await page.keyboard.press('ArrowUp');
+    const oneStep = await page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments[0].upper, panelId);
+    assert.ok(oneStep > beforeKeys, `an arrow moves the bound up (${beforeKeys} → ${oneStep})`);
+    // The step is a hundredth of the value axis, so ten presses are a tenth.
+    const step = oneStep - beforeKeys;
+    await page.keyboard.press('Shift+ArrowUp');
+    const shifted = await page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments[0].upper, panelId);
+    assert.ok(Math.abs((shifted - oneStep) - step * 10) < step * 0.01, `Shift moves ten steps (${shifted - oneStep} vs ${step * 10})`);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    assert.ok(Math.abs(await page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments[0].upper, panelId) - beforeKeys) < step * 0.01,
+        'and down again, back where it started');
+    // The handle keeps the focus through all of it, so a key can be held.
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.bound), 'upper', 'the handle still has the focus');
+    // The numbers follow the keys, as they follow the pointer.
+    await page.waitForFunction(({ id, upper }) => {
+        const band = window.app.plotManager.plots.get(id)._trendResults?.[0]?.result?.band;
+        return !!band && Math.abs(band.upper - upper) < 1e-9;
+    }, { id: panelId, upper: beforeKeys }, { timeout: 60000 });
+    assert.equal((await result()).n, 8991, 'and the band is where it was, so the spikes are still out');
+    // End takes it to the top of the axis, Home to the bottom.
+    await page.keyboard.press('End');
+    const atEnd = await page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments[0].upper, panelId);
+    const axis = await page.evaluate(id => {
+        const range = window.app.plotManager.plots.get(id).div._fullLayout.yaxis.range;
+        return { min: Math.min(...range), max: Math.max(...range) };
+    }, panelId);
+    assert.ok(Math.abs(atEnd - axis.max) < 1e-6, `End is the top of the value axis (${atEnd} vs ${axis.max})`);
+    // Back to the band that leaves the spikes out, from the drawer's field,
+    // where the arrows move the bound the same way.
+    await setBand('upper', 10);
+    await settled();
+    await page.locator('.fft-number-input[data-trend-band-key="upper"]').focus();
+    await page.keyboard.press('ArrowUp');
+    const fromField = await page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments[0].upper, panelId);
+    assert.ok(Math.abs((fromField - 10) - step) < step * 0.01, `the field's arrows move it a step too (${fromField})`);
+    // And the field keeps the focus, so the key can be pressed again.
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.trendBandKey), 'upper', 'the field still has the focus');
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(({ id }) => {
+        const band = window.app.plotManager.plots.get(id)._trendResults?.[0]?.result?.band;
+        return !!band && Math.abs(band.upper - 10) < 1e-9;
+    }, { id: panelId }, { timeout: 60000 });
+
+    // ── And moved with a finger ──
+    {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+        const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', {
+            type,
+            touchPoints: type === 'touchEnd' ? [] : [{ x, y }],
+        });
+        const spot = await page.evaluate(id => {
+            const plot = window.app.plotManager.plots.get(id);
+            const fl = plot.div._fullLayout;
+            const box = plot.div.getBoundingClientRect();
+            const [lo, hi] = window.app.plotManager._trendRange(plot, plot.trend.segments[0]);
+            return {
+                x: box.left + (fl.xaxis._offset || 0) + fl.xaxis.d2p((lo + hi) / 2),
+                from: box.top + (fl.yaxis._offset || 0) + fl.yaxis.d2p(10),
+                to: box.top + (fl.yaxis._offset || 0) + fl.yaxis.d2p(25),
+            };
+        }, panelId);
+        await touch('touchStart', spot.x, spot.from);
+        for (let i = 1; i <= 6; i++) {
+            await touch('touchMove', spot.x, spot.from + (spot.to - spot.from) * (i / 6));
+            await page.waitForTimeout(16);
+        }
+        await touch('touchEnd');
+        const byFinger = await page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments[0].upper, panelId);
+        assert.ok(byFinger > 18 && byFinger < 32, `a finger drags the line too (${byFinger})`);
+        await setBand('upper', 10);
+        await settled();
+    }
 
     // ── A second segment over the ramp ──
     await page.locator('.trend-add-btn').click();
@@ -281,6 +377,9 @@ try {
 
     if (process.env.OMV_SHOTS) {
         await page.locator(`.layout-panel[data-id="${panelId}"]`).screenshot({ path: `${process.env.OMV_SHOTS}/trend-panel.png` });
+        await page.locator('.trend-table tbody tr').first().click();
+        await page.waitForTimeout(400);
+        await page.locator(`.layout-panel[data-id="${panelId}"] .fft-time-pane`).screenshot({ path: `${process.env.OMV_SHOTS}/trend-band.png` });
     }
 
     // Nothing was logged as an error along the way.
