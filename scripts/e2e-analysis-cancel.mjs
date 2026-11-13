@@ -1,9 +1,9 @@
 // Every analysis shows a computing pill with a Cancel button while it
 // recalculates, and Cancel stops the work and keeps what is on screen.
 //
-// For each of the eight analyses — FFT, histogram, heatmap, temporal profile,
-// integral and curve fit on a time series; correlation and curve fit on a 2D
-// plot — over a file open in memory-saving (lazy) mode:
+// For each of the nine analyses — FFT, histogram, heatmap, temporal profile,
+// integral, curve fit and trend analysis on a time series; correlation and
+// curve fit on a 2D plot — over a file open in memory-saving (lazy) mode:
 //
 //   1. the analysis computes its first result;
 //   2. the queries and streams that carry the panel's cancel signal are made
@@ -106,6 +106,7 @@ try {
         case 'temporal-profile': return count(plot.temporalProfileDiv);
         case 'integral': return count(plot.integralDiv);
         case 'curve-fit': return count(plot.div, t => t.meta?.curveFitIndex !== undefined);
+        case 'trend': return count(plot.div, t => t.meta?.trendIndex !== undefined);
         case 'correlation': return count(plot.correlationDiv);
         case 'phase2d': return count(plot.div, t => t.line?.dash === 'dash');
         default: return 0;
@@ -131,6 +132,7 @@ try {
             return !!div && (div.data || []).some(t => (t.x?.length || 0) + (t.z?.length || 0) + (t.values?.length || 0) > 0);
         }
         if (mode === 'curve-fit') return plot._curveFitResults?.[0]?.result?.fit?.status === 'ok';
+        if (mode === 'trend') return !!plot._trendResults?.[0]?.result;
         if (mode === 'phase2d') return (plot._phase2dFits || []).some(r => r.fit?.status === 'ok');
         return true;
     }, { id, mode }, { timeout: 90000 }).catch(async (error) => {
@@ -270,6 +272,25 @@ try {
             await pm('_updateCurveFitEntry', timeId, { model: curveModel });
         },
         setting: () => page.evaluate(id => window.app.plotManager.plots.get(id).curveFit.fits.map(fit => fit.model), timeId),
+    });
+
+    // The trend analysis: its numbers come back from aggregate queries that
+    // carry the panel's cancel signal, and its range is what a recompute
+    // changes — the whole signal ↔ the middle of it.
+    let trendFull = true;
+    await checkCancel({
+        name: 'Trend analysis', id: timeId, mode: 'trend',
+        open: async () => {
+            await toggle(timeId, 'trend');
+            await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.trendTableEl, timeId, { timeout: 30000 });
+            await pm('_updateTrendSegment', timeId, { rangeFull: true });
+        },
+        recompute: async () => {
+            trendFull = !trendFull;
+            await pm('_updateTrendSegment', timeId, trendFull ? { rangeFull: true } : await middleRange(timeId));
+        },
+        setting: () => page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments
+            .map(segment => [segment.rangeFull, segment.x1, segment.x2]), timeId),
     });
 
     // The 2D plot: a against b.

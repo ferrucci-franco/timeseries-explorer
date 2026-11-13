@@ -41,6 +41,8 @@ export function installPlotViewHistoryMethods(TargetClass) {
             'temporal-profile': plot.temporalProfileDiv,
             integral: plot.integralDiv,
             'curve-fit': plot.curveFitResidualDiv,
+            // The Trend analysis' second pane is a table, not a chart.
+            trend: null,
             correlation: plot.correlationDiv,
             phase2d: plot.phase2d?.fitEnabled ? plot.phase2dFitTimeDiv : null,
         }[plot.mode];

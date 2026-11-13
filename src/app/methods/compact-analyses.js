@@ -40,6 +40,11 @@ const ICON = {
     correlation: svg('<path d="M4 19L20 5" stroke-opacity=".5"/><path stroke-width="3.2" d="M5.5 16h.01M9 16.5h.01M10.5 11.5h.01M14 12h.01M15 7.5h.01M18.5 8h.01"/>'),
     'curve-fit': svg('<path d="M4 4v16h16"/><path stroke-dasharray="2.4 2" d="M7 17c2-5 4-8 7-9.5s4.5-1.5 6-1.5"/><path stroke-width="3.2" d="M7.5 15.5h.01M10 11h.01M13 9h.01M16.5 7.5h.01"/>'),
     'phase2d-fit': svg('<path d="M3.5 18.5c5 0 8-1.5 10-5.5s3.5-7 7-8"/><path stroke-width="3.2" d="M6 15.5h.01M10 18.5h.01M12 11h.01M16.5 11.5h.01M17 5h.01"/>'),
+    // Two stretches: the mean of one, the slope of the other, and the value
+    // band that keeps the outliers out.
+    trend: svg('<path d="M4 4v16h16"/>'
+        + '<path stroke-opacity=".45" stroke-dasharray="2 2" d="M6 10.5h7M6 17.5h7"/>'
+        + '<path d="M6.5 14h6.5"/><path d="M14.5 15.5L20 7"/>'),
     // A mode set up on the full layout, which the sheet only names.
     other: svg('<path d="M4 4v16h16"/><path d="M7 16l4-5 3 3 5-7"/>'),
 };
@@ -264,6 +269,34 @@ export const COMPACT_ANALYSES = [
             return [
                 { label: 'V/H', titleKey: 'fftLayoutToggle', run: () => pm._setCurveFitLayout(panelId, flip(pm._ensureCurveFitState(plot).layout)) },
                 { labelKey: key, titleKey: 'curveFitResidualsTooltip', pressed: hidden, run: () => { pm._toggleCurveFitResiduals(panelId); refresh(); } },
+            ];
+        },
+    },
+    {
+        mode: 'trend',
+        icon: ICON.trend,
+        labelKey: 'analysisItemTrend',
+        signals: true,
+        fit: true,
+        windowZoom: true,
+        removeTrace: ({ pm, panelId, plot }, trace) => pm._removeTrendTraceFromLegend(panelId, plot, trace),
+        pane: {
+            name: 'segments',
+            // Its second pane is a table of the segments, not a chart: there
+            // are no axes on it to fit and no window to draw.
+            div: 'trendTableEl',
+            windowZoom: false,
+            fit: null,
+        },
+        optionsTitleKey: 'compactTrendOptions',
+        options: ({ pm, plot }) => pm._trendOptionsPanel(plot),
+        reset: { labelKey: 'fftResetLabel', titleKey: 'fftResetView', run: ({ pm, panelId }) => pm._resetTrendView(panelId) },
+        actions: ({ pm, panelId, plot, refresh }) => {
+            const hidden = !!pm._ensureTrendState(plot).tableHidden;
+            const key = hidden ? 'trendShowTable' : 'trendHideTable';
+            return [
+                { label: 'V/H', titleKey: 'fftLayoutToggle', run: () => pm._setTrendLayout(panelId, flip(pm._ensureTrendState(plot).layout)) },
+                { labelKey: key, titleKey: 'trendTableTooltip', pressed: hidden, run: () => { pm._toggleTrendTable(panelId); refresh(); } },
             ];
         },
     },

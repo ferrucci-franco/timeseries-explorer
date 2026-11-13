@@ -73,7 +73,7 @@ export const PLOT_TYPES = [
 
 export const plotTypeDescKey = key => `plotTypeDesc_${key.replace(/-/g, '_')}`;
 
-const TIME_SERIES_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit']);
+const TIME_SERIES_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend']);
 const PAIR_FAMILY = new Set(['phase2d', 'correlation']);
 
 // The type a plot is of: an analysis is still a time series, Correlation is

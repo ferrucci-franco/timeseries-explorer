@@ -2,7 +2,8 @@
 
 Status: first slice built (2026-10-04), extended since. It covers time series and
 every analysis of the desktop — FFT, the histogram, the calendar heatmap, the
-temporal profile, the integral, correlation and the 2D curve fit — 2D, 2D + t and
+temporal profile, the integral, the trend analysis, correlation and the 2D curve
+fit — 2D, 2D + t and
 3D plots and state animations, the measurement cursors, plus CSV parsing.
 
 Built:
@@ -20,7 +21,7 @@ Built:
   plot. Both are built from the same models the desktop dropdowns are drawn from, so
   a new item in either menu reaches the phone with no work;
 - the Analyze sheet: time series, FFT, histogram, calendar heatmap, temporal profile,
-  integral, correlation and the 2D curve fit, each analysis with its options lent to
+  integral, the trend analysis, correlation and the 2D curve fit, each analysis with its options lent to
   the sheet and its
   top-bar buttons (reset, V/H, hide the time series) as buttons there; the histogram's
   log counts, in the View menu on the desktop, is a button there too, and the
@@ -276,8 +277,9 @@ it is wider than 40 % of the plot; choosing any legend setting shows every legen
 
 Analyze holds whatever produces new numbers.
 
-- **Analysis workspaces**: FFT, histogram, heatmap, temporal profile, integral and
-  correlation. On the phone:
+- **Analysis workspaces**: FFT, histogram, heatmap, temporal profile, integral, the
+  trend analysis (whose second pane is a table of its segments) and correlation. On
+  the phone:
   - the workspace's plot fills the plot area;
   - its options panel (`aside.fft-options`) becomes the content of the Analyze sheet;
   - in portrait, FFT's time and spectrum panes stack vertically.

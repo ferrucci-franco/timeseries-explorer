@@ -51,6 +51,16 @@ export const ANALYSIS_ART = {
         + '<path class="art-faint" d="M10 44h6c4 0 6-4 10-10s6-12 10-16 10-7 14-7 8 1 12 1 8 0 12-1 8 0 12 0"/>'
         + '<path class="art-line" d="M14 42C24 32 36 18 48 13"/>'
         + '<path class="art-line" d="M52 12c10-1 22-1 34-1"/>'),
+    // Two stretches of a signal: the mean of the first, the slope of the
+    // second, and the value band that keeps the outliers out of both.
+    trend: art(
+        '<path class="art-faint" d="M8 6v42h82"/>'
+        + '<path class="art-bound" d="M14 8v40M46 8v40M54 8v40M86 8v40"/>'
+        + '<path class="art-faint" d="M10 30c4-7 8 5 12-2s8 7 12 1 8 1 12-4 8-7 12-10 8-3 12-6 8-1 12-3"/>'
+        + '<circle class="art-point" cx="30" cy="12" r="2"/>'
+        + '<path class="art-bound" d="M14 20h32M14 36h32"/>'
+        + '<path class="art-line" d="M14 28h32"/>'
+        + '<path class="art-line" d="M54 26L86 10"/>'),
     // The analyses of a 2D plot. "None" is the 2D plot itself.
     phase2d: art(
         '<path class="art-faint" d="M8 6v42h82"/>'

@@ -24,7 +24,7 @@ function makeCsv() {
     return { name: 'wave.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
 }
 
-const ORDER = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'];
+const ORDER = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend'];
 const modeOf = (page, index = 0) => page.evaluate((i) => {
     const panel = document.querySelectorAll('.layout-panel')[i];
     return window.app.plotManager.plots.get(panel.dataset.id)?.mode;

@@ -2884,6 +2884,7 @@ proto._rescheduleAnalysisRecompute = function(panelId, mode) {
         case 'temporal-profile': return this._scheduleTemporalProfileRecompute?.(panelId, { immediate: true });
         case 'integral': return this._scheduleIntegralRecompute?.(panelId, { immediate: true });
         case 'curve-fit': return this._scheduleCurveFitRecompute?.(panelId, { immediate: true });
+        case 'trend': return this._scheduleTrendRecompute?.(panelId, { immediate: true });
         case 'correlation': return this._scheduleCorrelationRecompute?.(panelId, { immediate: true });
         case 'phase2d': return this._schedulePhase2dFitRecompute?.(panelId, { immediate: true });
         default: return undefined;

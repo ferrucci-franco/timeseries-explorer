@@ -88,14 +88,14 @@ const translations = readFileSync(new URL('../src/i18n/translations.js', import.
 assert.equal([...translations.matchAll(/cursorSlideBothHintTouch:/g)].length, 5, 'in five languages');
 
 // ── Every analysis mode's range band takes a finger too ────────────────────
-// The eight modes each own a selection band on their time pane and drag it the
-// same way. They hand those handlers to one bridge rather than growing seven
+// The nine modes each own a selection band on their time pane and drag it the
+// same way. They hand those handlers to one bridge rather than growing eight
 // copies of the touch plumbing — and a mode that forgets is a mode whose range
 // cannot be set by hand at all.
 const methods = new URL('../src/plots/methods/', import.meta.url);
 const modes = readdirSync(methods).filter(name => name.endsWith('.js'));
 const withBands = modes.filter(name => readFileSync(new URL(name, methods), 'utf8').includes('SelectionHandlers = function'));
-assert.equal(withBands.length, 8, 'eight analysis modes have a selection band');
+assert.equal(withBands.length, 9, 'nine analysis modes have a selection band');
 for (const name of withBands) {
     const text = readFileSync(new URL(name, methods), 'utf8');
     assert.equal((text.match(/this\._alsoDragWithTouch\(/g) || []).length, 1, `${name} bridges its band to touch`);
