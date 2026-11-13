@@ -1583,6 +1583,16 @@
     flex-wrap: wrap;
 }
 
+/* A field that wraps must not wrap its help button onto a line of its own:
+   the select gives way instead (a basis of zero), whatever the longest model
+   name is. */
+.curve-fit-options .phase2d-fit-type-select,
+.curve-fit-options .phase2d-fit-pair-select,
+.trend-options .phase2d-fit-type-select,
+.trend-options .phase2d-fit-pair-select {
+    flex: 1 1 0;
+}
+
 .curve-fit-options .phase2d-fit-field-label {
     display: inline-flex;
     align-items: center;
