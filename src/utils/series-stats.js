@@ -15,35 +15,54 @@
 // left out of min/max/mean/RMS, which it would otherwise swallow whole.
 
 /**
- * @param {ArrayLike<number>|null|undefined} values
- * @returns {{min:number,max:number,mean:number,rms:number,missing:number,total:number}|null}
- *          null only when there is nothing at all to describe.
+ * The same statistics, fed a piece at a time: `add(values)` for each chunk of
+ * the series in order, then `result()`. A file in memory-saving mode is read
+ * in chunks and never held whole; fed its chunks in order, this runs the very
+ * sums seriesStats runs over the whole array, so the two agree bit for bit.
  */
-export function seriesStats(values) {
-    if (!values || !values.length) return null;
-
+export function createSeriesStatsAccumulator() {
+    let total = 0;
     let n = 0;
     let missing = 0;
     let sum = 0;
     let sumSq = 0;
     let min = Infinity;
     let max = -Infinity;
+    return {
+        add(values) {
+            if (!values) return;
+            total += values.length;
+            for (const value of values) {
+                if (!Number.isFinite(value)) {
+                    if (value !== Infinity && value !== -Infinity) missing++;
+                    continue;
+                }
+                n++;
+                sum += value;
+                sumSq += value * value;
+                if (value < min) min = value;
+                if (value > max) max = value;
+            }
+        },
+        /** null only when there was nothing at all to describe. */
+        result() {
+            if (!total) return null;
+            if (!n) return { min: NaN, max: NaN, mean: NaN, rms: NaN, missing, total };
+            return { min, max, mean: sum / n, rms: Math.sqrt(sumSq / n), missing, total };
+        },
+    };
+}
 
-    for (const value of values) {
-        if (!Number.isFinite(value)) {
-            if (value !== Infinity && value !== -Infinity) missing++;
-            continue;
-        }
-        n++;
-        sum += value;
-        sumSq += value * value;
-        if (value < min) min = value;
-        if (value > max) max = value;
-    }
-
-    const total = values.length;
-    if (!n) return { min: NaN, max: NaN, mean: NaN, rms: NaN, missing, total };
-    return { min, max, mean: sum / n, rms: Math.sqrt(sumSq / n), missing, total };
+/**
+ * @param {ArrayLike<number>|null|undefined} values
+ * @returns {{min:number,max:number,mean:number,rms:number,missing:number,total:number}|null}
+ *          null only when there is nothing at all to describe.
+ */
+export function seriesStats(values) {
+    if (!values || !values.length) return null;
+    const stats = createSeriesStatsAccumulator();
+    stats.add(values);
+    return stats.result();
 }
 
 /**

@@ -1615,6 +1615,15 @@
     text-align: left;
 }
 
+/* Under the table: the signals Σ could not read whole (on the overview only). */
+.stats-table-note {
+    margin: 0.75rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    text-align: left;
+    white-space: normal;
+}
+
 .modal-dialog-csv-pattern-help {
     width: min(980px, 94vw);
     max-width: none;

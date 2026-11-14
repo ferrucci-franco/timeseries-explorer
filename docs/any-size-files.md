@@ -78,6 +78,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Derivadas del eje de tiempo (`index`, `delta`) | ~~calculadas sobre el overview~~ **SQL sobre el archivo desde la 4a** (el número de fila y la diferencia de filas consecutivas, `rowIndexWindow` y `timeAxisDeltaWindows`); esta fila había quedado vieja | — |
 | Análisis de tendencia | **exacto sobre todas las filas de cada tramo** (sección "Implementado: análisis de tendencia exacto"): los agregados de las dos pasadas en una consulta por pasada para todos los tramos; se rechaza, diciéndolo, una señal que solo está en el resumen y un eje generado del número de fila | `trendLazyOverviewOnly`, `trendLazyGeneratedAxis` |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
+| Estadísticas del panel (Σ) | ~~calculadas sobre el resumen, sin aviso~~ **exactas sobre todas las filas** (sección "Implementado: estadísticas del panel exactas"); una señal que existe solo en el resumen se nombra debajo de la tabla, sin cifras | `statsLazyOverviewOnly` |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
 | Guardar proyecto | rechazado | *"A complete project cannot be saved while these files are using memory-saving mode. Increase their full-load limit in Settings and reload them, or save a view instead"* |
 
@@ -1529,6 +1530,53 @@ Pruebas:
   lazy, un panel pasado a Histograma: las barras suman los 419 650 valores
   finitos del archivo y el resumen cuenta los huecos, con el archivo entero y
   con una selección; sin avisos ni errores de página.
+
+### Implementado: estadísticas del panel exactas
+
+El botón Σ (en el escritorio, la barra del panel; en el teléfono, "Estadísticas"
+en la hoja Plot) imprimía mínimo, máximo, media, RMS y la cantidad de huecos
+de cada señal calculados con `seriesStats(_getTransformedVariableData(…))`. En
+un archivo lazy esos arreglos son el resumen: las cifras parecían correctas y
+no lo eran (otra media, otro total), sin ningún aviso. El defecto no estaba
+anotado en la tabla de arriba.
+
+Ahora, para las señales de un archivo lazy, `_showPanelStats` lee el archivo
+(`src/plots/methods/stats-lazy-methods.js`, `_lazyPanelStats`) con la misma
+pasada que el histograma exacto (`_lazyHistogramPass`, sin selección: el
+archivo entero, con el recorte, el desplazamiento, la ganancia, el offset y el
+signo de `_transformFetchedPhaseTrajectory`), y cada trozo va al mismo kernel:
+`seriesStats` es ahora `createSeriesStatsAccumulator` alimentado de una vez, y
+la pasada lo alimenta trozo a trozo en el mismo orden, así que las sumas son
+las mismas, bit a bit. Un stream por archivo con todas sus variables. El eje
+de tiempo también puede ser una fila de Σ (un 2D de una señal contra el
+tiempo): no se lee como columna, se toma el tiempo transformado que trae cada
+trozo; pedido solo, cualquier columna del archivo trae las filas.
+
+Mientras lee, el panel de espera compartido (`onBusyOverlay`) cuenta las filas
+leídas, y su **Cancelar** aborta el stream al instante (el `token` del panel
+dispara un `AbortController`); cancelado, no se muestra nada, tampoco si el
+último trozo ya había llegado. Un error de lectura se dice
+(`statsLazyReadFailed`) y no imprime cifras. Una señal que existe solo en el
+resumen (sin SQL propio) no se suma desde él: se nombra debajo de la tabla
+(`statsLazyOverviewOnly`); una fórmula o la salida de una herramienta de datos
+sobre el archivo se calcula exacta. Las señales de archivos en memoria siguen
+por el camino de siempre, en el mismo panel.
+
+Pruebas:
+
+- `scripts/test-lazy-panel-stats.mjs` (DuckDB-WASM en Node): contra
+  `seriesStats(_getTransformedVariableData(…))` sobre las filas en memoria,
+  con `Object.is`: 18 paneles — una señal con huecos y ±∞, otra simple, el eje
+  de tiempo solo y junto a una señal, una variable repetida — sin
+  transformaciones, con todas, y con un recorte más allá de los extremos y
+  ganancia negativa; dos archivos; una fórmula sobre el archivo; una señal
+  solo del resumen dejada fuera; un eje generado, con y sin transformaciones;
+  el acumulador por trozos de 1 a 5 000 contra el kernel entero; las filas
+  informadas; cancelar (también después del último trozo). Comprueba además
+  que el resumen habría dado otra media.
+- `scripts/e2e-lazy-histogram.mjs` (Chromium): en el CSV de 420 000 filas
+  abierto en lazy, Σ sobre la serie temporal imprime el mínimo, el máximo, la
+  media, el RMS y los 350 huecos de todas las filas, calculados en Node.
 
 ### Implementado: heatmap y perfil temporal exactos
 

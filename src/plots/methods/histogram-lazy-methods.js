@@ -89,7 +89,18 @@ proto._lazyHistogramPass = async function(traces, range, visit, { signal = null,
         if (!data?._duckdb) continue;
         const timeVar = this._getTimeVar(fileId);
         const byRow = this._isGeneratedIndexTime(fileId, timeVar) || this._isGeneratedFromDetectedTime(fileId, timeVar);
-        const names = [...new Set(fileTraces.map(trace => trace.varName))];
+        // The time axis is not a column to read: it is the transformed time
+        // every chunk carries (panel statistics can ask for it — a 2D plot of
+        // a signal against time). Asked for alone, any column of the file
+        // brings the rows.
+        const isTime = name => name === timeVar || data.variables?.[name]?.kind === 'abscissa';
+        const names = [...new Set(fileTraces.map(trace => trace.varName).filter(name => !isTime(name)))];
+        if (!names.length) {
+            const carrier = Object.keys(data.variables || {})
+                .find(name => !isTime(name) && data._duckdb.source?.hasSqlValue?.(data.variables[name]));
+            if (!carrier) continue;
+            names.push(carrier);
+        }
         const options = { signal };
         if (range && !byRow) {
             const source = this._sourceRangeForDisplayRange(fileId, [lo, hi], timeVar);
@@ -122,7 +133,7 @@ proto._lazyHistogramPass = async function(traces, range, visit, { signal = null,
                 }
             }
             for (const trace of fileTraces) {
-                let values = transformed.valuesByVar.get(trace.varName);
+                let values = isTime(trace.varName) ? transformed.time : transformed.valuesByVar.get(trace.varName);
                 if (keep) {
                     const picked = new Float64Array(keep.length);
                     for (let k = 0; k < keep.length; k++) picked[k] = values[keep[k]];

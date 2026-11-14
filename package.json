@@ -139,6 +139,7 @@
     "test:dataset-chunks": "node scripts/test-dataset-chunks.mjs",
     "test:lazy-datasets": "node scripts/test-lazy-datasets.mjs",
     "test:lazy-histogram": "node scripts/test-lazy-histogram.mjs",
+    "test:lazy-panel-stats": "node scripts/test-lazy-panel-stats.mjs",
     "test:lazy-curve-fit": "node scripts/test-lazy-curve-fit.mjs",
     "test:lazy-live-continuation": "node scripts/test-lazy-live-continuation.mjs",
     "test:lazy-kept-results": "node scripts/test-lazy-kept-results.mjs",

@@ -12,6 +12,7 @@ import { installPlotMarksMethods } from './methods/marks-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-methods.js';
+import { installPlotStatsLazyMethods } from './methods/stats-lazy-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
 import { installPlotAnalysisBusyMethods } from './methods/analysis-busy-methods.js';
 import { installPlotAnalysisRangeMethods } from './methods/analysis-range-methods.js';
@@ -3933,24 +3934,16 @@ class PlotManager {
         return !['heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend'].includes(plot.mode);
     }
 
-    _showPanelStats(panelId) {
+    async _showPanelStats(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
         // Correlation reports the exact per-pair results, not raw variable stats.
         if (plot.mode === 'correlation') { this._showCorrelationStats?.(plot); return; }
 
-        const entries = [];
+        const wanted = [];
         const addVar = (fileId, varName) => {
-            const d = this.files.get(fileId)?.data;
-            const variable = d?.variables[varName];
-            if (!variable) return;
-            const stats = seriesStats(this._getTransformedVariableData(fileId, varName));
-            if (!stats) return;
-            entries.push({
-                name: this._traceName(varName, fileId, { units: false }),
-                unit: this._extractUnit(variable.description),
-                ...stats,
-            });
+            const variable = this.files.get(fileId)?.data?.variables?.[varName];
+            if (variable) wanted.push({ fileId, varName, variable });
         };
 
         if (plot.mode === 'timeseries' || plot.mode === 'fft') {
@@ -3966,8 +3959,34 @@ class PlotManager {
             });
         }
 
+        // A file in memory-saving mode holds an overview, not its rows: its
+        // variables are read from the file (stats-lazy-methods.js), with the
+        // rows counted on screen and a Cancel. One with no file to read — made
+        // from the overview — is said to be so, never summed from it.
+        const lazy = wanted.filter(entry => this._isLazyStatsEntry(entry));
+        let lazyStats = new Map();
+        if (lazy.length) {
+            lazyStats = await this._readLazyPanelStats(lazy);
+            if (!lazyStats) return;
+        }
+
+        const entries = [];
+        const overviewOnly = [];
+        for (const entry of wanted) {
+            const { fileId, varName, variable } = entry;
+            const name = this._traceName(varName, fileId, { units: false });
+            let stats;
+            if (lazyStats.has(entry)) stats = lazyStats.get(entry);
+            else if (lazy.includes(entry)) { overviewOnly.push(name); continue; }
+            else stats = seriesStats(this._getTransformedVariableData(fileId, varName));
+            if (!stats) continue;
+            entries.push({ name, unit: this._extractUnit(variable.description), ...stats });
+        }
+
         if (!entries.length) {
-            Modal.alert(i18n.t('panelStatsTitle'), i18n.t('statsNoNumeric'), { icon: 'Σ' });
+            Modal.alert(i18n.t('panelStatsTitle'), overviewOnly.length
+                ? i18n.t('statsLazyOverviewOnly').replace('{names}', overviewOnly.join(', '))
+                : i18n.t('statsNoNumeric'), { icon: 'Σ' });
             return;
         }
 
@@ -4005,11 +4024,41 @@ class PlotManager {
                     <tbody>${rows}</tbody>
                 </table>
             </div>
+            ${overviewOnly.length ? `<p class="stats-table-note">${this._escapeHTML(i18n.t('statsLazyOverviewOnly').replace('{names}', overviewOnly.join(', ')))}</p>` : ''}
         `;
         Modal.alert(i18n.t('panelStatsTitle'), body, {
             icon: 'Σ', html: true, className: 'modal-dialog-stats',
             copyText: dialog => tableText(dialog.querySelector('.stats-table')),
         });
+    }
+
+    // Σ over the rows of lazy files: the busy overlay counts the rows read, and
+    // its Cancel aborts the stream. Null when cancelled (nothing is shown) or
+    // when the read failed (said, then nothing is shown).
+    async _readLazyPanelStats(entries) {
+        const controller = new AbortController();
+        // The overlay sets token.cancelled; here that aborts the read at once,
+        // rather than at the next chunk.
+        const token = {
+            get cancelled() { return controller.signal.aborted; },
+            set cancelled(value) { if (value) controller.abort(); },
+        };
+        const overlay = this.onBusyOverlay?.({ title: i18n.t('statsLazyComputing'), token });
+        try {
+            return await this._lazyPanelStats(entries, {
+                signal: controller.signal,
+                onRows: rows => overlay?.progress(i18n.t('statsLazyProgress').replace('{rows}', i18n.formatNumber(rows))),
+            });
+        } catch (err) {
+            if (err?.name === 'AbortError' || controller.signal.aborted) return null;
+            console.error('[stats] could not read the file:', err);
+            await Modal.alert(i18n.t('panelStatsTitle'),
+                i18n.t('statsLazyReadFailed').replace('{error}', err?.message || String(err)),
+                { icon: '⚠️' });
+            return null;
+        } finally {
+            overlay?.close();
+        }
     }
 
     // ─── Helpers ───────────────────────────────────────────────────
@@ -5755,6 +5804,7 @@ installPlotAnalysisFitMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotHistogramLazyMethods(PlotManager);
+installPlotStatsLazyMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);
 installPlotAnalysisBusyMethods(PlotManager);
 installPlotFitLazyMethods(PlotManager);
