@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
     amplitudeExtentInRange,
@@ -268,8 +269,8 @@ proto._createFftChart = function(panelId, panelEl) {
         hideKey: 'edgeHideOptions',
         showKey: 'edgeShowOptions',
         onToggle: () => this._toggleFftOptions(panelId),
-    }), options);
-    container.append(topbar, workspace);
+    }), createAnalysisSide(topbar, options));
+    container.append(workspace);
     panelEl.appendChild(container);
 
     plot.fftContainer = container;
@@ -2804,7 +2805,6 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     const options = this._fftOptionsPanel(plot);
     if (!options) return;
     const domain = this._fftDomain(plot);
-    const fmt = value => Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(12))) : '';
     const makeRow = (labelText, control, tooltip = '') => {
         const label = document.createElement('label');
         label.className = 'fft-option-row';
@@ -2843,32 +2843,6 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
                 this._scheduleFftRecompute(panelId);
             }
             this._syncFftOptionsPanel(plot);
-        });
-        return input;
-    };
-    const makeRange = (key) => {
-        const input = document.createElement('input');
-        input.type = 'range';
-        input.className = 'fft-range-input';
-        input.dataset.fftKey = key;
-        if (domain) {
-            input.min = String(domain.min);
-            input.max = String(domain.max);
-            input.step = 'any';
-        }
-        input.value = fmt(state[key]);
-        input.disabled = !!state.rangeFull;
-        input.addEventListener('input', () => {
-            const state = this._ensureFftState(plot);
-            const n = Number(input.value);
-            this._dismissFftAutoRangeWarning(plot);
-            state[key] = Number.isFinite(n) ? n : null;
-            this._syncFftOptionsPanel(plot, { skipRangeSliders: true });
-            this._updateFftSelectionShapes(panelId, plot);
-        });
-        input.addEventListener('change', () => {
-            this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
-            this._scheduleFftRecompute(panelId);
         });
         return input;
     };
@@ -2961,72 +2935,65 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     message.hidden = true;
     options.appendChild(message);
 
-    const segmented = document.createElement('div');
-    segmented.className = 'fft-segmented';
-    const makeSegment = (labelKey, tooltipKey, isFull) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = i18n.t(labelKey);
-        btn.title = i18n.t(tooltipKey);
-        btn.dataset.fftRangeFull = String(isFull);
-        btn.classList.toggle('active', !!state.rangeFull === isFull);
-        btn.addEventListener('click', (event) => {
-            event.preventDefault();
-            const state = this._ensureFftState(plot);
-            if (!!state.rangeFull === isFull) return;
+    // The shared range block (analysis-range-methods.js). The FFT panel is
+    // where this block was first written; it is now one piece of code that
+    // every analysis builds its own from.
+    const seedSelectionFromView = () => {
+        const xa = plot.div?._fullLayout?.xaxis;
+        let lo = this._coerceAxisValue(xa?.range?.[0]);
+        let hi = this._coerceAxisValue(xa?.range?.[1]);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) { lo = domain?.min; hi = domain?.max; }
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        if (domain) {
+            lo = Math.max(domain.min, Math.min(domain.max, lo));
+            hi = Math.max(domain.min, Math.min(domain.max, hi));
+        }
+        state.x1 = lo;
+        state.x2 = hi;
+        this._ensureFftRange(plot);
+    };
+    options.appendChild(this._buildAnalysisRangeSection({
+        prefix: 'fft',
+        rangeFull: state.rangeFull,
+        lo: state.x1,
+        hi: state.x2,
+        domain,
+        calendar: this._fftUsesCalendarTime(plot),
+        onMode: (isFull) => {
+            const st = this._ensureFftState(plot);
             this._dismissFftAutoRangeWarning(plot);
-            state.rangeFull = isFull;
-            state.autoRangeLimited = false;
-            if (!isFull) {
-                // The selection starts as the currently visible time span.
-                const domain = this._fftDomain(plot);
-                const xa = plot.div?._fullLayout?.xaxis;
-                let lo = this._coerceAxisValue(xa?.range?.[0]);
-                let hi = this._coerceAxisValue(xa?.range?.[1]);
-                if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-                    lo = domain?.min;
-                    hi = domain?.max;
-                }
-                if (Number.isFinite(lo) && Number.isFinite(hi)) {
-                    if (lo > hi) [lo, hi] = [hi, lo];
-                    if (domain) {
-                        lo = Math.max(domain.min, Math.min(domain.max, lo));
-                        hi = Math.max(domain.min, Math.min(domain.max, hi));
-                    }
-                    state.x1 = lo;
-                    state.x2 = hi;
-                }
-                this._ensureFftRange(plot);
-            }
+            st.rangeFull = isFull;
+            st.autoRangeLimited = false;
+            // The selection starts as the currently visible time span.
+            if (!isFull) seedSelectionFromView();
             this._updateFftSelectionShapes(panelId, plot);
             this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
             this._scheduleFftRecompute(panelId);
             this._syncFftOptionsPanel(plot);
-        });
-        return btn;
-    };
-    segmented.append(
-        makeSegment('fftRangeFull', 'analysisRangeFullTooltip', true),
-        makeSegment('fftRangeSelection', 'analysisRangeSelectionTooltip', false),
-    );
-    options.appendChild(makeRow(i18n.t('fftRange'), segmented));
-
-    const rangeGrid = document.createElement('div');
-    rangeGrid.className = 'fft-range-grid';
-    const makeBound = (labelText, key, tooltip) => {
-        const wrap = document.createElement('div');
-        wrap.className = 'fft-range-bound';
-        if (this._fftUsesCalendarTime(plot)) wrap.classList.add('fft-range-bound-datetime');
-        const slider = makeRange(key);
-        slider.title = tooltip;
-        wrap.append(makeRow(labelText, makeInput(key), tooltip), slider);
-        return wrap;
-    };
-    rangeGrid.append(
-        makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('analysisRangeStartTooltip')),
-        makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('analysisRangeEndTooltip')),
-    );
-    options.appendChild(rangeGrid);
+        },
+        onType: (key, value) => {
+            const st = this._ensureFftState(plot);
+            this._dismissFftAutoRangeWarning(plot);
+            st[key] = value;
+            this._ensureFftRange(plot);
+            this._updateFftSelectionShapes(panelId, plot);
+            this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+            this._scheduleFftRecompute(panelId);
+            this._syncFftOptionsPanel(plot);
+        },
+        onSlide: (key, value) => {
+            const st = this._ensureFftState(plot);
+            this._dismissFftAutoRangeWarning(plot);
+            st[key] = value;
+            this._syncFftOptionsPanel(plot, { skipRangeSliders: true });
+            this._updateFftSelectionShapes(panelId, plot);
+        },
+        onCommit: () => {
+            this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+            this._scheduleFftRecompute(panelId);
+        },
+    }));
 
     options.appendChild(makeRow(i18n.t('fftWindow'), makeSelect('windowType', [
         { value: 'none', label: i18n.t('fftWindowNone') },
@@ -3194,20 +3161,26 @@ proto._syncFftOptionsPanel = function(plot, options = {}) {
     const state = this._ensureFftState(plot);
     const panel = this._fftOptionsPanel(plot);
     if (!panel) return;
-    const fmt = value => Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(12))) : '';
-    panel.querySelectorAll('[data-fft-range-full]').forEach(btn => {
-        btn.classList.toggle('active', String(!!state.rangeFull) === btn.dataset.fftRangeFull);
+    // The range block, as every analysis syncs it.
+    this._syncAnalysisRangeSection(panel, {
+        prefix: 'fft',
+        rangeFull: state.rangeFull,
+        lo: state.x1,
+        hi: state.x2,
+        domain: this._fftDomain(plot),
+        calendar: this._fftUsesCalendarTime(plot),
+        skipRole: options.skipRangeSliders ? 'slider' : null,
     });
     panel.querySelectorAll('[data-fft-key]').forEach(input => {
         const key = input.dataset.fftKey;
         if (!key || !(key in state)) return;
-        if (key === 'x1' || key === 'x2') input.disabled = !!state.rangeFull;
+        // The two range bounds were just done, above.
+        if (key === 'x1' || key === 'x2') return;
         const isAxisLimit = input.dataset.fftAxisLimit === 'true';
         if (input.type === 'checkbox') input.checked = !!state[key];
         else if (input.tagName?.toLowerCase() === 'select') input.value = String(state[key]);
         else if (input.type === 'range') {
             if (isAxisLimit) this._configureFftAxisLimitSlider(input, plot, key);
-            else if (!options.skipRangeSliders) input.value = fmt(state[key]);
         } else if (isAxisLimit) {
             input.value = formatFftInputValue(this._fftAxisLimitDisplayValue(plot, key));
         } else if (input.type === 'datetime-local') {

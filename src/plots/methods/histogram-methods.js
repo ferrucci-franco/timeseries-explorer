@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { appendCopyButton } from '../../ui/copy-button.js';
 import { blockText } from '../../utils/clipboard.js';
@@ -233,8 +234,8 @@ proto._createHistogramChart = function(panelId, panelEl) {
         hideKey: 'edgeHideOptions',
         showKey: 'edgeShowOptions',
         onToggle: () => this._toggleHistogramOptions(panelId),
-    }), options);
-    container.append(topbar, workspace);
+    }), createAnalysisSide(topbar, options));
+    container.append(workspace);
     panelEl.appendChild(container);
 
     plot.histogramContainer = container;
@@ -1132,80 +1133,36 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
         return input;
     };
 
-    // Temporal scope — input + slider per bound, calendar-aware, exactly as FFT.
-    options.appendChild(row(i18n.t('fftRange'), segmented(
-        [
-            { label: i18n.t('fftRangeFull'), value: true, title: i18n.t('analysisRangeFullTooltip') },
-            { label: i18n.t('fftRangeSelection'), value: false, title: i18n.t('analysisRangeSelectionTooltip') },
-        ],
-        state.rangeFull,
-        (full) => this._setHistogramRangeMode(panelId, full),
-        { wrapperClass: 'fft-segmented', buttonClass: '' },
-    ), '', 'fft-option-row'));
+    // Temporal scope — the shared range block (analysis-range-methods.js), so
+    // it IS the block every other analysis has rather than a copy of it.
     const domain = this._histogramDomain(plot);
     const isCal = this._histogramUsesCalendarTime(plot);
-    const boundValue = (key) => this._activeHistogramRange(plot)[key === 'x1' ? 0 : 1];
-    const makeBoundInput = (key) => {
-        const input = document.createElement('input');
-        input.type = isCal ? 'datetime-local' : 'number';
-        input.step = isCal ? '1' : 'any';
-        input.className = 'fft-number-input';
-        input.dataset.histKey = key;
-        input.dataset.histRole = 'input';
-        input.disabled = !!state.rangeFull;
-        const cur = boundValue(key);
-        input.value = isCal ? histMsToDatetimeInput(cur) : formatHistInputValue(cur);
-        input.addEventListener('change', () => {
-            const n = isCal ? histDatetimeInputToMs(input.value) : Number(input.value);
-            let v = Number.isFinite(n) ? n : null;
-            if (v != null && domain) v = Math.max(domain.min, Math.min(domain.max, v));
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = v;
-            this._updateHistogramSelectionShapes(panelId, plot);
+    const clamped = (value) => {
+        if (value === null) return null;
+        return domain ? Math.max(domain.min, Math.min(domain.max, value)) : value;
+    };
+    const writeBound = (key, value) => {
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
+        state[key] = clamped(value);
+        this._updateHistogramSelectionShapes(panelId, plot);
+    };
+    const [rangeLo, rangeHi] = this._activeHistogramRange(plot);
+    options.appendChild(this._buildAnalysisRangeSection({
+        prefix: 'hist',
+        rangeFull: state.rangeFull,
+        lo: rangeLo,
+        hi: rangeHi,
+        domain,
+        calendar: isCal,
+        onMode: (full) => this._setHistogramRangeMode(panelId, full),
+        onType: (key, value) => {
+            writeBound(key, value);
             this._scheduleHistogramRecompute(panelId);
-        });
-        return input;
-    };
-    const makeBoundSlider = (key) => {
-        const input = document.createElement('input');
-        input.type = 'range';
-        input.className = 'fft-range-input';
-        input.dataset.histKey = key;
-        input.dataset.histRole = 'slider';
-        if (domain) { input.min = String(domain.min); input.max = String(domain.max); input.step = 'any'; }
-        const cur = boundValue(key);
-        if (Number.isFinite(cur)) input.value = String(cur);
-        input.disabled = !!state.rangeFull;
-        input.addEventListener('input', () => {
-            const n = Number(input.value);
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = Number.isFinite(n) ? n : null;
-            this._updateHistogramSelectionShapes(panelId, plot);
-        });
-        input.addEventListener('change', () => this._scheduleHistogramRecompute(panelId));
-        return input;
-    };
-    const boundBlock = (labelText, key) => {
-        const wrap = document.createElement('div');
-        wrap.className = 'fft-range-bound' + (isCal ? ' fft-range-bound-datetime' : '');
-        const label = document.createElement('label');
-        label.className = 'fft-option-row';
-        label.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
-        const span = document.createElement('span');
-        span.textContent = labelText;
-        label.append(span, makeBoundInput(key));
-        wrap.append(label, makeBoundSlider(key));
-        return wrap;
-    };
-    const rangeGrid = document.createElement('div');
-    rangeGrid.className = 'fft-range-grid';
-    rangeGrid.append(
-        boundBlock(i18n.t('fftRangeStart'), 'x1'),
-        boundBlock(i18n.t('fftRangeEnd'), 'x2'),
-    );
-    options.appendChild(rangeGrid);
+        },
+        onSlide: (key, value) => writeBound(key, value),
+        onCommit: () => this._scheduleHistogramRecompute(panelId),
+    }));
 
     // Bins.
     section('histogramBins');
@@ -1303,19 +1260,15 @@ proto._syncHistogramOptionsPanel = function(plot) {
     const options = this._histogramOptionsPanel(plot);
     if (!options) return;
     const state = this._ensureHistogramState(plot);
-    const isCal = this._histogramUsesCalendarTime(plot);
     const [lo, hi] = this._activeHistogramRange(plot);
-    const vals = { x1: lo, x2: hi };
-    for (const key of ['x1', 'x2']) {
-        const input = options.querySelector(`input[data-hist-role="input"][data-hist-key="${key}"]`);
-        const slider = options.querySelector(`input[data-hist-role="slider"][data-hist-key="${key}"]`);
-        if (input && document.activeElement !== input) {
-            input.value = isCal ? histMsToDatetimeInput(vals[key]) : formatHistInputValue(vals[key]);
-        }
-        if (slider && document.activeElement !== slider && Number.isFinite(vals[key])) {
-            slider.value = String(vals[key]);
-        }
-    }
+    this._syncAnalysisRangeSection(options, {
+        prefix: 'hist',
+        rangeFull: state.rangeFull,
+        lo,
+        hi,
+        domain: this._histogramDomain(plot),
+        calendar: this._histogramUsesCalendarTime(plot),
+    });
 };
 
 proto._syncHistogramSummary = function(plot, spec = plot?._histSpec, unit = '') {
@@ -1352,18 +1305,4 @@ function formatHistInputValue(value) {
     return String(Number(n.toFixed(2)));
 }
 
-// Calendar axes store epoch ms rendered as naive UTC (see _plotlyTimeValue),
-// so the datetime-local inputs use the same UTC convention as the axis ticks.
-function histMsToDatetimeInput(ms) {
-    const n = Number(ms);
-    if (!Number.isFinite(n)) return '';
-    const date = new Date(n);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toISOString().slice(0, 19);
-}
 
-function histDatetimeInputToMs(text) {
-    if (!text) return NaN;
-    const ms = Date.parse(`${text}Z`);
-    return Number.isFinite(ms) ? ms : NaN;
-}

@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
     buildCalendarHeatmap,
@@ -179,18 +180,6 @@ function formatDurationMs(ms) {
 function text(key) {
     const translated = i18n.t(key);
     return translated && translated !== key ? translated : (fallbackText[key] || key);
-}
-
-function utcInputValue(ms) {
-    const value = Number(ms);
-    if (!Number.isFinite(value)) return '';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 19);
-}
-
-function utcInputMs(value) {
-    if (!value) return NaN;
-    return Date.parse(`${value}Z`);
 }
 
 function utcIso(ms) {
@@ -515,8 +504,8 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
         hideKey: 'edgeHideOptions',
         showKey: 'edgeShowOptions',
         onToggle: () => this._toggleCalendarHeatmapOptions(panelId),
-    }), options);
-    container.append(topbar, workspace);
+    }), createAnalysisSide(topbar, options));
+    container.append(workspace);
     panelEl.appendChild(container);
 
     plot.div = timeDiv;
@@ -1789,16 +1778,6 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         options.appendChild(label);
         return label;
     };
-    const rangeRow = (labelText, control, tooltip = '') => {
-        const label = document.createElement('label');
-        label.className = 'fft-option-row';
-        if (tooltip) label.title = tooltip;
-        const span = document.createElement('span');
-        span.textContent = labelText;
-        label.append(span, control);
-        options.appendChild(label);
-        return label;
-    };
     const segmented = (items, current, onPick, classes = {}) => {
         const { wrapperClass = 'heatmap-segmented', buttonClass = 'heatmap-segmented-btn' } = classes;
         const wrapper = document.createElement('div');
@@ -1858,69 +1837,31 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         return element;
     };
 
-    rangeRow(i18n.t('fftRange'), segmented([
-        { value: true, label: i18n.t('fftRangeFull'), title: i18n.t('analysisRangeFullTooltip') },
-        { value: false, label: i18n.t('fftRangeSelection'), title: i18n.t('analysisRangeSelectionTooltip') },
-    ], state.rangeFull, full => this._setCalendarHeatmapRangeMode(panelId, full), { wrapperClass: 'fft-segmented', buttonClass: '' }));
-
+    // The shared range block (analysis-range-methods.js), as every analysis
+    // has it. This mode is calendar-only, so its bounds are always instants.
     const domain = this._calendarHeatmapDomain(plot);
-    const makeBound = (key, labelText, index, tooltip = '') => {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'fft-range-bound fft-range-bound-datetime';
-        if (tooltip) wrapper.title = tooltip;
-        const input = document.createElement('input');
-        input.type = 'datetime-local';
-        input.step = '1';
-        input.className = 'fft-number-input';
-        input.dataset.heatmapKey = key;
-        input.dataset.heatmapRole = 'input';
-        input.disabled = state.rangeFull;
-        input.value = utcInputValue(this._activeCalendarHeatmapRange(plot)[index]);
-        input.addEventListener('change', () => {
-            const value = utcInputMs(input.value);
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = Number.isFinite(value) ? value : null;
-            this._updateCalendarHeatmapSelectionShapes(panelId, plot);
-            this._scheduleCalendarHeatmapRecompute(panelId);
-        });
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.className = 'fft-range-input';
-        if (tooltip) slider.title = tooltip;
-        slider.dataset.heatmapKey = key;
-        slider.dataset.heatmapRole = 'slider';
-        slider.disabled = state.rangeFull;
-        if (domain) {
-            slider.min = String(domain.min);
-            slider.max = String(domain.max);
-            slider.step = 'any';
-            slider.value = String(this._activeCalendarHeatmapRange(plot)[index]);
-        }
-        slider.addEventListener('input', () => {
-            const value = Number(slider.value);
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = Number.isFinite(value) ? value : null;
-            this._updateCalendarHeatmapSelectionShapes(panelId, plot);
-        });
-        slider.addEventListener('change', () => this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true }));
-        const label = document.createElement('label');
-        label.className = 'fft-option-row';
-        if (tooltip) label.title = tooltip;
-        const span = document.createElement('span');
-        span.textContent = labelText;
-        label.append(span, input);
-        wrapper.append(label, slider);
-        return wrapper;
+    const activeRange = this._activeCalendarHeatmapRange(plot);
+    const writeBound = (key, value) => {
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
+        state[key] = value;
+        this._updateCalendarHeatmapSelectionShapes(panelId, plot);
     };
-    const rangeGrid = document.createElement('div');
-    rangeGrid.className = 'fft-range-grid';
-    rangeGrid.append(
-        makeBound('x1', i18n.t('fftRangeStart'), 0, i18n.t('analysisRangeStartTooltip')),
-        makeBound('x2', i18n.t('fftRangeEnd'), 1, i18n.t('analysisRangeEndTooltip')),
-    );
-    options.appendChild(rangeGrid);
+    options.appendChild(this._buildAnalysisRangeSection({
+        prefix: 'heatmap',
+        rangeFull: state.rangeFull,
+        lo: activeRange[0],
+        hi: activeRange[1],
+        domain,
+        calendar: true,
+        onMode: (full) => this._setCalendarHeatmapRangeMode(panelId, full),
+        onType: (key, value) => {
+            writeBound(key, value);
+            this._scheduleCalendarHeatmapRecompute(panelId);
+        },
+        onSlide: (key, value) => writeBound(key, value),
+        onCommit: () => this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true }),
+    }));
 
     section(text('heatmapGeometry'), text('heatmapGeometryTooltip'));
     options.appendChild(segmented([
@@ -2049,13 +1990,14 @@ proto._syncCalendarHeatmapOptionsPanel = function(plot) {
     const options = this._calendarHeatmapOptionsPanel(plot);
     if (!options) return;
     const [lower, upper] = this._activeCalendarHeatmapRange(plot);
-    const values = { x1: lower, x2: upper };
-    for (const key of ['x1', 'x2']) {
-        const input = options.querySelector(`input[data-heatmap-role="input"][data-heatmap-key="${key}"]`);
-        const slider = options.querySelector(`input[data-heatmap-role="slider"][data-heatmap-key="${key}"]`);
-        if (input && document.activeElement !== input) input.value = utcInputValue(values[key]);
-        if (slider && document.activeElement !== slider && Number.isFinite(values[key])) slider.value = String(values[key]);
-    }
+    this._syncAnalysisRangeSection(options, {
+        prefix: 'heatmap',
+        rangeFull: this._ensureCalendarHeatmapState(plot).rangeFull,
+        lo: lower,
+        hi: upper,
+        domain: this._calendarHeatmapDomain(plot),
+        calendar: true,
+    });
 };
 
 proto._syncCalendarHeatmapSummary = function(plot) {

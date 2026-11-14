@@ -14,6 +14,7 @@ import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
 import { installPlotAnalysisBusyMethods } from './methods/analysis-busy-methods.js';
+import { installPlotAnalysisRangeMethods } from './methods/analysis-range-methods.js';
 import { installPlotFitLazyMethods } from './methods/fit-lazy-methods.js';
 import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
 import { installPlotCurveFitMethods } from './methods/curve-fit-methods.js';
@@ -5711,6 +5712,8 @@ installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
 installPlotRepeatedMethods(PlotManager);
 installPlotMarksMethods(PlotManager);
+// Before the analyses: every one of them builds its range section with it.
+installPlotAnalysisRangeMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotHistogramLazyMethods(PlotManager);

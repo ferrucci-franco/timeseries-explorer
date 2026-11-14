@@ -50,6 +50,10 @@
     --audio-idle-mark: #5f6b7a;
     --audio-strip-bg: #bcd6ee;
     --audio-strip-border: #7fa9d2;
+    --scrollbar-track: #ececec;
+    --scrollbar-thumb: #b9b9b9;
+    --scrollbar-thumb-hover: #949494;
+    --scrollbar-thumb-active: #5d7f9e;
 }
 
 .theme-dark {
@@ -71,6 +75,10 @@
     --audio-idle-mark: #9fb0c4;
     --audio-strip-bg: #2d4767;
     --audio-strip-border: #4d76a6;
+    --scrollbar-track: #262626;
+    --scrollbar-thumb: #5a5a5a;
+    --scrollbar-thumb-hover: #7b7b7b;
+    --scrollbar-thumb-active: #9fb6cf;
 }
 
 /* ============================================
@@ -80,6 +88,63 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+}
+
+/* ── Scrollbars, everywhere, from one place ────────────────────────────────
+   Every scrolling box in the app — not only the handful that had their own
+   rules — gets the same slim rounded bar, in both themes and in BOTH engines:
+
+   · Firefox (and anything else that has no ::-webkit-scrollbar) reads
+     `scrollbar-width`/`scrollbar-color`, which are INHERITED, so setting them
+     here dresses the whole app instead of the few boxes that named them. The
+     wide grey system bars Firefox used to draw are what this fixes.
+   · Chromium and WebKit read the ::-webkit-scrollbar pseudo-elements below.
+
+   The thumb's three states are all spelled out — resting, under the pointer,
+   and HELD — because a state nobody declared is a state the engine picks, and
+   pressing the bar used to leave it almost invisible. The colours are solid
+   rather than mixed with `transparent`: a translucent thumb takes the colour
+   of whatever it happens to lie on, which is how a bar goes missing.
+
+   A box that wants no scrollbar at all still says so for itself
+   (`scrollbar-width: none` and a `::-webkit-scrollbar { display: none }`), and
+   a box that wants a wider one overrides the width below it. */
+html {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+}
+
+*::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: content-box;
+}
+
+/* Held: the bar is being dragged, and says so. */
+*::-webkit-scrollbar-thumb:active {
+    background: var(--scrollbar-thumb-active);
+    background-clip: content-box;
+}
+
+/* Where a horizontal and a vertical bar meet. */
+*::-webkit-scrollbar-corner {
+    background: transparent;
 }
 
 /* A swipe is a gesture this app wants, not a page navigation.

@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
@@ -53,23 +54,6 @@ const finiteOrNull = (value) => {
     if (value === '' || value === null || value === undefined) return null;
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
-};
-const formatInputValue = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return '';
-    if (n !== 0 && Math.abs(n) < 0.01) return n.toExponential(3);
-    return String(Number(n.toPrecision(10)));
-};
-const msToDatetimeInput = (ms) => {
-    const n = Number(ms);
-    if (!Number.isFinite(n)) return '';
-    const d = new Date(n);
-    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 19);
-};
-const datetimeInputToMs = (text) => {
-    if (!text) return NaN;
-    const ms = Date.parse(`${text}Z`);
-    return Number.isFinite(ms) ? ms : NaN;
 };
 
 export function curveFitColor(index) {
@@ -738,8 +722,8 @@ export function installPlotCurveFitMethods(TargetClass) {
             hideKey: 'edgeHideOptions',
             showKey: 'edgeShowOptions',
             onToggle: () => this._toggleCurveFitOptions(panelId),
-        }), options);
-        container.append(topbar, workspace);
+        }), createAnalysisSide(topbar, options));
+        container.append(workspace);
         panelEl.appendChild(container);
 
         plot.curveFitContainer = container;
@@ -1290,17 +1274,24 @@ export function installPlotCurveFitMethods(TargetClass) {
             label.append(span, control);
             return label;
         };
-        const segmented = document.createElement('div');
-        segmented.className = 'fft-segmented';
-        const makeSegment = (labelKey, tooltipKey, isFull) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = i18n.t(labelKey);
-            button.title = i18n.t(tooltipKey);
-            button.classList.toggle('active', !!entry.rangeFull === isFull);
-            button.addEventListener('click', (event) => {
-                event.preventDefault();
-                if (!!entry.rangeFull === isFull) return;
+        // The shared range block (analysis-range-methods.js): the same
+        // Full / Selection and the same two bounds with sliders as every
+        // other analysis has.
+        const [lo, hi] = this._curveFitRange(plot, entry);
+        const boundPatch = (key, value) => {
+            const [curLo, curHi] = this._curveFitRange(plot, entry);
+            return key === 'x1' ? { x1: value, x2: curHi } : { x1: curLo, x2: value };
+        };
+        drawer.appendChild(this._buildAnalysisRangeSection({
+            prefix: 'curveFit',
+            rangeFull: entry.rangeFull,
+            lo,
+            hi,
+            domain: this._curveFitTraceDomain(trace) || this._curveFitDomain(plot),
+            calendar: usesCalendar,
+            fullTooltipKey: 'curveFitRangeFullTooltip',
+            selectionTooltipKey: 'curveFitRangeSelectionTooltip',
+            onMode: (isFull) => {
                 const patch = { rangeFull: isFull };
                 if (!isFull && (entry.x1 === null || entry.x2 === null)) {
                     const probe = { ...entry };
@@ -1309,43 +1300,22 @@ export function installPlotCurveFitMethods(TargetClass) {
                     patch.x2 = probe.x2;
                 }
                 this._updateCurveFitEntry(panelId, patch);
-            });
-            return button;
-        };
-        segmented.append(
-            makeSegment('fftRangeFull', 'curveFitRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'curveFitRangeSelectionTooltip', false),
-        );
-        drawer.appendChild(makeRow(i18n.t('fftRange'), segmented));
-        const [lo, hi] = this._curveFitRange(plot, entry);
-        const makeInput = (key, value) => {
-            const input = document.createElement('input');
-            input.type = usesCalendar ? 'datetime-local' : 'number';
-            input.step = usesCalendar ? '1' : 'any';
-            input.className = 'fft-number-input';
-            input.dataset.curveFitKey = key;
-            input.value = usesCalendar ? msToDatetimeInput(value) : formatInputValue(value);
-            input.disabled = !!entry.rangeFull;
-            input.addEventListener('change', () => {
-                const n = usesCalendar ? datetimeInputToMs(input.value) : Number(input.value);
-                if (!Number.isFinite(n)) return;
-                const [curLo, curHi] = this._curveFitRange(plot, entry);
-                const patch = key === 'x1' ? { x1: n, x2: curHi } : { x1: curLo, x2: n };
-                this._updateCurveFitEntry(panelId, patch);
-            });
-            return input;
-        };
-        const rangeGrid = document.createElement('div');
-        rangeGrid.className = 'fft-range-grid';
-        const bound = (labelKey, key, value) => {
-            const wrap = document.createElement('div');
-            wrap.className = 'fft-range-bound';
-            if (usesCalendar) wrap.classList.add('fft-range-bound-datetime');
-            wrap.appendChild(makeRow(i18n.t(labelKey), makeInput(key, value)));
-            return wrap;
-        };
-        rangeGrid.append(bound('fftRangeStart', 'x1', lo), bound('fftRangeEnd', 'x2', hi));
-        drawer.appendChild(rangeGrid);
+            },
+            onType: (key, value) => {
+                if (value === null) return;
+                this._updateCurveFitEntry(panelId, boundPatch(key, value));
+            },
+            // A drag must not rebuild the drawer under the finger: it moves the
+            // range and redraws its band, and the fit is run when it ends —
+            // which is what dragging the band on the plot does.
+            onSlide: (key, value) => {
+                if (value === null) return;
+                Object.assign(entry, boundPatch(key, value));
+                this._updateCurveFitSelectionShapes(plot);
+                this._syncCurveFitRangeInputs(plot);
+            },
+            onCommit: () => this._scheduleCurveFitRecompute(panelId),
+        }));
         // Extrapolate: the drawn curves run over the whole signal (dotted
         // outside their range), and a saved fit is not NaN outside it.
         const extrapolateLabel = document.createElement('label');
@@ -1519,14 +1489,18 @@ export function installPlotCurveFitMethods(TargetClass) {
         const entry = this._curveFitActiveEntry(plot);
         if (!drawer || !entry) return;
         const trace = this._curveFitTraceFor(plot, entry);
-        const usesCalendar = !!trace && this._fftTimeKind(trace.fileId) === 'datetime';
         const [lo, hi] = this._curveFitRange(plot, entry);
-        for (const [key, value] of [['x1', lo], ['x2', hi]]) {
-            const input = drawer.querySelector(`.fft-number-input[data-curve-fit-key="${key}"]`);
-            if (input && document.activeElement !== input) {
-                input.value = usesCalendar ? msToDatetimeInput(value) : formatInputValue(value);
-            }
-        }
+        // `force`: this runs from a drag — of the band on the plot or of one of
+        // the sliders — and the drag is what wrote these numbers.
+        this._syncAnalysisRangeSection(drawer, {
+            prefix: 'curveFit',
+            rangeFull: entry.rangeFull,
+            lo,
+            hi,
+            domain: this._curveFitTraceDomain(trace) || this._curveFitDomain(plot),
+            calendar: !!trace && this._fftTimeKind(trace.fileId) === 'datetime',
+            force: true,
+        });
     };
 
     // ── Saving a fit as a signal ──────────────────────────────────
