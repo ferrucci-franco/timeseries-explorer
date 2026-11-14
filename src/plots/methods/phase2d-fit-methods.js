@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
@@ -33,23 +34,6 @@ const p2dFiniteOrNull = (value) => {
     if (value === '' || value === null || value === undefined) return null;
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
-};
-const p2dFormatInputValue = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return '';
-    if (n !== 0 && Math.abs(n) < 0.01) return n.toExponential(2);
-    return String(Number(n.toFixed(2)));
-};
-const p2dMsToDatetimeInput = (ms) => {
-    const n = Number(ms);
-    if (!Number.isFinite(n)) return '';
-    const d = new Date(n);
-    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 19);
-};
-const p2dDatetimeInputToMs = (text) => {
-    if (!text) return NaN;
-    const ms = Date.parse(`${text}Z`);
-    return Number.isFinite(ms) ? ms : NaN;
 };
 
 // TODO 10 — 2D mode: point/line display + (later) linear/quadratic fitting.
@@ -653,8 +637,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             hideKey: 'edgeHideOptions',
             showKey: 'edgeShowOptions',
             onToggle: () => this._togglePhase2dOptions(panelId),
-        }), options);
-        container.append(topbar, workspace);
+        }), createAnalysisSide(topbar, options));
+        container.append(workspace);
         panelEl.appendChild(container);
 
         plot.phase2dFitContainer = container;
@@ -1013,6 +997,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         }
         if (!state.timeSeriesHidden && plot.phase2dFitTimeDiv) Plotly.Plots.resize(plot.phase2dFitTimeDiv);
         if (plot.div) Plotly.Plots.resize(plot.div);
+        // The pane's floating fit buttons go with it.
+        this._refreshAnalysisFitButtons(plot);
     };
 
     proto._togglePhase2dOptions = function(panelId) {
@@ -1267,15 +1253,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         // ── 1) Temporal range: Todo / Selección (mirrors FFT/Correlation) ──
         const domain = this._phase2dFitDomain(plot);
         const usesCalendar = this._phase2dFitUsesCalendarTime(plot);
-        const makeRow = (labelText, control, tooltip = '') => {
-            const label = document.createElement('label');
-            label.className = 'fft-option-row';
-            if (tooltip) label.title = tooltip;
-            const span = document.createElement('span');
-            span.textContent = labelText;
-            label.append(span, control);
-            return label;
-        };
         const seedSelectionFromView = () => {
             const xa = plot.phase2dFitTimeDiv?._fullLayout?.xaxis;
             let lo = this._coerceAxisValue(xa?.range?.[0]);
@@ -1288,15 +1265,23 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             }
             this._ensurePhase2dFitRange(plot);
         };
-        const makeSegment = (labelKey, tooltipKey, isFull) => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.textContent = i18n.t(labelKey);
-            btn.title = i18n.t(tooltipKey);
-            btn.classList.toggle('active', !!state.rangeFull === isFull);
-            btn.addEventListener('click', (event) => {
-                event.preventDefault();
-                if (!!state.rangeFull === isFull) return;
+        // The shared range block (analysis-range-methods.js), the one every
+        // analysis has.
+        const writeBound = (key, value, { recompute = true } = {}) => {
+            this._clearPhase2dAutoRangeNotice(plot, state);
+            state[key] = value;
+            this._ensurePhase2dFitRange(plot);
+            this._updatePhase2dFitSelectionShapes(panelId, plot);
+            if (recompute) this._schedulePhase2dFitRecompute(panelId, { immediate: true });
+        };
+        drawer.appendChild(this._buildAnalysisRangeSection({
+            prefix: 'p2d',
+            rangeFull: state.rangeFull,
+            lo: state.x1,
+            hi: state.x2,
+            domain,
+            calendar: usesCalendar,
+            onMode: (isFull) => {
                 this._clearPhase2dAutoRangeNotice(plot, state);
                 state.rangeFull = isFull;
                 if (!isFull) {
@@ -1314,70 +1299,17 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 }
                 this._updatePhase2dFitSelectionShapes(panelId, plot);
                 this._schedulePhase2dFitRecompute(panelId, { immediate: true });
-            });
-            return btn;
-        };
-        const makeInput = (key) => {
-            const input = document.createElement('input');
-            input.type = usesCalendar ? 'datetime-local' : 'number';
-            input.step = usesCalendar ? '1' : 'any';
-            input.className = 'fft-number-input';
-            input.dataset.p2dKey = key;
-            input.value = usesCalendar ? p2dMsToDatetimeInput(state[key]) : p2dFormatInputValue(state[key]);
-            input.disabled = !!state.rangeFull;
-            input.addEventListener('change', () => {
-                const n = usesCalendar ? p2dDatetimeInputToMs(input.value) : Number(input.value);
-                this._clearPhase2dAutoRangeNotice(plot, state);
-                state[key] = Number.isFinite(n) ? n : null;
-                this._ensurePhase2dFitRange(plot);
-                this._updatePhase2dFitSelectionShapes(panelId, plot);
-                this._schedulePhase2dFitRecompute(panelId, { immediate: true });
+            },
+            onType: (key, value) => {
+                writeBound(key, value);
                 this._syncPhase2dFitRangeInputs(plot);
-            });
-            return input;
-        };
-        const makeRange = (key) => {
-            const input = document.createElement('input');
-            input.type = 'range';
-            input.className = 'fft-range-input';
-            input.dataset.p2dKey = key;
-            if (domain) { input.min = String(domain.min); input.max = String(domain.max); input.step = 'any'; }
-            input.value = Number.isFinite(Number(state[key])) ? String(Number(state[key])) : '';
-            input.disabled = !!state.rangeFull;
-            input.addEventListener('input', () => {
-                const n = Number(input.value);
-                this._clearPhase2dAutoRangeNotice(plot, state);
-                state[key] = Number.isFinite(n) ? n : null;
+            },
+            onSlide: (key, value) => {
+                writeBound(key, value, { recompute: false });
                 this._syncPhase2dFitRangeInputs(plot, { skipSliders: true });
-                this._updatePhase2dFitSelectionShapes(panelId, plot);
-            });
-            input.addEventListener('change', () => this._schedulePhase2dFitRecompute(panelId));
-            return input;
-        };
-        const segmented = document.createElement('div');
-        segmented.className = 'fft-segmented';
-        segmented.append(
-            makeSegment('fftRangeFull', 'analysisRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'analysisRangeSelectionTooltip', false),
-        );
-        drawer.appendChild(makeRow(i18n.t('fftRange'), segmented));
-
-        const rangeGrid = document.createElement('div');
-        rangeGrid.className = 'fft-range-grid';
-        const makeBound = (labelText, key, tooltip) => {
-            const wrap = document.createElement('div');
-            wrap.className = 'fft-range-bound';
-            if (usesCalendar) wrap.classList.add('fft-range-bound-datetime');
-            const slider = makeRange(key);
-            slider.title = tooltip;
-            wrap.append(makeRow(labelText, makeInput(key), tooltip), slider);
-            return wrap;
-        };
-        rangeGrid.append(
-            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('analysisRangeStartTooltip')),
-            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('analysisRangeEndTooltip')),
-        );
-        drawer.appendChild(rangeGrid);
+            },
+            onCommit: () => this._schedulePhase2dFitRecompute(panelId),
+        }));
 
         // ── 2) Pair selector — full width, ellipsis on overflow, full name in
         // the tooltip. Lets the user fit different pairs independently. ──
@@ -1546,19 +1478,16 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const panel = plot?.phase2dFitOptions;
         if (!panel) return;
         const state = this._ensurePhase2dState(plot);
-        const usesCalendar = this._phase2dFitUsesCalendarTime(plot);
-        for (const key of ['x1', 'x2']) {
-            const num = panel.querySelector(`.fft-number-input[data-p2d-key="${key}"]`);
-            if (num && document.activeElement !== num) {
-                num.value = usesCalendar ? p2dMsToDatetimeInput(state[key]) : p2dFormatInputValue(state[key]);
-            }
-            if (!options.skipSliders) {
-                const slider = panel.querySelector(`.fft-range-input[data-p2d-key="${key}"]`);
-                if (slider && document.activeElement !== slider) {
-                    slider.value = Number.isFinite(Number(state[key])) ? String(Number(state[key])) : '';
-                }
-            }
-        }
+        // `skipSliders`: a slider being dragged is what wrote these numbers.
+        this._syncAnalysisRangeSection(panel, {
+            prefix: 'p2d',
+            rangeFull: state.rangeFull,
+            lo: state.x1,
+            hi: state.x2,
+            domain: this._phase2dFitDomain(plot),
+            calendar: this._phase2dFitUsesCalendarTime(plot),
+            skipRole: options.skipSliders ? 'slider' : null,
+        });
     };
 
     // ── CSV export (fit summary / fit curve / displayed points) ─────

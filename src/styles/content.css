@@ -198,29 +198,18 @@
 .plots-area.plots-area-scrollable {
     overflow-x: hidden;
     overflow-y: auto;
+    /* Wide rather than slim: this is the page's own bar, and a hairline left
+       people unaware the panels went on below the fold. The colours are the
+       app's (base.css). */
     scrollbar-width: auto;
-    scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent;
 }
 
 .plots-area.plots-area-scrollable::-webkit-scrollbar {
     width: 18px;
 }
 
-.plots-area.plots-area-scrollable::-webkit-scrollbar-track {
-    background: transparent;
-}
-
 .plots-area.plots-area-scrollable::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
-    border: 3px solid transparent;
-    border-radius: 999px;
-    background-clip: content-box;
-}
-
-.plots-area.plots-area-scrollable:hover::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--primary-color) 58%, var(--text-secondary));
-    border: 3px solid transparent;
-    background-clip: content-box;
+    border-width: 4px;
 }
 
 .plots-area.plots-area-scrollable > .layout-split,
@@ -337,26 +326,10 @@
     overflow-y: hidden;
     overscroll-behavior: contain;
     scrollbar-width: thin;
-    scrollbar-color: color-mix(in srgb, var(--text-secondary) 42%, transparent) transparent;
 }
 
 .layout-panel-toolbar::-webkit-scrollbar {
     height: 6px;
-}
-
-.layout-panel-toolbar::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.layout-panel-toolbar::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
-    border-radius: 999px;
-    border: 1px solid transparent;
-    background-clip: content-box;
-}
-
-.layout-panel-toolbar:hover::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--primary-color) 62%, var(--text-secondary));
 }
 
 .layout-panel-toolbar.is-scrollable {
@@ -1139,28 +1112,14 @@
        hairline scrollbar left people unaware there were more topics below the
        fold. Same treatment the scrollable plots area already uses. */
     scrollbar-width: auto;
-    scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent;
 }
 
 .help-topic-sidebar::-webkit-scrollbar {
     width: 16px;
 }
 
-.help-topic-sidebar::-webkit-scrollbar-track {
-    background: transparent;
-}
-
 .help-topic-sidebar::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--text-secondary) 42%, transparent);
-    border: 3px solid transparent;
-    border-radius: 999px;
-    background-clip: content-box;
-}
-
-.help-topic-sidebar:hover::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--primary-color) 58%, var(--text-secondary));
-    border: 3px solid transparent;
-    background-clip: content-box;
+    border-width: 4px;
 }
 
 .help-topic-button {
@@ -1248,7 +1207,6 @@
     padding: clamp(1.6rem, 3vw, 3rem);
     background: var(--bg-primary);
     scrollbar-width: thin;
-    scrollbar-color: var(--border-color) transparent;
 }
 
 .help-section {
@@ -1850,6 +1808,15 @@
 .trend-band-toggle,
 .trend-curve-toggle {
     margin: 0;
+}
+
+/* The model of the exponential, under the box that turns it on. */
+.trend-exp-row {
+    padding-left: 20px;
+}
+
+.trend-exp-row .trend-exp-select:disabled {
+    opacity: 0.5;
 }
 
 .trend-band-sigma {
@@ -3444,6 +3411,122 @@ body.cursor-box-dragging {
     --fft-split: 50%;
 }
 
+/* ── The analysis pane's own fit buttons ───────────────────────────────────
+   An analysis panel shows two plots and the toolbar has one set of fit
+   buttons: those belong to the time series, and the pane beside it carries
+   these three in its corner, so neither set is a guess. Faint until the
+   pointer is on them — the curve under them is what the user came for — and
+   they are not there at all when the time series is folded away, because the
+   toolbar's buttons are then this pane's own
+   (src/plots/methods/analysis-fit-methods.js). The phone layout draws its own
+   over every plot, and these stay out of its way. */
+.analysis-fit-group {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 5;
+    display: flex;
+    gap: 4px;
+    pointer-events: none;
+}
+
+.analysis-fit-group[hidden] {
+    display: none;
+}
+
+.analysis-fit-btn {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--bg-primary) 40%, transparent);
+    color: var(--text-primary);
+    opacity: 0.4;
+    cursor: pointer;
+    transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+
+.analysis-fit-btn[hidden] {
+    display: none;
+}
+
+.analysis-fit-btn:hover,
+.analysis-fit-btn:focus-visible {
+    opacity: 1;
+    background: var(--bg-primary);
+}
+
+.analysis-fit-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+
+/* ── The side panel of an analysis ─────────────────────────────────────────
+   The analysis' own buttons (V/H, hide the time series, Reset, Options and
+   the status line) are the HEADER of this column, not a bar across the whole
+   panel above the plots — which is a strip of height the plots now keep.
+   See src/plots/analysis-side.js. The column carries the width and the border
+   each drawer used to carry on its own. */
+.analysis-side {
+    flex: 0 0 286px;
+    width: 286px;
+    max-width: min(42vw, 320px);
+    min-width: 230px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border-color);
+    background: var(--bg-primary);
+}
+
+/* Nothing to show — the drawer is closed, or the phone layout has borrowed it
+   for a sheet and it is not a child here at all — so the column goes with it,
+   rather than leaving a strip of buttons beside the plot. */
+.analysis-side:not(:has(> aside:not([hidden]))) {
+    display: none;
+}
+
+/* Inside the column the drawer fills what is left, and its frame is the
+   column's. */
+.analysis-side > aside {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    min-height: 0;
+    border-left: 0;
+}
+
+/* The bar, as a header: the same buttons and the same look, wrapping when the
+   column is narrow, with the status line on a line of its own. */
+.analysis-side > .fft-topbar,
+.analysis-side > .hist-topbar,
+.analysis-side > .heatmap-topbar {
+    width: 100%;
+    overflow: visible;
+    border-bottom: 1px solid var(--border-color);
+    font-size: var(--analysis-font);
+}
+
+.analysis-side > .fft-topbar > .fft-status,
+.analysis-side > .hist-topbar > .hist-status,
+.analysis-side > .heatmap-topbar > .heatmap-status {
+    /* A line of its own under the buttons, and it wraps there rather than
+       being cut off at a column's width with an ellipsis. */
+    flex: 1 1 100%;
+    min-width: 0;
+    margin-left: 0;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+}
+
 .fft-topbar {
     flex: 0 0 auto;
     min-height: 32px;
@@ -3595,6 +3678,15 @@ body.cursor-box-dragging {
     background: var(--bg-primary);
     overflow: auto;
     color: var(--text-primary);
+    /* Inherited by everything in the panel, so a block that is not one of the
+       rows — a line of help, a caption, a button — reads at the panel's size
+       instead of falling back to the page's. */
+    font-size: var(--analysis-font);
+}
+
+/* The panel's own buttons are part of its text, not of the top bar's. */
+.fft-options .fft-tool-btn {
+    font-size: var(--analysis-font);
 }
 
 .fft-options[hidden] {
@@ -4629,28 +4721,13 @@ body.cursor-pair-dragging .cursor-overlay-line {
     /* Reserves the track, so the table does not reflow when the bar appears. */
     scrollbar-gutter: stable;
     scrollbar-width: auto;
-    scrollbar-color: color-mix(in srgb, var(--text-secondary) 55%, transparent) transparent;
     /* Keeps the last row clear of the panel's bottom edge — the table used to
        sit flush against it with the scrollbar on top of the final row. */
     padding-bottom: 6px;
     margin-bottom: 14px;
 }
 .integral-summary::-webkit-scrollbar { height: 14px; width: 14px; }
-.integral-summary::-webkit-scrollbar-track {
-    background: color-mix(in srgb, var(--border-color) 40%, transparent);
-    border-radius: 999px;
-}
-.integral-summary::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--text-secondary) 55%, transparent);
-    border: 3px solid transparent;
-    border-radius: 999px;
-    background-clip: content-box;
-}
-.integral-summary::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in srgb, var(--primary-color) 70%, var(--text-secondary));
-    border: 3px solid transparent;
-    background-clip: content-box;
-}
+.integral-summary::-webkit-scrollbar-thumb { border-width: 4px; }
 .integral-summary-table {
     width: 100%;
     border-collapse: collapse;
@@ -4847,7 +4924,6 @@ body.cursor-pair-dragging .cursor-overlay-line {
 .heatmap-analysis-pane {
     overflow: auto;
     scrollbar-width: auto;
-    scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent;
 }
 
 .heatmap-analysis-pane::-webkit-scrollbar {
@@ -4855,21 +4931,8 @@ body.cursor-pair-dragging .cursor-overlay-line {
     height: 14px;
 }
 
-.heatmap-analysis-pane::-webkit-scrollbar-track {
-    background: transparent;
-}
-
 .heatmap-analysis-pane::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
-    border: 3px solid transparent;
-    border-radius: 999px;
-    background-clip: content-box;
-}
-
-.heatmap-analysis-pane:hover::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--primary-color) 58%, var(--text-secondary));
-    border: 3px solid transparent;
-    background-clip: content-box;
+    border-width: 4px;
 }
 
 .heatmap-splitter {

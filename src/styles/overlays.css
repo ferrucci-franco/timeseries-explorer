@@ -830,7 +830,6 @@
     border-right: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--sidebar-bg) 88%, var(--primary-color));
     scrollbar-width: thin;
-    scrollbar-color: var(--border-color) transparent;
 }
 
 .plot-settings-topic-button {
@@ -918,7 +917,6 @@
     overflow-y: auto;
     padding: clamp(1.5rem, 2.5vw, 2.5rem);
     scrollbar-width: thin;
-    scrollbar-color: var(--border-color) transparent;
 }
 
 .plot-settings-panel {

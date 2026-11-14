@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
@@ -34,28 +35,6 @@ const finiteOrNull = (value) => {
     if (value === '' || value === null || value === undefined) return null;
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
-};
-
-// Range-input formatting mirrors the FFT panel so the two look/behave the same.
-// Display-only rounding; state keeps full precision.
-const formatInputValue = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return '';
-    if (n !== 0 && Math.abs(n) < 0.01) return n.toExponential(2);
-    return String(Number(n.toFixed(2)));
-};
-// Calendar axes store epoch ms as naive UTC; the datetime-local pickers use the
-// same UTC convention so they match the axis tick labels.
-const msToDatetimeInput = (ms) => {
-    const n = Number(ms);
-    if (!Number.isFinite(n)) return '';
-    const d = new Date(n);
-    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 19);
-};
-const datetimeInputToMs = (text) => {
-    if (!text) return NaN;
-    const ms = Date.parse(`${text}Z`);
-    return Number.isFinite(ms) ? ms : NaN;
 };
 
 // The Correlation analysis mode: a temporal plot (variables that make up the
@@ -270,8 +249,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             hideKey: 'edgeHideOptions',
             showKey: 'edgeShowOptions',
             onToggle: () => this._toggleCorrelationOptions(panelId),
-        }), options);
-        container.append(topbar, workspace);
+        }), createAnalysisSide(topbar, options));
+        container.append(workspace);
         panelEl.appendChild(container);
 
         plot.correlationContainer = container;
@@ -906,6 +885,9 @@ export function installPlotCorrelationMethods(TargetClass) {
         }
         if (!state.timeSeriesHidden && plot.div) Plotly.Plots.resize(plot.div);
         if (plot.correlationDiv) Plotly.Plots.resize(plot.correlationDiv);
+        // The analysis pane's floating fit buttons go when it is the only pane
+        // left: the toolbar's are then its own.
+        this._refreshAnalysisFitButtons(plot);
     };
 
     proto._toggleCorrelationOptions = function(panelId) {
@@ -997,19 +979,10 @@ export function installPlotCorrelationMethods(TargetClass) {
             panel.appendChild(box);
         }
 
-        // Range section — identical DOM/classes to FFT/Histogram (segmented
-        // Full/Selection control + Start/End rows with number inputs and sliders).
+        // Range section — the shared block, so it IS the one every other
+        // analysis has rather than a copy that drifts from it.
         const domain = this._correlationDomain(plot);
         const usesCalendar = this._correlationUsesCalendarTime(plot);
-        const makeRow = (labelText, control, tooltip = '') => {
-            const label = document.createElement('label');
-            label.className = 'fft-option-row';
-            if (tooltip) label.title = tooltip;
-            const span = document.createElement('span');
-            span.textContent = labelText;
-            label.append(span, control);
-            return label;
-        };
         const seedSelectionFromView = () => {
             const xa = plot.div?._fullLayout?.xaxis;
             let lo = this._coerceAxisValue(xa?.range?.[0]);
@@ -1022,16 +995,26 @@ export function installPlotCorrelationMethods(TargetClass) {
             }
             this._ensureCorrelationRange(plot);
         };
-        const makeSegment = (labelKey, tooltipKey, isFull) => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.textContent = i18n.t(labelKey);
-            btn.title = i18n.t(tooltipKey);
-            btn.classList.toggle('active', !!state.rangeFull === isFull);
-            btn.addEventListener('click', (event) => {
-                event.preventDefault();
+        // The shared range block (analysis-range-methods.js), as in every
+        // other analysis.
+        const writeBound = (key, value, { recompute = true } = {}) => {
+            const st = this._ensureCorrelationState(plot);
+            st.autoRangeWarning = null;
+            st.autoRangeLimited = false;
+            st[key] = value;
+            this._ensureCorrelationRange(plot);
+            this._updateCorrelationSelectionShapes(panelId, plot);
+            if (recompute) this._scheduleCorrelationRecompute(panelId, { immediate: true });
+        };
+        panel.appendChild(this._buildAnalysisRangeSection({
+            prefix: 'corr',
+            rangeFull: state.rangeFull,
+            lo: state.x1,
+            hi: state.x2,
+            domain,
+            calendar: usesCalendar,
+            onMode: (isFull) => {
                 const st = this._ensureCorrelationState(plot);
-                if (!!st.rangeFull === isFull) return;
                 st.autoRangeWarning = null;
                 st.autoRangeLimited = false;
                 st.rangeFull = isFull;
@@ -1039,74 +1022,17 @@ export function installPlotCorrelationMethods(TargetClass) {
                 this._updateCorrelationSelectionShapes(panelId, plot);
                 this._scheduleCorrelationRecompute(panelId, { immediate: true });
                 this._renderCorrelationOptionsPanel(panelId, plot);
-            });
-            return btn;
-        };
-        const makeInput = (key) => {
-            const input = document.createElement('input');
-            input.type = usesCalendar ? 'datetime-local' : 'number';
-            input.step = usesCalendar ? '1' : 'any';
-            input.className = 'fft-number-input';
-            input.dataset.corrKey = key;
-            input.value = usesCalendar ? msToDatetimeInput(state[key]) : formatInputValue(state[key]);
-            input.disabled = !!state.rangeFull;
-            input.addEventListener('change', () => {
-                const st = this._ensureCorrelationState(plot);
-                const n = usesCalendar ? datetimeInputToMs(input.value) : Number(input.value);
-                st.autoRangeWarning = null;
-                st.autoRangeLimited = false;
-                st[key] = Number.isFinite(n) ? n : null;
-                this._ensureCorrelationRange(plot);
-                this._updateCorrelationSelectionShapes(panelId, plot);
-                this._scheduleCorrelationRecompute(panelId, { immediate: true });
+            },
+            onType: (key, value) => {
+                writeBound(key, value);
                 this._syncCorrelationRangeInputs(plot);
-            });
-            return input;
-        };
-        const makeRange = (key) => {
-            const input = document.createElement('input');
-            input.type = 'range';
-            input.className = 'fft-range-input';
-            input.dataset.corrKey = key;
-            if (domain) { input.min = String(domain.min); input.max = String(domain.max); input.step = 'any'; }
-            input.value = Number.isFinite(Number(state[key])) ? String(Number(state[key])) : '';
-            input.disabled = !!state.rangeFull;
-            input.addEventListener('input', () => {
-                const st = this._ensureCorrelationState(plot);
-                const n = Number(input.value);
-                st.autoRangeWarning = null;
-                st.autoRangeLimited = false;
-                st[key] = Number.isFinite(n) ? n : null;
+            },
+            onSlide: (key, value) => {
+                writeBound(key, value, { recompute: false });
                 this._syncCorrelationRangeInputs(plot, { skipSliders: true });
-                this._updateCorrelationSelectionShapes(panelId, plot);
-            });
-            input.addEventListener('change', () => this._scheduleCorrelationRecompute(panelId));
-            return input;
-        };
-        const segmented = document.createElement('div');
-        segmented.className = 'fft-segmented';
-        segmented.append(
-            makeSegment('fftRangeFull', 'analysisRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'analysisRangeSelectionTooltip', false),
-        );
-        panel.appendChild(makeRow(i18n.t('fftRange'), segmented));
-
-        const rangeGrid = document.createElement('div');
-        rangeGrid.className = 'fft-range-grid';
-        const makeBound = (labelText, key, tooltip) => {
-            const wrap = document.createElement('div');
-            wrap.className = 'fft-range-bound';
-            if (usesCalendar) wrap.classList.add('fft-range-bound-datetime');
-            const slider = makeRange(key);
-            slider.title = tooltip;
-            wrap.append(makeRow(labelText, makeInput(key), tooltip), slider);
-            return wrap;
-        };
-        rangeGrid.append(
-            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('analysisRangeStartTooltip')),
-            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('analysisRangeEndTooltip')),
-        );
-        panel.appendChild(rangeGrid);
+            },
+            onCommit: () => this._scheduleCorrelationRecompute(panelId),
+        }));
 
         // Pending pair hint
         const pending = plot.phasePending;
@@ -1247,19 +1173,16 @@ export function installPlotCorrelationMethods(TargetClass) {
         const panel = this._correlationOptionsPanel(plot);
         if (!panel) return;
         const state = this._ensureCorrelationState(plot);
-        const usesCalendar = this._correlationUsesCalendarTime(plot);
-        for (const key of ['x1', 'x2']) {
-            const num = panel.querySelector(`.fft-number-input[data-corr-key="${key}"]`);
-            if (num && document.activeElement !== num) {
-                num.value = usesCalendar ? msToDatetimeInput(state[key]) : formatInputValue(state[key]);
-            }
-            if (!options.skipSliders) {
-                const slider = panel.querySelector(`.fft-range-input[data-corr-key="${key}"]`);
-                if (slider && document.activeElement !== slider) {
-                    slider.value = Number.isFinite(Number(state[key])) ? String(Number(state[key])) : '';
-                }
-            }
-        }
+        // `skipSliders`: a slider being dragged is what wrote these numbers.
+        this._syncAnalysisRangeSection(panel, {
+            prefix: 'corr',
+            rangeFull: state.rangeFull,
+            lo: state.x1,
+            hi: state.x2,
+            domain: this._correlationDomain(plot),
+            calendar: this._correlationUsesCalendarTime(plot),
+            skipRole: options.skipSliders ? 'slider' : null,
+        });
     };
 
     proto._correlationUsesCalendarTime = function(plot) {

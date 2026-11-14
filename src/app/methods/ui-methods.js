@@ -338,6 +338,12 @@ proto.initEventListeners = function() {
         });
     }
 
+    // The same choice in the top bar, beside the other layout buttons.
+    document.getElementById('scrollable-plot-area-btn')?.addEventListener('click', () => {
+        this._setScrollablePlotArea(!this.scrollablePlotArea);
+    });
+    this._syncScrollablePlotAreaUI();
+
     const mouseWheelZoomToggle = document.getElementById('mouse-wheel-zoom');
     if (mouseWheelZoomToggle) {
         mouseWheelZoomToggle.checked = !!this.mouseWheelZoom;
@@ -508,8 +514,16 @@ proto._setScrollablePlotArea = async function(enabled) {
 };
 
 proto._syncScrollablePlotAreaUI = function() {
+    const on = !!this.scrollablePlotArea;
     const toggle = document.getElementById('scrollable-plot-area');
-    if (toggle) toggle.checked = !!this.scrollablePlotArea;
+    if (toggle) toggle.checked = on;
+    // The same switch as a button in the top bar, with the layout buttons:
+    // in Options, where it lived alone, nobody found it.
+    const button = document.getElementById('scrollable-plot-area-btn');
+    if (button) {
+        button.classList.toggle('active', on);
+        button.setAttribute('aria-pressed', String(on));
+    }
 };
 
 proto._syncLegendCornerPicker = function() {
@@ -3139,14 +3153,18 @@ proto.loadExample = async function(exampleId = 'pendulum') {
     if (!ex) throw new Error(`Unknown example: ${exampleId}`);
 
     // A project example restores a whole saved session, which REPLACES the
-    // workspace (all loaded files + plots), so confirm whenever anything is
-    // loaded — not only when something is plotted — and say so plainly. A
-    // single-file example only resets the plots, so its lighter warning (and
-    // trace-only trigger) is kept.
+    // workspace — every file, every plot and every tab — so it still asks
+    // first, and says so plainly.
+    //
+    // A single-file example asks nothing any more: it opens in a NEW TAB,
+    // named after the example, and the work on screen stays where it is. It
+    // used to clear the plots of the one workspace there was and warn about
+    // it; with tabs there is nothing to clear and nothing to warn about.
     const isProjectExample = !!ex.projectPath;
+    const useNewTab = !isProjectExample && this._tabsEnabled?.() && this.plotManager.hasAnyTraces();
     const needsConfirm = isProjectExample
         ? (this.files.size > 0 || this.plotManager.hasAnyTraces())
-        : this.plotManager.hasAnyTraces();
+        : (!useNewTab && this.plotManager.hasAnyTraces());
     if (needsConfirm) {
         const ok = await Modal.confirm(
             i18n.t(isProjectExample ? 'loadProjectExampleWarning' : 'loadExampleWarning'),
@@ -3204,6 +3222,17 @@ proto.loadExample = async function(exampleId = 'pendulum') {
         this.plotManager.setActiveFile(fileId);
 
         const grid = ex.grid || { rows: 2, cols: 2 };
+
+        // A tab of its own, named after the example: the panels on screen are
+        // the user's work, and an example is not a reason to take them away.
+        // (The file itself is the app's, not the tab's, so it is in the
+        // sidebar of both.)
+        if (useNewTab) {
+            await this.addTab();
+            const tabs = this._ensureTabsState();
+            this.renameTab(tabs.activeIndex, i18n.t(ex.nameKey));
+            if (isCancelled()) return;
+        }
 
         // Clear plots and build the example layout grid
         this.plotManager.clearAll();

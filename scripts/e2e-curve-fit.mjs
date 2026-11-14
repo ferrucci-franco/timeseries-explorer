@@ -140,6 +140,46 @@ try {
     assert.deepEqual({ ...check, passes: undefined }, { passes: undefined, fit: true, residual: true, curve: true, nScope: true }, `streamed in the browser (${name}): the same fit, residuals and curve`);
   }
 
+  // ── Whose are Fit X / Fit Y / Fit all ──
+  // The toolbar's belong to the time series; the residual pane has three of
+  // its own in its corner while both panes are shown.
+  const fitGroup = page.locator('.plotly-mode-curve-fit-residual .analysis-fit-group');
+  assert.equal(await fitGroup.count(), 1, 'the residual pane carries its own fit buttons');
+  assert.equal(await fitGroup.isVisible(), true, 'while the time series is beside it');
+  const ranges = () => page.evaluate(id => {
+    const plot = window.app.plotManager.plots.get(id);
+    return {
+      time: plot.div._fullLayout.yaxis.range.slice(),
+      residual: plot.curveFitResidualDiv._fullLayout.yaxis.range.slice(),
+    };
+  }, panelId);
+  // A pane squeezed by hand, so a fit of it is visible in its range.
+  await page.evaluate(id => {
+    const plot = window.app.plotManager.plots.get(id);
+    return Promise.all([
+      Plotly.relayout(plot.div, { 'yaxis.range': [-50, 50] }),
+      Plotly.relayout(plot.curveFitResidualDiv, { 'yaxis.range': [-50, 50] }),
+    ]);
+  }, panelId);
+  const squeezed = await ranges();
+  await fitGroup.locator('[data-axis="y"]').click();
+  await page.waitForTimeout(800);
+  const afterPaneFit = await ranges();
+  assert.notDeepEqual(afterPaneFit.residual, squeezed.residual, 'the pane\'s own button fits the pane');
+  assert.deepEqual(afterPaneFit.time, squeezed.time, 'and leaves the time series alone');
+  // The toolbar's button is the time series'.
+  await page.locator(`.layout-panel[data-id="${panelId}"] .panel-autoscale-axis-btn`).nth(1).click();
+  await page.waitForTimeout(800);
+  const afterToolbar = await ranges();
+  assert.notDeepEqual(afterToolbar.time, squeezed.time, 'the toolbar fits the time series');
+  // With the residuals folded away the pane's buttons go with them.
+  await page.evaluate(id => window.app.plotManager._toggleCurveFitResiduals(id), panelId);
+  await page.waitForTimeout(400);
+  assert.equal(await fitGroup.isVisible(), false, 'folded away, the pane takes its buttons with it');
+  await page.evaluate(id => window.app.plotManager._toggleCurveFitResiduals(id), panelId);
+  await page.waitForTimeout(400);
+  assert.equal(await fitGroup.isVisible(), true, 'and brings them back');
+
   // Saved from a lazy file: SQL over the file, exact against the fit.
   await page.click('.curve-fit-save-fit');
   await page.waitForTimeout(500);

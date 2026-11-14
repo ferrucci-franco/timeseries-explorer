@@ -220,6 +220,11 @@
     "test:exp-fit": "node scripts/test-exp-fit.mjs",
     "test:fit-passes": "node scripts/test-fit-passes.mjs",
     "test:analysis-cancel": "node scripts/test-analysis-cancel.mjs",
+    "test:analysis-range": "node scripts/test-analysis-range.mjs",
+    "test:analysis-side": "node scripts/test-analysis-side.mjs",
+    "test:scrollbars": "node scripts/test-scrollbars.mjs",
+    "test:analysis-fit": "node scripts/test-analysis-fit.mjs",
+    "test:options-tooltips": "node scripts/test-options-tooltips.mjs",
     "test:curve-fit-analysis": "node scripts/test-curve-fit-analysis.mjs",
     "test:regression-lazy": "node scripts/test-regression-lazy.mjs",
     "test:regression-conditioning": "node scripts/test-regression-conditioning.mjs",
@@ -339,7 +344,7 @@
   "build": {
     "appId": "io.github.ferrucci-franco.timeseries-explorer",
     "productName": "Time Series Explorer",
-    "copyright": "Copyright © 2026 Franco Ferrucci",
+    "copyright": "Copyright \u00a9 2026 Franco Ferrucci",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "icon": "build/icons/timeseries-explorer-icon.png",
     "directories": {

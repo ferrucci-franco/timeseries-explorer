@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { appendCopyButton } from '../../ui/copy-button.js';
 import { blockText } from '../../utils/clipboard.js';
@@ -150,19 +151,6 @@ function finiteOrNull(value) {
 
 function hasFinite(value) {
     return value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
-}
-
-function utcInputValue(ms) {
-    const number = Number(ms);
-    if (!Number.isFinite(number)) return '';
-    const date = new Date(number);
-    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 19);
-}
-
-function utcInputMs(value) {
-    if (!value) return NaN;
-    const number = Date.parse(`${value}Z`);
-    return Number.isFinite(number) ? number : NaN;
 }
 
 function rgba(color, alpha) {
@@ -446,8 +434,8 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
         hideKey: 'edgeHideOptions',
         showKey: 'edgeShowOptions',
         onToggle: () => this._toggleTemporalProfileOptions(panelId),
-    }), options);
-    container.append(topbar, workspace);
+    }), createAnalysisSide(topbar, options));
+    container.append(workspace);
     panelEl.appendChild(container);
 
     plot.temporalProfileContainer = container;
@@ -1295,6 +1283,9 @@ proto._toggleTemporalProfileTimeSeries = function(panelId) {
         this._refreshPanelDomOverlays(plot);
     }
     if (plot.temporalProfileDiv) this._resizePlotlyDiv(plot.temporalProfileDiv);
+    // The analysis pane's floating fit buttons go when it is the only pane
+    // left: the toolbar's are then its own.
+    this._refreshAnalysisFitButtons(plot);
 };
 
 proto._toggleTemporalProfileOptions = function(panelId) {
@@ -1454,65 +1445,33 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         return input;
     };
 
-    row(i18n.t('fftRange'), segmented([
-        { label: i18n.t('fftRangeFull'), value: true, title: i18n.t('analysisRangeFullTooltip') },
-        { label: i18n.t('fftRangeSelection'), value: false, title: i18n.t('analysisRangeSelectionTooltip') },
-    ], state.rangeFull, full => this._setTemporalProfileRangeMode(panelId, full), { wrapperClass: 'fft-segmented', buttonClass: '' }), '', 'fft-option-row');
+    // The shared range block (analysis-range-methods.js), as every analysis
+    // has it. This mode is calendar-only, so its bounds are always instants.
     const domain = this._temporalProfileDomain(plot);
     const activeRange = this._activeTemporalProfileRange(plot);
-    const boundBlock = (labelText, key, index) => {
-        const wrap = document.createElement('div');
-        wrap.className = 'fft-range-bound fft-range-bound-datetime';
-        const label = document.createElement('label');
-        label.className = 'fft-option-row';
-        label.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
-        const span = document.createElement('span');
-        span.textContent = labelText;
-        const input = document.createElement('input');
-        input.type = 'datetime-local';
-        input.step = '1';
-        input.className = 'fft-number-input';
-        input.dataset.profileKey = key;
-        input.dataset.profileRole = 'input';
-        input.disabled = state.rangeFull;
-        input.value = utcInputValue(activeRange[index]);
-        input.addEventListener('change', () => {
-            let value = utcInputMs(input.value);
-            if (Number.isFinite(value) && domain) value = Math.max(domain.min, Math.min(domain.max, value));
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = Number.isFinite(value) ? value : null;
-            this._updateTemporalProfileSelectionShapes(panelId, plot);
-            this._scheduleTemporalProfileRecompute(panelId);
-        });
-        label.append(span, input);
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.className = 'fft-range-input';
-        slider.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
-        slider.dataset.profileKey = key;
-        slider.dataset.profileRole = 'slider';
-        slider.disabled = state.rangeFull;
-        if (domain) { slider.min = String(domain.min); slider.max = String(domain.max); slider.step = 'any'; }
-        if (Number.isFinite(activeRange[index])) slider.value = String(activeRange[index]);
-        slider.addEventListener('input', () => {
-            const number = Number(slider.value);
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = Number.isFinite(number) ? number : null;
-            this._updateTemporalProfileSelectionShapes(panelId, plot);
-        });
-        slider.addEventListener('change', () => this._scheduleTemporalProfileRecompute(panelId));
-        wrap.append(label, slider);
-        return wrap;
+    const writeBound = (key, value) => {
+        let v = value;
+        if (v !== null && domain) v = Math.max(domain.min, Math.min(domain.max, v));
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
+        state[key] = v;
+        this._updateTemporalProfileSelectionShapes(panelId, plot);
     };
-    const rangeGrid = document.createElement('div');
-    rangeGrid.className = 'fft-range-grid';
-    rangeGrid.append(
-        boundBlock(i18n.t('fftRangeStart'), 'x1', 0),
-        boundBlock(i18n.t('fftRangeEnd'), 'x2', 1),
-    );
-    options.appendChild(rangeGrid);
+    options.appendChild(this._buildAnalysisRangeSection({
+        prefix: 'profile',
+        rangeFull: state.rangeFull,
+        lo: activeRange[0],
+        hi: activeRange[1],
+        domain,
+        calendar: true,
+        onMode: (full) => this._setTemporalProfileRangeMode(panelId, full),
+        onType: (key, value) => {
+            writeBound(key, value);
+            this._scheduleTemporalProfileRecompute(panelId);
+        },
+        onSlide: (key, value) => writeBound(key, value),
+        onCommit: () => this._scheduleTemporalProfileRecompute(panelId),
+    }));
 
     section(text('temporalProfilePeriod'));
     options.appendChild(segmented([
@@ -1692,13 +1651,14 @@ proto._syncTemporalProfileOptionsPanel = function(plot) {
     const options = this._temporalProfileOptionsPanel(plot);
     if (!options) return;
     const [lo, hi] = this._activeTemporalProfileRange(plot);
-    const values = { x1: lo, x2: hi };
-    for (const key of ['x1', 'x2']) {
-        const input = options.querySelector(`input[data-profile-role="input"][data-profile-key="${key}"]`);
-        const slider = options.querySelector(`input[data-profile-role="slider"][data-profile-key="${key}"]`);
-        if (input && document.activeElement !== input) input.value = utcInputValue(values[key]);
-        if (slider && document.activeElement !== slider && Number.isFinite(values[key])) slider.value = String(values[key]);
-    }
+    this._syncAnalysisRangeSection(options, {
+        prefix: 'profile',
+        rangeFull: this._ensureTemporalProfileState(plot).rangeFull,
+        lo,
+        hi,
+        domain: this._temporalProfileDomain(plot),
+        calendar: true,
+    });
 };
 
 proto._syncTemporalProfileSummary = function(plot) {

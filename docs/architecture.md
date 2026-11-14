@@ -53,6 +53,19 @@ Owns plot state and every Plotly-driven behavior.
   - state animation mode
 - `methods/interaction-methods.js`
   - hover sync, cursors, 3D controls, toolbar actions
+- `methods/analysis-range-methods.js`
+  - the range section every analysis shows (Full / Selection, and the two
+    bounds with their sliders): one builder and one sync, so a new analysis
+    gets the block rather than a copy of it
+- `methods/analysis-fit-methods.js`
+  - whose the toolbar's Fit X / Fit Y / Fit all are: the time series while it
+    is on screen, and the analysis' own pane when it is folded away — which
+    is also why that pane carries three floating buttons of its own while
+    both are shown
+- `analysis-side.js`
+  - an analysis' side panel: its own buttons (V/H, hide the time series,
+    Reset, Options, status) as the header of its options drawer, rather than
+    a bar across the whole panel above the plots
 - `methods/dashboard-methods.js`
   - Dashboard mode: the panel's traces as cards with their value (the last
     one read, or the one at the instant of a time slider); a card's unit is

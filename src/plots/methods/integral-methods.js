@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { appendCopyButton } from '../../ui/copy-button.js';
 import { tableText } from '../../utils/clipboard.js';
@@ -152,19 +153,6 @@ function finiteOrNull(value) {
 
 function hasFinite(value) {
     return value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
-}
-
-function utcInputValue(ms) {
-    const number = Number(ms);
-    if (!Number.isFinite(number)) return '';
-    const date = new Date(number);
-    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 19);
-}
-
-function utcInputMs(value) {
-    if (!value) return NaN;
-    const number = Date.parse(`${value}Z`);
-    return Number.isFinite(number) ? number : NaN;
 }
 
 function escapeHtml(value) {
@@ -399,8 +387,8 @@ proto._createIntegralChart = function(panelId, panelEl) {
         hideKey: 'edgeHideOptions',
         showKey: 'edgeShowOptions',
         onToggle: () => this._toggleIntegralOptions(panelId),
-    }), options);
-    container.append(topbar, workspace);
+    }), createAnalysisSide(topbar, options));
+    container.append(workspace);
     panelEl.appendChild(container);
 
     plot.integralContainer = container;
@@ -770,6 +758,9 @@ proto._toggleIntegralTimeSeries = function(panelId) {
     }
     if (plot.integralDiv) Plotly.Plots.resize(plot.integralDiv);
     if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
+    // The analysis pane's floating fit buttons go when it is the only pane
+    // left: the toolbar's are then its own.
+    this._refreshAnalysisFitButtons(plot);
 };
 
 proto._toggleIntegralOptions = function(panelId) {
@@ -1830,68 +1821,33 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
         return element;
     };
 
-    // ── Range: the exact block every other analysis mode uses ──
-    row(i18n.t('fftRange'), segmented([
-        { label: i18n.t('fftRangeFull'), value: true, title: i18n.t('analysisRangeFullTooltip') },
-        { label: i18n.t('fftRangeSelection'), value: false, title: i18n.t('analysisRangeSelectionTooltip') },
-    ], state.rangeFull, full => this._setIntegralRangeMode(panelId, full), { wrapperClass: 'fft-segmented', buttonClass: '' }), '', 'fft-option-row');
-
+    // ── Range: the shared block (analysis-range-methods.js) ──
     const domain = this._integralDomain(plot);
     const activeRange = this._activeIntegralRange(plot);
     const calendar = this._integralHasCalendarAxis(plot);
-    const boundBlock = (labelText, key, index) => {
-        const wrap = document.createElement('div');
-        wrap.className = `fft-range-bound${calendar ? ' fft-range-bound-datetime' : ''}`;
-        const label = document.createElement('label');
-        label.className = 'fft-option-row';
-        label.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
-        const span = document.createElement('span');
-        span.textContent = labelText;
-        const input = document.createElement('input');
-        input.type = calendar ? 'datetime-local' : 'number';
-        if (calendar) input.step = '1';
-        input.className = 'fft-number-input';
-        input.dataset.integralKey = key;
-        input.dataset.integralRole = 'input';
-        input.disabled = state.rangeFull;
-        input.value = calendar ? utcInputValue(activeRange[index]) : String(activeRange[index] ?? '');
-        input.addEventListener('change', () => {
-            let value = calendar ? utcInputMs(input.value) : Number(input.value);
-            if (Number.isFinite(value) && domain) value = Math.max(domain.min, Math.min(domain.max, value));
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = Number.isFinite(value) ? value : null;
-            this._updateIntegralSelectionShapes(panelId, plot);
-            this._scheduleIntegralRecompute(panelId);
-        });
-        label.append(span, input);
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.className = 'fft-range-input';
-        slider.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
-        slider.dataset.integralKey = key;
-        slider.dataset.integralRole = 'slider';
-        slider.disabled = state.rangeFull;
-        if (domain) { slider.min = String(domain.min); slider.max = String(domain.max); slider.step = 'any'; }
-        if (Number.isFinite(activeRange[index])) slider.value = String(activeRange[index]);
-        slider.addEventListener('input', () => {
-            const number = Number(slider.value);
-            state.autoRangeWarning = null;
-            state.autoRangeLimited = false;
-            state[key] = Number.isFinite(number) ? number : null;
-            this._updateIntegralSelectionShapes(panelId, plot);
-        });
-        slider.addEventListener('change', () => this._scheduleIntegralRecompute(panelId));
-        wrap.append(label, slider);
-        return wrap;
+    const writeBound = (key, value) => {
+        let v = value;
+        if (v !== null && domain) v = Math.max(domain.min, Math.min(domain.max, v));
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
+        state[key] = v;
+        this._updateIntegralSelectionShapes(panelId, plot);
     };
-    const rangeGrid = document.createElement('div');
-    rangeGrid.className = 'fft-range-grid';
-    rangeGrid.append(
-        boundBlock(i18n.t('fftRangeStart'), 'x1', 0),
-        boundBlock(i18n.t('fftRangeEnd'), 'x2', 1),
-    );
-    options.appendChild(rangeGrid);
+    options.appendChild(this._buildAnalysisRangeSection({
+        prefix: 'integral',
+        rangeFull: state.rangeFull,
+        lo: activeRange[0],
+        hi: activeRange[1],
+        domain,
+        calendar,
+        onMode: (full) => this._setIntegralRangeMode(panelId, full),
+        onType: (key, value) => {
+            writeBound(key, value);
+            this._scheduleIntegralRecompute(panelId);
+        },
+        onSlide: (key, value) => writeBound(key, value),
+        onCommit: () => this._scheduleIntegralRecompute(panelId),
+    }));
 
     // ── Integration ──
     section(text('integralIntegration'));
@@ -2064,22 +2020,14 @@ proto._syncIntegralOptionsPanel = function(plot) {
     const options = this._integralOptionsPanel(plot);
     if (!options) return;
     const state = this._ensureIntegralState(plot);
-    const calendar = this._integralHasCalendarAxis(plot);
     const range = this._activeIntegralRange(plot);
-    options.querySelectorAll('[data-integral-key]').forEach(input => {
-        const index = input.dataset.integralKey === 'x1' ? 0 : 1;
-        input.disabled = !!state.rangeFull;
-        if (document.activeElement === input) return;
-        if (input.dataset.integralRole === 'slider') {
-            if (Number.isFinite(range[index])) input.value = String(range[index]);
-        } else {
-            input.value = calendar ? utcInputValue(range[index]) : String(range[index] ?? '');
-        }
-    });
-    options.querySelectorAll('.fft-segmented button').forEach((button, index) => {
-        const isFull = index === 0;
-        button.classList.toggle('active', !!state.rangeFull === isFull);
-        button.setAttribute('aria-pressed', String(!!state.rangeFull === isFull));
+    this._syncAnalysisRangeSection(options, {
+        prefix: 'integral',
+        rangeFull: state.rangeFull,
+        lo: range[0],
+        hi: range[1],
+        domain: this._integralDomain(plot),
+        calendar: this._integralHasCalendarAxis(plot),
     });
 };
 

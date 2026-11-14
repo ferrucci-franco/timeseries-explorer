@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
@@ -8,6 +9,7 @@ import { seedTrendBand } from '../../utils/trend-fit.js';
 import { csvValueCell } from '../../utils/csv-cell.js';
 import {
     TREND_CURVES,
+    TREND_DEFAULT_EXP_MODEL,
     TREND_EXP_OPTIONS,
     TREND_LAYOUTS,
     TREND_MAX_SEGMENTS,
@@ -67,22 +69,14 @@ const finiteOrNull = (value) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
 };
+// The band's bounds are in the signal's own units, where two decimals would
+// be a lie: they keep their precision. (The time bounds are the shared range
+// section's, which rounds what it SHOWS, as every analysis does.)
 const formatInputValue = (value) => {
     const n = Number(value);
     if (!Number.isFinite(n)) return '';
     if (n !== 0 && Math.abs(n) < 0.01) return n.toExponential(3);
     return String(Number(n.toPrecision(10)));
-};
-const msToDatetimeInput = (ms) => {
-    const n = Number(ms);
-    if (!Number.isFinite(n)) return '';
-    const d = new Date(n);
-    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 19);
-};
-const datetimeInputToMs = (text) => {
-    if (!text) return NaN;
-    const ms = Date.parse(`${text}Z`);
-    return Number.isFinite(ms) ? ms : NaN;
 };
 // Four significant digits for the table; 'N/A' for what is not a number.
 const cell = (value) => (Number.isFinite(value) ? formatFitCoefficient(value) : '—');
@@ -219,8 +213,10 @@ export function installPlotTrendMethods(TargetClass) {
             // computed (or after they were cancelled) the previous ones.
             const shown = entry.result || entry.staleResult || null;
             if (!shown || !entry.trace) continue;
-            for (const kind of TREND_CURVES) {
-                if (state.curves[kind] === false) continue;
+            for (const kind of [...TREND_CURVES, 'exp']) {
+                // The three the table always reports are drawn when they are
+                // ticked; the exponential, when the segment has one.
+                if (kind !== 'exp' && state.curves[kind] === false) continue;
                 const curve = shown.curves?.[kind];
                 if (!curve?.x?.length) continue;
                 const label = kind === 'exp'
@@ -613,8 +609,8 @@ export function installPlotTrendMethods(TargetClass) {
             hideKey: 'edgeHideOptions',
             showKey: 'edgeShowOptions',
             onToggle: () => this._toggleTrendOptions(panelId),
-        }), options);
-        container.append(topbar, workspace);
+        }), createAnalysisSide(topbar, options));
+        container.append(workspace);
         panelEl.appendChild(container);
 
         plot.trendContainer = container;
@@ -1104,13 +1100,14 @@ export function installPlotTrendMethods(TargetClass) {
             exponential: art('<path class="art-line" d="M12 11C32 38 56 46 110 47"/>'),
             'exponential-offset': art('<path class="art-bound" d="M12 36h98"/>'
                 + '<path class="art-line" d="M12 11C32 31 56 36 110 36"/>'),
+            // A first-order response leaves its starting value at its
+            // steepest and flattens from there — it does not ease in.
             'first-order': art('<path class="art-bound" d="M12 12h98"/>'
-                + '<path class="art-line" d="M12 47C40 47 56 15 110 12"/>'),
+                + '<path class="art-line" d="M12 47C32 20 56 13 110 12"/>'),
             'first-order-offset': art('<path class="art-bound" d="M12 12h98M12 36h98"/>'
-                + '<path class="art-line" d="M12 36C40 36 56 15 110 12"/>'),
+                + '<path class="art-line" d="M12 36C32 17 56 13 110 12"/>'),
         };
         const cards = TREND_EXP_OPTIONS
-            .filter(option => option.id !== 'none')
             .map(option => {
                 const parts = fitEquationParts({ status: 'ok', model: option.id }, 't′');
                 return '<figure class="trend-exp-card">'
@@ -1426,19 +1423,24 @@ export function installPlotTrendMethods(TargetClass) {
         });
         drawer.appendChild(field('trendSignal', signalSelect));
 
-        // 3) Range
+        // 3) Range — the shared block (analysis-range-methods.js), as every
+        // analysis has it: Full / Selection, and the two bounds with sliders.
         const usesCalendar = !!trace && this._canonicalFftKind(trace.fileId) === 'datetime';
-        const segmented = document.createElement('div');
-        segmented.className = 'fft-segmented';
-        const makeSegment = (labelKey, tooltipKey, isFull) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = i18n.t(labelKey);
-            button.title = i18n.t(tooltipKey);
-            button.classList.toggle('active', !!segment.rangeFull === isFull);
-            button.addEventListener('click', (event) => {
-                event.preventDefault();
-                if (!!segment.rangeFull === isFull) return;
+        const [lo, hi] = this._trendRange(plot, segment);
+        const boundPatch = (key, value) => {
+            const [curLo, curHi] = this._trendRange(plot, segment);
+            return key === 'x1' ? { x1: value, x2: curHi } : { x1: curLo, x2: value };
+        };
+        drawer.appendChild(this._buildAnalysisRangeSection({
+            prefix: 'trend',
+            rangeFull: segment.rangeFull,
+            lo,
+            hi,
+            domain: this._trendTraceDomain(trace) || this._trendDomain(plot),
+            calendar: usesCalendar,
+            fullTooltipKey: 'trendRangeFullTooltip',
+            selectionTooltipKey: 'trendRangeSelectionTooltip',
+            onMode: (isFull) => {
                 const patch = { rangeFull: isFull };
                 if (!isFull && (segment.x1 === null || segment.x2 === null)) {
                     const probe = { ...segment };
@@ -1447,42 +1449,22 @@ export function installPlotTrendMethods(TargetClass) {
                     patch.x2 = probe.x2;
                 }
                 this._updateTrendSegment(panelId, patch);
-            });
-            return button;
-        };
-        segmented.append(
-            makeSegment('fftRangeFull', 'trendRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'trendRangeSelectionTooltip', false),
-        );
-        drawer.appendChild(makeRow(i18n.t('fftRange'), segmented));
-        const [lo, hi] = this._trendRange(plot, segment);
-        const makeTimeInput = (key, value) => {
-            const input = document.createElement('input');
-            input.type = usesCalendar ? 'datetime-local' : 'number';
-            input.step = usesCalendar ? '1' : 'any';
-            input.className = 'fft-number-input';
-            input.dataset.trendKey = key;
-            input.value = usesCalendar ? msToDatetimeInput(value) : formatInputValue(value);
-            input.disabled = !!segment.rangeFull;
-            input.addEventListener('change', () => {
-                const n = usesCalendar ? datetimeInputToMs(input.value) : Number(input.value);
-                if (!Number.isFinite(n)) return;
-                const [curLo, curHi] = this._trendRange(plot, segment);
-                this._updateTrendSegment(panelId, key === 'x1' ? { x1: n, x2: curHi } : { x1: curLo, x2: n });
-            });
-            return input;
-        };
-        const rangeGrid = document.createElement('div');
-        rangeGrid.className = 'fft-range-grid';
-        const bound = (labelKey, key, value) => {
-            const wrap = document.createElement('div');
-            wrap.className = 'fft-range-bound';
-            if (usesCalendar) wrap.classList.add('fft-range-bound-datetime');
-            wrap.appendChild(makeRow(i18n.t(labelKey), makeTimeInput(key, value)));
-            return wrap;
-        };
-        rangeGrid.append(bound('fftRangeStart', 'x1', lo), bound('fftRangeEnd', 'x2', hi));
-        drawer.appendChild(rangeGrid);
+            },
+            onType: (key, value) => {
+                if (value === null) return;
+                this._updateTrendSegment(panelId, boundPatch(key, value));
+            },
+            // A drag writes the bounds and redraws the band at once, but
+            // must not rebuild the drawer under the finger: the numbers are
+            // recomputed when the drag ends, as a drag on the plot does.
+            onSlide: (key, value) => {
+                if (value === null) return;
+                Object.assign(segment, boundPatch(key, value));
+                this._updateTrendSelectionShapes(plot);
+                this._syncTrendRangeInputs(plot);
+            },
+            onCommit: () => this._scheduleTrendRecompute(panelId),
+        }));
 
         // 4) The value band
         const bandBlock = document.createElement('div');
@@ -1535,7 +1517,9 @@ export function installPlotTrendMethods(TargetClass) {
         bandGrid.className = 'fft-range-grid trend-band-grid';
         for (const [labelKey, key] of [['trendBandLower', 'lower'], ['trendBandUpper', 'upper']]) {
             const wrap = document.createElement('div');
-            wrap.className = 'fft-range-bound';
+            // The band's two bounds borrow the range block's two-up layout,
+            // and say so: they are values, not a time range.
+            wrap.className = 'fft-range-bound trend-band-bound';
             wrap.appendChild(makeRow(i18n.t(labelKey), makeBandInput(key, finiteOrNull(segment[key]))));
             bandGrid.appendChild(wrap);
         }
@@ -1578,23 +1562,9 @@ export function installPlotTrendMethods(TargetClass) {
         bandBlock.appendChild(sigmaHint);
         drawer.appendChild(bandBlock);
 
-        // 5) The exponential of this segment
-        const expSelect = document.createElement('select');
-        expSelect.className = 'phase2d-fit-type-select trend-exp-select';
-        expSelect.setAttribute('aria-label', i18n.t('trendExp'));
-        for (const option of TREND_EXP_OPTIONS) {
-            const el = document.createElement('option');
-            el.value = option.id;
-            el.textContent = i18n.t(option.key);
-            el.selected = option.id === (segment.expModel || 'none');
-            expSelect.appendChild(el);
-        }
-        expSelect.addEventListener('change', () => this._updateTrendSegment(panelId, { expModel: expSelect.value }));
-        const expField = field('trendExp', expSelect, helpButton('trendExpHelpTitle', () => this._showTrendExpHelp()));
-        expField.title = i18n.t('trendExpTip');
-        drawer.appendChild(expField);
-
-        // 6) Which curves are drawn
+        // 5) What is drawn over the signal — and, under its own tick box, the
+        // exponential, which is the one of the four that has to be asked for
+        // before there is anything to draw.
         const curvesBlock = document.createElement('div');
         curvesBlock.className = 'trend-curves-block';
         const curvesTitle = document.createElement('div');
@@ -1617,6 +1587,42 @@ export function installPlotTrendMethods(TargetClass) {
             label.append(box, text);
             curvesBlock.appendChild(label);
         }
+
+        const expOn = !!segment.expModel && segment.expModel !== 'none';
+        const expLabel = document.createElement('label');
+        expLabel.className = 'curve-fit-extrapolate trend-curve-toggle';
+        expLabel.title = i18n.t('trendExpTip');
+        const expBox = document.createElement('input');
+        expBox.type = 'checkbox';
+        expBox.checked = expOn;
+        expBox.dataset.trendCurve = 'exp';
+        expBox.addEventListener('change', () => this._updateTrendSegment(panelId, {
+            expModel: expBox.checked ? (state.expChoice || TREND_DEFAULT_EXP_MODEL) : 'none',
+        }));
+        const expText = document.createElement('span');
+        expText.textContent = i18n.t(CURVE_LABEL_KEY.exp);
+        expLabel.append(expBox, expText, helpButton('trendExpHelpTitle', () => this._showTrendExpHelp()));
+        curvesBlock.appendChild(expLabel);
+
+        const expSelect = document.createElement('select');
+        expSelect.className = 'phase2d-fit-type-select trend-exp-select';
+        expSelect.setAttribute('aria-label', i18n.t('trendExp'));
+        expSelect.disabled = !expOn;
+        for (const option of TREND_EXP_OPTIONS) {
+            const el = document.createElement('option');
+            el.value = option.id;
+            el.textContent = i18n.t(option.key);
+            el.selected = option.id === (expOn ? segment.expModel : state.expChoice);
+            expSelect.appendChild(el);
+        }
+        expSelect.addEventListener('change', () => {
+            state.expChoice = expSelect.value;
+            this._updateTrendSegment(panelId, { expModel: expSelect.value });
+        });
+        const expRow = document.createElement('div');
+        expRow.className = 'trend-exp-row';
+        expRow.appendChild(expSelect);
+        curvesBlock.appendChild(expRow);
         drawer.appendChild(curvesBlock);
 
         // 7) Unit of t′
@@ -1814,12 +1820,19 @@ export function installPlotTrendMethods(TargetClass) {
         const segment = this._trendActiveSegment(plot);
         if (!drawer || !segment) return;
         const trace = this._trendTraceFor(plot, segment);
-        const usesCalendar = !!trace && this._canonicalFftKind(trace.fileId) === 'datetime';
         const [lo, hi] = this._trendRange(plot, segment);
-        for (const [key, value] of [['x1', lo], ['x2', hi]]) {
-            const input = drawer.querySelector(`.fft-number-input[data-trend-key="${key}"]`);
-            if (input) input.value = usesCalendar ? msToDatetimeInput(value) : formatInputValue(value);
-        }
+        // `force`: this runs from a drag — of a segment edge on the plot, or of
+        // one of the sliders — and the drag is what wrote these numbers, so the
+        // control under the pointer is not an exception to them.
+        this._syncAnalysisRangeSection(drawer, {
+            prefix: 'trend',
+            rangeFull: segment.rangeFull,
+            lo,
+            hi,
+            domain: this._trendTraceDomain(trace) || this._trendDomain(plot),
+            calendar: !!trace && this._canonicalFftKind(trace.fileId) === 'datetime',
+            force: true,
+        });
     };
 
     proto._syncTrendBandInputs = function(plot) {
