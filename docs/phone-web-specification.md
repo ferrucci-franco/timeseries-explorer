@@ -718,8 +718,12 @@ For an **analysis** the rule is enforced in code. Its placement is one entry in
 `src/app/methods/compact-analyses.js`: the radio in the Analyze sheet, whether a tap
 in Data gives it a signal or half a pair (and how either comes off again), the pane
 it draws beside its time pane (and how that pane's axes are fitted, or that nothing
-on it can be), what turning it off leaves, its reset, the rest of its top bar, and
-the options panel it lends to the sheet. An analysis that is not a mode of its own —
+on it can be), which of its two panes its own plot is and which of them the user can
+fold away, what turning it off leaves, its reset, the rest of its top bar, and
+the options panel it lends to the sheet. The desktop layout reads the same entry:
+`mainPane` and `hidden` are what tell it whose the toolbar's Fit X / Fit Y / Fit all
+are (`src/plots/methods/analysis-fit-methods.js`), so there is one description of
+these panels and not two. An analysis that is not a mode of its own —
 one a plot opens over itself, as a 2D plot does its curve fit — says so in the same
 entry: the plot mode it lives on, how it is recognised on a plot, and how it is
 turned on and off. The phone asks the plot which analysis it carries, never the mode
