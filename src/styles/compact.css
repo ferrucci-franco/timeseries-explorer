@@ -5716,3 +5716,101 @@ html.compact .modal-dialog-stats .stats-table-wrap {
     max-height: none;
     overflow: visible;
 }
+
+/* ── The audio strip on a phone ──────────────────────────────────────────
+   The desktop strip is one row that scrolls sideways when the panel is
+   narrow; at a phone's width everything past the signal list was cut off,
+   and its buttons were 22 px. Here it is three rows at a finger's size:
+   play, stop, loop, the time and mute; the seek bar across the whole width;
+   the signal and Remove DC. The phone's own buttons set the volume, so the
+   volume slider goes; mute stays. Opened from the Plot sheet (Sound). */
+html.compact .audio-strip {
+    padding: 6px 10px;
+    font-size: 0.9rem;
+}
+
+html.compact .audio-strip-row {
+    display: grid;
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+        "play stop loop time mute"
+        "seek seek seek seek seek"
+        "source source source dc dc";
+    align-items: center;
+    gap: 4px 8px;
+    overflow: visible;
+}
+
+html.compact .audio-btn {
+    min-width: 44px;
+    height: 40px;
+    border-radius: 8px;
+}
+
+html.compact .audio-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+html.compact .audio-play { grid-area: play; }
+html.compact .audio-stop { grid-area: stop; }
+html.compact .audio-loop { grid-area: loop; }
+html.compact .audio-mute { grid-area: mute; }
+
+html.compact .audio-readout {
+    grid-area: time;
+    justify-self: center;
+    font-size: 0.85rem;
+}
+
+html.compact .audio-seek {
+    grid-area: seek;
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    margin: 0;
+}
+
+html.compact .audio-field {
+    grid-area: source;
+    min-width: 0;
+}
+
+html.compact .audio-source {
+    width: 100%;
+    max-width: none;
+    height: 40px;
+    border-radius: 8px;
+    font-size: 1rem;
+}
+
+html.compact .audio-dc {
+    grid-area: dc;
+    justify-self: end;
+    min-height: 40px;
+    gap: 6px;
+}
+
+html.compact .audio-dc-input {
+    width: 20px;
+    height: 20px;
+}
+
+/* The panel is a whole phone wide: the labels the container queries drop
+   for a narrow desktop panel are kept, except the signal's, which the
+   list itself names. */
+html.compact .audio-strip .audio-label {
+    display: none;
+}
+
+html.compact .audio-strip .audio-dc-text {
+    display: inline;
+}
+
+html.compact .audio-volume {
+    display: none;
+}
+
+html.compact .audio-strip-note {
+    font-size: 0.8rem;
+}

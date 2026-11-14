@@ -165,6 +165,9 @@ const OWN_CLOSE_BUTTONS = '.plot-settings-header-close, .help-modal-close, .comp
 // in their narrow header): the new ✕ presses it.
 const REPLACED_CLOSE_BUTTONS = '.feedback-close, .desktop-download-close';
 
+// The modes whose panel toolbar has the 🔊 button (audio-methods.js).
+const COMPACT_AUDIO_MODES = new Set(['timeseries', 'fft', 'histogram', 'integral']);
+
 // After a sheet settles: Plotly measures its container, so resizing during the
 // slide would redraw every frame.
 const SHEET_SETTLE_MS = 240;
@@ -1708,6 +1711,7 @@ export function installCompactMethods(ViewerClass) {
         }
 
         this._buildCompactCursorSection(node, plot);
+        this._buildCompactSoundSection(node, panelId, plot);
         this._buildCompactOutputSection(node, panelId, plot);
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
@@ -1767,6 +1771,40 @@ export function installCompactMethods(ViewerClass) {
         node.appendChild(signals);
 
         return { title: i18n.t('compactNavPlot'), node };
+    };
+
+    // Sound: the desktop toolbar's 🔊, which opens the audio strip under the
+    // plot (audio-methods.js). The strip is the same one; compact.css lays it
+    // out at a finger's size. Offered where the desktop offers the button —
+    // a time series and the analyses drawn from it — and, where nothing can
+    // be played, disabled with the reason the desktop puts in its tooltip.
+    proto._buildCompactSoundSection = function(node, panelId, plot) {
+        const pm = this.plotManager;
+        if (!plot || !pm._hasContent(plot) || !COMPACT_AUDIO_MODES.has(plot.mode)) return;
+        const open = !!plot.audio?.open;
+        const playable = pm._audioPanelPlayable(plot);
+        const wrap = section(i18n.t('compactSoundSection'));
+        const row = el('label', 'compact-switch-row compact-sound-switch');
+        const input = el('input');
+        input.type = 'checkbox';
+        input.checked = open;
+        // An open strip can always be closed, even once nothing in it plays.
+        input.disabled = !playable && !open;
+        input.addEventListener('change', () => {
+            pm._toggleAudioStrip(panelId);
+            if (plot.audio?.open) {
+                // The strip is under the plot: the sheet makes way for it.
+                this._closeCompactSheet();
+            } else {
+                this._renderCompactSheetContent();
+            }
+        });
+        row.append(el('span', '', i18n.t('compactSoundSwitch')), input);
+        wrap.appendChild(row);
+        wrap.appendChild(el('p', 'compact-note compact-sound-note', playable
+            ? i18n.t('compactSoundNote')
+            : pm._audioButtonTitle(plot)));
+        node.appendChild(wrap);
     };
 
     // Σ and Export: the two buttons at the end of the desktop panel toolbar,

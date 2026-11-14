@@ -58,6 +58,16 @@ Built:
   plot and not the part the sheet left above it. Σ is disabled, saying why, where
   the desktop's is (`_panelStatsAvailable`). Files are downloaded; sending them
   through Web Share is still to come;
+- **Sound** in the Plot sheet (§5.2): a switch that opens the desktop's audio strip
+  under the plot and puts the sheet away, offered where the desktop's 🔊 is (a time
+  series, FFT, the histogram, the integral) and, where nothing can be heard,
+  disabled with the reason the desktop gives in its tooltip. The strip is the same
+  one (`audio-methods.js`), laid out by `compact.css` in three rows at a finger's
+  size: play, stop, loop, the time and mute; the seek bar across the screen; the
+  signal and Remove DC. The phone's own buttons set the volume, so the volume
+  slider is hidden. A tap on the plot moves the sound there, as a click does on the
+  desktop. The chart follows the strip's height when its note line comes and goes
+  (`_heightObserver`, which also fixes the desktop strip covering the axis);
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
@@ -76,7 +86,7 @@ The code is in `src/app/methods/compact-methods.js`,
 `src/ui/compact-layout.js`, `src/utils/cursor-handles.js` and
 `src/styles/compact.css`. The tests are `npm run test:compact-layout`,
 `npm run test:compact-derived`, `npm run test:compact-tools`,
-`npm run test:cursor-handles`, `npm run e2e:compact-layout`,
+`npm run test:cursor-handles`, `npm run e2e:compact-layout`, `npm run e2e:compact-audio`,
 `npm run e2e:compact-derived` and `npm run e2e:compact-tools`.
 
 Not built yet:
@@ -266,7 +276,8 @@ compact mode hides the panel toolbar.
 - Autoscale, and linked time axes.
 - **View**: log, stack, Y2, line shape.
 - **Marks**: NaN, gaps, repeated, samples.
-- Legend position, cursors, compare files, audio strip.
+- Legend position, cursors, compare files.
+- **Sound**: the audio strip, built (see the list at the top).
 - **Statistics and export**: statistics (Σ) and **Export** (§8.3), built.
   Export closes the sheet before the dialog opens: the image is the plot at the
   size it has on the screen.

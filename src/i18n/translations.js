@@ -2966,6 +2966,9 @@ const translations = {
             compactExportButton: 'Export…',
             compactExportNote: 'The data as CSV, or the plot as an image: PNG at 1× to 4× quality, or SVG. With a sheet open, the plot is exported at its full size.',
             compactStatsOwnResults: 'This analysis reports its own results; panel statistics are for time series, 2D and 3D plots.',
+            compactSoundSection: 'Sound',
+            compactSoundSwitch: 'Listen to the signal',
+            compactSoundNote: 'Play, pause, a seek bar and the choice of signal appear under the plot. A tap on the plot moves the sound there.',
             compactHelpCursors: 'Cursors: A|B in the plot’s corner turns them on. Drag the A and B tabs at the foot of the lines; hold one still, then drag, to move both. In their sheet the arrows step to the next sample, peak, trough or zero. Hidden, the sheet leaves Δx and Δy in the top bar.',
             compactMoreActions: 'More actions',
             // Derived variables on a phone (compact-derived-methods.js)
@@ -6069,6 +6072,9 @@ const translations = {
             compactExportButton: 'Exporter…',
             compactExportNote: 'Les données en CSV, ou le graphique en image : PNG en qualité 1× à 4×, ou SVG. Le graphique est exporté à sa taille entière, même avec un panneau ouvert.',
             compactStatsOwnResults: 'Cette analyse donne ses propres résultats ; les statistiques du panneau concernent les séries temporelles et les graphiques 2D et 3D.',
+            compactSoundSection: 'Son',
+            compactSoundSwitch: 'Écouter le signal',
+            compactSoundNote: 'Lecture, pause, une barre de position et le choix du signal apparaissent sous le graphique. Un appui sur le graphique y déplace le son.',
             compactHelpCursors: 'Curseurs : A|B dans le coin du graphique les active. Faites glisser les onglets A et B au pied des lignes ; gardez-en un appuyé, puis glissez, pour déplacer les deux. Dans leur panneau, les flèches vont au prochain échantillon, pic, creux ou zéro. Masqué, le panneau laisse Δx et Δy dans la barre du haut.',
             compactMoreActions: 'Plus d’actions',
             // Derived variables on a phone (compact-derived-methods.js)
@@ -9141,6 +9147,9 @@ const translations = {
             compactExportButton: 'Exportar…',
             compactExportNote: 'Los datos en CSV, o el gráfico como imagen: PNG con calidad de 1× a 4×, o SVG. El gráfico se exporta a su tamaño completo, aunque haya un panel abierto.',
             compactStatsOwnResults: 'Este análisis da sus propios resultados; las estadísticas del panel son para series temporales y gráficos 2D y 3D.',
+            compactSoundSection: 'Sonido',
+            compactSoundSwitch: 'Escuchar la señal',
+            compactSoundNote: 'Reproducir, pausar, una barra de posición y la elección de la señal aparecen debajo del gráfico. Un toque en el gráfico lleva el sonido a ese punto.',
             compactHelpCursors: 'Cursores: A|B en la esquina del gráfico los enciende. Arrastra las pestañas A y B al pie de las líneas; mantén una quieta y luego arrastra para mover las dos. En su panel, las flechas van a la siguiente muestra, pico, valle o cero. Oculto, el panel deja Δx y Δy en la barra superior.',
             compactMoreActions: 'Más acciones',
             // Derived variables on a phone (compact-derived-methods.js)
@@ -12213,6 +12222,9 @@ const translations = {
             compactExportButton: 'Esporta…',
             compactExportNote: 'I dati in CSV, o il grafico come immagine: PNG con qualità da 1× a 4×, o SVG. Il grafico viene esportato a dimensione intera, anche con un pannello aperto.',
             compactStatsOwnResults: 'Questa analisi riporta i propri risultati; le statistiche del pannello sono per serie temporali e grafici 2D e 3D.',
+            compactSoundSection: 'Suono',
+            compactSoundSwitch: 'Ascolta il segnale',
+            compactSoundNote: 'Riproduci, pausa, una barra di posizione e la scelta del segnale compaiono sotto il grafico. Un tocco sul grafico porta lì il suono.',
             compactHelpCursors: 'Cursori: A|B nell’angolo del grafico li attiva. Trascina le linguette A e B ai piedi delle linee; tienine ferma una, poi trascina, per spostarle entrambe. Nel loro pannello le frecce vanno al successivo campione, picco, valle o zero. Nascosto, il pannello lascia Δx e Δy nella barra in alto.',
             compactMoreActions: 'Altre azioni',
             // Derived variables on a phone (compact-derived-methods.js)
@@ -15307,6 +15319,9 @@ const translations = {
             compactExportButton: '导出…',
             compactExportNote: '将数据导出为 CSV，或将图导出为图像：PNG（1× 至 4× 质量）或 SVG。即使面板已打开，也按图的完整尺寸导出。',
             compactStatsOwnResults: '此分析给出自己的结果；面板统计适用于时间序列、2D 和 3D 图。',
+            compactSoundSection: '声音',
+            compactSoundSwitch: '收听信号',
+            compactSoundNote: '播放、暂停、进度条和信号选择会出现在图下方。轻触图即可将声音移到该处。',
             compactHelpCursors: '光标：图表角落的 A|B 可开启光标。拖动竖线底部的 A 和 B 标签；按住其中一个不动，再拖动，可同时移动两者。在其面板中，箭头可跳到下一个采样点、峰值、谷值或零点。隐藏后，面板会将 Δx 和 Δy 留在顶部栏中。',
             compactMoreActions: '更多操作',
             // Derived variables on a phone (compact-derived-methods.js)
