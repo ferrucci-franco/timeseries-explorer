@@ -17,7 +17,9 @@
 //   · a browser that holds the sound back: the strip says to tap ▶ again,
 //     and that tap retries; the page asks iOS to play as media;
 //   · on iOS, a silent media element plays with the sound (the silent switch
-//     mutes Web Audio otherwise) and stops with it; nowhere else.
+//     mutes Web Audio otherwise) and stops with it; nowhere else;
+//   · the Plot sheet removes the first plot, and then the only one, which
+//     leaves a new, empty plot.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:compact-audio`.
 import assert from 'node:assert/strict';
@@ -227,6 +229,35 @@ try {
     await page.waitForFunction(() => !document.querySelector('.compact-active-panel .audio-strip'));
     assert.equal((await audio()).open, false, 'off, the strip goes');
     assert.equal(await page.locator('.compact-sound-switch input').isChecked(), false, 'and the switch says so');
+
+    // ── Removing plots: the first, and then the only one ────────────────────
+    // With one plot left the button used to vanish, so the first plot could
+    // never be removed. The layout always keeps a panel, so removing the only
+    // plot leaves a new, empty one in its place.
+    {
+        const panelIds = () => page.evaluate(() => window.app._compactPanelIds());
+        const removeBtn = page.locator('.compact-page-plot .compact-remove-plot-btn');
+        if (await page.evaluate(() => window.app._compact.sheet) !== 'plot') await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+        await page.waitForFunction(() => window.app._compact.sheet === 'plot');
+        assert.equal((await panelIds()).length, 2);
+        await page.locator('.compact-plot-item').first().click();
+        const [first, second] = await panelIds();
+        await removeBtn.click();
+        assert.deepEqual(await panelIds(), [second], 'the first plot is removed, the second stays');
+        assert.equal(await removeBtn.count(), 1, 'the one left, which has signals, can be removed too');
+        await removeBtn.click();
+        const fresh = await panelIds();
+        assert.equal(fresh.length, 1, 'removing the only plot leaves one');
+        assert.ok(!fresh.includes(second) && !fresh.includes(first), 'a new one');
+        assert.deepEqual(await page.evaluate(() => {
+            const pm = window.app.plotManager;
+            const plot = pm.plots.get(window.app._compactActivePanelId());
+            return { mode: plot?.mode || 'timeseries', content: !!plot && pm._hasContent(plot), strip: !!document.querySelector('.compact-active-panel .audio-strip') };
+        }), { mode: 'timeseries', content: false, strip: false }, 'empty: no signals, no sound strip, a time series');
+        assert.equal(await page.locator('.compact-plot-selector-label').innerText(), 'Plot 1 of 1', 'and the app bar says so');
+        assert.equal(await removeBtn.count(), 0, 'an empty plot alone has nothing to remove');
+        await page.locator('.compact-sheet-close').click();
+    }
 
     assert.deepEqual(errors, [], 'no page error');
 

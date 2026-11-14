@@ -39,6 +39,10 @@ import { DEMO_MODE, demoParam } from './demo-mode.js';
 
 class OpenModelicaViewer {
     constructor() {
+        // Safari on iOS applies :active — the pressed look every button has
+        // (base.css) — only on a page that listens for touches. An empty,
+        // passive listener is the switch; it blocks no scrolling.
+        document.addEventListener('touchstart', () => {}, { passive: true });
         this.parser      = new MatParser();
         this.csvParser   = new CsvParser(this.parser);
         this.files       = new Map();   // fileId → { file, name }

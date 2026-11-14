@@ -2795,6 +2795,14 @@ html.compact .compact-page-time-axis .file-transform-actions button:disabled {
     opacity: 0.45;
 }
 
+/* Done (content.css): the same green mark at a phone's size, over the sheet's
+   own colours for Apply and Reset all. */
+html.compact .compact-page-time-axis .file-transform-actions button.is-done.is-done {
+    background: color-mix(in srgb, var(--success-color) 22%, var(--bg-tertiary));
+    color: var(--text-primary);
+    box-shadow: inset 0 0 0 2px var(--success-color);
+}
+
 html.compact .compact-page-time-axis .file-transform-wide-action {
     width: 100%;
     color: var(--primary-color);

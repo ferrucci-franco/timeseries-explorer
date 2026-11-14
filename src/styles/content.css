@@ -971,6 +971,22 @@
     color: var(--text-primary);
 }
 
+/* Done: Apply, Reset and Reset all redraw the panel, so the pressed button is
+   replaced at once; its successor says the work was done (file-methods.js,
+   _markTransformButtonDone). Doubled class to win over the compact sheet's
+   own button colours. */
+.file-transform-actions button.is-done.is-done {
+    border-color: var(--success-color);
+    background: color-mix(in srgb, var(--success-color) 18%, var(--bg-primary));
+    color: var(--text-primary);
+}
+
+.file-transform-actions button.is-done::before {
+    content: '✓ ';
+    color: var(--success-color);
+    font-weight: 700;
+}
+
 /* ── Help modal ──────────────────────────────────────────────── */
 .help-backdrop {
     position: fixed;
