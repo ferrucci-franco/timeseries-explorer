@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
@@ -7,8 +8,6 @@ import {
     computeAmplitudeSpectrum,
     windowSpectrumForDisplay,
     fftWindowCoefficients,
-    formatNaturalDuration,
-    frequencyPeriod,
     nextPowerOfTwo,
     normalizeFftScale,
     normalizeFftWindow,
@@ -1690,22 +1689,6 @@ proto._buildFftSpectrumTrace = function(plot, entry, range) {
     const asPeriod = isPeriod ? periodSeriesFromSpectrum(windowed.frequencies, windowed.amplitudes) : null;
     const dispX = isPeriod ? asPeriod.periods : windowed.frequencies;
     const dispAmps = isPeriod ? asPeriod.amplitudes : windowed.amplitudes;
-    // What the hover shows on its second line: the other reading of the same
-    // bin. Frequency axis → its period; period axis → its frequency.
-    const dispOther = isPeriod ? asPeriod.frequencies : windowed.frequencies;
-    const periodUnit = this._fftCursorPeriodUnit(plot);
-    const otherValues = new Float64Array(dispX.length);
-    // Dense (filled with '') — a sparse array leaves holes that Plotly renders
-    // as "-" in %{text}, so the hover showed e.g. "1.09227 s-" instead of "s".
-    const naturalPeriodSuffixes = new Array(dispX.length).fill('');
-    for (let i = 0; i < dispX.length; i++) {
-        const other = isPeriod ? Number(dispOther[i]) : frequencyPeriod(Number(dispOther[i]));
-        otherValues[i] = other;
-        const period = isPeriod ? Number(dispX[i]) : other;
-        if (periodUnit === 's' && Number.isFinite(period) && period >= 60) {
-            naturalPeriodSuffixes[i] = ` (${formatNaturalDuration(period, 2)})`;
-        }
-    }
     const full = entry.frequencies;
     const fullExtent = isPeriod
         ? periodExtentOf(full)
@@ -1713,8 +1696,6 @@ proto._buildFftSpectrumTrace = function(plot, entry, range) {
     return {
         x: dispX,
         y: dispAmps,
-        customdata: otherValues,
-        text: naturalPeriodSuffixes,
         // WebGL keeps the windowed envelope smooth to pan/zoom and is cheap for
         // the bounded point count.
         type: 'scattergl',
@@ -1722,9 +1703,10 @@ proto._buildFftSpectrumTrace = function(plot, entry, range) {
         name: entry.name,
         visible: entry.visible,
         line: { color: entry.color, width: 1.5 },
-        hovertemplate: isPeriod
-            ? `<b>%{fullData.name}</b><br>${i18n.t('fftPeriod')}${periodUnit ? ` [${periodUnit}]` : ''} = %{x:.6g}%{text}<br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{customdata:.6g}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`
-            : `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftPeriod')} = %{customdata:.6g}${periodUnit ? ` ${periodUnit}` : ''}%{text}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
+        // The numbers are written by the readout (utils/hover-readout.js), the
+        // same rule as every other hover: "627.4 µs", not "0.000627379 s".
+        hovertemplate: `<b>%{fullData.name}</b><br>${HOVER_READOUT_TOKEN}<extra></extra>`,
+        _hoverReadout: this._fftSpectrumHoverReadout(plot, isPeriod),
         _fftFullIndex: entry.index,
         _fftExtent: {
             ...fullExtent,
@@ -1732,6 +1714,35 @@ proto._buildFftSpectrumTrace = function(plot, entry, range) {
             yMax: entry.yExtent?.max,
         },
     };
+};
+
+// What a spectrum hover reads: the axis value, the other reading of the same
+// bin (frequency ↔ period), and the amplitude. The axis value keeps the digits
+// that tell two neighbouring bins apart ('local'); the rest have four.
+proto._fftSpectrumHoverReadout = function(plot, isPeriod) {
+    const periodUnit = this._fftCursorPeriodUnit(plot);
+    const bracket = text => String(text || '').trim().replace(/^\[|\]$/g, '');
+    const frequencyUnit = bracket(this._fftFrequencyUnitSuffix(plot));
+    const amplitudeUnit = bracket(this._fftAmplitudeUnitSuffix(plot));
+    const label = key => `${this._escapeHTML(i18n.t(key))}`;
+    const frequency = { label: label('fftFrequency'), unit: frequencyUnit };
+    const period = {
+        label: label('fftPeriod'),
+        unit: periodUnit,
+        // A period of a minute or more also reads as a duration, in seconds only.
+        ...(periodUnit === 's' ? { suffix: 'naturalDuration' } : {}),
+    };
+    const amplitude = { label: label('fftAmplitudeShort'), source: 'y', unit: amplitudeUnit };
+    // Only the axis reading needs the extra digits; the other one is a second
+    // name for a bin the first already tells apart, and reads in four.
+    const lines = isPeriod
+        ? [{ ...period, source: 'x', resolution: 'local' }, { ...frequency, source: 'x', map: 'reciprocal' }, amplitude]
+        : [{ ...frequency, source: 'x', resolution: 'local' }, { ...period, source: 'x', map: 'reciprocal' }, amplitude];
+    const unitText = unit => (unit ? ` ${this._escapeHTML(unit)}` : '');
+    const fallback = isPeriod
+        ? `${period.label} = %{x:.6g}${unitText(periodUnit)}<br>${amplitude.label} = %{y:.4~g}${unitText(amplitudeUnit)}`
+        : `${frequency.label} = %{x:.6g}${unitText(frequencyUnit)}<br>${amplitude.label} = %{y:.4~g}${unitText(amplitudeUnit)}`;
+    return { lines, fallback };
 };
 
 // Zoom/pan on the spectrum re-windows each visible trace to the new frequency
@@ -1744,8 +1755,6 @@ proto._refreshFftSpectrumWindow = function(panelId, plot = this.plots.get(panelI
     const indices = [];
     const xs = [];
     const ys = [];
-    const customs = [];
-    const texts = [];
     data.forEach((tr, i) => {
         if (!tr || tr.visible === 'legendonly' || tr._fftFullIndex == null) return;
         const entry = plot._fftSpectraFull[tr._fftFullIndex];
@@ -1754,11 +1763,9 @@ proto._refreshFftSpectrumWindow = function(panelId, plot = this.plots.get(panelI
         indices.push(i);
         xs.push(built.x);
         ys.push(built.y);
-        customs.push(built.customdata);
-        texts.push(built.text);
     });
     if (!indices.length) return;
-    Plotly.restyle(plot.fftDiv, { x: xs, y: ys, customdata: customs, text: texts }, indices);
+    Plotly.restyle(plot.fftDiv, { x: xs, y: ys }, indices);
 };
 
 proto._fftSeriesForTrace = async function(trace, range, state, signal = null) {

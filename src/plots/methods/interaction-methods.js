@@ -2101,7 +2101,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                                 axis: this._traceYAxis(t, plot),
                             });
                         }
-                        lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(ydata[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
+                        lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatReadoutHTML(ydata[tidx], unit)}`);
                     }
                 });
                 this._renderHoverOverlay(plot, plotXVal, markers);
@@ -2140,8 +2140,8 @@ proto._onHover = function(sourcePanelId, eventData) {
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${yu ? ' ' + this._escapeHTML(yu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatReadoutHTML(xdata[tidx], xu)}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatReadoutHTML(ydata[tidx], yu)}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -2179,8 +2179,8 @@ proto._onHover = function(sourcePanelId, eventData) {
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         const xu = this._extractUnit(xv.description), zu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${zu ? ' ' + this._escapeHTML(zu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatReadoutHTML(xdata[tidx], xu)}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatReadoutHTML(ydata[tidx], zu)}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -2221,7 +2221,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                             const dataName = [pt2.x, pt2.y, pt2.z][vi];
                             const values = this._getTransformedVariableData(pt2.fileId, dataName);
                             const u = this._extractUnit(v.description);
-                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatHTMLNumber(values[tidx])}${u ? ' ' + this._escapeHTML(u) : ''}`);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatReadoutHTML(values[tidx], u)}`);
                         });
                     }
                 });

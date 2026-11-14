@@ -4,6 +4,7 @@ import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { appendCopyButton } from '../../ui/copy-button.js';
 import { blockText } from '../../utils/clipboard.js';
 import Plotly from '../../vendor/plotly.js';
+import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import {
     buildTemporalProfile,
     inferTemporalProfileStepMs,
@@ -141,6 +142,10 @@ const fallbackText = {
 function text(key) {
     const translated = i18n.t(key);
     return translated && translated !== key ? translated : (fallbackText[key] || key);
+}
+
+function escapeText(value) {
+    return String(value ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 }
 
 function finiteOrNull(value) {
@@ -929,7 +934,16 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
             const abscissa = model.result.absoluteBins
                 ? `${text('temporalProfileYear')} = %{customdata[6]}`
                 : 'x = %{x:.4g}';
-            const hovertemplate = `<b>%{fullData.name}</b><br>${abscissa}<br>${text('temporalProfileMean')} = %{y:.6g}<br>${text('temporalProfileStd')} = %{customdata[0]:.6g}<br>${text('temporalProfileCoverage')} = %{customdata[1]}/%{customdata[2]} (%{customdata[3]:.1%})<br>${text('temporalProfileInvalid')} = %{customdata[4]}<br>${text('temporalProfileGaps')} = %{customdata[5]}<extra></extra>`;
+            // Mean and standard deviation are written by the readout
+            // (utils/hover-readout.js), in the signal's unit: "7.213 mV".
+            const hoverReadout = {
+                lines: [
+                    { label: escapeText(text('temporalProfileMean')), source: 'y', unit: model.unit || '' },
+                    { label: escapeText(text('temporalProfileStd')), source: 'customdata', index: 0, unit: model.unit || '' },
+                ],
+                fallback: `${escapeText(text('temporalProfileMean'))} = %{y:.4~g}<br>${escapeText(text('temporalProfileStd'))} = %{customdata[0]:.4~g}`,
+            };
+            const hovertemplate = `<b>%{fullData.name}</b><br>${abscissa}<br>${HOVER_READOUT_TOKEN}<br>${text('temporalProfileCoverage')} = %{customdata[1]}/%{customdata[2]} (%{customdata[3]:.1%})<br>${text('temporalProfileInvalid')} = %{customdata[4]}<br>${text('temporalProfileGaps')} = %{customdata[5]}<extra></extra>`;
             if (state.renderMode === 'columns') {
                 const barTrace = {
                     type: 'bar', x, y,
@@ -940,6 +954,7 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
                         line: { color, width: 1 },
                     },
                     customdata, hovertemplate,
+                    _hoverReadout: hoverReadout,
                 };
                 // Overlay fills the complete calendar bin. In group mode the
                 // width must be omitted so Plotly can divide and offset the
@@ -983,6 +998,7 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
                 name, visible, meta,
                 line: { color, width: 2 },
                 customdata, hovertemplate,
+                _hoverReadout: hoverReadout,
                 connectgaps: false,
             });
         });

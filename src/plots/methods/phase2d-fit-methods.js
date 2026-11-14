@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
+import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import Modal from '../../ui/modal.js';
 import { createCopyButton } from '../../ui/copy-button.js';
 import {
@@ -423,9 +424,15 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 mode: 'lines',
                 name: `${modelWord} · ${r.label}`,
                 line: { color: r.pair.color, width: 2.5, dash: 'dash' },
-                hovertemplate: `<b>${this._escapeHTML(modelWord)}</b><br>`
-                    + `x = %{x:.4g}<br>ŷ = %{y:.4g}`
+                hovertemplate: `<b>${this._escapeHTML(modelWord)}</b><br>${HOVER_READOUT_TOKEN}`
                     + `<extra>${this._escapeHTML(r.label)}</extra>`,
+                _hoverReadout: {
+                    lines: [
+                        { label: 'x', source: 'x', unit: this._variableUnit(r.pair?.fileId, r.pair?.x) },
+                        { label: 'ŷ', source: 'y', unit: this._variableUnit(r.pair?.fileId, r.pair?.y) },
+                    ],
+                    fallback: 'x = %{x:.4~g}<br>ŷ = %{y:.4~g}',
+                },
                 _phase2dFit: true,
             });
         }

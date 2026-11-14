@@ -355,28 +355,19 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     // preformatted period readout, and measurement cursors must render each
     // frequency and period on separate semantic rows. These intentionally
     // avoid asserting the surrounding HTML whitespace or localized labels.
-    assert.match(fftMethodsSource, /\bfrequencyPeriod\b/, 'spectrum builds a period value for every frequency');
-    assert.match(fftMethodsSource, /\bformatNaturalDuration\b/, 'spectrum hover builds compact natural suffixes');
-    // customdata carries the OTHER reading of each bin — its period on a
-    // frequency axis, its frequency on a period one (#108) — in a compact
-    // typed array either way.
-    assert.match(
-        fftMethodsSource,
-        /const otherValues = new Float64Array\(dispX\.length\)/,
-        'spectrum keeps the second reading in a compact typed array',
-    );
-    assert.match(fftMethodsSource, /customdata:\s*otherValues/, 'spectrum carries those numbers through customdata');
-    assert.match(fftMethodsSource, /text:\s*naturalPeriodSuffixes/, 'spectrum carries only natural-unit suffixes through text');
-    assert.match(
-        fftMethodsSource,
-        /fftPeriod[^\n]*%\{customdata:\.6g\}[^\n]*%\{text\}/,
-        'the frequency-axis hover combines numeric customdata with the optional natural suffix',
-    );
-    assert.match(
-        fftMethodsSource,
-        /fftPeriod[^\n]*= %\{x:\.6g\}%\{text\}[^\n]*fftFrequency[^\n]*%\{customdata:\.6g\}/,
-        'and the period-axis hover reads the period off x, with the frequency beside it',
-    );
+    // The spectrum hover is a declared readout (utils/hover-readout.js): the
+    // axis value with the digits that tell neighbouring bins apart, the other
+    // reading of the same bin (frequency ↔ period) and the amplitude, each
+    // with an SI prefix where it needs one — "627.4 µs", not "0.000627379 s".
+    // scripts/test-readout-format.mjs checks the numbers and
+    // scripts/e2e-hover-readout.mjs the box Plotly draws.
+    assert.match(fftMethodsSource, /_hoverReadout: this\._fftSpectrumHoverReadout\(plot, isPeriod\)/,
+        'the spectrum trace declares its readout');
+    assert.match(fftMethodsSource, /map: 'reciprocal'/, 'the other reading of a bin is its reciprocal');
+    assert.match(fftMethodsSource, /suffix: 'naturalDuration'/, 'a long period also reads as a duration');
+    assert.match(fftMethodsSource, /resolution: 'local'/, 'the axis value keeps the digits its bins need');
+    assert.doesNotMatch(fftMethodsSource, /%\{(?:x|y|customdata):\.6g\}%\{text\}/,
+        'the six-digit d3 hovers are gone');
     assert.match(interactionMethodsSource, /\bformatSpectrumPeriod\b/, 'measurement cursors use the shared period formatter');
     assert.match(
         interactionMethodsSource,

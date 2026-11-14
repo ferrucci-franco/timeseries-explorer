@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
+import { HOVER_READOUT_TOKEN, fillHoverReadout } from '../src/utils/hover-readout.js';
+import { formatReadout } from '../src/utils/readout-format.js';
 import {
     HOVER_MAX_SIGNIFICANT_DIGITS,
     HOVER_MIN_SIGNIFICANT_DIGITS,
@@ -102,25 +104,49 @@ class Harness {
 
 installPlotDataMethods(Harness);
 
-const hoverFormatOf = (step, count) => {
+// The trace declares its readout (utils/hover-readout.js) and the Plotly
+// wrapper writes it; here it is written the same way, from the arrays drawn.
+const builtTrace = (step, count, sourceRows = null) => {
     const harness = new Harness(step, count);
+    if (sourceRows) harness.files.get(FILE_ID).data._duckdb = { totalRows: sourceRows };
     const trace = { fileId: FILE_ID, varName: 'y', color: '#2196f3' };
     const plot = { mode: 'timeseries', traces: [trace], timeseriesStacked: false, timeseriesY2Enabled: false };
-    const built = harness._buildTimeTrace(trace, null, plot, 0);
-    return /Time \[s\]<\/b> = %\{x:(\.\d+g)\}/.exec(built.hovertemplate)?.[1];
+    return harness._buildTimeTrace(trace, null, plot, 0);
 };
+const timeLine = built => built._hoverReadout.lines.find(line => line.label === '<b>Time</b>');
+const timeTextAt = (built, i) => /<b>Time<\/b> = ([^<]+)/.exec(fillHoverReadout({ ...built }, { decimal: '.' }).hovertext[i])?.[1];
 
-assert.equal(hoverFormatOf(0.01, 1001), '.4g', 'an ordinary axis keeps its four digits');
-const fineFormat = hoverFormatOf(1e-7, 100_000);
-assert.ok(fineFormat && Number(fineFormat.slice(1, -1)) >= 6,
-    `the 100 ns trace asks Plotly for more digits (got ${fineFormat})`);
+const ordinary = builtTrace(0.01, 1001);
+assert.ok(ordinary.hovertemplate.includes(HOVER_READOUT_TOKEN), 'the time series hovers through the readout');
+assert.equal(timeLine(ordinary).unit, 's', 'the time line carries the axis unit');
+assert.ok(Math.abs(timeLine(ordinary).resolution - 0.01) < 1e-12, 'and the axis step');
 
-// The decimated x array is what Plotly gets, but the digits come from the file:
-// decimation drops samples, it does not make the timestamps coarser.
-assert.equal(hoverFormatOf(1e-7, 100_000), hoverFormatOf(1e-7, 100_000), 'stable across builds');
+// The reported case: a 100 ns step. The decimated x keeps one sample in fifty,
+// but the digits come from the file: two neighbouring samples must differ.
+const fineTrace = builtTrace(1e-7, 100_000);
+const fineStep = timeLine(fineTrace).resolution;
+assert.ok(Math.abs(fineStep - 1e-7) < 1e-15, `the resolution is the file's step, not the drawn one (${fineStep})`);
+assert.notEqual(
+    formatReadout(0.0123456, { unit: 's', resolution: fineStep, format: { decimal: '.' } }),
+    formatReadout(0.0123457, { unit: 's', resolution: fineStep, format: { decimal: '.' } }),
+    'two samples 100 ns apart read differently',
+);
+assert.doesNotMatch(timeTextAt(fineTrace, 3), /e[-+]?\d/, 'no exponent in the time readout');
+
+// A memory-saving file has only an overview in memory: its step is the
+// file's row count over the span, not the overview's.
+const lazyTrace = builtTrace(1e-3, 1001, 1_000_001);
+assert.ok(Math.abs(timeLine(lazyTrace).resolution - 1e-6) < 1e-15,
+    `a lazy file's step comes from its row count (${timeLine(lazyTrace).resolution})`);
+
+// The value line carries the variable's unit, which left the label.
+const valueLine = ordinary._hoverReadout.lines.find(line => line.source === 'y');
+assert.equal(valueLine.unit, 'V');
+assert.equal(valueLine.label, '<b>y</b>');
 
 const dataMethods = readFileSync(new URL('../src/plots/methods/data-methods.js', import.meta.url), 'utf8');
-assert.match(dataMethods, /hoverNumberFormat\(timeData\)/, 'the time hover asks the axis how many digits it needs');
+assert.match(dataMethods, /hoverAxisResolution\(timeData, fileData\._duckdb\?\.totalRows\)/,
+    'the time readout asks the axis for its step');
 assert.doesNotMatch(dataMethods, /Time \[\$\{hoverTimeUnit\}\]<\/b> = %\{x:\.4g\}/,
     'the hardcoded four digits are gone from the time readout');
 

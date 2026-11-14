@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
+import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import Modal from '../../ui/modal.js';
 import { createCopyButton } from '../../ui/copy-button.js';
 import { buildFitCurve } from '../../utils/regression.js';
@@ -434,8 +435,8 @@ export function installPlotCurveFitMethods(TargetClass) {
                 yaxis: this._traceYAxis(r.trace, plot),
                 line: { color: r.color, width: 2.5, dash: 'dash' },
                 customdata: curve.tPrime,
-                hovertemplate: `<b>${this._escapeHTML(name)}</b><br>t′ = %{customdata:.4g} ${this._escapeHTML(r.result.unit || '')}`
-                    + '<br>ŷ = %{y:.4g}<extra></extra>',
+                hovertemplate: `<b>${this._escapeHTML(name)}</b><br>${HOVER_READOUT_TOKEN}<extra></extra>`,
+                _hoverReadout: this._fitCurveHoverReadout(r.result.unit, r.trace),
                 meta: { curveFitIndex: r.index },
             });
             const outside = extrapolate ? this._curveFitExtrapolatedCurve(r) : null;
@@ -452,8 +453,8 @@ export function installPlotCurveFitMethods(TargetClass) {
                     opacity: 0.8,
                     customdata: outside.tPrime,
                     hovertemplate: `<b>${this._escapeHTML(name)}</b> (${this._escapeHTML(i18n.t('curveFitExtrapolatedShort'))})`
-                        + `<br>t′ = %{customdata:.4g} ${this._escapeHTML(r.result.unit || '')}`
-                        + '<br>ŷ = %{y:.4g}<extra></extra>',
+                        + `<br>${HOVER_READOUT_TOKEN}<extra></extra>`,
+                    _hoverReadout: this._fitCurveHoverReadout(r.result.unit, r.trace),
                     meta: { curveFitIndex: r.index, curveFitExtrapolated: true },
                 });
             }
@@ -602,6 +603,20 @@ export function installPlotCurveFitMethods(TargetClass) {
         return layout;
     };
 
+    // A fitted curve's hover: the fit's own time t′ in the unit it was fitted
+    // in, and ŷ in the signal's unit, both written by the readout
+    // (utils/hover-readout.js). Shared by the curve fit and the trend.
+    proto._fitCurveHoverReadout = function(timeUnit, trace) {
+        const unit = this._variableUnit(trace?.fileId, trace?.varName);
+        return {
+            lines: [
+                { label: 't′', source: 'customdata', unit: timeUnit || '' },
+                { label: 'ŷ', source: 'y', unit },
+            ],
+            fallback: `t′ = %{customdata:.4~g} ${this._escapeHTML(timeUnit || '')}<br>ŷ = %{y:.4~g}`,
+        };
+    };
+
     proto._refreshCurveFitResiduals = function(plot, results = plot._curveFitResults || []) {
         const div = plot?.curveFitResidualDiv;
         if (!div) return Promise.resolve();
@@ -617,7 +632,11 @@ export function installPlotCurveFitMethods(TargetClass) {
                 mode: 'lines',
                 name,
                 line: { color: r.color, width: 1.2 },
-                hovertemplate: `<b>${name}</b> y − ŷ = %{y:.4g}<extra></extra>`,
+                hovertemplate: `<b>${name}</b> ${HOVER_READOUT_TOKEN}<extra></extra>`,
+                _hoverReadout: {
+                    lines: [{ label: 'y − ŷ', source: 'y', unit: this._variableUnit(r.trace?.fileId, r.trace?.varName) }],
+                    fallback: 'y − ŷ = %{y:.4~g}',
+                },
             });
         }
         return Plotly.react(div, traces, this._buildCurveFitResidualLayout(plot), this._getPlotlyConfig());

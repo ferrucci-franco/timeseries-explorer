@@ -7,6 +7,7 @@ import { installTouchPlotGestures } from '../ui/plot-touch-gestures.js';
 import { install3DSceneGestures } from '../ui/plot-3d-gestures.js';
 import { compactPlotLayout, compactPlotRelayout } from '../utils/compact-plot-layout.js';
 import { keepOverlayLegendsFromPushing } from '../utils/overlay-legend-margins.js';
+import { fillHoverReadout, hoverReadoutRestyle } from '../utils/hover-readout.js';
 
 const Plotly = globalThis.Plotly;
 
@@ -71,6 +72,19 @@ const withSeparators = (layout) => {
 
 const layoutFor = layout => withSeparators(largerFonts() ? compactPlotLayout(layout) : layout);
 
+// Hover readouts (utils/hover-readout.js): a trace that declares
+// `_hoverReadout` gets its `hovertext` written here from the x/y/z it is drawn
+// with, by every call that hands Plotly new data. Kept out of the trace
+// builders because a time series reaches Plotly by half a dozen restyle paths,
+// and one of them forgetting would show the previous window's numbers.
+const readoutFormat = () => ({ decimal: plotSeparators()[0] || '.' });
+const fillReadouts = (data) => {
+    if (Array.isArray(data)) data.forEach(trace => fillHoverReadout(trace, readoutFormat()));
+    else if (data && typeof data === 'object') fillHoverReadout(data, readoutFormat());
+    return data;
+};
+const withReadoutRestyle = (div, update, traces) => hoverReadoutRestyle(div?.data, update, traces, readoutFormat());
+
 const nativeNewPlot = Plotly.newPlot.bind(Plotly);
 const nativeRelayout = Plotly.relayout.bind(Plotly);
 // An overlay legend must not squeeze the plot (utils/overlay-legend-margins.js).
@@ -80,13 +94,25 @@ const nativeRelayout = Plotly.relayout.bind(Plotly);
 const unsqueeze = (drawn, div) => (keepOverlayLegendsFromPushing(drawn || div)
     ? nativeRelayout(drawn || div, { 'margin.autoexpand': true }).then(() => drawn, () => drawn)
     : drawn);
-Plotly.newPlot = (div, data, layout, ...rest) => nativeNewPlot(div, data, layoutFor(layout), ...rest)
+Plotly.newPlot = (div, data, layout, ...rest) => nativeNewPlot(div, fillReadouts(data), layoutFor(layout), ...rest)
     .then(drawn => unsqueeze(drawn, div))
     .then(drawn => withTouchGestures(drawn, div));
 const nativeReact = Plotly.react.bind(Plotly);
-Plotly.react = (div, data, layout, ...rest) => nativeReact(div, data, layoutFor(layout), ...rest)
+Plotly.react = (div, data, layout, ...rest) => nativeReact(div, fillReadouts(data), layoutFor(layout), ...rest)
     .then(drawn => unsqueeze(drawn, div))
     .then(drawn => withTouchGestures(drawn, div));
+const nativeRestyle = Plotly.restyle.bind(Plotly);
+Plotly.restyle = (div, update, ...rest) => {
+    // The (div, 'attr', value, traces) form never carries a readout's data in
+    // this app; only the object form is rewritten.
+    if (!update || typeof update !== 'object') return nativeRestyle(div, update, ...rest);
+    return nativeRestyle(div, withReadoutRestyle(div, update, rest[0]), ...rest);
+};
+const nativeUpdate = Plotly.update.bind(Plotly);
+Plotly.update = (div, traceUpdate, layoutUpdate, traces, ...rest) => nativeUpdate(div,
+    withReadoutRestyle(div, traceUpdate, traces), layoutUpdate, traces, ...rest);
+const nativeAddTraces = Plotly.addTraces.bind(Plotly);
+Plotly.addTraces = (div, traces, ...rest) => nativeAddTraces(div, fillReadouts(traces), ...rest);
 Plotly.relayout = (div, update, ...rest) => nativeRelayout(div,
     largerFonts() && update && typeof update === 'object' ? compactPlotRelayout(update) : update, ...rest);
 

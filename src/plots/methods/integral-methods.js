@@ -4,6 +4,7 @@ import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { appendCopyButton } from '../../ui/copy-button.js';
 import { tableText } from '../../utils/clipboard.js';
 import Plotly from '../../vendor/plotly.js';
+import { formatReadout } from '../../utils/readout-format.js';
 import {
     calendarPeriodWindows,
     collectMissingDays,
@@ -1334,7 +1335,9 @@ proto._buildIntegralTraces = function(plot, models = []) {
     // The hover always shows all three quantities, whichever one the bars are
     // plotting: a total is only readable next to the duration it spans, and the
     // mean is that comparison made explicit.
-    const withUnit = (value, unit) => (value == null ? '—' : `${formatNumber(value, 6)}${unit ? ` ${unit}` : ''}`);
+    // The hover reads like every other (utils/readout-format.js): four digits,
+    // an SI prefix folded into the unit outside 0.01–10 000 ("12.35 kV·h").
+    const withUnit = (value, unit) => (value == null ? '—' : escapeHtml(formatReadout(value, { unit, format: i18n.numberFormat })));
     const customdata = view.rows.map(row => [
         withUnit(row.value, view.resultUnit),
         withUnit(row.perDay, view.perDayUnit),
@@ -1412,7 +1415,9 @@ proto._buildGroupedIntegralTraces = function(plot, models, view) {
     // fit between them. A year of days is 365 columns: printed values there are
     // not a reading, they are a texture.
     const showValues = state.showValues && view.categories.length <= GROUPED_VALUE_LABEL_LIMIT;
-    const withUnit = (value, unit) => (value == null ? '—' : `${formatNumber(value, 6)}${unit ? ` ${unit}` : ''}`);
+    // The hover reads like every other (utils/readout-format.js): four digits,
+    // an SI prefix folded into the unit outside 0.01–10 000 ("12.35 kV·h").
+    const withUnit = (value, unit) => (value == null ? '—' : escapeHtml(formatReadout(value, { unit, format: i18n.numberFormat })));
     const traces = view.series.map((entry) => {
         const values = entry.points.map(point => point.scaled);
         const customdata = entry.points.map(point => [

@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
+import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import Modal from '../../ui/modal.js';
 import { createCopyButton } from '../../ui/copy-button.js';
 import { fitEquationParts, formatFitCoefficient } from '../../utils/fit-models.js';
@@ -233,8 +234,8 @@ export function installPlotTrendMethods(TargetClass) {
                     yaxis: this._traceYAxis(entry.trace, plot),
                     line: { color: entry.color, width: style.width, dash: style.dash },
                     customdata: curve.tPrime,
-                    hovertemplate: `<b>${this._escapeHTML(name)}</b><br>t′ = %{customdata:.4g} ${this._escapeHTML(shown.unit || '')}`
-                        + '<br>ŷ = %{y:.4g}<extra></extra>',
+                    hovertemplate: `<b>${this._escapeHTML(name)}</b><br>${HOVER_READOUT_TOKEN}<extra></extra>`,
+                    _hoverReadout: this._fitCurveHoverReadout(shown.unit, entry.trace),
                     meta: { trendIndex: entry.index, trendCurve: kind },
                 });
             }

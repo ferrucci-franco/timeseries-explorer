@@ -1,7 +1,8 @@
 import i18n from '../../i18n/index.js';
 import { getCalendarDateTickFormat } from '../plotly-locale.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
-import { hoverNumberFormat } from '../../utils/hover-precision.js';
+import { hoverAxisResolution, hoverNumberFormat } from '../../utils/hover-precision.js';
+import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import { distinguishingParameterNames, runParameterLabel } from '../../utils/run-parameters.js';
 import { countDistinctPositions, sampleMarkersVisible, SAMPLE_POSITION_SCAN_LIMIT } from '../../utils/sample-markers.js';
 import { quoteIdent, rowIndexWindow } from '../../data/lazy-tool-sql.js';
@@ -112,6 +113,12 @@ export function installPlotDataMethods(TargetClass) {
             return v?.displayName || varName;
         };
     }
+
+    // The unit a variable's description carries ("[V]"), '' when it has none.
+    proto._variableUnit = function(fileId, varName) {
+        const description = this.files.get(fileId)?.data?.variables?.[varName]?.description;
+        return description ? this._extractUnit(description) : '';
+    };
 
     if (!proto._phaseTraceName) {
         proto._phaseTraceName = function(plot, pt) {
@@ -2080,22 +2087,39 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const runParams = this._runParameterLabel(t.fileId);
     const runSuffix = runParams ? `<br><i>${this._escapeHTML(runParams)}</i>` : '';
     const hoverTimeUnit = this._escapeHTML(timeUnit);
-    const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
     const primaryCalendarTimeFormat = this._calendarTimeFormat(primaryTimeTrace.fileId, primaryTimeVar);
     const calendarHoverFormat = this._calendarTickFormat(primaryTimeTrace.fileId, primaryTimeVar);
     const durationFractionDigits = this._durationFractionDigits(t.fileId);
     const stackAttrs = this._timeseriesStackAttrs(plot, traceIndex);
     const yaxis = this._traceYAxis(t, plot);
+    // A numeric time axis is written by the readout (utils/hover-readout.js):
+    // "627.4 µs", with the digits the axis resolution needs so two samples
+    // never read the same. A calendar, a duration or a row index keeps its own
+    // format — those are not quantities with a unit to prefix.
+    const numericTimeReadout = !highResolutionCalendarAxis && timeMode !== 'calendar'
+        && !durationAxis && timeUnit !== 'index';
     const hoverX = highResolutionCalendarAxis
         ? `<b>Time</b> = %{customdata}<br>`
         : timeMode === 'calendar'
         ? `<b>Time</b> = %{x|${calendarHoverFormat}}<br>`
         : (durationAxis
             ? `<b>Elapsed</b> = %{customdata}<br>`
-            // Digits from the axis itself, not a constant: four of them turn
-            // every sample of a 100 ns record into the same "0.1235", and
-            // sample 12345 of an index axis into "1.234e+4".
-            : `<b>Time [${hoverTimeUnit}]</b> = %{x:${hoverNumberFormat(timeData)}}<br>`);
+            : (numericTimeReadout
+                ? ''
+                // Digits from the axis itself, not a constant: four of them
+                // turn sample 12345 of an index axis into "1.234e+4".
+                : `<b>Time [${hoverTimeUnit}]</b> = %{x:${hoverNumberFormat(timeData)}}<br>`));
+    const valueUnitText = unit ? ` ${this._escapeHTML(unit)}` : '';
+    const hoverReadout = {
+        lines: [
+            ...(numericTimeReadout
+                ? [{ label: '<b>Time</b>', source: 'x', unit: timeUnit, resolution: hoverAxisResolution(timeData, fileData._duckdb?.totalRows) }]
+                : []),
+            { label: `<b>${hoverName}</b>`, source: 'y', unit },
+        ],
+        fallback: `${numericTimeReadout ? `<b>Time</b> = %{x:${hoverNumberFormat(timeData)}}${timeUnit ? ` ${hoverTimeUnit}` : ''}<br>` : ''}`
+            + `<b>${hoverName}</b> = %{y:.4~g}${valueUnitText}`,
+    };
 
     if (variable.kind === 'parameter') {
         const tStart = timeData.length ? timeData[0] : 0;
@@ -2108,7 +2132,8 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             yaxis,
             line: { color: t.color, width: 1.5, dash: 'dash' },
             ...stackAttrs,
-            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}${runSuffix}<extra></extra>`,
+            hovertemplate: `${hoverX}${HOVER_READOUT_TOKEN}${runSuffix}<extra></extra>`,
+            _hoverReadout: hoverReadout,
             ...(highResolutionCalendarAxis
                 ? { customdata: [tStart, tEnd].map(value => this._formatGeneratedCalendarDateTime(
                     t.fileId,
@@ -2210,7 +2235,8 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             // sample underneath, which is the comparison being invited.
             marker: { color: t.color, size: 7, symbol: 'circle-open', line: { color: t.color, width: 1.6 } },
             ...(customdata ? { customdata } : {}),
-            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
+            hovertemplate: `${hoverX}${HOVER_READOUT_TOKEN}${runSuffix}<extra></extra>`,
+            _hoverReadout: hoverReadout,
         };
     }
     if (eventSamples) {
@@ -2222,7 +2248,8 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             marker: { color: t.color, size: 5 },
             ...stackAttrs,
             ...(customdata ? { customdata } : {}),
-            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
+            hovertemplate: `${hoverX}${HOVER_READOUT_TOKEN}${runSuffix}<extra></extra>`,
+            _hoverReadout: hoverReadout,
         };
     }
     return {
@@ -2244,7 +2271,8 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         // locate sampling gaps for line breaks, then strips it before Plotly
         // sees the trace. Never emitted in timeseries mode.
         ...(options.attachSourceX ? { __srcX: visual.x } : {}),
-        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${repeatedDecoration ? '%{text}' : ''}${runSuffix}<extra></extra>`,
+        hovertemplate: `${hoverX}${HOVER_READOUT_TOKEN}${repeatedDecoration ? '%{text}' : ''}${runSuffix}<extra></extra>`,
+        _hoverReadout: hoverReadout,
     };
 };
 
@@ -2459,12 +2487,14 @@ proto._buildPhase2DTraces = function(plot) {
         if (!visual) return null;
         const len = Math.max(visual.x?.length || 0, visual.y?.length || 0);
         const useGL = this._phase2dUseGL(len, showMarkers);
+        const name = this._phaseTraceName(plot, pt);
         const trace = {
             x: visual.x, y: visual.y,
-            name: this._phaseTraceName(plot, pt),
+            name,
             type: useGL ? 'scattergl' : 'scatter', mode,
             visible: pt.visible ?? true,
             line: { color: pt.color, width: 1.5 },
+            ...this._phaseHoverReadout(pt, name, [[pt.x, 'x'], [pt.y, 'y']]),
         };
         if (showMarkers) {
             trace.marker = { color: pt.color, size: state?.markerSize ?? 4, opacity: state?.markerOpacity ?? 0.65 };
@@ -2564,13 +2594,10 @@ proto._buildPhase2DtTraces = function(plot) {
         if (!visual) return null;
         const name = this._phaseTraceName(plot, pt);
         const customdata = this._phase2DtHighResolutionTimeCustomData(plot, pt, visual.time);
-        const highResolutionHover = customdata ? {
-            customdata,
-            hovertemplate: `<b>Time</b> = %{customdata}<br>`
-                + `<b>${this._escapeHTML(this._variableLabel(pt.x, pt.fileId))}</b> = %{y:.4g}<br>`
-                + `<b>${this._escapeHTML(this._variableLabel(pt.y, pt.fileId))}</b> = %{z:.4g}`
-                + `<extra>${this._escapeHTML(name)}</extra>`,
-        } : {};
+        const highResolutionHover = {
+            ...(customdata ? { customdata } : {}),
+            ...this._phaseHoverReadout(pt, name, [[pt.x, 'y'], [pt.y, 'z']], { withTime: true, highResolutionTime: !!customdata }),
+        };
         return {
             x: this._plotlyTimeArray(pt.fileId, visual.time, timeVar),
             y: visual.x,
@@ -2588,15 +2615,67 @@ proto._buildPhase3DTraces = function(plot) {
     return plot.phaseTraces.map(pt => {
         const visual = this._phaseVisualDataForTrace(plot, pt);
         if (!visual) return null;
+        const name = this._phaseTraceName(plot, pt);
         return {
             x: visual.x,
             y: visual.y,
             z: visual.z,
-            name: this._phaseTraceName(plot, pt),
+            name,
             ...this._phase3dDisplayProps(plot, pt.color),
             visible: pt.visible ?? true,
+            ...this._phaseHoverReadout(pt, name, [[pt.x, 'x'], [pt.y, 'y'], [pt.z, 'z']]),
         };
     }).filter(Boolean);
+};
+
+// The hover of a phase trace: one line per variable, written by the readout
+// (utils/hover-readout.js) with the variable's unit — "7.213 mV", as on a time
+// series. `axes` pairs each variable with the Plotly coordinate it is drawn on.
+// A 2D+t trace also reads its time, on the X coordinate: as the calendar
+// string it carries when `highResolutionTime`, as Plotly's own date reading on
+// a calendar axis, and through the readout on a numeric one.
+proto._phaseHoverReadout = function(pt, name, axes, { withTime = false, highResolutionTime = false } = {}) {
+    const fileData = this.files.get(pt.fileId)?.data;
+    const lines = axes.map(([varName, source]) => ({
+        label: `<b>${this._escapeHTML(this._variableLabel(varName, pt.fileId))}</b>`,
+        source,
+        unit: this._extractUnit(fileData?.variables?.[varName]?.description || ''),
+    }));
+    let timePrefix = '';
+    let timeFallback = '';
+    if (withTime) {
+        const timeVar = this._getTimeVar(pt.fileId);
+        const timeMode = this._timeDisplayModeForVar(pt.fileId, timeVar);
+        const numeric = !highResolutionTime
+            && timeMode !== 'calendar'
+            && timeMode !== 'elapsedDateTime'
+            && !this._isGeneratedIndexTime(pt.fileId, timeVar)
+            && !this._isGeneratedDurationTime(pt.fileId, timeVar);
+        if (highResolutionTime) {
+            timePrefix = '<b>Time</b> = %{customdata}<br>';
+        } else if (numeric) {
+            const timeUnit = timeMode === 'elapsedSeconds' ? 's' : (timeVar ? this._extractUnit(timeVar.description) : 's');
+            const timeData = this._getTransformedTimeDataForVariable(pt.fileId, pt.x);
+            lines.unshift({
+                label: '<b>Time</b>',
+                source: 'x',
+                unit: timeUnit,
+                resolution: hoverAxisResolution(timeData, fileData?._duckdb?.totalRows),
+            });
+            timeFallback = `<b>Time</b> = %{x}${timeUnit ? ` ${this._escapeHTML(timeUnit)}` : ''}<br>`;
+        } else {
+            timePrefix = '<b>Time</b> = %{x}<br>';
+        }
+    }
+    const unitText = unit => (unit ? ` ${this._escapeHTML(unit)}` : '');
+    const fallback = timeFallback + lines
+        .filter(line => line.label !== '<b>Time</b>')
+        .map(line => `${line.label} = %{${line.source}:.4~g}${unitText(line.unit)}`)
+        .join('<br>');
+    return {
+        hovertemplate: `${timePrefix}${HOVER_READOUT_TOKEN}<extra>${this._escapeHTML(name)}</extra>`,
+        _hoverReadout: { lines, fallback },
+    };
 };
 
 // Trace type/mode/line/marker for a 3D pair trace. 2D+t and 3D each keep

@@ -10,6 +10,7 @@ import {
 // undeclared unit is written.
 import { UNKNOWN_UNIT } from '../../utils/integral-presentation.js';
 import Plotly from '../../vendor/plotly.js';
+import { formatReadout } from '../../utils/readout-format.js';
 
 const HEATMAP_LAYOUTS = new Set(['horizontal', 'vertical']);
 const HEATMAP_CALENDAR_MODES = new Set(['week-day', 'day-hour']);
@@ -1225,7 +1226,7 @@ proto._calendarHeatmapGridHoverText = function(grid, trace, z, aggregation) {
     const x = grid?.x || [];
     const y = grid?.y || [];
     const name = escapeHtml(this._traceName(trace.varName, trace.fileId));
-    const unit = escapeHtml(unitForAggregation(this._varUnit(trace.varName, trace.fileId), aggregation));
+    const rawUnit = unitForAggregation(this._varUnit(trace.varName, trace.fileId), aggregation);
     const aggregationLabel = escapeHtml(text(aggregationLabelKey[aggregation] || aggregation));
     return z.map((row, rowIndex) => row.map((value, columnIndex) => {
         const cell = customdata?.[rowIndex]?.[columnIndex];
@@ -1239,12 +1240,11 @@ proto._calendarHeatmapGridHoverText = function(grid, trace, z, aggregation) {
         const nFinite = Number(cellValue(cell, 'nFinite', 0));
         const nInvalid = Number(cellValue(cell, 'nInvalid', Math.max(0, nScope - nFinite)));
         const partial = !!cellValue(cell, 'partial', false);
+        // Read like every other hover (utils/readout-format.js): "7.213 mV".
         const displayValue = Number.isFinite(value)
-            ? Number(value).toPrecision(6)
-                .replace(/(\.\d*?[1-9])0+(e|$)/, '$1$2')
-                .replace(/\.0+(e|$)/, '$1')
+            ? escapeHtml(formatReadout(value, { unit: rawUnit, format: i18n.numberFormat }))
             : '—';
-        const title = unit ? `<b>${name}</b> [${unit}]` : `<b>${name}</b>`;
+        const title = `<b>${name}</b>`;
         const calendarLabel = grid?.meta?.calendarMode === 'day-hour'
             ? `${utcDateLabel(x[columnIndex])} · ${String(y[rowIndex]).padStart(2, '0')}:00 UTC`
             : `${isoWeekLabel(x[columnIndex])} · ${escapeHtml(localizedWeekdays()[Math.max(0, Number(y[rowIndex]) - 1)] || '')} · ${utcDateLabel(start)} (week starts ${utcDateLabel(x[columnIndex])})`;
