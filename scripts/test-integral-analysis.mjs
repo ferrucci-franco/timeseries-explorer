@@ -562,8 +562,11 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(methods.includes("plot.div.classList.toggle('fft-cursor-ew'"), 'the pane sets the resize cursor class');
     ok(methods.includes("plot.div.classList.toggle('fft-cursor-grab'"), 'and the grab cursor class');
     ok(methods.includes("fillcolor: 'rgba(67,160,71,0.14)'"), 'the selection band keeps the shared green');
-    ok(methods.includes("i18n.t('fftRangeFull')") && methods.includes("i18n.t('fftRangeSelection')"),
-        'Full/Selection reuse the shared labels rather than new ones');
+    // Full / Selection and the two bounds are the shared range block that every
+    // analysis builds (src/plots/methods/analysis-range-methods.js), labels
+    // and all; scripts/test-analysis-range.mjs is what holds that rule.
+    ok(methods.includes('_buildAnalysisRangeSection({'), 'the range is the shared block, labels and all');
+    ok(methods.includes('_syncAnalysisRangeSection('), 'and it is kept in step with the same code');
 
     // The lazy path: the SQL answers per-day partials, JS decides the policies.
     // Keeping the day decisions out of SQL is what stops eager and lazy drifting.

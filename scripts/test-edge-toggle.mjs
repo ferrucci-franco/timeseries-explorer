@@ -177,13 +177,15 @@ for (const [file, toggleName, container] of PANELS) {
     const source = read(`src/plots/methods/${file}-methods.js`);
     assert.match(source, /import \{ createEdgeToggle, syncEdgeToggle \} from '\.\.\/\.\.\/ui\/edge-toggle\.js';/,
         `${file}: uses the shared control`);
-    // Between the plot and the options: that is the border it has to sit on.
+    // Between the plot and the side panel: that is the border it has to sit
+    // on. (The side panel is the options drawer with the analysis' own
+    // buttons as its header — src/plots/analysis-side.js.)
     assert.match(
         source,
-        new RegExp(`workspace\\.append\\(plotArea, createEdgeToggle\\(\\{[\\s\\S]{0,240}?side: 'right',[\\s\\S]{0,240}?onToggle: \\(\\) => this\\.${toggleName}\\(panelId\\),[\\s\\S]{0,40}?\\}\\), options\\);`),
-        `${file}: the rail goes between the plot area and the options panel`,
+        new RegExp(`workspace\\.append\\(plotArea, createEdgeToggle\\(\\{[\\s\\S]{0,240}?side: 'right',[\\s\\S]{0,240}?onToggle: \\(\\) => this\\.${toggleName}\\(panelId\\),[\\s\\S]{0,40}?\\}\\), createAnalysisSide\\(topbar, options\\)\\);`),
+        `${file}: the rail goes between the plot area and the side panel`,
     );
-    assert.doesNotMatch(source, /workspace\.append\(plotArea, options\);/,
+    assert.doesNotMatch(source, /workspace\.append\(plotArea, options\)/,
         `${file}: no shell left without one`);
     // The toolbar button and the edge control must never disagree.
     assert.match(
@@ -200,8 +202,8 @@ const content = read('src/styles/content.css');
 
 assert.match(sidebarCss, /\.sidebar \{[\s\S]*?border-right: 1px solid var\(--border-color\);/,
     'the sidebar divider is still one pixel');
-assert.match(content, /\.fft-options \{[\s\S]*?border-left: 1px solid var\(--border-color\);/,
-    'and so is the options panel divider');
+assert.match(content, /\.analysis-side \{[\s\S]*?border-left: 1px solid var\(--border-color\);/,
+    'and so is the side panel divider the rail sits on');
 assert.doesNotMatch(base, /\.edge-toggle[^{]*\{[^}]*\bborder-(right|left)-width\b/,
     'the control does not thicken the border it sits on');
 
