@@ -50,6 +50,14 @@ Built:
   chosen from a list, the side panel's controls at a finger's size (− and +
   that repeat, a segmented choice, every "?" a help page), and Create, Update
   and Delete; the tree's ✎ on a tool's output opens its page;
+- the Plot sheet's **Statistics and export** (§5.2): Σ and **Export…**, the two
+  buttons the hidden panel toolbar ends with, opening the desktop's own dialogs
+  full screen — the statistics table, and every export option (CSV; PNG at 1× to
+  4×; SVG; the chart, the theme and the file name). Export puts the sheet away
+  first and waits for the plot to take its full size, so the image is the whole
+  plot and not the part the sheet left above it. Σ is disabled, saying why, where
+  the desktop's is (`_panelStatsAvailable`). Files are downloaded; sending them
+  through Web Share is still to come;
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
@@ -258,8 +266,10 @@ compact mode hides the panel toolbar.
 - Autoscale, and linked time axes.
 - **View**: log, stack, Y2, line shape.
 - **Marks**: NaN, gaps, repeated, samples.
-- Legend position, cursors, compare files, audio strip, statistics (Σ).
-- **Export** (§8.3).
+- Legend position, cursors, compare files, audio strip.
+- **Statistics and export**: statistics (Σ) and **Export** (§8.3), built.
+  Export closes the sheet before the dialog opens: the image is the plot at the
+  size it has on the screen.
 
 Autoscale and the cursor toggle may also appear as a small floating button cluster
 on the plot. That cluster must avoid axes, legend and data, and must stay at most two

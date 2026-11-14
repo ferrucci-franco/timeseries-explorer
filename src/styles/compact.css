@@ -5643,3 +5643,76 @@ html.compact :is(.compact-sheet-body, .modal-dialog) :is(input[type="text"], inp
     padding-left: 12px;
     padding-right: 12px;
 }
+
+
+/* Σ: seven columns do not fit a phone, and a table that scrolls sideways
+   hides that it does. Each variable is a card instead: its name on top, then
+   one labelled line per figure (the labels are the cells' data-label). The
+   table underneath is unchanged, so "Copy results" copies the same text. */
+html.compact .stats-table-cards,
+html.compact .stats-table-cards tbody,
+html.compact .stats-table-cards tr,
+html.compact .stats-table-cards td {
+    display: block;
+}
+
+html.compact .stats-table-cards thead {
+    display: none;
+}
+
+/* The dialog's message keeps its line breaks (pre-line); once the cells are
+   blocks, the source's indentation between them would become blank lines. */
+html.compact .stats-table-cards {
+    white-space: normal;
+}
+
+html.compact .stats-table-cards tr {
+    margin: 0 0 12px;
+    padding: 4px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+}
+
+html.compact .stats-table-cards td {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 6px 0;
+    font-size: 1rem;
+    text-align: right;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+html.compact .stats-table-cards td::before {
+    content: attr(data-label);
+    color: var(--text-secondary);
+    text-align: left;
+    white-space: nowrap;
+}
+
+html.compact .stats-table-cards tr > td:last-child {
+    border-bottom: none;
+}
+
+/* The name heads the card (P1, P2… for correlation's pairs); a unit is said
+   only when there is one. */
+html.compact .stats-table-cards td:first-child {
+    display: block;
+    font-weight: 600;
+    text-align: left;
+}
+
+html.compact .stats-table-cards td:first-child::before {
+    content: none;
+}
+
+html.compact .stats-table-cards td:nth-child(2):empty {
+    display: none;
+}
+
+html.compact .modal-dialog-stats .stats-table-wrap {
+    max-height: none;
+    overflow: visible;
+}

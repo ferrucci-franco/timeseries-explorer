@@ -878,18 +878,23 @@ class PlotManager {
             if (!div || !div.isConnected || div.offsetParent === null) return null;
             return Promise.resolve(Plotly.Plots.resize(div)).catch(() => {});
         };
+        // Settled when every chart has its new size: the phone's export waits
+        // for it, so the image is the plot as it is once the sheet is gone.
+        const pending = [];
         for (const [, plot] of this.plots) {
             if (!plot.div) continue;
-            resize(plot.div)?.then(() => {
-                this._refreshPanelDomOverlays(plot);
-            });
-            resize(plot.fftDiv);
-            resize(plot.histogramDiv);
-            resize(plot.heatmapDiv);
-            resize(plot.temporalProfileDiv);
-            resize(plot.integralDiv);
-            resize(plot.integralPieDiv);
+            const main = resize(plot.div);
+            if (main) {
+                pending.push(main.then(() => {
+                    this._refreshPanelDomOverlays(plot);
+                }));
+            }
+            for (const div of [plot.fftDiv, plot.histogramDiv, plot.heatmapDiv, plot.temporalProfileDiv, plot.integralDiv, plot.integralPieDiv]) {
+                const done = resize(div);
+                if (done) pending.push(done);
+            }
         }
+        return Promise.all(pending);
     }
 
     _refreshPanelDomOverlays(plot) {
@@ -2942,7 +2947,7 @@ class PlotManager {
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
-            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral' || plot?.mode === 'curve-fit' || plot?.mode === 'trend';
+            statsBtn.disabled = !this._panelStatsAvailable(plot);
             if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
@@ -3919,6 +3924,15 @@ class PlotManager {
         });
     }
 
+    // Whether Σ has something to say about this panel. The analyses that are
+    // a table of their own (the heatmap, the profile, the integral, the curve
+    // fit, the trend) report their results themselves. The desktop's Σ button
+    // and the phone's Plot sheet both ask here.
+    _panelStatsAvailable(plot) {
+        if (!plot || !this._hasContent(plot)) return false;
+        return !['heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend'].includes(plot.mode);
+    }
+
     _showPanelStats(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
@@ -3960,20 +3974,23 @@ class PlotManager {
         // A variable with no finite sample prints four gaps and a full NaN
         // count: the row is the answer, so it is no longer dropped.
         const fmt = value => Number.isFinite(value) ? value.toPrecision(6) : '';
+        // Each cell names its column (data-label): the phone layout draws a
+        // card per variable from them instead of seven columns it cannot fit.
+        const label = key => this._escapeHTML(i18n.t(key));
         const rows = entries.map(e => `
             <tr>
-                <td>${this._escapeHTML(e.name)}</td>
-                <td>${this._escapeHTML(e.unit)}</td>
-                <td>${fmt(e.min)}</td>
-                <td>${fmt(e.max)}</td>
-                <td>${fmt(e.mean)}</td>
-                <td>${fmt(e.rms)}</td>
-                <td>${this._escapeHTML(formatMissingCount(e.missing, e.total))}</td>
+                <td data-label="${label('statsVariable')}">${this._escapeHTML(e.name)}</td>
+                <td data-label="${label('statsUnit')}">${this._escapeHTML(e.unit)}</td>
+                <td data-label="${label('statsMin')}">${fmt(e.min)}</td>
+                <td data-label="${label('statsMax')}">${fmt(e.max)}</td>
+                <td data-label="${label('statsMean')}">${fmt(e.mean)}</td>
+                <td data-label="${label('statsRms')}">${fmt(e.rms)}</td>
+                <td data-label="${label('statsNaN')}">${this._escapeHTML(formatMissingCount(e.missing, e.total))}</td>
             </tr>
         `).join('');
         const body = `
             <div class="stats-table-wrap">
-                <table class="stats-table">
+                <table class="stats-table stats-table-cards">
                     <thead>
                         <tr>
                             <th>${this._escapeHTML(i18n.t('statsVariable'))}</th>

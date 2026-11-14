@@ -349,6 +349,98 @@ try {
         );
     }
 
+    // ── Σ and Export: the panel toolbar's last two buttons, in this sheet ───
+    {
+        const output = page.locator('.compact-page-plot .compact-section', { has: page.locator('.compact-export-btn') });
+        assert.equal(await output.locator('.compact-section-title').textContent(), 'Statistics and export', 'a section of its own');
+        assert.equal(await output.locator('.compact-stats-btn').isDisabled(), false, 'Σ has a time series to report on');
+        assert.equal(await output.locator('.compact-export-note').isVisible(), true, 'what Export writes is said, with no tooltip to say it');
+        const traceCount = await page.evaluate(() => window.app.plotManager.plots.get(window.app._compactActivePanelId()).traces.length);
+
+        // Σ: the desktop's table, on the whole screen, over the sheet.
+        await output.locator('.compact-stats-btn').click();
+        await page.waitForSelector('.modal-overlay.compact-fullscreen-overlay:has(.modal-dialog-stats) > .compact-dialog-close');
+        assert.equal(await page.locator('.modal-dialog-stats .stats-table tbody tr').count(), traceCount, 'one row per signal on the plot');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1), false, 'the table does not push the page sideways');
+        // A card per variable, every figure in view: nothing to scroll sideways for.
+        assert.deepEqual(
+            await page.evaluate(() => {
+                const wrap = document.querySelector('.modal-dialog-stats .stats-table-wrap');
+                const rmsCell = document.querySelector('.modal-dialog-stats tbody tr td:nth-child(6)');
+                const r = rmsCell.getBoundingClientRect();
+                return { scrolls: wrap.scrollWidth > wrap.clientWidth + 1, rmsInView: r.left >= 0 && r.right <= window.innerWidth, head: getComputedStyle(document.querySelector('.modal-dialog-stats thead')).display };
+            }),
+            { scrolls: false, rmsInView: true, head: 'none' },
+            'the statistics are cards, with every figure on the screen',
+        );
+        await page.waitForTimeout(400);
+        await shot(page, 'stats');
+        // Its ✕ closes it — not the "Copy results" beside Close.
+        await page.locator('.compact-dialog-close').click();
+        await page.waitForFunction(() => !document.querySelector('.modal-overlay'));
+        assert.equal(await page.evaluate(() => window.app._compact.sheet), 'plot', 'closing it goes back to the sheet');
+
+        // Export: the sheet steps aside first, so the image is the whole plot
+        // and not the part the sheet left above it.
+        const plotHeight = () => page.evaluate(() => window.app.plotManager.plots.get(window.app._compactActivePanelId()).div._fullLayout.height);
+        const underSheet = await plotHeight();
+        await output.locator('.compact-export-btn').click();
+        await page.waitForSelector('.modal-overlay.compact-fullscreen-overlay .modal-dialog-plot-export');
+        assert.equal(await page.evaluate(() => window.app._compact.sheet), null, 'the sheet is gone');
+        const full = await page.evaluate(() => {
+            const layout = window.app.plotManager.plots.get(window.app._compactActivePanelId()).div._fullLayout;
+            return { width: Math.round(layout.width), height: Math.round(layout.height) };
+        });
+        assert.ok(full.height > underSheet + 50, `the plot has its full height (${full.height} px, ${underSheet} px under the sheet)`);
+        const exportDialog = page.locator('.modal-dialog-plot-export');
+        for (const format of ['csv', 'png', 'svg']) {
+            assert.equal(await exportDialog.locator(`input[name="omv-export-format"][value="${format}"]`).isDisabled(), false, `${format.toUpperCase()} is offered`);
+        }
+
+        // PNG at 3×: the file is three times the plot on the screen.
+        await exportDialog.locator('input[name="omv-export-format"][value="png"]').check();
+        await exportDialog.locator('input[name="omv-export-scale"][value="3"]').check();
+        await page.waitForTimeout(400);
+        assert.match(await exportDialog.locator('.export-section', { hasText: 'Quality' }).locator('.export-hint-line').innerText(), new RegExp(`${full.width * 3}\\D+${full.height * 3}`), 'the quality line names the size the file will have');
+        await shot(page, 'export');
+        const download = async () => {
+            const [file] = await Promise.all([page.waitForEvent('download'), exportDialog.locator('.modal-btn-confirm').click()]);
+            const chunks = [];
+            for await (const chunk of await file.createReadStream()) chunks.push(chunk);
+            await page.waitForFunction(() => !document.querySelector('.modal-dialog-plot-export'));
+            return { name: file.suggestedFilename(), bytes: Buffer.concat(chunks) };
+        };
+        const png = await download();
+        assert.match(png.name, /\.png$/);
+        assert.equal(png.bytes.subarray(1, 4).toString('latin1'), 'PNG', 'a PNG file');
+        assert.deepEqual(
+            { width: png.bytes.readUInt32BE(16), height: png.bytes.readUInt32BE(20) },
+            { width: full.width * 3, height: full.height * 3 },
+            'at three times the plot\'s size',
+        );
+
+        const reopen = async () => {
+            await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+            await page.locator('.compact-page-plot .compact-export-btn').click();
+            await page.waitForSelector('.modal-dialog-plot-export');
+        };
+        await reopen();
+        assert.equal(await exportDialog.locator('input[name="omv-export-format"][value="png"]').isChecked(), true, 'the format chosen last is kept');
+        await exportDialog.locator('input[name="omv-export-format"][value="svg"]').check();
+        assert.equal(await exportDialog.locator('.export-section', { hasText: 'Quality' }).isVisible(), false, 'SVG has no quality to choose');
+        const svg = await download();
+        assert.match(svg.name, /\.svg$/);
+        assert.match(svg.bytes.toString('utf8', 0, 200), /<svg/, 'an SVG file');
+
+        await reopen();
+        await exportDialog.locator('input[name="omv-export-format"][value="csv"]').check();
+        const csv = await download();
+        assert.match(csv.name, /\.csv$/);
+        assert.equal(csv.bytes.toString('utf8').split(/\r?\n/).filter(Boolean).length, 2001, 'the CSV has every row');
+        assert.equal(await page.evaluate(() => window.app._compact.sheet), null, 'the plot is left in view');
+        await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    }
+
     await page.locator('.compact-add-signals-btn').click();
     await page.waitForFunction(() => window.app._compact.sheet === 'data');
     await page.locator('.compact-sheet-close').click();
@@ -878,6 +970,23 @@ try {
         'the Plot sheet still reads 2D under correlation');
     assert.equal(await page.locator('.compact-page-plot .compact-trace-name', { hasText: 'voltage / current' }).count(), 1,
         'and still lists the pair');
+    // Σ here is correlation's own table, a card per pair as well.
+    await page.locator('.compact-page-plot .compact-stats-btn').click();
+    await page.waitForSelector('.modal-overlay.compact-fullscreen-overlay:has(.modal-dialog-stats) > .compact-dialog-close');
+    await page.waitForTimeout(400);
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const wrap = document.querySelector('.modal-dialog-stats .stats-table-wrap');
+            const last = document.querySelector('.modal-dialog-stats tbody tr td:last-child');
+            const r = last.getBoundingClientRect();
+            return { rows: document.querySelectorAll('.modal-dialog-stats tbody tr').length, scrolls: wrap.scrollWidth > wrap.clientWidth + 1, lastInView: r.left >= 0 && r.right <= window.innerWidth };
+        }),
+        { rows: 1, scrolls: false, lastInView: true },
+        'the pair\'s r, N, μ and σ are all on the screen',
+    );
+    await shot(page, 'correlation-stats');
+    await page.locator('.compact-dialog-close').click();
+    await page.waitForFunction(() => !document.querySelector('.modal-overlay'));
     // Turning it off leaves the 2D plot the pair belongs to, not an empty time series.
     await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
     await page.locator('.compact-radio', { hasText: '2D plot' }).click();
