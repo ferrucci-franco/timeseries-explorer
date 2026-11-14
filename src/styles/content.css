@@ -1810,13 +1810,60 @@
     margin: 0;
 }
 
-/* The model of the exponential, under the box that turns it on. */
-.trend-exp-row {
-    padding-left: 20px;
+/* The block of curves ends with room to spare: the numbers of the segment
+   follow it, and a menu pressed against their title read as part of them. */
+.trend-curves-block {
+    margin-bottom: 12px;
 }
 
-.trend-exp-row .trend-exp-select:disabled {
-    opacity: 0.5;
+/* The exponential and its model are one control. The model hangs from the
+   tick box on a branch — a line down from the box, turning toward the menu —
+   and is there only while the fit is on (trend-methods.js). */
+.trend-exp-group {
+    display: flex;
+    flex-direction: column;
+    --trend-exp-branch-x: 6px;
+}
+
+.trend-exp-row {
+    position: relative;
+    margin-top: 1px;
+    padding: 3px 0 1px calc(var(--trend-exp-branch-x) + 14px);
+}
+
+.trend-exp-row[hidden] {
+    display: none;
+}
+
+/* The branch: down from the middle of the box, then across to the menu. */
+.trend-exp-row::before {
+    content: '';
+    position: absolute;
+    left: var(--trend-exp-branch-x);
+    top: -3px;
+    width: 9px;
+    height: calc(50% + 4px);
+    border-left: 1.5px solid color-mix(in srgb, var(--primary-color) 55%, var(--border-color));
+    border-bottom: 1.5px solid color-mix(in srgb, var(--primary-color) 55%, var(--border-color));
+    border-bottom-left-radius: 4px;
+    pointer-events: none;
+}
+
+.trend-exp-model {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.trend-exp-model-label {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+}
+
+.trend-exp-model .trend-exp-select {
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .trend-band-sigma {

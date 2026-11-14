@@ -1588,7 +1588,14 @@ export function installPlotTrendMethods(TargetClass) {
             curvesBlock.appendChild(label);
         }
 
+        // The tick box and the model are ONE control — "fit an exponential,
+        // of this kind" — so they are drawn as one: the model hangs from the
+        // box on a line, as a sub-option does, and is there only while the
+        // fit is on. Off, there is nothing to choose, and a dead menu on
+        // screen only asks what it is for.
         const expOn = !!segment.expModel && segment.expModel !== 'none';
+        const expGroup = document.createElement('div');
+        expGroup.className = 'trend-exp-group';
         const expLabel = document.createElement('label');
         expLabel.className = 'curve-fit-extrapolate trend-curve-toggle';
         expLabel.title = i18n.t('trendExpTip');
@@ -1596,22 +1603,18 @@ export function installPlotTrendMethods(TargetClass) {
         expBox.type = 'checkbox';
         expBox.checked = expOn;
         expBox.dataset.trendCurve = 'exp';
-        expBox.addEventListener('change', () => this._updateTrendSegment(panelId, {
-            expModel: expBox.checked ? (state.expChoice || TREND_DEFAULT_EXP_MODEL) : 'none',
-        }));
         const expText = document.createElement('span');
         expText.textContent = i18n.t(CURVE_LABEL_KEY.exp);
         expLabel.append(expBox, expText, helpButton('trendExpHelpTitle', () => this._showTrendExpHelp()));
-        curvesBlock.appendChild(expLabel);
 
         const expSelect = document.createElement('select');
         expSelect.className = 'phase2d-fit-type-select trend-exp-select';
-        expSelect.setAttribute('aria-label', i18n.t('trendExp'));
-        expSelect.disabled = !expOn;
+        expSelect.setAttribute('aria-label', `${i18n.t('trendExp')} — ${i18n.t('trendExpModel')}`);
         for (const option of TREND_EXP_OPTIONS) {
             const el = document.createElement('option');
             el.value = option.id;
             el.textContent = i18n.t(option.key);
+            // Off, it still holds the model the fit comes back as.
             el.selected = option.id === (expOn ? segment.expModel : state.expChoice);
             expSelect.appendChild(el);
         }
@@ -1621,8 +1624,29 @@ export function installPlotTrendMethods(TargetClass) {
         });
         const expRow = document.createElement('div');
         expRow.className = 'trend-exp-row';
-        expRow.appendChild(expSelect);
-        curvesBlock.appendChild(expRow);
+        expRow.id = `trend-exp-model-${String(panelId).replace(/[^\w-]/g, '')}`;
+        expRow.hidden = !expOn;
+        const modelLabel = document.createElement('label');
+        modelLabel.className = 'trend-exp-model';
+        const modelText = document.createElement('span');
+        modelText.className = 'trend-exp-model-label';
+        modelText.textContent = i18n.t('trendExpModel');
+        modelLabel.append(modelText, expSelect);
+        expRow.appendChild(modelLabel);
+
+        // The box says it opens the model, and whether it is open.
+        expBox.setAttribute('aria-controls', expRow.id);
+        expBox.setAttribute('aria-expanded', String(expOn));
+        expBox.addEventListener('change', () => {
+            // At once, before the drawer is drawn again with the new fit.
+            expRow.hidden = !expBox.checked;
+            expBox.setAttribute('aria-expanded', String(expBox.checked));
+            this._updateTrendSegment(panelId, {
+                expModel: expBox.checked ? (state.expChoice || TREND_DEFAULT_EXP_MODEL) : 'none',
+            });
+        });
+        expGroup.append(expLabel, expRow);
+        curvesBlock.appendChild(expGroup);
         drawer.appendChild(curvesBlock);
 
         // 7) Unit of t′
