@@ -224,6 +224,7 @@
     "test:analysis-side": "node scripts/test-analysis-side.mjs",
     "test:scrollbars": "node scripts/test-scrollbars.mjs",
     "test:analysis-fit": "node scripts/test-analysis-fit.mjs",
+    "test:options-tooltips": "node scripts/test-options-tooltips.mjs",
     "test:curve-fit-analysis": "node scripts/test-curve-fit-analysis.mjs",
     "test:regression-lazy": "node scripts/test-regression-lazy.mjs",
     "test:regression-conditioning": "node scripts/test-regression-conditioning.mjs",

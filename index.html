@@ -115,6 +115,18 @@
             <button id="reset-layout" class="icon-btn" title="Reset layout" disabled>
                 <span class="icon reset-layout-icon" aria-hidden="true"></span>
             </button>
+            <!-- Scrollable plot area: the same switch as in Options, where
+                 nobody found it. It is a layout choice, so it is here with
+                 the other layout buttons. -->
+            <button id="scrollable-plot-area-btn" class="icon-btn scrollable-plot-area-btn" type="button" aria-pressed="false" title="Allow the plot area to scroll vertically so stacked panels can keep a comfortable height." data-i18n-title="scrollablePlotAreaTooltip" aria-label="Scrollable plot area" data-i18n-aria-label="scrollablePlotArea">
+                <span class="icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+                        <rect x="3" y="3.5" width="13" height="7" rx="1.5"/>
+                        <rect x="3" y="13.5" width="13" height="7" rx="1.5"/>
+                        <path d="M20 5.5v13"/><path d="M20 3.5l-2 2.5h4l-2-2.5Z" fill="currentColor" stroke="none"/><path d="M20 20.5l-2-2.5h4l-2 2.5Z" fill="currentColor" stroke="none"/>
+                    </svg>
+                </span>
+            </button>
             <div class="example-menu-wrap">
                 <button id="load-example-btn" class="icon-btn" title="Load example" aria-haspopup="true" aria-expanded="false">
                     <span class="icon">🧪</span>
@@ -1137,20 +1149,20 @@
             <!-- Options -->
             <div class="sidebar-section sidebar-options-section">
                 <h3 data-i18n="options">Options</h3>
-                <label class="checkbox-label">
+                <label class="checkbox-label" title="Zoom or pan one time plot and every other one follows, so the panels always show the same stretch of time." data-i18n-title="linkTimeAxesTooltip">
                     <input type="checkbox" id="link-time-axes" checked>
                     <span data-i18n="linkTimeAxes">Link time axes</span>
                 </label>
-                <label class="checkbox-label">
+                <label class="checkbox-label" title="On: the hover reads the one curve nearest the pointer. Off: it reads every curve of the panel at that instant." data-i18n-title="hoverProximityTooltip">
                     <input type="checkbox" id="hover-proximity" checked>
                     <span data-i18n="hoverProximity">Hover by proximity</span>
                 </label>
-                <label class="checkbox-label">
+                <label class="checkbox-label" title="With several files open, the hover of a curve also names the parameters that tell its run apart from the others." data-i18n-title="hoverRunParametersTooltip">
                     <input type="checkbox" id="hover-run-parameters" checked>
                     <span data-i18n="hoverRunParameters">Run parameters in hover</span>
                 </label>
                 <div class="legend-overlay-row">
-                    <label class="checkbox-label legend-overlay-option">
+                    <label class="checkbox-label legend-overlay-option" title="Pointing at one time plot marks the same instant on all the others and reads their values into a box in the corner." data-i18n-title="syncHoverTooltip">
                         <input type="checkbox" id="sync-hover">
                         <span data-i18n="syncHover">Synchronized hover</span>
                     </label>

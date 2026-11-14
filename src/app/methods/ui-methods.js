@@ -338,6 +338,12 @@ proto.initEventListeners = function() {
         });
     }
 
+    // The same choice in the top bar, beside the other layout buttons.
+    document.getElementById('scrollable-plot-area-btn')?.addEventListener('click', () => {
+        this._setScrollablePlotArea(!this.scrollablePlotArea);
+    });
+    this._syncScrollablePlotAreaUI();
+
     const mouseWheelZoomToggle = document.getElementById('mouse-wheel-zoom');
     if (mouseWheelZoomToggle) {
         mouseWheelZoomToggle.checked = !!this.mouseWheelZoom;
@@ -508,8 +514,16 @@ proto._setScrollablePlotArea = async function(enabled) {
 };
 
 proto._syncScrollablePlotAreaUI = function() {
+    const on = !!this.scrollablePlotArea;
     const toggle = document.getElementById('scrollable-plot-area');
-    if (toggle) toggle.checked = !!this.scrollablePlotArea;
+    if (toggle) toggle.checked = on;
+    // The same switch as a button in the top bar, with the layout buttons:
+    // in Options, where it lived alone, nobody found it.
+    const button = document.getElementById('scrollable-plot-area-btn');
+    if (button) {
+        button.classList.toggle('active', on);
+        button.setAttribute('aria-pressed', String(on));
+    }
 };
 
 proto._syncLegendCornerPicker = function() {
