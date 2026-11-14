@@ -133,6 +133,13 @@ try {
     assert.equal(selected.summary.nFinite, finiteInSelection, `the selection counts the file's rows in it (${selected.summary.nFinite})`);
     assert.equal(selected.total, finiteInSelection, 'and the bars add up to them');
 
+    // Σ on the Histogram panel reports its signal too, over every row.
+    await page.locator(`.layout-panel[data-id="${panelId}"] .panel-stats-btn`).dispatchEvent('click');
+    await page.waitForSelector('.modal-dialog-stats .stats-table', { timeout: 120000 });
+    const onHistogram = await page.evaluate(() => [...document.querySelectorAll('.modal-dialog-stats tbody tr td')].map(td => td.textContent.trim()));
+    assert.deepEqual(onHistogram.slice(2), [stats.min, stats.max, stats.mean, stats.rms, formatMissingCount(holes, ROWS)], 'Σ on the histogram is the file\'s');
+    await page.locator('.modal-dialog-stats .modal-btn-confirm').click();
+
     assert.deepEqual(errors, [], 'no page error');
     console.log(`e2e lazy histogram: ${finite} finite values of a lazy file counted from the panel, the whole file and a selection; Σ over every row`);
 } finally {

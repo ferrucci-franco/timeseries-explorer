@@ -3946,7 +3946,10 @@ class PlotManager {
             if (variable) wanted.push({ fileId, varName, variable });
         };
 
-        if (plot.mode === 'timeseries' || plot.mode === 'fft') {
+        // A time series, and the analyses drawn from its traces that Σ is
+        // offered on: FFT and the histogram (whose signals were looked for
+        // among the 2D pairs, and Σ said there was no numeric data).
+        if (['timeseries', 'fft', 'histogram'].includes(plot.mode)) {
             plot.traces.forEach(t => addVar(t.fileId, t.varName));
         } else if (plot.mode === 'state-anim') {
             plot.stateSlots.x.forEach(v => addVar(plot.stateSlots.fileId, v));
