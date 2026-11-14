@@ -544,7 +544,9 @@ try {
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
     assert.equal(
-        await page.evaluate(() => !!document.querySelector('.fft-workspace > .fft-options')),
+        // Back in its side panel, where the analysis' own buttons are its
+        // header (src/plots/analysis-side.js).
+        await page.evaluate(() => !!document.querySelector('.fft-workspace > .analysis-side > .fft-options')),
         true,
         'closing the sheet gives the FFT its options panel back',
     );
@@ -853,7 +855,7 @@ try {
     await shot(page, 'analyze-correlation');
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
-    assert.equal(await page.evaluate(() => !!document.querySelector('.correlation-container .fft-workspace > .correlation-options')), true,
+    assert.equal(await page.evaluate(() => !!document.querySelector('.correlation-container .fft-workspace > .analysis-side > .correlation-options')), true,
         'closing the sheet gives correlation its options panel back');
     await page.waitForFunction(
         () => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?.querySelector('.compact-fit-group:not([hidden])'),
@@ -922,7 +924,7 @@ try {
     }, null, { timeout: 30000 });
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
-    assert.equal(await page.evaluate(() => !!document.querySelector('.phase2d-fit-container .fft-workspace > .phase2d-fit-options')), true,
+    assert.equal(await page.evaluate(() => !!document.querySelector('.phase2d-fit-container .fft-workspace > .analysis-side > .phase2d-fit-options')), true,
         'closing the sheet gives the fit its drawer back');
     await page.waitForFunction(
         () => {
@@ -1110,7 +1112,7 @@ try {
         await shot(profilePage, 'analyze-profile');
         await profilePage.locator('.compact-sheet-close').click();
         await profilePage.waitForFunction(() => window.app._compact.sheet === null);
-        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.temporal-profile-container .hist-workspace > .hist-options')), true,
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.temporal-profile-container .hist-workspace > .analysis-side > .hist-options')), true,
             'closing the sheet gives the profile its options panel back');
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
@@ -1141,7 +1143,7 @@ try {
         await shot(profilePage, 'analyze-integral');
         await profilePage.locator('.compact-sheet-close').click();
         await profilePage.waitForFunction(() => window.app._compact.sheet === null);
-        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.integral-container .hist-workspace > .hist-options')), true,
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.integral-container .hist-workspace > .analysis-side > .hist-options')), true,
             'closing the sheet gives the integral its options panel back');
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
@@ -1180,7 +1182,7 @@ try {
         await shot(profilePage, 'analyze-histogram');
         await profilePage.locator('.compact-sheet-close').click();
         await profilePage.waitForFunction(() => window.app._compact.sheet === null);
-        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.hist-container:not(.integral-container):not(.temporal-profile-container) .hist-workspace > .hist-options')), true,
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.hist-container:not(.integral-container):not(.temporal-profile-container) .hist-workspace > .analysis-side > .hist-options')), true,
             'closing the sheet gives the histogram its options panel back');
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
@@ -1214,7 +1216,7 @@ try {
         await shot(profilePage, 'analyze-heatmap');
         await profilePage.locator('.compact-sheet-close').click();
         await profilePage.waitForFunction(() => window.app._compact.sheet === null);
-        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.heatmap-workspace > .heatmap-options')), true,
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.heatmap-workspace > .analysis-side > .heatmap-options')), true,
             'closing the sheet gives the Heatmap its options panel back');
         await profilePage.waitForFunction(
             () => document.querySelectorAll('.compact-active-panel .compact-fit-group:not([hidden])').length === 2,

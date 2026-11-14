@@ -1595,12 +1595,17 @@ html.compact .legend-toggle-btn:active {
 
 /* FFT, the histogram, the temporal profile and the integral (the last two are
    .hist-container as well): the status stays on the plot; their buttons and
-   options live in the Analyze sheet. */
+   options live in the Analyze sheet.
+
+   On the desktop the analysis' buttons are the header of its side panel
+   (src/plots/analysis-side.js). Here there is no side panel — the options are
+   lent to the sheet — so the column goes back to being a strip across the top
+   of the workspace, with only the status left in it. */
 html.compact .fft-topbar-group,
-html.compact .fft-workspace > .fft-options,
+html.compact .fft-workspace > .analysis-side > .fft-options,
 html.compact .fft-workspace > .edge-toggle-rail,
 html.compact .hist-container .hist-topbar-group,
-html.compact .hist-container .hist-workspace > .hist-options,
+html.compact .hist-container .hist-workspace > .analysis-side > .hist-options,
 html.compact .hist-container .hist-workspace > .edge-toggle-rail {
     display: none !important;
 }
@@ -1608,9 +1613,38 @@ html.compact .hist-container .hist-workspace > .edge-toggle-rail {
 /* The Heatmap, the same way: its top bar's buttons and its options panel go
    to the Analyze sheet, and only its status stays on the plot. */
 html.compact .heatmap-topbar-group,
-html.compact .heatmap-workspace > .heatmap-options,
+html.compact .heatmap-workspace > .analysis-side > .heatmap-options,
 html.compact .heatmap-workspace > .edge-toggle-rail {
     display: none !important;
+}
+
+/* With the drawer gone there is no column to put beside the plots, only the
+   status to keep. So on a phone the strip is laid over the top of the plots
+   rather than taking a column of its own — and the plots keep the height the
+   old bar used to take. */
+html.compact :is(.fft-container, .hist-container, .heatmap-container) {
+    position: relative;
+}
+
+html.compact .analysis-side {
+    display: block !important;
+    position: absolute;
+    inset: 0 0 auto 0;
+    z-index: 3;
+    flex: none;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    border-left: 0;
+    background: transparent;
+    pointer-events: none;
+}
+
+html.compact .analysis-side > :is(.fft-topbar, .hist-topbar, .heatmap-topbar) {
+    min-height: 0;
+    padding: 2px 8px;
+    border-bottom: 0;
+    background: transparent;
 }
 
 /* ── Empty state ─────────────────────────────────────────────────────── */
