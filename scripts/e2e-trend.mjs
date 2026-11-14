@@ -305,13 +305,15 @@ try {
         .filter(trace => trace.meta?.trendIndex !== undefined)
         .map(trace => ({ index: trace.meta.trendIndex, kind: trace.meta.trendCurve, points: trace.x?.length || 0 })), panelId);
     assert.deepEqual(curves.map(c => `${c.index}:${c.kind}`).sort(),
-        ['0:linear', '0:mean', '1:linear', '1:mean'], 'the mean and the line of each segment are drawn');
+        ['0:mean', '1:mean'], 'the mean of each segment is the one line drawn to begin with');
     assert.ok(curves.every(c => c.points >= 2), 'each with points to draw');
 
-    // Turning the parabola on draws it as well.
-    await page.locator('.trend-curves-block input[data-trend-curve="quadratic"]').check();
-    await page.waitForFunction(id => (window.app.plotManager.plots.get(id).div.data || [])
-        .some(trace => trace.meta?.trendCurve === 'quadratic'), panelId, { timeout: 15000 });
+    // Turning the line and the parabola on draws them as well.
+    for (const kind of ['linear', 'quadratic']) {
+        await page.locator(`.trend-curves-block input[data-trend-curve="${kind}"]`).check();
+        await page.waitForFunction(([id, want]) => (window.app.plotManager.plots.get(id).div.data || [])
+            .filter(trace => trace.meta?.trendCurve === want).length === 2, [panelId, kind], { timeout: 15000 });
+    }
 
     // ── The exponential, asked for on this segment ──
     // On `decay`, whose time constant is 300 s by construction.
@@ -322,6 +324,11 @@ try {
     await page.waitForFunction(id => window.app.plotManager.plots.get(id).traces.length === 2, panelId, { timeout: 15000 });
     await setSegment({ varName: 'decay', x1: 100, x2: 1500 });
     await settled(1);
+    // The menu of models only says which one: the tick box beside it is what
+    // turns the fit on, and it is disabled until then.
+    const expBox = page.locator('.trend-curves-block input[data-trend-curve="exp"]');
+    assert.equal(await page.locator('.trend-exp-select').isDisabled(), true, 'the model menu is dead until the fit is asked for');
+    await expBox.check();
     await page.locator('.trend-exp-select').selectOption('exponential-offset');
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)._trendResults?.[1]?.result?.exp?.status === 'ok',
         panelId, { timeout: 60000 });
@@ -332,8 +339,16 @@ try {
     rows = await tableRows();
     assert.ok(plain(rows[1].cells[11]).startsWith('300'), `τ is in the table (${rows[1].cells[11]})`);
     assert.notEqual(rows[1].cells[12], '—', 'and so is its R²');
-    await page.locator('.trend-exp-select').selectOption('none');
+    // The curve is drawn as soon as it is fitted: asking for it is the choice.
+    assert.equal(await page.evaluate(id => (window.app.plotManager.plots.get(id).div.data || [])
+        .filter(trace => trace.meta?.trendCurve === 'exp').length, panelId), 1, 'and the curve is over the signal');
+    // Unticking the box is what turns it off, and the menu keeps the choice.
+    await expBox.uncheck();
     await settled(1);
+    assert.equal(await page.evaluate(id => (window.app.plotManager.plots.get(id).div.data || [])
+        .some(trace => trace.meta?.trendCurve === 'exp'), panelId), false, 'the curve goes with it');
+    assert.equal(await page.locator('.trend-exp-select').inputValue(), 'exponential-offset', 'the model stays picked for next time');
+    assert.equal(await page.locator('.trend-exp-select').isDisabled(), true, 'with the menu dead again');
 
     // ── Clicking a row picks that segment ──
     await page.locator('.trend-table tbody tr').first().click();
@@ -383,8 +398,8 @@ try {
             'the block of numbers carries it');
 
         // The exponential menu explains itself, with the four shapes drawn.
-        const expHelp = page.locator('.trend-options .phase2d-fit-field', { hasText: 'Exponential' }).locator('.fft-help-btn');
-        assert.equal(await expHelp.count(), 1, 'the exponential menu has its own help');
+        const expHelp = page.locator('.trend-curves-block .trend-curve-toggle', { hasText: 'Exponential' }).locator('.fft-help-btn');
+        assert.equal(await expHelp.count(), 1, 'the exponential tick box has its own help');
         await expHelp.click();
         await page.waitForSelector('.trend-exp-gallery');
         const cards = page.locator('.trend-exp-card');

@@ -1852,6 +1852,15 @@
     margin: 0;
 }
 
+/* The model of the exponential, under the box that turns it on. */
+.trend-exp-row {
+    padding-left: 20px;
+}
+
+.trend-exp-row .trend-exp-select:disabled {
+    opacity: 0.5;
+}
+
 .trend-band-sigma {
     display: flex;
     align-items: center;
@@ -3595,6 +3604,15 @@ body.cursor-box-dragging {
     background: var(--bg-primary);
     overflow: auto;
     color: var(--text-primary);
+    /* Inherited by everything in the panel, so a block that is not one of the
+       rows — a line of help, a caption, a button — reads at the panel's size
+       instead of falling back to the page's. */
+    font-size: var(--analysis-font);
+}
+
+/* The panel's own buttons are part of its text, not of the top bar's. */
+.fft-options .fft-tool-btn {
+    font-size: var(--analysis-font);
 }
 
 .fft-options[hidden] {

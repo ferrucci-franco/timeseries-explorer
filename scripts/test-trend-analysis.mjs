@@ -198,8 +198,9 @@ for (const size of [1, 7, 1000, ROWS]) {
     assert.equal(state.segments[0].rangeFull, false, 'which is a selection, not the whole file');
     assert.equal(state.segments[0].bandOn, false, 'with no band');
     assert.equal(state.segments[0].expModel, 'none', 'and no exponential');
-    assert.equal(state.curves.quadratic, false, 'the parabola is computed but not drawn by default');
-    assert.equal(state.curves.mean && state.curves.linear, true, 'the mean and the line are drawn');
+    // The mean is the one line drawn to begin with; the rest are asked for.
+    assert.deepEqual(state.curves, { mean: true, linear: false, quadratic: false }, 'only the mean is drawn at first');
+    assert.equal(state.expChoice, 'exponential', 'and the exponential comes back as the plain one');
 
     const wild = normalizeTrendState({
         layout: 'diagonal', split: 9, optionsVisible: false, tableHidden: 'yes',
@@ -219,6 +220,7 @@ for (const size of [1, 7, 1000, ROWS]) {
     assert.ok(wild.bandSigma <= 10, 'the sigma factor is clamped');
     assert.equal(wild.curves.mean, false, 'a curve turned off stays off');
     assert.equal('nonsense' in wild.curves, false, 'an unknown curve is dropped');
+    assert.equal('exp' in wild.curves, false, 'the exponential is not one of them: it is drawn when it is fitted');
     const first = wild.segments[0];
     assert.equal(first.x1, 3, 'a numeric string becomes a number');
     assert.equal(first.x2, null, 'an unreadable bound becomes null');

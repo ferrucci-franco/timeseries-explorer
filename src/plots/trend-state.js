@@ -29,19 +29,23 @@ import { EXP_FAMILY_MODELS } from '../utils/exp-fit.js';
 export const TREND_LAYOUTS = new Set(['horizontal', 'vertical']);
 export const TREND_MAX_SEGMENTS = 12;
 
-// The exponential models a segment may ask for, in menu order. `none` is the
-// default: no exponential fit is computed for that segment.
+// The exponential models a segment may ask for, in menu order. There is no
+// "none" among them: the tick box beside the menu is what turns the fit off,
+// and a menu entry for the same thing only asked which of the two to use.
 export const TREND_EXP_OPTIONS = [
-    { id: 'none', key: 'trendExpOff' },
     { id: 'exponential', key: 'fitModelExponential' },
     { id: 'exponential-offset', key: 'fitModelExponentialOffset' },
     { id: 'first-order', key: 'fitModelFirstOrder' },
     { id: 'first-order-offset', key: 'fitModelFirstOrderOffset' },
 ];
 
-// Which curves the time pane draws. The numbers of mean, linear and quadratic
-// are always in the table; this is only what is drawn over the signal.
-export const TREND_CURVES = ['mean', 'linear', 'quadratic', 'exp'];
+// The model a segment gets when its exponential is turned back on.
+export const TREND_DEFAULT_EXP_MODEL = 'exponential';
+
+// Which curves the time pane draws over the signal. The numbers of mean,
+// linear and quadratic are in the table either way; an exponential is drawn
+// whenever a segment has one, because asking for it is already the choice.
+export const TREND_CURVES = ['mean', 'linear', 'quadratic'];
 
 // How many stddevs the "3σ" button puts the band at.
 export const TREND_BAND_SIGMA_MIN = 0.1;
@@ -113,7 +117,12 @@ export function defaultTrendState() {
         timeUnit: 's',
         activeSegment: 0,
         bandSigma: 3,
-        curves: { mean: true, linear: true, quadratic: false, exp: true },
+        // The mean is the one line that says something about every stretch;
+        // the others are drawn when they are asked for. Their numbers are in
+        // the table from the start either way.
+        curves: { mean: true, linear: false, quadratic: false },
+        // The model the exponential comes back as, once a segment has had one.
+        expChoice: TREND_DEFAULT_EXP_MODEL,
         segments: [defaultTrendSegment()],
     };
 }
@@ -142,6 +151,7 @@ export function normalizeTrendState(raw = {}) {
         bandSigma: Number.isFinite(sigma)
             ? Math.max(TREND_BAND_SIGMA_MIN, Math.min(TREND_BAND_SIGMA_MAX, sigma))
             : defaults.bandSigma,
+        expChoice: EXP_FAMILY_MODELS.has(raw.expChoice) ? raw.expChoice : defaults.expChoice,
         curves,
         segments,
     };
