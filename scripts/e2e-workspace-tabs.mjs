@@ -320,6 +320,33 @@ try {
     });
     assert.equal(firstInView, true, 'picking one from the list brings it into view');
 
+    // ── An example opens in a tab of its own, with nothing thrown away ──
+    // It used to clear the plots of the one workspace there was, after a
+    // warning about it. With tabs there is nothing to clear.
+    const tabsBeforeExample = await web.evaluate(() => window.app.tabs.items.length);
+    const panelsBeforeExample = await web.evaluate(() => window.app.layoutManager.getPanelCount());
+    await web.evaluate(() => window.app.loadExample('lorenz'));
+    await web.waitForFunction(count => window.app.tabs.items.length === count + 1
+        && !window.app._tabSwitching && !window.app._exampleLoading,
+    tabsBeforeExample, { timeout: 120000 });
+    const exampleTabs = await web.evaluate(() => ({
+        active: window.app.tabs.activeIndex,
+        name: window.app.tabs.items[window.app.tabs.activeIndex].name,
+        modal: !!document.querySelector('.modal-overlay'),
+        drawn: window.app.plotManager.hasAnyTraces(),
+    }));
+    assert.equal(exampleTabs.modal, false, 'no warning: nothing was going to be lost');
+    assert.ok(exampleTabs.name, 'the new tab is named after the example');
+    assert.equal(exampleTabs.drawn, true, 'and the example is drawn on it');
+    // The tab the user was on still has its panels.
+    await web.evaluate(index => window.app.switchTab(index), 1);
+    await web.waitForFunction(() => !window.app._tabSwitching);
+    assert.equal(await web.evaluate(() => window.app.layoutManager.getPanelCount()), panelsBeforeExample,
+        'the tab the user was on kept its panels');
+    await web.evaluate(() => window.app.closeTab(window.app.tabs.items.length - 1, { force: true }));
+    await web.waitForFunction(count => window.app.tabs.items.length === count && !window.app._tabSwitching,
+        tabsBeforeExample, { timeout: 60000 });
+
     // ── A file dragged from the desktop onto a tab opens; the tabs stay ──
     const tabIds = () => web.evaluate(() => window.app.tabs.items.map(item => item.id));
     const idsBefore = await tabIds();
@@ -353,7 +380,9 @@ try {
         panels: window.app.layoutManager.getPanelCount(),
         parked: document.querySelectorAll('.workspace-tab-parked').length,
     }));
-    assert.deepEqual(closed, { files: 2, panels: 1, parked: 0 }, 'one empty tab left; the files stay open');
+    // Three files: the two loaded here and the example's, which stays open in
+    // the sidebar — a file belongs to the app, not to the tab it was drawn on.
+    assert.deepEqual(closed, { files: 3, panels: 1, parked: 0 }, 'one empty tab left; the files stay open');
 
     await webContext.close();
 
