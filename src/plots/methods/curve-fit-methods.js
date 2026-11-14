@@ -1595,7 +1595,7 @@ export function installPlotCurveFitMethods(TargetClass) {
         const out = choice === 'summary' ? this._curveFitSummaryCsv(plot) : this._curveFitCurveCsv(plot);
         if (!out) return;
         const filename = options.baseName ? `${options.baseName}_${choice}.csv` : out.filename;
-        this._downloadCsvColumns(out.headers, out.columns, filename);
+        return this._downloadCsvColumns(out.headers, out.columns, filename);
     };
 
     proto._curveFitTimeCell = function(trace, value) {

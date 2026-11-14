@@ -81,9 +81,11 @@ assert.match(dialog, /title="\$\{this\._escapeHTML\(i18n\.t\('statsNaNHint'\)\)\
     'the header explains what the count means');
 
 // The header and the rows must keep the same number of columns.
-// `<th ...>` only — `<thead>` is not a column.
+// `<th ...>` only — `<thead>` is not a column. A cell carries the name of its
+// column (data-label), which the phone layout prints on its card.
 const headers = dialog.match(/<th(?:\s[^>]*)?>/g) || [];
-const cells = dialog.match(/<td>/g) || [];
+const cells = dialog.match(/<td(?:\s[^>]*)?>/g) || [];
+assert.equal((dialog.match(/<td data-label="/g) || []).length, cells.length, 'every cell names its column for the phone');
 assert.equal(headers.length, 7, 'Variable, Unit, Min, Max, Mean, RMS, NaN');
 assert.equal(cells.length, headers.length, 'every header has a cell under it');
 

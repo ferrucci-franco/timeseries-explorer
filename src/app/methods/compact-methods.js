@@ -51,6 +51,8 @@ const SVG = {
     fitX: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14M20 5v14"/><path d="M8 12h8M8 12l3-3M8 12l3 3M16 12l-3-3M16 12l-3 3"/></svg>',
     fitY: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14M5 20h14"/><path d="M12 8v8M12 8l-3 3M12 8l3 3M12 16l-3-3M12 16l3-3"/></svg>',
     fitAll: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>',
+    // Σ for the Plot sheet's statistics button; Export uses the download arrow.
+    sigma: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5H6l6 7-6 7h12"/></svg>',
     // The More sheet's menu, drawn like the rest of the phone layout.
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg>',
     save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h8V3M8 21v-7h8v7"/></svg>',
@@ -162,6 +164,9 @@ const OWN_CLOSE_BUTTONS = '.plot-settings-header-close, .help-modal-close, .comp
 // Dialogs with a ✕ of their own that the phone layout replaces (it is lost
 // in their narrow header): the new ✕ presses it.
 const REPLACED_CLOSE_BUTTONS = '.feedback-close, .desktop-download-close';
+
+// The modes whose panel toolbar has the 🔊 button (audio-methods.js).
+const COMPACT_AUDIO_MODES = new Set(['timeseries', 'fft', 'histogram', 'integral']);
 
 // After a sheet settles: Plotly measures its container, so resizing during the
 // slide would redraw every frame.
@@ -583,9 +588,11 @@ export function installCompactMethods(ViewerClass) {
             const close = button('compact-icon-btn compact-dialog-close', '', () => {
                 // The dialog's own way out: its ✕, its Cancel, its only button,
                 // or Escape.
+                // A dialog's "Copy results" is drawn as a secondary button
+                // (modal-btn-cancel) but copies; it is never the way out.
                 const own = dialog.querySelector(REPLACED_CLOSE_BUTTONS);
-                const cancel = dialog.querySelector('.modal-buttons .modal-btn-cancel');
-                const buttons = dialog.querySelectorAll('.modal-buttons .modal-btn');
+                const cancel = dialog.querySelector('.modal-buttons .modal-btn-cancel:not(.modal-copy-btn)');
+                const buttons = dialog.querySelectorAll('.modal-buttons .modal-btn:not(.modal-copy-btn)');
                 if (own) own.click();
                 else if (cancel) cancel.click();
                 else if (buttons.length === 1) buttons[0].click();
@@ -1704,6 +1711,8 @@ export function installCompactMethods(ViewerClass) {
         }
 
         this._buildCompactCursorSection(node, plot);
+        this._buildCompactSoundSection(node, panelId, plot);
+        this._buildCompactOutputSection(node, panelId, plot);
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
         const traces = plot?.traces || [];
@@ -1762,6 +1771,83 @@ export function installCompactMethods(ViewerClass) {
         node.appendChild(signals);
 
         return { title: i18n.t('compactNavPlot'), node };
+    };
+
+    // Sound: the desktop toolbar's 🔊, which opens the audio strip under the
+    // plot (audio-methods.js). The strip is the same one; compact.css lays it
+    // out at a finger's size. Offered where the desktop offers the button —
+    // a time series and the analyses drawn from it — and, where nothing can
+    // be played, disabled with the reason the desktop puts in its tooltip.
+    proto._buildCompactSoundSection = function(node, panelId, plot) {
+        const pm = this.plotManager;
+        if (!plot || !pm._hasContent(plot) || !COMPACT_AUDIO_MODES.has(plot.mode)) return;
+        const open = !!plot.audio?.open;
+        const playable = pm._audioPanelPlayable(plot);
+        const wrap = section(i18n.t('compactSoundSection'));
+        const row = el('label', 'compact-switch-row compact-sound-switch');
+        const input = el('input');
+        input.type = 'checkbox';
+        input.checked = open;
+        // An open strip can always be closed, even once nothing in it plays.
+        input.disabled = !playable && !open;
+        input.addEventListener('change', () => {
+            pm._toggleAudioStrip(panelId);
+            if (plot.audio?.open) {
+                // The strip is under the plot: the sheet makes way for it.
+                this._closeCompactSheet();
+            } else {
+                this._renderCompactSheetContent();
+            }
+        });
+        row.append(el('span', '', i18n.t('compactSoundSwitch')), input);
+        wrap.appendChild(row);
+        wrap.appendChild(el('p', 'compact-note compact-sound-note', playable
+            ? i18n.t('compactSoundNote')
+            : pm._audioButtonTitle(plot)));
+        node.appendChild(wrap);
+    };
+
+    // Σ and Export: the two buttons at the end of the desktop panel toolbar,
+    // which the phone layout hides. Both open the desktop's own dialogs (full
+    // screen here), so the statistics and every export option — CSV, PNG at
+    // 1× to 4×, SVG, the chart, the theme, the file name — are the same ones.
+    proto._buildCompactOutputSection = function(node, panelId, plot) {
+        const pm = this.plotManager;
+        if (!plot || !pm._hasContent(plot)) return;
+        const wrap = section(i18n.t('compactOutputSection'));
+        const row = el('div', 'compact-action-row');
+        const statsBtn = button('compact-secondary-btn compact-stats-btn', i18n.t('compactStatsButton'), () => {
+            pm._showPanelStats(panelId);
+        }, { icon: SVG.sigma });
+        const statsOk = pm._panelStatsAvailable(plot);
+        statsBtn.disabled = !statsOk;
+        const exportBtn = button('compact-secondary-btn compact-export-btn', i18n.t('compactExportButton'), () => {
+            this._compactExportPlot(panelId);
+        }, { icon: SVG.download });
+        row.append(statsBtn, exportBtn);
+        wrap.appendChild(row);
+        // No tooltip on a phone: what the disabled Σ means, and what Export
+        // writes, are said under the buttons.
+        if (!statsOk) {
+            wrap.appendChild(el('p', 'compact-note compact-stats-note', i18n.t(plot.mode === 'heatmap' ? 'heatmapStatsPending' : 'compactStatsOwnResults')));
+        }
+        wrap.appendChild(el('p', 'compact-note compact-export-note', i18n.t('compactExportNote')));
+        node.appendChild(wrap);
+    };
+
+    // The image is the plot as it stands on the screen, and while a sheet is
+    // open the plot is only the part left above it (or beside it). The sheet
+    // goes first, the charts take their full size, and then the dialog opens:
+    // its quality line names the size the file will have.
+    proto._compactExportPlot = async function(panelId) {
+        const pm = this.plotManager;
+        if (!pm.plots.get(panelId)) return;
+        if (this._compact?.sheet) {
+            this._closeCompactSheet();
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            await pm.resizeAll();
+        }
+        await pm._openExportDialog(panelId);
     };
 
     // The rows of a desktop panel menu (View, Marks), as a phone reads them.

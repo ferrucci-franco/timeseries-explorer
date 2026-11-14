@@ -5643,3 +5643,174 @@ html.compact :is(.compact-sheet-body, .modal-dialog) :is(input[type="text"], inp
     padding-left: 12px;
     padding-right: 12px;
 }
+
+
+/* Σ: seven columns do not fit a phone, and a table that scrolls sideways
+   hides that it does. Each variable is a card instead: its name on top, then
+   one labelled line per figure (the labels are the cells' data-label). The
+   table underneath is unchanged, so "Copy results" copies the same text. */
+html.compact .stats-table-cards,
+html.compact .stats-table-cards tbody,
+html.compact .stats-table-cards tr,
+html.compact .stats-table-cards td {
+    display: block;
+}
+
+html.compact .stats-table-cards thead {
+    display: none;
+}
+
+/* The dialog's message keeps its line breaks (pre-line); once the cells are
+   blocks, the source's indentation between them would become blank lines. */
+html.compact .stats-table-cards {
+    white-space: normal;
+}
+
+html.compact .stats-table-cards tr {
+    margin: 0 0 12px;
+    padding: 4px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+}
+
+html.compact .stats-table-cards td {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 6px 0;
+    font-size: 1rem;
+    text-align: right;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+html.compact .stats-table-cards td::before {
+    content: attr(data-label);
+    color: var(--text-secondary);
+    text-align: left;
+    white-space: nowrap;
+}
+
+html.compact .stats-table-cards tr > td:last-child {
+    border-bottom: none;
+}
+
+/* The name heads the card (P1, P2… for correlation's pairs); a unit is said
+   only when there is one. */
+html.compact .stats-table-cards td:first-child {
+    display: block;
+    font-weight: 600;
+    text-align: left;
+}
+
+html.compact .stats-table-cards td:first-child::before {
+    content: none;
+}
+
+html.compact .stats-table-cards td:nth-child(2):empty {
+    display: none;
+}
+
+html.compact .modal-dialog-stats .stats-table-wrap {
+    max-height: none;
+    overflow: visible;
+}
+
+/* ── The audio strip on a phone ──────────────────────────────────────────
+   The desktop strip is one row that scrolls sideways when the panel is
+   narrow; at a phone's width everything past the signal list was cut off,
+   and its buttons were 22 px. Here it is three rows at a finger's size:
+   play, stop, loop, the time and mute; the seek bar across the whole width;
+   the signal and Remove DC. The phone's own buttons set the volume, so the
+   volume slider goes; mute stays. Opened from the Plot sheet (Sound). */
+html.compact .audio-strip {
+    padding: 6px 10px;
+    font-size: 0.9rem;
+}
+
+html.compact .audio-strip-row {
+    display: grid;
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+        "play stop loop time mute"
+        "seek seek seek seek seek"
+        "source source source dc dc";
+    align-items: center;
+    gap: 4px 8px;
+    overflow: visible;
+}
+
+html.compact .audio-btn {
+    min-width: 44px;
+    height: 40px;
+    border-radius: 8px;
+}
+
+html.compact .audio-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+html.compact .audio-play { grid-area: play; }
+html.compact .audio-stop { grid-area: stop; }
+html.compact .audio-loop { grid-area: loop; }
+html.compact .audio-mute { grid-area: mute; }
+
+html.compact .audio-readout {
+    grid-area: time;
+    justify-self: center;
+    font-size: 0.85rem;
+}
+
+html.compact .audio-seek {
+    grid-area: seek;
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    margin: 0;
+}
+
+html.compact .audio-field {
+    grid-area: source;
+    min-width: 0;
+}
+
+html.compact .audio-source {
+    width: 100%;
+    max-width: none;
+    height: 40px;
+    border-radius: 8px;
+    font-size: 1rem;
+}
+
+html.compact .audio-dc {
+    grid-area: dc;
+    justify-self: end;
+    min-height: 40px;
+    gap: 6px;
+}
+
+html.compact .audio-dc-input {
+    width: 20px;
+    height: 20px;
+}
+
+/* The panel is a whole phone wide: the labels the container queries drop
+   for a narrow desktop panel are kept, except the signal's, which the
+   list itself names. */
+html.compact .audio-strip .audio-label {
+    display: none;
+}
+
+html.compact .audio-strip .audio-dc-text {
+    display: inline;
+}
+
+html.compact .audio-volume {
+    display: none;
+}
+
+html.compact .audio-strip-note {
+    font-size: 0.8rem;
+}

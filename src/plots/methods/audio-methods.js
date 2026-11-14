@@ -1125,7 +1125,9 @@ export function installPlotAudioMethods(TargetClass) {
 
     proto._removeAudioStrip = function(panelId) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-        panelEl?.querySelector('.audio-strip')?.remove();
+        const strip = panelEl?.querySelector('.audio-strip');
+        strip?._heightObserver?.disconnect();
+        strip?.remove();
     };
 
     proto._syncAudioStrip = function(panelId) {
@@ -1272,6 +1274,27 @@ export function installPlotAudioMethods(TargetClass) {
             this._applyAudioVolume(state, panelId);
             this._syncAudioStrip(panelId);
         });
+
+        // The strip grows when its note appears (a resampled rate, clipping,
+        // why nothing plays) and shrinks when it goes. The panel keeps its
+        // size, so the panel's own ResizeObserver never hears of it, and the
+        // chart went on drawing its x axis under the strip. Its height is
+        // watched here instead.
+        if (typeof ResizeObserver === 'function') {
+            let lastHeight = -1;
+            let timer = null;
+            strip._heightObserver = new ResizeObserver(entries => {
+                const height = Math.round(entries[entries.length - 1]?.contentRect?.height ?? 0);
+                if (height === lastHeight) return;
+                const first = lastHeight < 0;
+                lastHeight = height;
+                // Its first size is already told to Plotly by whoever opened it.
+                if (first) return;
+                clearTimeout(timer);
+                timer = setTimeout(() => this._resizePanelCharts?.(panelId), 50);
+            });
+            strip._heightObserver.observe(strip);
+        }
 
         return strip;
     };

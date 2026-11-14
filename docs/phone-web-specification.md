@@ -50,6 +50,24 @@ Built:
   chosen from a list, the side panel's controls at a finger's size (− and +
   that repeat, a segmented choice, every "?" a help page), and Create, Update
   and Delete; the tree's ✎ on a tool's output opens its page;
+- the Plot sheet's **Statistics and export** (§5.2): Σ and **Export…**, the two
+  buttons the hidden panel toolbar ends with, opening the desktop's own dialogs
+  full screen — the statistics table, and every export option (CSV; PNG at 1× to
+  4×; SVG; the chart, the theme and the file name). Export puts the sheet away
+  first and waits for the plot to take its full size, so the image is the whole
+  plot and not the part the sheet left above it. Σ is disabled, saying why, where
+  the desktop's is (`_panelStatsAvailable`). Where the browser can share the
+  file, the dialog offers **Share…** beside Download (§8.3);
+- **Sound** in the Plot sheet (§5.2): a switch that opens the desktop's audio strip
+  under the plot and puts the sheet away, offered where the desktop's 🔊 is (a time
+  series, FFT, the histogram, the integral) and, where nothing can be heard,
+  disabled with the reason the desktop gives in its tooltip. The strip is the same
+  one (`audio-methods.js`), laid out by `compact.css` in three rows at a finger's
+  size: play, stop, loop, the time and mute; the seek bar across the screen; the
+  signal and Remove DC. The phone's own buttons set the volume, so the volume
+  slider is hidden. A tap on the plot moves the sound there, as a click does on the
+  desktop. The chart follows the strip's height when its note line comes and goes
+  (`_heightObserver`, which also fixes the desktop strip covering the axis);
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
@@ -68,13 +86,12 @@ The code is in `src/app/methods/compact-methods.js`,
 `src/ui/compact-layout.js`, `src/utils/cursor-handles.js` and
 `src/styles/compact.css`. The tests are `npm run test:compact-layout`,
 `npm run test:compact-derived`, `npm run test:compact-tools`,
-`npm run test:cursor-handles`, `npm run e2e:compact-layout`,
+`npm run test:cursor-handles`, `npm run e2e:compact-layout`, `npm run e2e:compact-audio`,
 `npm run e2e:compact-derived` and `npm run e2e:compact-tools`.
 
 Not built yet:
 
 - tap readouts beyond Plotly's own;
-- export through Web Share;
 - the web manifest and the service worker (§8);
 - deferring Plotly;
 - the phone file-size defaults (§9).
@@ -258,8 +275,11 @@ compact mode hides the panel toolbar.
 - Autoscale, and linked time axes.
 - **View**: log, stack, Y2, line shape.
 - **Marks**: NaN, gaps, repeated, samples.
-- Legend position, cursors, compare files, audio strip, statistics (Σ).
-- **Export** (§8.3).
+- Legend position, cursors, compare files.
+- **Sound**: the audio strip, built (see the list at the top).
+- **Statistics and export**: statistics (Σ) and **Export** (§8.3), built.
+  Export closes the sheet before the dialog opens: the image is the plot at the
+  size it has on the screen.
 
 Autoscale and the cursor toggle may also appear as a small floating button cluster
 on the plot. That cluster must avoid axes, legend and data, and must stay at most two
@@ -650,9 +670,19 @@ A service worker makes the app open and work without network once installed.
   without storing it beyond that hand-off.
 - **File handling (desktop Chromium).** `file_handlers` in the manifest comes almost
   for free and lets an installed desktop PWA open files from the OS.
-- **Export.** Exports use the Web Share API (`navigator.share` with files) when it is
-  available, so a PNG or CSV can go straight to a chat or to Drive. Otherwise they
-  fall back to a normal download.
+- **Export.** Built. Where the browser can share a file of the chosen type
+  (`navigator.canShare` with a file of it: Chrome on Android, Safari on iOS and
+  macOS, Chrome and Edge on Windows), the export dialog offers **Share…** beside
+  **Download**, and the PNG, SVG or CSV goes to the device's share sheet — a chat,
+  mail, Drive. Elsewhere the dialog is as it was. The browser opens the sheet only
+  close to a tap; a file that took longer to build (a large PNG or CSV, Safari
+  allowing least) gets a short **File ready** question whose Share button is the
+  fresh tap it needs. Closing the sheet is not an error; a share that fails
+  otherwise downloads the file and says so. The CSV keeps its bytes but goes as
+  plain `text/csv`. Code: `src/utils/file-share.js`, `_saveExportBlob` in
+  `src/plots/methods/export-methods.js` (every export's last step); tests:
+  `npm run test:file-share`, `npm run test:export-dialog` and the share flows in
+  `npm run e2e:compact-layout`.
 - A file arriving while files are already loaded joins the session. It never replaces
   what is there silently.
 

@@ -1518,7 +1518,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         // suffix that says which of the three it is.
         const suffix = { summary: 'summary', curve: 'curve', displayed: 'displayed_visual_sample' }[choice];
         const filename = options.baseName ? `${options.baseName}_${suffix}.csv` : out.filename;
-        this._downloadCsvColumns(out.headers, out.columns, filename);
+        return this._downloadCsvColumns(out.headers, out.columns, filename);
     };
 
     proto._downloadCsvColumns = function(headers, columns, filename) {
@@ -1527,12 +1527,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const rows = [headers.join(',')];
         for (let i = 0; i < nRows; i++) rows.push(columns.map(c => (c[i] !== undefined ? c[i] : '')).join(','));
         const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
+        // Shared or downloaded, as the export dialog was asked (export-methods.js).
+        return this._saveExportBlob(blob, filename);
     };
 
     // Shared CSV helpers. Cell escaping itself lives in utils/csv-cell.js, which

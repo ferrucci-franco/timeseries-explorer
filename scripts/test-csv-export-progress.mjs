@@ -33,11 +33,23 @@ const coreEnd = source.indexOf(endMarker, coreStart);
 const core = source.slice(coreStart, coreEnd + endMarker.length)
     .replace(coreMarker, 'proto._writeCsvChunks = async function(headers, blocks, fileName, { totalRows = null, alwaysReport = false } = {}) {');
 
+// The export's last step (export-methods.js, _saveExportBlob) hands the file
+// to the browser as file-share.js's downloadFile does: through the stubs above.
+const SAVE_STAND_IN = `proto._saveExportBlob = async function(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    return 'downloaded';
+};`;
+
 const proto = {};
 let written = null;
 let downloaded = null;
 let blobs = [];
-vm.runInNewContext(`${method}\n${core}`, {
+vm.runInNewContext(`${method}\n${core}\n${SAVE_STAND_IN}`, {
     proto,
     console,
     i18n: { t: key => key, formatNumber: value => String(value) },
@@ -59,6 +71,7 @@ vm.runInNewContext(`${method}\n${core}`, {
 const makeHost = ({ overlay = null } = {}) => ({
     write: proto.write,
     _writeCsvChunks: proto._writeCsvChunks,
+    _saveExportBlob: proto._saveExportBlob,
     yields: 0,
     onBusyOverlay: overlay ? (options) => overlay(options) : null,
     _yieldToPaint() { this.yields++; return Promise.resolve(); },

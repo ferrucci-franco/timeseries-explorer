@@ -65,9 +65,15 @@ assert.ok(
     plotManagerSource.includes('return this._writeCsvFile(headers, columns, options.fileName || `${plot.mode}_export.csv`);'),
     'CSV keeps its old default name and accepts the one typed in the dialog',
 );
+// The writer hands the finished file to the export's last step, which shares
+// it or downloads it under that name (export-methods.js, file-share.js).
 assert.ok(
-    plotManagerSource.includes('a.download = fileName;'),
+    plotManagerSource.includes('await this._saveExportBlob(blob, fileName);'),
     'and that name is what the browser is given',
+);
+assert.ok(
+    readFileSync(new URL('../src/utils/file-share.js', import.meta.url), 'utf8').includes('link.download = fileName;'),
+    'as the download\'s name',
 );
 
 // ── The dialog ──────────────────────────────────────────────────────────
@@ -127,7 +133,7 @@ class Harness {
 
     _hasContent() { return true; }
 
-    _exportCSV(panelId, options) { this.csvExports.push({ panelId, options }); }
+    _exportCSV(panelId, options) { this.csvExports.push({ panelId, options, delivery: this._exportDelivery }); }
 
     _themeRelayoutUpdate() {
         const light = this.theme === 'light';
@@ -146,6 +152,11 @@ const alerts = [];
 let dialogAnswer = null;
 let dialogOptions = null;
 const downloads = [];
+const choices = [];
+let choiceAnswer = null;
+const shares = [];
+let shareOutcomes = [];
+const shareableFormats = new Set();
 
 const makeDiv = (order, width = 800, height = 450, extraLayout = {}) => {
     const div = {
@@ -180,7 +191,20 @@ const sandbox = {
         body: { appendChild() {} },
     },
     i18n: { t: (key) => key },
-    Modal: { alert: (title, body) => alerts.push({ title, body }) },
+    Modal: {
+        alert: (title, body) => alerts.push({ title, body }),
+        choice: async (message, options) => { choices.push({ message, options }); return choiceAnswer; },
+    },
+    // file-share.js, as stubs: whether the browser can share, and what its
+    // share sheet answers (shareOutcomes, in order).
+    canShareFiles: (format) => shareableFormats.has(format),
+    exportFile: (blob, name) => ({ blob, name }),
+    shareFile: async (file) => { shares.push(file.name); return shareOutcomes.shift(); },
+    downloadFile: (blob, name) => {
+        const a = sandbox.document.createElement('a');
+        a.download = name;
+        a.click();
+    },
     PlotExportDialog: {
         open: async (options) => { dialogOptions = options; return dialogAnswer; },
     },
@@ -396,6 +420,77 @@ for (const [mode, extraKey, chartId] of [
     assert.equal(alerts.length, 1, 'the failure is reported');
     assert.equal(alerts[0].title, 'exportFailedTitle', 'the report says the export failed');
     assert.equal(relayouts.length, 2, 'the panel is restored even when the render fails');
+}
+
+// Share: the dialog is told what can be shared, and the file goes to the
+// share sheet instead of a download.
+{
+    const plot = { mode: 'timeseries', div: makeDiv(1) };
+    const manager = new Harness(plot);
+    const png = { format: 'png', chartId: 'plot', scale: 2, theme: 'current', baseName: 'p', fileName: 'p.png' };
+    const reset = () => { downloads.length = 0; shares.length = 0; choices.length = 0; alerts.length = 0; };
+
+    shareableFormats.clear();
+    shareableFormats.add('png');
+    dialogAnswer = null;
+    await manager._openExportDialog('panel');
+    assert.equal(typeof dialogOptions.canShare, 'function', 'the dialog is asked to offer Share where it can');
+    assert.equal(dialogOptions.canShare('png'), true, 'for a type the browser can share');
+    assert.equal(dialogOptions.canShare('csv'), false, 'and not for one it cannot');
+
+    reset();
+    dialogAnswer = { ...png, delivery: 'download' };
+    await manager._openExportDialog('panel');
+    assert.deepEqual([downloads, shares], [['p.png'], []], 'Download still downloads');
+
+    reset();
+    dialogAnswer = { ...png, delivery: 'share' };
+    shareOutcomes = ['shared'];
+    await manager._openExportDialog('panel');
+    assert.deepEqual([shares, downloads, choices.length], [['p.png'], [], 0], 'Share hands the file to the share sheet, and nothing is downloaded');
+
+    reset();
+    shareOutcomes = ['cancelled'];
+    await manager._openExportDialog('panel');
+    assert.deepEqual([downloads, alerts, choices.length], [[], [], 0], 'closing the share sheet is not an error');
+
+    // Too long after the tap: one more tap, on a "ready" question.
+    reset();
+    shareOutcomes = ['needs-gesture', 'shared'];
+    choiceAnswer = 'share';
+    await manager._openExportDialog('panel');
+    assert.equal(choices.length, 1, 'a share that came too late asks for one more tap');
+    assert.equal(choices[0].options.title, 'exportReadyTitle');
+    assert.deepEqual(Array.from(choices[0].options.choices, c => c.value), ['download', 'share'], 'Share, or Download instead (the action last)');
+    assert.deepEqual([shares, downloads], [['p.png', 'p.png'], []], 'and that tap shares it');
+
+    reset();
+    shareOutcomes = ['needs-gesture'];
+    choiceAnswer = 'download';
+    await manager._openExportDialog('panel');
+    assert.deepEqual([shares.length, downloads], [1, ['p.png']], 'or downloads it, if that is the answer');
+
+    reset();
+    shareOutcomes = ['needs-gesture'];
+    choiceAnswer = null;
+    await manager._openExportDialog('panel');
+    assert.deepEqual([downloads, alerts], [[], []], 'dismissed, nothing happens');
+
+    // A share target that fails: the file is not lost.
+    reset();
+    shareOutcomes = [{ error: new Error('target crashed') }];
+    await manager._openExportDialog('panel');
+    assert.deepEqual(downloads, ['p.png'], 'a failed share downloads the file instead');
+    assert.equal(alerts.length, 1, 'and says so');
+
+    // CSV: the writer reads where the file goes while it runs.
+    reset();
+    dialogAnswer = { format: 'csv', baseName: 'c', fileName: 'c.csv', delivery: 'share' };
+    manager.csvExports.length = 0;
+    await manager._openExportDialog('panel');
+    assert.equal(manager.csvExports[0].delivery, 'share', 'the CSV writer is told to share');
+    assert.equal(manager._exportDelivery, null, 'and the choice does not outlive the export');
+    shareableFormats.clear();
 }
 
 console.log('Export dialog tests passed');

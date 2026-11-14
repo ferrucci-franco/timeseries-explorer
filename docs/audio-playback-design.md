@@ -71,6 +71,19 @@ Accepted costs: the strip moves between panels as the source changes; it takes h
 from a panel that may already be short; and comparing is done through a dropdown
 rather than two slots visible at once.
 
+### On a phone
+
+The phone layout (docs/phone-web-specification.md) hides the panel toolbar, so the
+🔊 button becomes a **Sound** switch in the Plot sheet. It opens the same strip
+under the plot and puts the sheet away; where nothing can be heard it is disabled
+and the tooltip's reason is written under it. `compact.css` lays the strip out in
+three rows at a finger's size (transport, time and mute; the seek bar across the
+screen; the signal and Remove DC) and hides the volume slider, which the phone's
+own buttons replace. Tap-to-seek works as the click does. The strip watches its own
+height (`_heightObserver`), so the chart gives it room when its note line appears —
+which also fixed the desktop strip covering the chart's x axis when a note came.
+Tested by `npm run e2e:compact-audio`.
+
 ### B — global dock at the foot of the app (recorded, not chosen)
 
 A single collapsible bar across the window, with two named signal slots and a `⇄` that

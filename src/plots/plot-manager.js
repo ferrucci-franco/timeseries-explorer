@@ -12,6 +12,7 @@ import { installPlotMarksMethods } from './methods/marks-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-methods.js';
+import { installPlotStatsLazyMethods } from './methods/stats-lazy-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
 import { installPlotAnalysisBusyMethods } from './methods/analysis-busy-methods.js';
 import { installPlotAnalysisRangeMethods } from './methods/analysis-range-methods.js';
@@ -878,18 +879,23 @@ class PlotManager {
             if (!div || !div.isConnected || div.offsetParent === null) return null;
             return Promise.resolve(Plotly.Plots.resize(div)).catch(() => {});
         };
+        // Settled when every chart has its new size: the phone's export waits
+        // for it, so the image is the plot as it is once the sheet is gone.
+        const pending = [];
         for (const [, plot] of this.plots) {
             if (!plot.div) continue;
-            resize(plot.div)?.then(() => {
-                this._refreshPanelDomOverlays(plot);
-            });
-            resize(plot.fftDiv);
-            resize(plot.histogramDiv);
-            resize(plot.heatmapDiv);
-            resize(plot.temporalProfileDiv);
-            resize(plot.integralDiv);
-            resize(plot.integralPieDiv);
+            const main = resize(plot.div);
+            if (main) {
+                pending.push(main.then(() => {
+                    this._refreshPanelDomOverlays(plot);
+                }));
+            }
+            for (const div of [plot.fftDiv, plot.histogramDiv, plot.heatmapDiv, plot.temporalProfileDiv, plot.integralDiv, plot.integralPieDiv]) {
+                const done = resize(div);
+                if (done) pending.push(done);
+            }
         }
+        return Promise.all(pending);
     }
 
     _refreshPanelDomOverlays(plot) {
@@ -2942,7 +2948,7 @@ class PlotManager {
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
-            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral' || plot?.mode === 'curve-fit' || plot?.mode === 'trend';
+            statsBtn.disabled = !this._panelStatsAvailable(plot);
             if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
@@ -2984,16 +2990,13 @@ class PlotManager {
         // With the 2D Curve Fit workspace open, offer the fit-specific exports
         // (summary / curve / displayed points) instead of the raw X/Y dump.
         if (plot.mode === 'curve-fit' && this._exportCurveFitCsv) {
-            this._exportCurveFitCsv(panelId, plot, { baseName: options.baseName });
-            return;
+            return this._exportCurveFitCsv(panelId, plot, { baseName: options.baseName });
         }
         if (plot.mode === 'trend' && this._exportTrendCsv) {
-            this._exportTrendCsv(panelId, plot, { baseName: options.baseName });
-            return;
+            return this._exportTrendCsv(panelId, plot, { baseName: options.baseName });
         }
         if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && this._exportPhase2dFitCsv) {
-            this._exportPhase2dFitCsv(panelId, plot, { baseName: options.baseName });
-            return;
+            return this._exportPhase2dFitCsv(panelId, plot, { baseName: options.baseName });
         }
 
         const headers = [];
@@ -3181,6 +3184,7 @@ class PlotManager {
         // channel of minutes is a CSV of a gigabyte, and holding all of it as
         // strings until the end is what ran the tab out of memory.
         const SPILL_CHARS = 32 * 1024 * 1024;
+        let blob = null;
         const token = { cancelled: false };
         const knownTotal = Number.isFinite(totalRows) && totalRows >= 0;
         const overlay = alwaysReport || (knownTotal && totalRows * nColumns >= CELLS_BEFORE_REPORTING)
@@ -3231,17 +3235,13 @@ class PlotManager {
             }
             if (pending.length) chunks.push('\n' + pending.join('\n'));
 
-            const blob = new Blob([...spilled, ...chunks], { type: 'text/csv;charset=utf-8;' });
-            const url  = URL.createObjectURL(blob);
-            const a    = document.createElement('a');
-            a.href     = url;
-            a.download = fileName;
-            a.click();
-            URL.revokeObjectURL(url);
-            return fileName;
+            blob = new Blob([...spilled, ...chunks], { type: 'text/csv;charset=utf-8;' });
         } finally {
             overlay?.close();
         }
+        // Once the overlay is down: sharing may need one more tap.
+        await this._saveExportBlob(blob, fileName);
+        return fileName;
     }
 
     /**
@@ -3919,27 +3919,31 @@ class PlotManager {
         });
     }
 
-    _showPanelStats(panelId) {
+    // Whether Σ has something to say about this panel. The analyses that are
+    // a table of their own (the heatmap, the profile, the integral, the curve
+    // fit, the trend) report their results themselves. The desktop's Σ button
+    // and the phone's Plot sheet both ask here.
+    _panelStatsAvailable(plot) {
+        if (!plot || !this._hasContent(plot)) return false;
+        return !['heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend'].includes(plot.mode);
+    }
+
+    async _showPanelStats(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
         // Correlation reports the exact per-pair results, not raw variable stats.
         if (plot.mode === 'correlation') { this._showCorrelationStats?.(plot); return; }
 
-        const entries = [];
+        const wanted = [];
         const addVar = (fileId, varName) => {
-            const d = this.files.get(fileId)?.data;
-            const variable = d?.variables[varName];
-            if (!variable) return;
-            const stats = seriesStats(this._getTransformedVariableData(fileId, varName));
-            if (!stats) return;
-            entries.push({
-                name: this._traceName(varName, fileId, { units: false }),
-                unit: this._extractUnit(variable.description),
-                ...stats,
-            });
+            const variable = this.files.get(fileId)?.data?.variables?.[varName];
+            if (variable) wanted.push({ fileId, varName, variable });
         };
 
-        if (plot.mode === 'timeseries' || plot.mode === 'fft') {
+        // A time series, and the analyses drawn from its traces that Σ is
+        // offered on: FFT and the histogram (whose signals were looked for
+        // among the 2D pairs, and Σ said there was no numeric data).
+        if (['timeseries', 'fft', 'histogram'].includes(plot.mode)) {
             plot.traces.forEach(t => addVar(t.fileId, t.varName));
         } else if (plot.mode === 'state-anim') {
             plot.stateSlots.x.forEach(v => addVar(plot.stateSlots.fileId, v));
@@ -3952,28 +3956,57 @@ class PlotManager {
             });
         }
 
+        // A file in memory-saving mode holds an overview, not its rows: its
+        // variables are read from the file (stats-lazy-methods.js), with the
+        // rows counted on screen and a Cancel. One with no file to read — made
+        // from the overview — is said to be so, never summed from it.
+        const lazy = wanted.filter(entry => this._isLazyStatsEntry(entry));
+        let lazyStats = new Map();
+        if (lazy.length) {
+            lazyStats = await this._readLazyPanelStats(lazy);
+            if (!lazyStats) return;
+        }
+
+        const entries = [];
+        const overviewOnly = [];
+        for (const entry of wanted) {
+            const { fileId, varName, variable } = entry;
+            const name = this._traceName(varName, fileId, { units: false });
+            let stats;
+            if (lazyStats.has(entry)) stats = lazyStats.get(entry);
+            else if (lazy.includes(entry)) { overviewOnly.push(name); continue; }
+            else stats = seriesStats(this._getTransformedVariableData(fileId, varName));
+            if (!stats) continue;
+            entries.push({ name, unit: this._extractUnit(variable.description), ...stats });
+        }
+
         if (!entries.length) {
-            Modal.alert(i18n.t('panelStatsTitle'), i18n.t('statsNoNumeric'), { icon: 'Σ' });
+            Modal.alert(i18n.t('panelStatsTitle'), overviewOnly.length
+                ? i18n.t('statsLazyOverviewOnly').replace('{names}', overviewOnly.join(', '))
+                : i18n.t('statsNoNumeric'), { icon: 'Σ' });
             return;
         }
 
         // A variable with no finite sample prints four gaps and a full NaN
         // count: the row is the answer, so it is no longer dropped.
         const fmt = value => Number.isFinite(value) ? value.toPrecision(6) : '';
+        // Each cell names its column (data-label): the phone layout draws a
+        // card per variable from them instead of seven columns it cannot fit.
+        const label = key => this._escapeHTML(i18n.t(key));
         const rows = entries.map(e => `
             <tr>
-                <td>${this._escapeHTML(e.name)}</td>
-                <td>${this._escapeHTML(e.unit)}</td>
-                <td>${fmt(e.min)}</td>
-                <td>${fmt(e.max)}</td>
-                <td>${fmt(e.mean)}</td>
-                <td>${fmt(e.rms)}</td>
-                <td>${this._escapeHTML(formatMissingCount(e.missing, e.total))}</td>
+                <td data-label="${label('statsVariable')}">${this._escapeHTML(e.name)}</td>
+                <td data-label="${label('statsUnit')}">${this._escapeHTML(e.unit)}</td>
+                <td data-label="${label('statsMin')}">${fmt(e.min)}</td>
+                <td data-label="${label('statsMax')}">${fmt(e.max)}</td>
+                <td data-label="${label('statsMean')}">${fmt(e.mean)}</td>
+                <td data-label="${label('statsRms')}">${fmt(e.rms)}</td>
+                <td data-label="${label('statsNaN')}">${this._escapeHTML(formatMissingCount(e.missing, e.total))}</td>
             </tr>
         `).join('');
         const body = `
             <div class="stats-table-wrap">
-                <table class="stats-table">
+                <table class="stats-table stats-table-cards">
                     <thead>
                         <tr>
                             <th>${this._escapeHTML(i18n.t('statsVariable'))}</th>
@@ -3988,11 +4021,41 @@ class PlotManager {
                     <tbody>${rows}</tbody>
                 </table>
             </div>
+            ${overviewOnly.length ? `<p class="stats-table-note">${this._escapeHTML(i18n.t('statsLazyOverviewOnly').replace('{names}', overviewOnly.join(', ')))}</p>` : ''}
         `;
         Modal.alert(i18n.t('panelStatsTitle'), body, {
             icon: 'Σ', html: true, className: 'modal-dialog-stats',
             copyText: dialog => tableText(dialog.querySelector('.stats-table')),
         });
+    }
+
+    // Σ over the rows of lazy files: the busy overlay counts the rows read, and
+    // its Cancel aborts the stream. Null when cancelled (nothing is shown) or
+    // when the read failed (said, then nothing is shown).
+    async _readLazyPanelStats(entries) {
+        const controller = new AbortController();
+        // The overlay sets token.cancelled; here that aborts the read at once,
+        // rather than at the next chunk.
+        const token = {
+            get cancelled() { return controller.signal.aborted; },
+            set cancelled(value) { if (value) controller.abort(); },
+        };
+        const overlay = this.onBusyOverlay?.({ title: i18n.t('statsLazyComputing'), token });
+        try {
+            return await this._lazyPanelStats(entries, {
+                signal: controller.signal,
+                onRows: rows => overlay?.progress(i18n.t('statsLazyProgress').replace('{rows}', i18n.formatNumber(rows))),
+            });
+        } catch (err) {
+            if (err?.name === 'AbortError' || controller.signal.aborted) return null;
+            console.error('[stats] could not read the file:', err);
+            await Modal.alert(i18n.t('panelStatsTitle'),
+                i18n.t('statsLazyReadFailed').replace('{error}', err?.message || String(err)),
+                { icon: '⚠️' });
+            return null;
+        } finally {
+            overlay?.close();
+        }
     }
 
     // ─── Helpers ───────────────────────────────────────────────────
@@ -5738,6 +5801,7 @@ installPlotAnalysisFitMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotHistogramLazyMethods(PlotManager);
+installPlotStatsLazyMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);
 installPlotAnalysisBusyMethods(PlotManager);
 installPlotFitLazyMethods(PlotManager);

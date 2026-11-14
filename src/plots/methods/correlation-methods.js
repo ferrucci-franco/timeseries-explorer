@@ -1134,27 +1134,31 @@ export function installPlotCorrelationMethods(TargetClass) {
             return;
         }
         const fmt = (v) => Number.isFinite(v) ? Number(v).toPrecision(6) : '—';
+        // Each cell names its column (data-label), so the phone layout can draw
+        // a card per pair rather than ten columns it cannot fit.
+        const pairsLabel = this._escapeHTML(i18n.t('correlationPairsTitle'));
+        const excludedLabel = this._escapeHTML(i18n.t('correlationExcludedShort'));
         const rowsHTML = results.map((r, i) => {
             const label = r?.label
                 || (r?.pair ? `${this._traceName(r.pair.x, r.pair.fileId)} ↔ ${this._traceName(r.pair.y, r.pair.fileId)}` : '');
             const ok = r?.status === 'ok';
             return `<tr>
-                <td>P${i + 1}</td>
-                <td>${this._escapeHTML(label)}</td>
-                <td>${ok ? fmt(r.r) : 'N/A'}</td>
-                <td>${ok ? fmt(r.r2) : 'N/A'}</td>
-                <td>${fmt(r?.n ?? r?.nPair)}</td>
-                <td>${fmt(r?.nExcluded)}</td>
-                <td>${fmt(r?.meanX)}</td>
-                <td>${fmt(r?.stdX)}</td>
-                <td>${fmt(r?.meanY)}</td>
-                <td>${fmt(r?.stdY)}</td>
+                <td data-label="#">P${i + 1}</td>
+                <td data-label="${pairsLabel}">${this._escapeHTML(label)}</td>
+                <td data-label="r">${ok ? fmt(r.r) : 'N/A'}</td>
+                <td data-label="r²">${ok ? fmt(r.r2) : 'N/A'}</td>
+                <td data-label="N">${fmt(r?.n ?? r?.nPair)}</td>
+                <td data-label="${excludedLabel}">${fmt(r?.nExcluded)}</td>
+                <td data-label="μx">${fmt(r?.meanX)}</td>
+                <td data-label="σx">${fmt(r?.stdX)}</td>
+                <td data-label="μy">${fmt(r?.meanY)}</td>
+                <td data-label="σy">${fmt(r?.stdY)}</td>
             </tr>`;
         }).join('');
         const th = (text) => `<th>${this._escapeHTML(text)}</th>`;
         const body = `
             <div class="stats-table-wrap">
-                <table class="stats-table">
+                <table class="stats-table stats-table-cards">
                     <thead><tr>
                         ${th('#')}${th(i18n.t('correlationPairsTitle'))}
                         ${th('r')}${th('r²')}${th('N')}${th(i18n.t('correlationExcludedShort'))}

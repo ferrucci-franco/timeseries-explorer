@@ -2,6 +2,7 @@ import Plotly from '../../vendor/plotly.js';
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import PlotExportDialog from '../../ui/plot-export-dialog.js';
+import { canShareFiles, downloadFile, exportFile, shareFile } from '../../utils/file-share.js';
 
 /**
  * Panel export — the download button and everything behind it.
@@ -47,19 +48,6 @@ const dataUrlToBlob = (dataUrl) => {
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return new Blob([bytes], { type: mime });
-};
-
-const downloadBlob = (blob, fileName) => {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    link.rel = 'noopener';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    // Revoking straight away can cut a large download short in some browsers.
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
 };
 
 export function installPlotExportMethods(TargetClass) {
@@ -184,6 +172,9 @@ export function installPlotExportMethods(TargetClass) {
         // them in time, one time column for all (the default when it can).
         const concat = !csvBlockedReason ? this._timeseriesConcatPlan?.(plot) : null;
         const result = await PlotExportDialog.open({
+            // Where the browser can hand a file of that type to the device's
+            // share sheet, the dialog offers Share beside Download.
+            canShare: format => canShareFiles(format),
             contextLabel: charts.map(chart => chart.label).join(' · '),
             charts: charts.map(({ id, label, width, height }) => ({ id, label, width, height })),
             defaultChartId: this._defaultExportChartId(plot, charts),
@@ -203,6 +194,17 @@ export function installPlotExportMethods(TargetClass) {
         });
         if (!result) return;
 
+        // Where the file goes, read by _saveExportBlob when the file is ready.
+        // Held for the whole export: a CSV is written in chunks first.
+        this._exportDelivery = result.delivery === 'share' ? 'share' : 'download';
+        try {
+            await this._runExport(panelId, plot, charts, result);
+        } finally {
+            this._exportDelivery = null;
+        }
+    };
+
+    proto._runExport = async function(panelId, plot, charts, result) {
         if (result.format === 'csv') {
             // Awaited: a large table is now written in chunks, and the caller
             // going on while it does would leave the dialog's own teardown
@@ -223,6 +225,7 @@ export function installPlotExportMethods(TargetClass) {
 
     proto._exportPlotImage = async function(panelId, plot, chart, { format, scale, theme, fileName }) {
         const restore = await this._applyExportTheme(panelId, plot, chart.div, theme);
+        let blob = null;
         try {
             const dataUrl = await Plotly.toImage(chart.div, {
                 format,
@@ -232,7 +235,7 @@ export function installPlotExportMethods(TargetClass) {
                 // resolution-independent, so only PNG uses the multiplier.
                 scale: format === 'png' ? scale : 1,
             });
-            downloadBlob(dataUrlToBlob(dataUrl), fileName);
+            blob = dataUrlToBlob(dataUrl);
         } catch (error) {
             Modal.alert(i18n.t('exportFailedTitle'), i18n.t('exportFailedBody'), {
                 details: error?.message || String(error),
@@ -241,6 +244,57 @@ export function installPlotExportMethods(TargetClass) {
         } finally {
             await restore();
         }
+        // After the chart has its own theme back: a share sheet can stay open
+        // for as long as the user likes.
+        if (blob) await this._saveExportBlob(blob, fileName);
+    };
+
+    /**
+     * Every export's last step: the file to the device's share sheet when the
+     * export dialog's Share was pressed, downloaded otherwise.
+     *
+     * The browser opens the share sheet only close to a tap. A file that took
+     * longer than that to build (a large PNG or CSV; Safari allows least) gets
+     * a short "ready" question whose button is the fresh tap it needs. Closing
+     * the sheet is not an error. A share that fails otherwise downloads the
+     * file instead, and says so.
+     */
+    proto._saveExportBlob = async function(blob, fileName) {
+        if (this._exportDelivery !== 'share') {
+            downloadFile(blob, fileName);
+            return 'downloaded';
+        }
+        const file = exportFile(blob, fileName);
+        let outcome = await shareFile(file);
+        if (outcome === 'needs-gesture') {
+            const choice = await Modal.choice(i18n.t('exportReadyBody').replace('{name}', fileName), {
+                title: i18n.t('exportReadyTitle'),
+                icon: false,
+                className: 'modal-dialog-export-ready',
+                // The action last: on the right of a desktop row, and on top
+                // of the phone's stacked buttons.
+                choices: [
+                    { text: i18n.t('exportDownload'), value: 'download', className: 'modal-btn-secondary-confirm export-ready-download' },
+                    { text: i18n.t('exportShare'), value: 'share', className: 'modal-btn-confirm export-ready-share', autoFocus: true },
+                ],
+            });
+            if (choice === 'download') {
+                downloadFile(blob, fileName);
+                return 'downloaded';
+            }
+            if (choice !== 'share') return 'cancelled';
+            outcome = await shareFile(file);
+        }
+        if (outcome === 'shared' || outcome === 'cancelled') return outcome;
+        // Refused twice, or a share target that failed: the file is not lost.
+        downloadFile(blob, fileName);
+        const error = outcome?.error;
+        Modal.alert(i18n.t('exportDialogTitle'), i18n.t('exportShareFailed'), {
+            icon: '⚠️',
+            details: error ? (error.message || String(error)) : '',
+            detailsLabel: i18n.t('exportFailedDetails'),
+        });
+        return 'downloaded';
     };
 
     /**
