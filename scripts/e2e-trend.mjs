@@ -324,11 +324,36 @@ try {
     await page.waitForFunction(id => window.app.plotManager.plots.get(id).traces.length === 2, panelId, { timeout: 15000 });
     await setSegment({ varName: 'decay', x1: 100, x2: 1500 });
     await settled(1);
-    // The menu of models only says which one: the tick box beside it is what
-    // turns the fit on, and it is disabled until then.
+    // The tick box and its model are one control: the model hangs from the
+    // box and is there only while the fit is on.
     const expBox = page.locator('.trend-curves-block input[data-trend-curve="exp"]');
-    assert.equal(await page.locator('.trend-exp-select').isDisabled(), true, 'the model menu is dead until the fit is asked for');
+    const expRow = page.locator('.trend-exp-group .trend-exp-row');
+    assert.equal(await expRow.isVisible(), false, 'off, there is no model to choose');
+    assert.equal(await expBox.getAttribute('aria-expanded'), 'false', 'and the box says so');
+    assert.equal(await expBox.getAttribute('aria-controls'), await expRow.getAttribute('id'), 'it names what it opens');
     await expBox.check();
+    assert.equal(await expRow.isVisible(), true, 'ticked, the model appears under it');
+    assert.equal(await expBox.getAttribute('aria-expanded'), 'true');
+    assert.match(await expRow.locator('.trend-exp-model-label').innerText(), /Model/, 'labelled as the model of the fit');
+    // The branch leaves from the box and the menu sits to its right, inside
+    // the same group: nothing else between them.
+    const geometry = await page.evaluate(() => {
+        const box = document.querySelector('.trend-curves-block input[data-trend-curve="exp"]').getBoundingClientRect();
+        const row = document.querySelector('.trend-exp-group .trend-exp-row');
+        const select = row.querySelector('.trend-exp-select').getBoundingClientRect();
+        const branch = getComputedStyle(row, '::before');
+        const next = row.closest('.trend-curves-block').nextElementSibling?.getBoundingClientRect();
+        return {
+            gapBelowBox: select.top - box.bottom,
+            selectRightOfBox: select.left > box.right,
+            branch: branch.borderLeftStyle,
+            roomAfter: next ? next.top - row.getBoundingClientRect().bottom : null,
+        };
+    });
+    assert.ok(geometry.gapBelowBox >= 0 && geometry.gapBelowBox < 16, `the menu sits right under its box (${geometry.gapBelowBox} px)`);
+    assert.ok(geometry.selectRightOfBox, 'indented under it');
+    assert.equal(geometry.branch, 'solid', 'on a branch from the box');
+    assert.ok(geometry.roomAfter === null || geometry.roomAfter >= 10, `with room before what follows (${geometry.roomAfter} px)`);
     await page.locator('.trend-exp-select').selectOption('exponential-offset');
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)._trendResults?.[1]?.result?.exp?.status === 'ok',
         panelId, { timeout: 60000 });
@@ -347,8 +372,8 @@ try {
     await settled(1);
     assert.equal(await page.evaluate(id => (window.app.plotManager.plots.get(id).div.data || [])
         .some(trace => trace.meta?.trendCurve === 'exp'), panelId), false, 'the curve goes with it');
-    assert.equal(await page.locator('.trend-exp-select').inputValue(), 'exponential-offset', 'the model stays picked for next time');
-    assert.equal(await page.locator('.trend-exp-select').isDisabled(), true, 'with the menu dead again');
+    assert.equal(await expRow.isVisible(), false, 'and the model with it');
+    assert.equal(await page.locator('.trend-exp-select').inputValue(), 'exponential-offset', 'which stays picked for next time');
 
     // ── Clicking a row picks that segment ──
     await page.locator('.trend-table tbody tr').first().click();

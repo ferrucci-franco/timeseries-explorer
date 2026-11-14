@@ -1114,6 +1114,12 @@ html.compact.compact-landscape .compact-toast {
    phone layout — sheets, lent desktop panels and dialogs. A checkbox that
    picks items from a list (a checklist, a table of variables) stays a
    checkbox: that is a selection, not a setting. */
+/* The Trend's exponential hangs its model from its switch, whose middle is
+   further in than a checkbox's. */
+html.compact .trend-exp-group {
+    --trend-exp-branch-x: 22px;
+}
+
 html.compact input[type="checkbox"]:not(.modal-checklist-box):not(td *):not(th *) {
     -webkit-appearance: none !important;
     appearance: none !important;
