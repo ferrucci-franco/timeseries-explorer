@@ -404,7 +404,7 @@ try {
         assert.match(await exportDialog.locator('.export-section', { hasText: 'Quality' }).locator('.export-hint-line').innerText(), new RegExp(`${full.width * 3}\\D+${full.height * 3}`), 'the quality line names the size the file will have');
         await shot(page, 'export');
         const download = async () => {
-            const [file] = await Promise.all([page.waitForEvent('download'), exportDialog.locator('.modal-btn-confirm').click()]);
+            const [file] = await Promise.all([page.waitForEvent('download'), exportDialog.locator('.export-download-btn').click()]);
             const chunks = [];
             for await (const chunk of await file.createReadStream()) chunks.push(chunk);
             await page.waitForFunction(() => !document.querySelector('.modal-dialog-plot-export'));
@@ -438,6 +438,60 @@ try {
         assert.match(csv.name, /\.csv$/);
         assert.equal(csv.bytes.toString('utf8').split(/\r?\n/).filter(Boolean).length, 2001, 'the CSV has every row');
         assert.equal(await page.evaluate(() => window.app._compact.sheet), null, 'the plot is left in view');
+
+        // Share: where the browser can share files, the file goes to the
+        // device's share sheet. Chromium on Linux cannot, so a stand-in sheet
+        // records what it is handed; it refuses on request, as a browser does
+        // when the tap that asked is too long ago.
+        await page.evaluate(() => {
+            window.__shares = [];
+            window.__refuseNext = 0;
+            Object.defineProperty(navigator, 'canShare', { configurable: true, value: data => !!data?.files?.length });
+            Object.defineProperty(navigator, 'share', {
+                configurable: true,
+                value: async (data) => {
+                    if (window.__refuseNext > 0) {
+                        window.__refuseNext--;
+                        throw new DOMException('The tap is too long ago', 'NotAllowedError');
+                    }
+                    for (const file of data.files) {
+                        window.__shares.push({ name: file.name, type: file.type, text: file.type === 'text/csv' ? await file.text() : '', head: Array.from(new Uint8Array(await file.slice(0, 4).arrayBuffer())) });
+                    }
+                },
+            });
+        });
+        let downloadsDuringShare = 0;
+        const countDownload = () => { downloadsDuringShare++; };
+        page.on('download', countDownload);
+        await reopen();
+        await exportDialog.locator('input[name="omv-export-format"][value="png"]').check();
+        const shareBtn = exportDialog.locator('.modal-btn-share');
+        assert.equal(await shareBtn.isVisible(), true, 'where files can be shared, the dialog offers Share');
+        assert.equal(await exportDialog.locator('.export-download-btn').innerText(), 'Download', 'beside Download');
+        await shot(page, 'export-share');
+        await shareBtn.click();
+        await page.waitForFunction(() => window.__shares.length === 1, null, { timeout: 15000 });
+        const sharedPng = await page.evaluate(() => window.__shares[0]);
+        assert.match(sharedPng.name, /\.png$/);
+        assert.equal(sharedPng.type, 'image/png', 'the share sheet is handed a PNG');
+        assert.deepEqual(sharedPng.head, [0x89, 0x50, 0x4e, 0x47], 'a real one');
+
+        // Too long after the tap: the file is ready, and one more tap shares it.
+        await page.evaluate(() => { window.__refuseNext = 1; });
+        await reopen();
+        await exportDialog.locator('input[name="omv-export-format"][value="csv"]').check();
+        await shareBtn.click();
+        await page.waitForSelector('.modal-dialog-export-ready .export-ready-share');
+        await page.waitForTimeout(400);
+        await shot(page, 'export-ready');
+        await page.locator('.modal-dialog-export-ready .export-ready-share').click();
+        await page.waitForFunction(() => window.__shares.length === 2, null, { timeout: 15000 });
+        const sharedCsv = await page.evaluate(() => window.__shares[1]);
+        assert.equal(sharedCsv.type, 'text/csv', 'a CSV goes as text/csv');
+        assert.equal(sharedCsv.text.split(/\r?\n/).filter(Boolean).length, 2001, 'with every row');
+        page.off('download', countDownload);
+        assert.equal(downloadsDuringShare, 0, 'and nothing is downloaded when it is shared');
+        await page.evaluate(() => { delete navigator.share; delete navigator.canShare; });
         await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
     }
 

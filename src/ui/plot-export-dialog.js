@@ -61,9 +61,12 @@ export default class PlotExportDialog {
      * @param {{available: boolean, reason: string, fileCount: number, boundaryInstants: number}|null} [options.csvLayout]
      *   a time-series panel drawn from several files: whether its CSV can join
      *   them in time (one time column) and, if not, why. Null hides the choice.
+     * @param {(format: string) => boolean} [options.canShare] whether the
+     *   browser can hand a file of this format to the device's share sheet;
+     *   where it can, Share is offered beside Download
      * @returns {Promise<null|{format: string, chartId: string, scale: number,
      *   theme: string, baseName: string, fileName: string, timeLayout: string,
-     *   boundaryMode: string, sourceColumn: boolean}>}
+     *   boundaryMode: string, sourceColumn: boolean, delivery: 'download'|'share'}>}
      */
     static open({
         contextLabel = '',
@@ -72,6 +75,7 @@ export default class PlotExportDialog {
         csvBlockedReason = '',
         defaultBaseName = () => 'export',
         csvLayout = null,
+        canShare = () => false,
     } = {}) {
         return new Promise((resolve) => {
             const previousActive = document.activeElement;
@@ -389,7 +393,15 @@ export default class PlotExportDialog {
             confirmBtn.type = 'button';
             confirmBtn.className = 'modal-btn modal-btn-confirm';
             confirmBtn.textContent = i18n.t('exportAction');
-            buttons.append(cancelBtn, confirmBtn);
+            // To the device's share sheet (a chat, mail, Drive…), where the
+            // browser can share this format. Never modal-btn-cancel: the phone
+            // layout's ✕ presses that one.
+            const shareBtn = document.createElement('button');
+            shareBtn.type = 'button';
+            shareBtn.className = 'modal-btn modal-btn-confirm modal-btn-share';
+            shareBtn.textContent = i18n.t('exportShare');
+            shareBtn.hidden = true;
+            buttons.append(cancelBtn, confirmBtn, shareBtn);
             content.appendChild(buttons);
 
             modal.appendChild(content);
@@ -437,6 +449,15 @@ export default class PlotExportDialog {
                 nameExt.textContent = `.${currentFormat().ext}`;
                 if (!nameEdited) nameInput.value = defaultBaseName(state.format, isImage ? chart : null);
                 confirmBtn.disabled = !!currentFormat().disabled;
+                // With Share beside it, the plain button says what it does.
+                let shareable = false;
+                try { shareable = !currentFormat().disabled && !!canShare(state.format); } catch (_) { shareable = false; }
+                shareBtn.hidden = !shareable;
+                confirmBtn.textContent = i18n.t(shareable ? 'exportDownload' : 'exportAction');
+                // Share is the action there; Download stays, in second place.
+                confirmBtn.classList.toggle('modal-btn-confirm', !shareable);
+                confirmBtn.classList.toggle('modal-btn-secondary-confirm', shareable);
+                confirmBtn.classList.add('export-download-btn');
             }
 
             sync();
@@ -450,7 +471,7 @@ export default class PlotExportDialog {
                 resolve(value);
             };
 
-            const accept = () => {
+            const accept = (delivery = 'download') => {
                 if (confirmBtn.disabled) return;
                 const format = currentFormat();
                 const baseName = sanitizeBaseName(nameInput.value) || sanitizeBaseName(defaultBaseName(state.format, currentChart())) || 'export';
@@ -471,6 +492,7 @@ export default class PlotExportDialog {
                     timeLayout: csvLayout?.available ? state.timeLayout : 'per-trace',
                     boundaryMode: state.boundaryMode,
                     sourceColumn: state.sourceColumn,
+                    delivery: delivery === 'share' && !shareBtn.hidden ? 'share' : 'download',
                 });
             };
 
@@ -485,7 +507,8 @@ export default class PlotExportDialog {
             };
 
             cancelBtn.addEventListener('click', () => finish(null));
-            confirmBtn.addEventListener('click', accept);
+            confirmBtn.addEventListener('click', () => accept('download'));
+            shareBtn.addEventListener('click', () => accept('share'));
             overlay.addEventListener('click', (event) => {
                 if (event.target === overlay) finish(null);
             });

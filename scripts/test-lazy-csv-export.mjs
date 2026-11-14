@@ -47,10 +47,22 @@ const methods = [
 const helperStart = source.indexOf('function joinCsvRowPieces(');
 assert.ok(helperStart >= 0, 'joinCsvRowPieces is present');
 const helper = source.slice(helperStart, source.indexOf('\n}\n', helperStart) + 2);
+// The export's last step (export-methods.js, _saveExportBlob) hands the file
+// to the browser as file-share.js's downloadFile does: through the stubs above.
+const SAVE_STAND_IN = `proto._saveExportBlob = async function(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    return 'downloaded';
+};`;
+
 const proto = {};
 let downloads = [];
 const alerts = [];
-vm.runInNewContext(`${helper}\n${methods.map(sliceMethod).join('\n')}`, {
+vm.runInNewContext(`${helper}\n${methods.map(sliceMethod).join('\n')}\n${SAVE_STAND_IN}`, {
     proto,
     console,
     streamColumns,

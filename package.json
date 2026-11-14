@@ -162,6 +162,7 @@
     "test:parquet-conversion-sql": "node scripts/test-parquet-conversion-sql.mjs",
     "test:parquet-converter-menu": "node scripts/test-parquet-converter-menu.mjs",
     "test:large-files-help": "node scripts/test-large-files-help.mjs",
+    "test:file-share": "node scripts/test-file-share.mjs",
     "test:export-dialog": "node scripts/test-export-dialog.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
     "test:fft-csv-export": "node scripts/test-fft-csv-export.mjs",

@@ -1884,7 +1884,7 @@ export function installPlotTrendMethods(TargetClass) {
         const out = this._trendSummaryCsv(plot);
         if (!out) return;
         const filename = options.baseName ? `${options.baseName}_trend.csv` : out.filename;
-        this._downloadCsvColumns(out.headers, out.columns, filename);
+        return this._downloadCsvColumns(out.headers, out.columns, filename);
     };
 
     proto._trendTimeCell = function(trace, value) {

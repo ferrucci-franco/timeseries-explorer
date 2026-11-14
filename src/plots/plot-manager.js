@@ -2990,16 +2990,13 @@ class PlotManager {
         // With the 2D Curve Fit workspace open, offer the fit-specific exports
         // (summary / curve / displayed points) instead of the raw X/Y dump.
         if (plot.mode === 'curve-fit' && this._exportCurveFitCsv) {
-            this._exportCurveFitCsv(panelId, plot, { baseName: options.baseName });
-            return;
+            return this._exportCurveFitCsv(panelId, plot, { baseName: options.baseName });
         }
         if (plot.mode === 'trend' && this._exportTrendCsv) {
-            this._exportTrendCsv(panelId, plot, { baseName: options.baseName });
-            return;
+            return this._exportTrendCsv(panelId, plot, { baseName: options.baseName });
         }
         if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && this._exportPhase2dFitCsv) {
-            this._exportPhase2dFitCsv(panelId, plot, { baseName: options.baseName });
-            return;
+            return this._exportPhase2dFitCsv(panelId, plot, { baseName: options.baseName });
         }
 
         const headers = [];
@@ -3187,6 +3184,7 @@ class PlotManager {
         // channel of minutes is a CSV of a gigabyte, and holding all of it as
         // strings until the end is what ran the tab out of memory.
         const SPILL_CHARS = 32 * 1024 * 1024;
+        let blob = null;
         const token = { cancelled: false };
         const knownTotal = Number.isFinite(totalRows) && totalRows >= 0;
         const overlay = alwaysReport || (knownTotal && totalRows * nColumns >= CELLS_BEFORE_REPORTING)
@@ -3237,17 +3235,13 @@ class PlotManager {
             }
             if (pending.length) chunks.push('\n' + pending.join('\n'));
 
-            const blob = new Blob([...spilled, ...chunks], { type: 'text/csv;charset=utf-8;' });
-            const url  = URL.createObjectURL(blob);
-            const a    = document.createElement('a');
-            a.href     = url;
-            a.download = fileName;
-            a.click();
-            URL.revokeObjectURL(url);
-            return fileName;
+            blob = new Blob([...spilled, ...chunks], { type: 'text/csv;charset=utf-8;' });
         } finally {
             overlay?.close();
         }
+        // Once the overlay is down: sharing may need one more tap.
+        await this._saveExportBlob(blob, fileName);
+        return fileName;
     }
 
     /**

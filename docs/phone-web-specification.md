@@ -56,8 +56,8 @@ Built:
   4×; SVG; the chart, the theme and the file name). Export puts the sheet away
   first and waits for the plot to take its full size, so the image is the whole
   plot and not the part the sheet left above it. Σ is disabled, saying why, where
-  the desktop's is (`_panelStatsAvailable`). Files are downloaded; sending them
-  through Web Share is still to come;
+  the desktop's is (`_panelStatsAvailable`). Where the browser can share the
+  file, the dialog offers **Share…** beside Download (§8.3);
 - **Sound** in the Plot sheet (§5.2): a switch that opens the desktop's audio strip
   under the plot and puts the sheet away, offered where the desktop's 🔊 is (a time
   series, FFT, the histogram, the integral) and, where nothing can be heard,
@@ -92,7 +92,6 @@ The code is in `src/app/methods/compact-methods.js`,
 Not built yet:
 
 - tap readouts beyond Plotly's own;
-- export through Web Share;
 - the web manifest and the service worker (§8);
 - deferring Plotly;
 - the phone file-size defaults (§9).
@@ -671,9 +670,19 @@ A service worker makes the app open and work without network once installed.
   without storing it beyond that hand-off.
 - **File handling (desktop Chromium).** `file_handlers` in the manifest comes almost
   for free and lets an installed desktop PWA open files from the OS.
-- **Export.** Exports use the Web Share API (`navigator.share` with files) when it is
-  available, so a PNG or CSV can go straight to a chat or to Drive. Otherwise they
-  fall back to a normal download.
+- **Export.** Built. Where the browser can share a file of the chosen type
+  (`navigator.canShare` with a file of it: Chrome on Android, Safari on iOS and
+  macOS, Chrome and Edge on Windows), the export dialog offers **Share…** beside
+  **Download**, and the PNG, SVG or CSV goes to the device's share sheet — a chat,
+  mail, Drive. Elsewhere the dialog is as it was. The browser opens the sheet only
+  close to a tap; a file that took longer to build (a large PNG or CSV, Safari
+  allowing least) gets a short **File ready** question whose Share button is the
+  fresh tap it needs. Closing the sheet is not an error; a share that fails
+  otherwise downloads the file and says so. The CSV keeps its bytes but goes as
+  plain `text/csv`. Code: `src/utils/file-share.js`, `_saveExportBlob` in
+  `src/plots/methods/export-methods.js` (every export's last step); tests:
+  `npm run test:file-share`, `npm run test:export-dialog` and the share flows in
+  `npm run e2e:compact-layout`.
 - A file arriving while files are already loaded joins the session. It never replaces
   what is there silently.
 
