@@ -66,8 +66,16 @@ Built:
   size: play, stop, loop, the time and mute; the seek bar across the screen; the
   signal and Remove DC. The phone's own buttons set the volume, so the volume
   slider is hidden. A tap on the plot moves the sound there, as a click does on the
-  desktop. The chart follows the strip's height when its note line comes and goes
-  (`_heightObserver`, which also fixes the desktop strip covering the axis);
+  desktop; a tap on the buttons over the plot (Fit, A|B, the legend's) does not.
+  The rows wrap rather than sit in a grid: with a grid, a long signal name widened
+  the button columns until Loop, the time and the list overlapped (seen in Safari
+  on an iPhone). On an iPhone the page asks to play as media
+  (`navigator.audioSession.type = 'playback'`), which the silent switch does not
+  mute; the context is resumed from any state Safari leaves it in ("interrupted"
+  too) with a silent sample started inside the tap; and if the browser still holds
+  the sound back, the strip says to tap ▶ again and that tap is a new try. The chart
+  follows the strip's height when its note line comes and goes (`_heightObserver`,
+  which also fixes the desktop strip covering the axis);
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window

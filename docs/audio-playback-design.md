@@ -79,7 +79,15 @@ under the plot and puts the sheet away; where nothing can be heard it is disable
 and the tooltip's reason is written under it. `compact.css` lays the strip out in
 three rows at a finger's size (transport, time and mute; the seek bar across the
 screen; the signal and Remove DC) and hides the volume slider, which the phone's
-own buttons replace. Tap-to-seek works as the click does. The strip watches its own
+own buttons replace; the rows wrap, so a long signal name cannot push the buttons
+over each other. Tap-to-seek works as the click does, and never from a tap on a
+button over the plot (`AUDIO_SEEK_IGNORED`: the phone's Fit buttons moved the
+playhead). On an iPhone, Web Audio is "ambient" sound that the silent switch mutes,
+so the page declares itself a player (`navigator.audioSession.type = 'playback'`,
+Safari 17+); the context is resumed from any state but running (Safari's
+"interrupted" included) with a silent sample started in the tap; and a context
+the browser still holds back — its clock, and so the playhead, standing still — is
+said in the strip after a second ("tap ▶ again"), and that tap retries. The strip watches its own
 height (`_heightObserver`), so the chart gives it room when its note line appears —
 which also fixed the desktop strip covering the chart's x axis when a note came.
 Tested by `npm run e2e:compact-audio`.

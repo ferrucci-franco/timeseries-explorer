@@ -10,7 +10,12 @@
 //     appears and it grows;
 //   · a tap on the plot moves the sound there; Play plays; the signal list
 //     switches to the other signal; the switch closes the strip;
-//   · sideways, the strip still fits under the plot.
+//   · long signal names, and a 320 px phone: nothing overlaps, the time reads
+//     whole (Safari on an iPhone overlapped them, with a grid);
+//   · a tap on the Fit buttons over the plot does not move the sound;
+//   · sideways, the strip still fits under the plot;
+//   · a browser that holds the sound back: the strip says to tap ▶ again,
+//     and that tap retries; the page asks iOS to play as media.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:compact-audio`.
 import assert from 'node:assert/strict';
@@ -18,13 +23,17 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 
 const RATE = 8000;
+const TONE = 'omega_of_the_simple_pendulum_measured';
+const FILTERED = 'omega_filtered_by_a_second_order_lowpass';
 function toneCsv() {
-    const lines = ['time,tone,filtered'];
+    // Long names, as a real file has them: the strip's list must not push the
+    // buttons over each other (it did, in Safari on an iPhone).
+    const lines = [`time,${TONE},${FILTERED}`];
     for (let i = 0; i < RATE * 2; i++) {
         const t = i / RATE;
         lines.push(`${t.toFixed(6)},${Math.sin(2 * Math.PI * 440 * t).toFixed(5)},${(0.5 * Math.sin(2 * Math.PI * 440 * t)).toFixed(5)}`);
     }
-    return { name: 'tone.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
+    return { name: 'ExampleSimplePendulum collapsed recording.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
 }
 function slowCsv() {
     const lines = ['time,slow'];
@@ -79,6 +88,20 @@ try {
             }
             if (selector !== '.audio-readout' && selector !== '.audio-seek' && r.height < 40) problems.push(`${selector} is ${Math.round(r.height)} px tall`);
         }
+        // No two controls on top of each other.
+        const boxes = controls.map(selector => [selector, strip.querySelector(selector).getBoundingClientRect()]);
+        for (let i = 0; i < boxes.length; i++) {
+            for (let j = i + 1; j < boxes.length; j++) {
+                const [a, ra] = boxes[i];
+                const [b, rb] = boxes[j];
+                const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
+                const h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+                if (w > 0.5 && h > 0.5) problems.push(`${a} overlaps ${b}`);
+            }
+        }
+        // The time is read whole, not cut.
+        const readout = strip.querySelector('.audio-readout');
+        if (readout.scrollWidth > readout.clientWidth + 1) problems.push('the time is cut');
         if (document.documentElement.scrollWidth > window.innerWidth + 1) problems.push('the page scrolls sideways');
         if (strip.querySelector('.audio-strip-row').scrollWidth > strip.querySelector('.audio-strip-row').clientWidth + 1) problems.push('the strip scrolls sideways');
         return { chartBottom: Math.round(svg.bottom), stripTop: Math.round(s.top), stripBottom: Math.round(s.bottom), problems };
@@ -119,8 +142,8 @@ try {
     await page.locator('.compact-sheet-close').click();
     await page.setInputFiles('#file-input', [toneCsv()]);
     await page.waitForFunction(() => window.app.plotManager.files.size === 2, null, { timeout: 60000 });
-    await plotSignal('tone');
-    await plotSignal('filtered');
+    await plotSignal(TONE);
+    await plotSignal(FILTERED);
 
     await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
     assert.equal(await page.locator('.compact-sound-section-title, .compact-section-title', { hasText: /^Sound$/i }).count(), 1, 'the Plot sheet has a Sound section');
@@ -149,6 +172,24 @@ try {
     const sought = (await audio()).position;
     assert.ok(Math.abs(sought - 1.5) < 0.05, `a tap at 1.5 s on the plot moves the sound there (${sought})`);
 
+    // The buttons over the plot are not the plot: Fit leaves the sound where it is.
+    for (const axis of ['all', 'x', 'y']) {
+        const fit = page.locator(`.compact-active-panel .compact-fit-btn[data-axis="${axis}"]`);
+        if (!(await fit.isVisible())) continue;
+        await fit.tap();
+        await page.waitForTimeout(500);
+        const after = (await audio()).position;
+        assert.ok(Math.abs(after - sought) < 1e-9, `a tap on Fit ${axis} does not move the sound (${sought} → ${after})`);
+    }
+
+    // The narrowest phone: still nothing over anything.
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.waitForTimeout(600);
+    await settled('320 px wide');
+    await shot(page, 'narrow');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(600);
+
     // Play: the tap is the gesture the browser wants before it makes a sound.
     await page.locator('.compact-active-panel .audio-play').tap();
     await page.waitForFunction(() => {
@@ -162,10 +203,10 @@ try {
     await settled('with the note line');
 
     // The other signal, from the list.
-    const filteredValue = await page.evaluate(() => [...document.querySelectorAll('.compact-active-panel .audio-source option')]
-        .find(option => /filtered$/.test(option.textContent))?.value);
+    const filteredValue = await page.evaluate(name => [...document.querySelectorAll('.compact-active-panel .audio-source option')]
+        .find(option => option.textContent.endsWith(name))?.value, FILTERED);
     await page.locator('.compact-active-panel .audio-source').selectOption(filteredValue);
-    assert.match((await audio()).source, /filtered$/, 'the list switches to the other signal');
+    assert.ok((await audio()).source.endsWith(FILTERED), 'the list switches to the other signal');
 
     // ── Sideways ────────────────────────────────────────────────────────────
     await page.setViewportSize({ width: 844, height: 390 });
@@ -186,7 +227,57 @@ try {
     assert.equal(await page.locator('.compact-sound-switch input').isChecked(), false, 'and the switch says so');
 
     assert.deepEqual(errors, [], 'no page error');
-    console.log('e2e compact audio: the Sound switch opens a strip that fits a phone, upright and sideways; tap to seek, play, switch signal, close');
+
+    // ── A browser that holds the sound back (Safari, at times) ──────────────
+    // A stand-in AudioContext that never starts: its clock stands still, as
+    // Safari's does when it does not take the tap as permission. The strip
+    // must say so, and the next tap on Play is a new try, not a pause. The
+    // page also asks iOS to play as media (navigator.audioSession), which the
+    // silent switch does not mute.
+    {
+        const held = await context.newPage();
+        held.on('pageerror', e => errors.push(e.message));
+        await held.addInitScript(() => {
+            window.__audioSession = { type: 'auto' };
+            Object.defineProperty(navigator, 'audioSession', { configurable: true, get: () => window.__audioSession });
+            window.__resumes = 0;
+            const Real = window.AudioContext;
+            window.AudioContext = class extends Real {
+                constructor(...args) { super(...args); this.__held = true; super.suspend(); }
+                get state() { return this.__held ? 'suspended' : super.state; }
+                get currentTime() { return this.__held ? 0 : super.currentTime; }
+                resume() { window.__resumes++; return new Promise(() => {}); }
+            };
+        });
+        await held.goto(baseUrl);
+        await held.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'), null, { timeout: 60000 });
+        await held.setInputFiles('#file-input', [toneCsv()]);
+        await held.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+        await held.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await held.locator(`#variables-tree .tree-item[data-var-name="${TONE}"]`).click();
+        await held.locator('.compact-sheet-close').click();
+        await held.locator('.compact-nav-btn[data-sheet="plot"]').click();
+        await held.locator('.compact-sound-switch input').click();
+        await held.waitForSelector('.compact-active-panel .audio-strip');
+        await held.locator('.compact-active-panel .audio-play').tap();
+        assert.equal(await held.evaluate(() => window.__audioSession.type), 'playback', 'the page asks to play as media, which the silent switch does not mute');
+        const note = held.locator('.compact-active-panel .audio-strip-note');
+        await held.waitForFunction(() => /tap ▶ again/.test(document.querySelector('.compact-active-panel .audio-strip-note')?.textContent || ''), null, { timeout: 5000 });
+        assert.equal(await note.isVisible(), true, 'held back, the strip says to tap ▶ again');
+        const resumesBefore = await held.evaluate(() => window.__resumes);
+        await held.locator('.compact-active-panel .audio-play').tap();
+        const retried = await held.evaluate(() => {
+            const pm = window.app.plotManager;
+            return { playing: pm._audioPanelIsPlaying(pm.plots.get(window.app._compactActivePanelId())), resumes: window.__resumes };
+        });
+        assert.equal(retried.playing, true, 'that tap tries again rather than pausing');
+        assert.ok(retried.resumes > resumesBefore, 'asking the browser once more to start');
+        await shot(held, 'held-back');
+        await held.close();
+    }
+
+    assert.deepEqual(errors, [], 'no page error');
+    console.log('e2e compact audio: the Sound switch opens a strip that fits a phone (long names, 320 px, upright and sideways); tap to seek, Fit does not, play, switch signal, close; a held-back sound is said and retried');
 } finally {
     await browser.close();
     await server.close();
