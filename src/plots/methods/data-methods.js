@@ -2628,6 +2628,11 @@ proto._buildPhase3DTraces = function(plot) {
     }).filter(Boolean);
 };
 
+// Self-contained so the phase builders keep working on a bare harness.
+const escapeReadoutHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[ch]));
+
 // The hover of a phase trace: one line per variable, written by the readout
 // (utils/hover-readout.js) with the variable's unit — "7.213 mV", as on a time
 // series. `axes` pairs each variable with the Plotly coordinate it is drawn on.
@@ -2637,7 +2642,7 @@ proto._buildPhase3DTraces = function(plot) {
 proto._phaseHoverReadout = function(pt, name, axes, { withTime = false, highResolutionTime = false } = {}) {
     const fileData = this.files.get(pt.fileId)?.data;
     const lines = axes.map(([varName, source]) => ({
-        label: `<b>${this._escapeHTML(this._variableLabel(varName, pt.fileId))}</b>`,
+        label: `<b>${escapeReadoutHtml(this._variableLabel(varName, pt.fileId))}</b>`,
         source,
         unit: this._extractUnit(fileData?.variables?.[varName]?.description || ''),
     }));
@@ -2662,18 +2667,18 @@ proto._phaseHoverReadout = function(pt, name, axes, { withTime = false, highReso
                 unit: timeUnit,
                 resolution: hoverAxisResolution(timeData, fileData?._duckdb?.totalRows),
             });
-            timeFallback = `<b>Time</b> = %{x}${timeUnit ? ` ${this._escapeHTML(timeUnit)}` : ''}<br>`;
+            timeFallback = `<b>Time</b> = %{x}${timeUnit ? ` ${escapeReadoutHtml(timeUnit)}` : ''}<br>`;
         } else {
             timePrefix = '<b>Time</b> = %{x}<br>';
         }
     }
-    const unitText = unit => (unit ? ` ${this._escapeHTML(unit)}` : '');
+    const unitText = unit => (unit ? ` ${escapeReadoutHtml(unit)}` : '');
     const fallback = timeFallback + lines
         .filter(line => line.label !== '<b>Time</b>')
         .map(line => `${line.label} = %{${line.source}:.4~g}${unitText(line.unit)}`)
         .join('<br>');
     return {
-        hovertemplate: `${timePrefix}${HOVER_READOUT_TOKEN}<extra>${this._escapeHTML(name)}</extra>`,
+        hovertemplate: `${timePrefix}${HOVER_READOUT_TOKEN}<extra>${escapeReadoutHtml(name)}</extra>`,
         _hoverReadout: { lines, fallback },
     };
 };
