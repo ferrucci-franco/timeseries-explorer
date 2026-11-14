@@ -65,3 +65,23 @@ export function hoverSignificantDigits(values) {
 export function hoverNumberFormat(values) {
     return `.${hoverSignificantDigits(values)}g`;
 }
+
+/**
+ * The axis step itself — span / (samples - 1), the same reading as above — for
+ * a readout that picks its digits value by value (utils/readout-format.js).
+ * Null when the axis has no step to speak of.
+ *
+ * `sampleCount` is how many samples the span really holds when `values` is not
+ * all of them: a file in memory-saving mode keeps only an overview in memory,
+ * and its step read off the overview would be thousands of times too coarse.
+ */
+export function hoverAxisResolution(values, sampleCount = values?.length || 0) {
+    const n = values?.length || 0;
+    if (n < 2) return null;
+    const first = firstFiniteFrom(values, 0, 1, EDGE_SCAN_LIMIT);
+    const last = firstFiniteFrom(values, n - 1, -1, EDGE_SCAN_LIMIT);
+    if (first === null || last === null) return null;
+    const span = Math.abs(last - first);
+    const count = Math.max(n, Number(sampleCount) || 0);
+    return span > 0 ? span / (count - 1) : null;
+}

@@ -807,12 +807,17 @@ export function installPlotCorrelationMethods(TargetClass) {
         const labels = results.map((r, i) => `P${i + 1}`);
         const values = results.map(r => (r.status === 'ok' ? r.r : null));
         const colors = results.map(r => r.pair.color || '#888');
+        const formatCoefficient = value => i18n.formatNumber(value, { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+            .replace(/^-/, '\u2212');
         const customdata = results.map(r => ([
             r.label,
-            r.status === 'ok' ? r.r.toPrecision(6) : 'N/A',
-            r.status === 'ok' ? r.r2.toPrecision(6) : 'N/A',
-            r.n ?? 0,
-            r.nExcluded ?? 0,
+            // A coefficient bounded by ±1 reads as a fixed four decimals, never
+            // with an SI prefix ("r = 5 m" would be nonsense), and with the
+            // decimal mark Settings asks for.
+            r.status === 'ok' ? formatCoefficient(r.r) : 'N/A',
+            r.status === 'ok' ? formatCoefficient(r.r2) : 'N/A',
+            i18n.formatNumber(r.n ?? 0),
+            i18n.formatNumber(r.nExcluded ?? 0),
         ]));
         return [{
             type: 'bar',

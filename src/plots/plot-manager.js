@@ -1,6 +1,7 @@
 import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
 import { tableText } from '../utils/clipboard.js';
+import { formatReadout } from '../utils/readout-format.js';
 import Plotly, { onPlotDrawn } from '../vendor/plotly.js';
 import { installLegendToggle, resetLegendToggles, syncAllLegendToggles } from '../ui/legend-toggle.js';
 import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
@@ -4224,11 +4225,20 @@ class PlotManager {
         if (!plot?.div?._fullLayout || !captured?.indices?.length) return false;
         const name = this._traceName(newName, fileId);
         const hover = this._escapeHTML(this._traceName(newName, fileId, { units: false }));
+        const rename = text => text.split(`<b>${captured.oldHover}</b>`).join(`<b>${hover}</b>`);
         const hovertemplate = captured.indices.map(index => {
-            const template = plot.div.data[index]?.hovertemplate;
-            return typeof template === 'string'
-                ? template.split(`<b>${captured.oldHover}</b>`).join(`<b>${hover}</b>`)
-                : template;
+            const trace = plot.div.data[index];
+            // The name in a hover readout lives in its declared lines; the
+            // restyle below (it carries a hovertemplate) writes them again.
+            const readout = trace?._hoverReadout;
+            if (readout) {
+                for (const line of readout.lines || []) {
+                    if (typeof line.label === 'string') line.label = rename(line.label);
+                }
+                if (typeof readout.fallback === 'string') readout.fallback = rename(readout.fallback);
+            }
+            const template = trace?.hovertemplate;
+            return typeof template === 'string' ? rename(template) : template;
         });
         const div = plot.div;
         // Still this panel's live chart: a rebuild that replaced it has already
@@ -5710,6 +5720,14 @@ class PlotManager {
 
     _formatHTMLNumber(value) {
         return Number.isFinite(value) ? value.toPrecision(5) : this._escapeHTML(value);
+    }
+
+    /**
+     * A value and its unit as every hover box reads them (utils/readout-format.js):
+     * "627.4 µs", "7.213 mV", "0.1234 V" — escaped for HTML.
+     */
+    _formatReadoutHTML(value, unit = '') {
+        return this._escapeHTML(formatReadout(value, { unit, format: i18n.numberFormat }));
     }
 
     _extractUnit(description) {

@@ -38,6 +38,7 @@ El espacio es **U+202F** (espacio fino de no separación), el mismo carácter qu
 |---|---|
 | **Sí** | Todo lo que la app escribe para leer: totales y tablas de los análisis, estado de los paneles, conteos en los mensajes ("61.368 puntos"), resúmenes |
 | **Sí** | Lo que escribe **Plotly**: marcas de ejes y hovers, vía `layout.separators`, para que el eje coincida con el panel de al lado |
+| **Sí** | Los números de los **recuadros de hover**, que escribe la app (`src/utils/readout-format.js`) con el separador decimal resuelto; ver [hover-readout.md](hover-readout.md) |
 | **No** | La **exportación CSV** y cualquier salida que una máquina vuelva a leer |
 | **No** | Los **campos de entrada numéricos**, que el navegador parsea con sus propias reglas |
 

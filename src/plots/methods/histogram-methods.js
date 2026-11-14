@@ -4,6 +4,7 @@ import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { appendCopyButton } from '../../ui/copy-button.js';
 import { blockText } from '../../utils/clipboard.js';
 import Plotly from '../../vendor/plotly.js';
+import { formatReadout } from '../../utils/readout-format.js';
 import {
     HISTOGRAM_AUTO_MAX_BINS,
     HISTOGRAM_MANUAL_MAX_BINS,
@@ -707,9 +708,25 @@ proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
         const denom = stacked ? totalBinned : counted.nBinned;
         const norm = normalizeHistogramCounts(counted.counts, spec.edges, counted.nBinned, denom);
         const y = pickY(norm);
+        // [lo, hi, count, percent, density, last bin?] and then the same bin as
+        // the hover reads it (utils/readout-format.js): the edges with the
+        // digits the bin width needs and the signal's unit, the count as a
+        // count, the percentage with four digits.
+        const valueUnit = this._extractUnit(this.files.get(trace.fileId)?.data?.variables?.[trace.varName]?.description || '');
+        const format = i18n.numberFormat;
         const customdata = [];
         for (let i = 0; i < spec.k; i++) {
-            customdata.push([spec.edges[i], spec.edges[i + 1], norm.count[i], norm.percent[i], norm.density[i], i === spec.k - 1]);
+            const lo = spec.edges[i];
+            const hi = spec.edges[i + 1];
+            const last = i === spec.k - 1;
+            const edge = value => formatReadout(value, { unit: valueUnit, resolution: Math.abs(hi - lo) || null, format });
+            const interval = `[${this._escapeHTML(edge(lo))}, ${this._escapeHTML(edge(hi))}${last ? ']' : ')'}`;
+            customdata.push([
+                lo, hi, norm.count[i], norm.percent[i], norm.density[i], last,
+                interval,
+                this._escapeHTML(i18n.formatNumber(norm.count[i])),
+                this._escapeHTML(formatReadout(norm.percent[i], { unit: '%', format })),
+            ]);
         }
         bars.push({
             type: 'bar',
@@ -722,7 +739,7 @@ proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
             // other and a stack still shows its parts.
             marker: { color: trace.color, opacity: HISTOGRAM_DEFAULT_OPACITY, line: { color: trace.color, width: 1 } },
             customdata,
-            hovertemplate: `<b>%{fullData.name}</b><br>[%{customdata[0]:.6g}, %{customdata[1]:.6g})<br>${i18n.t('histogramCount')} = %{customdata[2]}<br>${i18n.t('histogramPercent')} = %{customdata[3]:.3g}%<extra></extra>`,
+            hovertemplate: `<b>%{fullData.name}</b><br>%{customdata[6]}<br>${i18n.t('histogramCount')} = %{customdata[7]}<br>${i18n.t('histogramPercent')} = %{customdata[8]}<extra></extra>`,
         });
         if (visible) summary.push({ name, nFinite: stat.nFinite, nInvalid: stat.nInvalid, nBinned: counted.nBinned, underflow: counted.underflow, overflow: counted.overflow });
     }

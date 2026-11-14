@@ -10,6 +10,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import Plotly from '../../vendor/plotly.js';
+import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import { griddedClient, nextDatasetId } from '../../gridded/gridded-client.js';
 import { GRIB_EXTENSIONS } from '../constants.js';
 import { extractZipEntry, isNetcdfEntryName, listZipEntries } from '../../gridded/zip-reader.js';
@@ -4278,7 +4279,12 @@ export function installGriddedMethods(TargetClass) {
             yaxis: !mixed || unitOf(variable) === units[0] ? 'y' : 'y2',
             name: `${group.tag} ${set.short}${roleName(role)}${mixed && unitOf(variable) ? ` [${variable.units}]` : ''}`,
             line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: set.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
-            hovertemplate: `${variable.displayName}<br>%{y:.5~g}${variable.units ? ` ${variable.units}` : ''}<extra></extra>`,
+            // The value reads like every other hover (utils/hover-readout.js).
+            hovertemplate: `${variable.displayName}<br>${HOVER_READOUT_TOKEN}<extra></extra>`,
+            _hoverReadout: {
+                lines: [{ source: 'y', unit: variable.units || '' }],
+                fallback: `%{y:.5~g}${variable.units ? ` ${variable.units}` : ''}`,
+            },
         }));
         // On a phone the legend goes above the curves, which keep the width.
         const narrow = chart.clientWidth < 600;

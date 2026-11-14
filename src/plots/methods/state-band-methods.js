@@ -15,6 +15,7 @@
 // on the plot's height, so it is worked out again after every draw and resize.
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
+import { formatReadout } from '../../utils/readout-format.js';
 import {
     STATE_BAND_COLUMN_PX,
     STATE_BAND_MAX_RUNS,
@@ -380,7 +381,10 @@ export function installPlotStateBandMethods(TargetClass) {
         }
         const unit = this._timeUnitLabel(fileId);
         if (unit === 'duration' || unit === 'datetime') return this._formatElapsedDateTime(duration);
-        return `${this._formatHTMLNumber(duration)}${unit ? ` ${unit}` : ''}`;
+        // A row count stays a count; a time in a unit reads like every other
+        // hover number (utils/readout-format.js): "627.4 µs".
+        if (unit === 'index') return `${i18n.formatNumber(duration)} ${unit}`;
+        return formatReadout(duration, { unit, format: i18n.numberFormat });
     };
 
     // The Plotly trace of one band for the visible range (null: the whole file).
