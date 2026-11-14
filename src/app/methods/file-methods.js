@@ -5950,6 +5950,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             return;
         }
         setApplyError('');
+        this._noteTransformButtonDone(fileId, 'apply');
         this._updateFileTransform(fileId, {
             cropStart: start.value,
             cropEnd: end.value,
@@ -6033,11 +6034,13 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     applyActions.className = 'file-transform-actions file-transform-crop-actions';
     const applyBtn = document.createElement('button');
     applyBtn.type = 'button';
-    applyBtn.textContent = 'Apply';
+    applyBtn.textContent = i18n.t('fileTransformApply');
+    applyBtn.dataset.transformAction = 'apply';
     applyBtn.addEventListener('click', applyCropAndOffset);
     const resetCropBtn = document.createElement('button');
     resetCropBtn.type = 'button';
-    resetCropBtn.textContent = 'Reset';
+    resetCropBtn.textContent = i18n.t('fileTransformReset');
+    resetCropBtn.dataset.transformAction = 'reset';
     resetCropBtn.addEventListener('click', () => {
         cropStartField.input.value = '';
         cropEndField.input.value = '';
@@ -6048,6 +6051,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         setFieldInvalid(timeShiftField, false);
         setFieldInvalid(yOffsetField, false);
         setApplyError('');
+        this._noteTransformButtonDone(fileId, 'reset');
         this._resetFileCropAndOffsets(fileId);
     });
     applyActions.append(applyBtn, resetCropBtn);
@@ -6066,14 +6070,45 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     actions.className = 'file-transform-actions';
     const resetBtn = document.createElement('button');
     resetBtn.type = 'button';
-    resetBtn.textContent = 'Reset all';
+    resetBtn.textContent = i18n.t('fileTransformResetAll');
+    resetBtn.dataset.transformAction = 'reset-all';
     resetBtn.addEventListener('click', () => {
+        this._noteTransformButtonDone(fileId, 'reset-all');
         this._updateFileTransform(fileId, this._defaultFileTransform(), { rerender: true });
     });
     actions.appendChild(resetBtn);
     panel.appendChild(actions);
 
+    this._markTransformButtonDone(panel, fileId);
     return panel;
+};
+
+// Apply, Reset and Reset all redraw the panel they sit in, so the button that
+// was pressed is gone before its pressed look could show: the work was done
+// and nothing on screen said so. The button that takes its place carries a
+// short "done" mark (✓, green), and so does the same button if the panel is
+// not redrawn.
+const TRANSFORM_DONE_MS = 1400;
+
+proto._noteTransformButtonDone = function(fileId, action) {
+    this._transformButtonDone = { fileId, action, until: Date.now() + TRANSFORM_DONE_MS };
+    // A panel left as it is (nothing changed, or redrawn later): mark it now
+    // and once more after the redraw.
+    const mark = () => document.querySelectorAll('.file-transform-panel')
+        .forEach(panel => this._markTransformButtonDone(panel, fileId));
+    mark();
+    requestAnimationFrame(mark);
+};
+
+proto._markTransformButtonDone = function(panel, fileId) {
+    const done = this._transformButtonDone;
+    if (!done || done.fileId !== fileId || String(panel.dataset.fileId) !== String(fileId)) return;
+    const left = done.until - Date.now();
+    if (left <= 0) return;
+    const button = panel.querySelector(`[data-transform-action="${done.action}"]`);
+    if (!button || button.classList.contains('is-done')) return;
+    button.classList.add('is-done');
+    setTimeout(() => button.classList.remove('is-done'), left);
 };
 
 proto._resetFileCropAndOffsets = function(fileId) {

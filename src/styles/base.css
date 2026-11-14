@@ -1780,3 +1780,33 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
         transform: rotate(90deg);
     }
 }
+
+/* ── Every button answers the press ───────────────────────────────────
+   A button that did its work without moving looked as if it had not been
+   pressed — above all on a phone, where nothing hovers first. Each one sinks
+   a little and darkens while held, on the desktop and on the phone alike.
+   `scale` (not `transform`) so it adds to whatever transform a button already
+   has: a centred one, or the modal buttons' lift on hover. Low specificity on
+   the resting state, so a button with a transition of its own keeps it. iOS
+   only applies :active once the page listens for touches, which viewer-app.js
+   does. */
+button,
+[role="button"],
+.modebar-btn,
+input[type="button"],
+input[type="submit"] {
+    transition-property: scale, filter, background-color, border-color, color, box-shadow, opacity;
+    transition-duration: 120ms;
+}
+
+:is(button, [role="button"], .modebar-btn, input[type="button"], input[type="submit"]):not(:disabled):not([aria-disabled="true"]):active {
+    scale: 0.95;
+    filter: brightness(0.9);
+    transition-duration: 40ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :is(button, [role="button"], .modebar-btn, input[type="button"], input[type="submit"]):not(:disabled):active {
+        scale: none;
+    }
+}

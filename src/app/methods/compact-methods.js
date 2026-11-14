@@ -1614,16 +1614,30 @@ export function installCompactMethods(ViewerClass) {
             this._updateActionButtons?.();
             this._renderCompactSheetContent();
         }));
-        if (ids.length > 1) {
-            plotActions.appendChild(button('compact-secondary-btn compact-danger-btn', i18n.t('compactRemovePlot'), () => {
+        // The only plot can be removed too: the layout always keeps one panel
+        // (as the desktop does), so it is replaced by a new, empty plot — no
+        // signals, no analysis, a time series. The button was hidden with one
+        // plot left, and the first plot could never be got rid of. An empty
+        // time series alone has nothing to remove.
+        const alone = ids.length === 1;
+        const pristine = alone && !(plot && pm._hasContent(plot)) && (plot?.mode || 'timeseries') === 'timeseries';
+        if (!pristine) {
+            const removeBtn = button('compact-secondary-btn compact-danger-btn compact-remove-plot-btn', i18n.t('compactRemovePlot'), () => {
                 const current = this._compactActivePanelId();
                 const index = ids.indexOf(current);
-                this.layoutManager.closePanel(current);
+                if (this._compactPanelIds().length > 1) {
+                    this.layoutManager.closePanel(current);
+                } else {
+                    this.layoutManager.resetToGrid(1, 1);
+                }
                 const remaining = this._compactPanelIds();
                 this._setCompactActivePanel(remaining[Math.min(index, remaining.length - 1)] || remaining[0]);
+                this._compactSyncTreeMarks?.();
+                this._compactUpdateAppBar?.();
                 this._updateActionButtons?.();
                 this._renderCompactSheetContent();
-            }));
+            });
+            plotActions.appendChild(removeBtn);
         }
         plots.appendChild(plotActions);
         node.appendChild(plots);

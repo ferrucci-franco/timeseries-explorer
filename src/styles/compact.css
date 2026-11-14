@@ -2795,6 +2795,14 @@ html.compact .compact-page-time-axis .file-transform-actions button:disabled {
     opacity: 0.45;
 }
 
+/* Done (content.css): the same green mark at a phone's size, over the sheet's
+   own colours for Apply and Reset all. */
+html.compact .compact-page-time-axis .file-transform-actions button.is-done.is-done {
+    background: color-mix(in srgb, var(--success-color) 22%, var(--bg-tertiary));
+    color: var(--text-primary);
+    box-shadow: inset 0 0 0 2px var(--success-color);
+}
+
 html.compact .compact-page-time-axis .file-transform-wide-action {
     width: 100%;
     color: var(--primary-color);
@@ -5729,21 +5737,29 @@ html.compact .audio-strip {
     font-size: 0.9rem;
 }
 
+/* Wrapping rows rather than a grid: in a grid the signal list spanned the
+   button columns, and a long signal name ("[ExampleSimplePendulum
+   collapsed] omega") widened them until the buttons, the time and the list
+   ran over each other (seen in Safari on an iPhone). Here each piece keeps
+   its own width: the buttons their size, the time its text, and the list
+   whatever is left of its row, cut with an ellipsis. */
 html.compact .audio-strip-row {
-    display: grid;
-    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
-    grid-template-areas:
-        "play stop loop time mute"
-        "seek seek seek seek seek"
-        "source source source dc dc";
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 4px 8px;
+    gap: 6px 8px;
     overflow: visible;
+}
+
+html.compact .audio-strip-row > * {
+    flex: 0 0 auto;
+    min-width: 0;
 }
 
 html.compact .audio-btn {
     min-width: 44px;
     height: 40px;
+    padding: 0 10px;
     border-radius: 8px;
 }
 
@@ -5752,41 +5768,51 @@ html.compact .audio-btn svg {
     height: 16px;
 }
 
-html.compact .audio-play { grid-area: play; }
-html.compact .audio-stop { grid-area: stop; }
-html.compact .audio-loop { grid-area: loop; }
-html.compact .audio-mute { grid-area: mute; }
+/* Row 1: play, stop, loop, the time (taking the room between), mute. */
+html.compact .audio-play { order: 1; }
+html.compact .audio-stop { order: 2; }
+html.compact .audio-loop { order: 3; }
 
 html.compact .audio-readout {
-    grid-area: time;
-    justify-self: center;
+    order: 4;
+    flex: 1 0 auto;
+    text-align: center;
+    white-space: nowrap;
     font-size: 0.85rem;
 }
 
+html.compact .audio-mute { order: 5; }
+
+/* Row 2: the seek bar, alone, the whole width. */
 html.compact .audio-seek {
-    grid-area: seek;
+    order: 6;
+    flex: 1 1 100%;
     width: 100%;
-    min-width: 0;
     height: 32px;
     margin: 0;
 }
 
+/* Row 3: the signal, taking what Remove DC leaves. */
 html.compact .audio-field {
-    grid-area: source;
+    order: 7;
+    flex: 1 1 0;
     min-width: 0;
 }
 
 html.compact .audio-source {
     width: 100%;
+    min-width: 0;
     max-width: none;
     height: 40px;
     border-radius: 8px;
     font-size: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
 html.compact .audio-dc {
-    grid-area: dc;
-    justify-self: end;
+    order: 8;
     min-height: 40px;
     gap: 6px;
 }

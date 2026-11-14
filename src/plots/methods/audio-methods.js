@@ -67,6 +67,14 @@ const CLICK_SLOP_PIXELS = 3;
 // ordinary click. Seeking waits this long to see whether a second one lands;
 // short enough to feel immediate, long enough to catch the pair.
 const DOUBLE_CLICK_GRACE_MS = 260;
+// What a click on the chart that seeks the sound must not have started on: the
+// chart's own furniture. Any button or field counts — the phone layout puts
+// Fit X / Fit Y / Fit all, A|B and the legend's button over the plot, and a
+// tap on Fit moved the playhead to where the button sits.
+const AUDIO_SEEK_IGNORED = 'button, a, input, select, textarea, label, [role="button"], '
+    + '.legend, .modebar, .audio-strip, .hover-info-box';
+// How long after Play a context that is still not running counts as held back.
+const AUDIO_START_CHECK_MS = 1200;
 
 // How long the panel's selection has to hold still before the sound follows it.
 // Dragging a bound crosses dozens of values; rebuilding on each one would
@@ -227,6 +235,74 @@ function formatClock(seconds) {
     const minutes = Math.floor(total / 60);
     const rest = total - minutes * 60;
     return `${minutes}:${rest.toFixed(2).padStart(5, '0')}`;
+}
+
+// ─── The iPhone's silent switch ──────────────────────────────────────
+//
+// iOS plays a page's Web Audio as "ambient" sound, which the ring/silent switch
+// mutes: the playhead ran and nothing was heard, on a phone where a video
+// played aloud. Safari 17+ takes navigator.audioSession.type = 'playback'
+// (_audioEnsureContext). Older iOS, and browsers built on WebKit that may not
+// pass that on, are moved to media playback the way the platform allows: a
+// media element playing at the same time. So on iOS a silent, looping
+// <audio> plays while the strip does, started inside the same tap.
+let sessionElement = null;
+let sessionUrl = null;
+
+/** iOS WebKit (Safari, and Chrome or Firefox on an iPhone), by feature. */
+function isIosWebKit() {
+    return typeof window !== 'undefined'
+        && typeof window.GestureEvent !== 'undefined'
+        && (navigator.maxTouchPoints || 0) > 0;
+}
+
+/** Half a second of silence as a WAV: 8 kHz, mono, 16-bit. */
+function silentWavUrl() {
+    if (sessionUrl) return sessionUrl;
+    const rate = 8000;
+    const samples = rate / 2;
+    const bytes = new ArrayBuffer(44 + samples * 2);
+    const view = new DataView(bytes);
+    const text = (offset, value) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+    text(0, 'RIFF');
+    view.setUint32(4, 36 + samples * 2, true);
+    text(8, 'WAVE');
+    text(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    text(36, 'data');
+    view.setUint32(40, samples * 2, true);
+    sessionUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    return sessionUrl;
+}
+
+/** Start (inside the tap) or stop the media playback that unmutes iOS. */
+function keepIosMediaSession(on) {
+    if (!isIosWebKit()) return;
+    try {
+        if (on) {
+            if (!sessionElement) {
+                sessionElement = document.createElement('audio');
+                sessionElement.className = 'audio-ios-session';
+                sessionElement.setAttribute('playsinline', '');
+                sessionElement.setAttribute('aria-hidden', 'true');
+                sessionElement.loop = true;
+                sessionElement.preload = 'auto';
+                sessionElement.src = silentWavUrl();
+                sessionElement.style.display = 'none';
+                document.body.appendChild(sessionElement);
+            }
+            const started = sessionElement.play();
+            if (started?.catch) started.catch(() => {});
+        } else if (sessionElement && !sessionElement.paused) {
+            sessionElement.pause();
+        }
+    } catch { /* the Web Audio sound still plays where it can */ }
 }
 
 export function installPlotAudioMethods(TargetClass) {
@@ -497,6 +573,15 @@ export function installPlotAudioMethods(TargetClass) {
     // ─── Transport ──────────────────────────────────────────────────
 
     proto._audioEnsureContext = function() {
+        // Safari on an iPhone plays Web Audio as "ambient" sound, which the
+        // ring/silent switch mutes — and an iPhone is often on silent, so the
+        // strip played nothing while a video beside it was heard. Declaring
+        // this page a player (Safari 17+) makes it sound as media does.
+        try {
+            if (navigator.audioSession && navigator.audioSession.type !== 'playback') {
+                navigator.audioSession.type = 'playback';
+            }
+        } catch { /* not settable here */ }
         // Created inside the user's click, which is what the browsers' autoplay
         // policy requires; every entry point into playback is a click.
         if (!player.context) {
@@ -505,9 +590,53 @@ export function installPlotAudioMethods(TargetClass) {
             player.context = new Ctor();
             player.master = player.context.createGain();
             player.master.connect(player.context.destination);
+            // A context left stopped by the browser stops the playhead with
+            // it (its clock is the playhead's): say so when it moves again or
+            // does not (see _audioCheckStarted).
+            player.context.onstatechange = () => {
+                const owner = player.owner;
+                owner?.manager?._syncAudioStrip?.(owner.panelId);
+            };
         }
-        if (player.context.state === 'suspended') player.context.resume().catch(() => {});
+        // Not only "suspended": Safari also reports "interrupted" (a call,
+        // another tab's sound, the phone locked), and waits for a resume.
+        if (player.context.state !== 'running') {
+            player.context.resume().catch(() => {});
+            // The iOS unlock: a sound started inside the tap, even a silent
+            // sample, is what lets the context run there.
+            try {
+                const silence = player.context.createBufferSource();
+                silence.buffer = player.context.createBuffer(1, 1, player.context.sampleRate);
+                silence.connect(player.context.destination);
+                silence.start(0);
+            } catch { /* nothing to unlock with */ }
+        }
         return player.context;
+    };
+
+    /**
+     * After Play: the browser may still hold the sound back (Safari does when
+     * the tap was not taken as permission). Its clock then stands still, and
+     * so did the playhead, with the strip reading "playing" — the one thing
+     * the user could not tell apart from a broken player. A second later the
+     * strip says what to do instead.
+     */
+    proto._audioCheckStarted = function(panelId) {
+        clearTimeout(player.startCheck);
+        player.startCheck = setTimeout(() => {
+            const plot = this.plots.get(panelId);
+            if (!plot || !this._audioPanelIsPlaying(plot)) return;
+            if (player.context?.state === 'running') return;
+            this._syncAudioStrip(panelId);
+        }, AUDIO_START_CHECK_MS);
+    };
+
+    /** Playing, but the browser has not let the sound start. */
+    proto._audioHeldBack = function(plot) {
+        return this._audioPanelIsPlaying(plot)
+            && !!player.context
+            && player.context.state !== 'running'
+            && player.context.currentTime - player.startedAt < 0.001;
     };
 
     /** Seconds into the range, right now. */
@@ -545,6 +674,7 @@ export function installPlotAudioMethods(TargetClass) {
         player.node = null;
         player.nodeGain = null;
         player.playing = false;
+        keepIosMediaSession(false);
         if (!node) return;
         node.onended = null;
         try {
@@ -651,11 +781,13 @@ export function installPlotAudioMethods(TargetClass) {
         player.startedAt = context.currentTime;
         player.loop = !!state.loop;
         player.playing = true;
+        player.playStartedAtMs = Date.now();
         this._applyAudioVolume(state, panelId);
 
         node.onended = () => {
             if (player.node !== node) return;
             player.playing = false;
+            keepIosMediaSession(false);
             player.node = null;
             player.nodeGain = null;
             const current = this.plots.get(panelId);
@@ -673,9 +805,12 @@ export function installPlotAudioMethods(TargetClass) {
             this._syncAudioStrip(panelId);
         };
 
+        // Inside the tap, as iOS wants it: see keepIosMediaSession.
+        keepIosMediaSession(true);
         node.start(0, state.position);
         this._startAudioTick();
         this._syncAudioStrip(panelId);
+        this._audioCheckStarted(panelId);
     };
 
     /**
@@ -748,6 +883,13 @@ export function installPlotAudioMethods(TargetClass) {
     proto._audioTogglePlay = function(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        // Held back by the browser, the button still shows Pause; the tap that
+        // the note asks for is a new try (inside a new gesture), not a pause.
+        if (this._audioHeldBack(plot)) {
+            this._audioEnsureContext();
+            this._audioPlay(panelId);
+            return;
+        }
         if (this._audioPanelIsPlaying(plot)) this._audioPause(panelId);
         else this._audioPlay(panelId);
     };
@@ -986,7 +1128,7 @@ export function installPlotAudioMethods(TargetClass) {
             // the legend sits inside that rectangle when it is drawn as an
             // overlay — which seeked the sound on every curve removed. Any
             // modifier is somebody else's gesture too: the cursors use them.
-            const onChrome = event.target?.closest?.('.legend, .modebar, .audio-strip, .hover-info-box');
+            const onChrome = event.target?.closest?.(AUDIO_SEEK_IGNORED);
             const modified = event.shiftKey || event.ctrlKey || event.altKey || event.metaKey;
             pressedAt = (event.button === 0 && !onChrome && !modified)
                 ? { x: event.clientX, y: event.clientY }
@@ -1040,7 +1182,7 @@ export function installPlotAudioMethods(TargetClass) {
         // A|B is being used: those cursors are dragged with the same button in
         // the same pixels, and moving the sound under them would be a surprise.
         if (this._anyCursorEnabled?.(plot)) return;
-        if (event.target?.closest?.('.modebar, .legend, .audio-strip, .hover-info-box')) return;
+        if (event.target?.closest?.(AUDIO_SEEK_IGNORED)) return;
 
         const source = this._audioSelectedSource(plot);
         if (!source?.status?.ok) return;
@@ -1375,7 +1517,11 @@ export function installPlotAudioMethods(TargetClass) {
         // to stay thin — the readout already gives the length of what is
         // playing, and the panel already shows the selection it came from.
         const notice = typeof state.notice === 'function' ? state.notice() : state.notice;
-        const text = [reason, notice].filter(Boolean).join(' · ');
+        // Pressed Play, and the browser keeps the sound (and the clock) still.
+        const heldBack = this._audioHeldBack(plot) && Date.now() - (player.playStartedAtMs || 0) >= AUDIO_START_CHECK_MS
+            ? i18n.t('audioHeldBack')
+            : '';
+        const text = [reason, heldBack, notice].filter(Boolean).join(' · ');
         note.textContent = text;
         note.hidden = !text;
 
