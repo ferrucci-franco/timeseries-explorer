@@ -15,7 +15,9 @@
 //   · a tap on the Fit buttons over the plot does not move the sound;
 //   · sideways, the strip still fits under the plot;
 //   · a browser that holds the sound back: the strip says to tap ▶ again,
-//     and that tap retries; the page asks iOS to play as media.
+//     and that tap retries; the page asks iOS to play as media;
+//   · on iOS, a silent media element plays with the sound (the silent switch
+//     mutes Web Audio otherwise) and stops with it; nowhere else.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:compact-audio`.
 import assert from 'node:assert/strict';
@@ -274,6 +276,45 @@ try {
         assert.ok(retried.resumes > resumesBefore, 'asking the browser once more to start');
         await shot(held, 'held-back');
         await held.close();
+    }
+
+    // ── iOS: the silent switch ──────────────────────────────────────────────
+    // On an iPhone, Web Audio is "ambient" sound that the silent switch mutes
+    // (the playhead ran, nothing was heard). Besides navigator.audioSession, a
+    // silent media element plays while the strip does, which moves the page to
+    // media playback; it stops with the sound. iOS is told apart by WebKit's
+    // GestureEvent, which a stand-in provides here.
+    {
+        const ios = await context.newPage();
+        ios.on('pageerror', e => errors.push(e.message));
+        await ios.addInitScript(() => { window.GestureEvent = function GestureEvent() {}; });
+        await ios.goto(baseUrl);
+        await ios.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'), null, { timeout: 60000 });
+        await ios.setInputFiles('#file-input', [toneCsv()]);
+        await ios.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+        await ios.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await ios.locator(`#variables-tree .tree-item[data-var-name="${TONE}"]`).click();
+        await ios.locator('.compact-sheet-close').click();
+        await ios.locator('.compact-nav-btn[data-sheet="plot"]').click();
+        await ios.locator('.compact-sound-switch input').click();
+        await ios.waitForSelector('.compact-active-panel .audio-strip');
+        assert.equal(await ios.locator('audio.audio-ios-session').count(), 0, 'nothing plays before Play');
+        await ios.locator('.compact-active-panel .audio-loop').tap();
+        await ios.locator('.compact-active-panel .audio-play').tap();
+        await ios.waitForFunction(() => {
+            const el = document.querySelector('audio.audio-ios-session');
+            return el && !el.paused;
+        }, null, { timeout: 5000 });
+        const session = await ios.evaluate(() => {
+            const el = document.querySelector('audio.audio-ios-session');
+            return { loop: el.loop, inline: el.hasAttribute('playsinline'), hidden: getComputedStyle(el).display === 'none' };
+        });
+        assert.deepEqual(session, { loop: true, inline: true, hidden: true }, 'on iOS a silent, looping, inline media element plays with the sound');
+        await ios.locator('.compact-active-panel .audio-stop').tap();
+        await ios.waitForFunction(() => document.querySelector('audio.audio-ios-session')?.paused === true, null, { timeout: 5000 });
+        await ios.close();
+        // And nowhere else.
+        assert.equal(await page.locator('audio.audio-ios-session').count(), 0, 'off iOS no media element is added');
     }
 
     assert.deepEqual(errors, [], 'no page error');

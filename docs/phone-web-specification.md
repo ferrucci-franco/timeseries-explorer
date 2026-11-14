@@ -71,7 +71,8 @@ Built:
   the button columns until Loop, the time and the list overlapped (seen in Safari
   on an iPhone). On an iPhone the page asks to play as media
   (`navigator.audioSession.type = 'playback'`), which the silent switch does not
-  mute; the context is resumed from any state Safari leaves it in ("interrupted"
+  mute, and plays a silent looping `<audio>` while the strip sounds, for iOS
+  versions and WebKit browsers where that API is missing; the context is resumed from any state Safari leaves it in ("interrupted"
   too) with a silent sample started inside the tap; and if the browser still holds
   the sound back, the strip says to tap ▶ again and that tap is a new try. The chart
   follows the strip's height when its note line comes and goes (`_heightObserver`,

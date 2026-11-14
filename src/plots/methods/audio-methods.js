@@ -237,6 +237,74 @@ function formatClock(seconds) {
     return `${minutes}:${rest.toFixed(2).padStart(5, '0')}`;
 }
 
+// ─── The iPhone's silent switch ──────────────────────────────────────
+//
+// iOS plays a page's Web Audio as "ambient" sound, which the ring/silent switch
+// mutes: the playhead ran and nothing was heard, on a phone where a video
+// played aloud. Safari 17+ takes navigator.audioSession.type = 'playback'
+// (_audioEnsureContext). Older iOS, and browsers built on WebKit that may not
+// pass that on, are moved to media playback the way the platform allows: a
+// media element playing at the same time. So on iOS a silent, looping
+// <audio> plays while the strip does, started inside the same tap.
+let sessionElement = null;
+let sessionUrl = null;
+
+/** iOS WebKit (Safari, and Chrome or Firefox on an iPhone), by feature. */
+function isIosWebKit() {
+    return typeof window !== 'undefined'
+        && typeof window.GestureEvent !== 'undefined'
+        && (navigator.maxTouchPoints || 0) > 0;
+}
+
+/** Half a second of silence as a WAV: 8 kHz, mono, 16-bit. */
+function silentWavUrl() {
+    if (sessionUrl) return sessionUrl;
+    const rate = 8000;
+    const samples = rate / 2;
+    const bytes = new ArrayBuffer(44 + samples * 2);
+    const view = new DataView(bytes);
+    const text = (offset, value) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+    text(0, 'RIFF');
+    view.setUint32(4, 36 + samples * 2, true);
+    text(8, 'WAVE');
+    text(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    text(36, 'data');
+    view.setUint32(40, samples * 2, true);
+    sessionUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    return sessionUrl;
+}
+
+/** Start (inside the tap) or stop the media playback that unmutes iOS. */
+function keepIosMediaSession(on) {
+    if (!isIosWebKit()) return;
+    try {
+        if (on) {
+            if (!sessionElement) {
+                sessionElement = document.createElement('audio');
+                sessionElement.className = 'audio-ios-session';
+                sessionElement.setAttribute('playsinline', '');
+                sessionElement.setAttribute('aria-hidden', 'true');
+                sessionElement.loop = true;
+                sessionElement.preload = 'auto';
+                sessionElement.src = silentWavUrl();
+                sessionElement.style.display = 'none';
+                document.body.appendChild(sessionElement);
+            }
+            const started = sessionElement.play();
+            if (started?.catch) started.catch(() => {});
+        } else if (sessionElement && !sessionElement.paused) {
+            sessionElement.pause();
+        }
+    } catch { /* the Web Audio sound still plays where it can */ }
+}
+
 export function installPlotAudioMethods(TargetClass) {
     const proto = TargetClass.prototype;
 
@@ -606,6 +674,7 @@ export function installPlotAudioMethods(TargetClass) {
         player.node = null;
         player.nodeGain = null;
         player.playing = false;
+        keepIosMediaSession(false);
         if (!node) return;
         node.onended = null;
         try {
@@ -718,6 +787,7 @@ export function installPlotAudioMethods(TargetClass) {
         node.onended = () => {
             if (player.node !== node) return;
             player.playing = false;
+            keepIosMediaSession(false);
             player.node = null;
             player.nodeGain = null;
             const current = this.plots.get(panelId);
@@ -735,6 +805,8 @@ export function installPlotAudioMethods(TargetClass) {
             this._syncAudioStrip(panelId);
         };
 
+        // Inside the tap, as iOS wants it: see keepIosMediaSession.
+        keepIosMediaSession(true);
         node.start(0, state.position);
         this._startAudioTick();
         this._syncAudioStrip(panelId);

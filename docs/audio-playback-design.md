@@ -84,7 +84,10 @@ over each other. Tap-to-seek works as the click does, and never from a tap on a
 button over the plot (`AUDIO_SEEK_IGNORED`: the phone's Fit buttons moved the
 playhead). On an iPhone, Web Audio is "ambient" sound that the silent switch mutes,
 so the page declares itself a player (`navigator.audioSession.type = 'playback'`,
-Safari 17+); the context is resumed from any state but running (Safari's
+Safari 17+) and, on iOS WebKit (Safari, and Chrome on an iPhone, which is WebKit
+too), plays a silent looping `<audio>` while the strip sounds — the platform's
+way into media playback where that API is missing or not passed on
+(`keepIosMediaSession`); the context is resumed from any state but running (Safari's
 "interrupted" included) with a silent sample started in the tap; and a context
 the browser still holds back — its clock, and so the playhead, standing still — is
 said in the strip after a second ("tap ▶ again"), and that tap retries. The strip watches its own
