@@ -758,6 +758,9 @@ proto._toggleIntegralTimeSeries = function(panelId) {
     }
     if (plot.integralDiv) Plotly.Plots.resize(plot.integralDiv);
     if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
+    // The analysis pane's floating fit buttons go when it is the only pane
+    // left: the toolbar's are then its own.
+    this._refreshAnalysisFitButtons(plot);
 };
 
 proto._toggleIntegralOptions = function(panelId) {

@@ -1021,6 +1021,8 @@ export function installPlotCurveFitMethods(TargetClass) {
             Plotly.Plots.resize(plot.curveFitResidualDiv);
             this._syncCurveFitResidualX(plot);
         }
+        // The pane's floating fit buttons go with it.
+        this._refreshAnalysisFitButtons(plot);
     };
 
     proto._toggleCurveFitOptions = function(panelId) {

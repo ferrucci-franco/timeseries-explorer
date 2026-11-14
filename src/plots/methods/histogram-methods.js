@@ -961,6 +961,9 @@ proto._toggleHistogramTimeSeries = function(panelId) {
         this._refreshPanelDomOverlays(plot);
     }
     if (plot.histogramDiv) this._resizePlotlyDiv(plot.histogramDiv);
+    // The analysis pane's floating fit buttons go when it is the only pane
+    // left: the toolbar's are then its own.
+    this._refreshAnalysisFitButtons(plot);
 };
 
 proto._toggleHistogramOptions = function(panelId) {

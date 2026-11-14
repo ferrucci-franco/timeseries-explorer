@@ -117,6 +117,10 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         if (!active) {
             if (existing) existing.remove();
             plot._analysisPill = null;
+            // A result has just been drawn (or dropped): the analysis pane's
+            // own fit buttons are made with it the first time, and follow
+            // whether the time series is beside it (analysis-fit-methods.js).
+            this._refreshAnalysisFitButtons?.(plot);
             return;
         }
         const { anchor, host } = this._analysisComputingTarget(plot);

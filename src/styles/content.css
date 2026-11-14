@@ -3411,6 +3411,62 @@ body.cursor-box-dragging {
     --fft-split: 50%;
 }
 
+/* ── The analysis pane's own fit buttons ───────────────────────────────────
+   An analysis panel shows two plots and the toolbar has one set of fit
+   buttons: those belong to the time series, and the pane beside it carries
+   these three in its corner, so neither set is a guess. Faint until the
+   pointer is on them — the curve under them is what the user came for — and
+   they are not there at all when the time series is folded away, because the
+   toolbar's buttons are then this pane's own
+   (src/plots/methods/analysis-fit-methods.js). The phone layout draws its own
+   over every plot, and these stay out of its way. */
+.analysis-fit-group {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 5;
+    display: flex;
+    gap: 4px;
+    pointer-events: none;
+}
+
+.analysis-fit-group[hidden] {
+    display: none;
+}
+
+.analysis-fit-btn {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--bg-primary) 40%, transparent);
+    color: var(--text-primary);
+    opacity: 0.4;
+    cursor: pointer;
+    transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+
+.analysis-fit-btn[hidden] {
+    display: none;
+}
+
+.analysis-fit-btn:hover,
+.analysis-fit-btn:focus-visible {
+    opacity: 1;
+    background: var(--bg-primary);
+}
+
+.analysis-fit-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+
 /* ── The side panel of an analysis ─────────────────────────────────────────
    The analysis' own buttons (V/H, hide the time series, Reset, Options and
    the status line) are the HEADER of this column, not a bar across the whole

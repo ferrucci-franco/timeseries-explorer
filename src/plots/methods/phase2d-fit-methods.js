@@ -997,6 +997,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         }
         if (!state.timeSeriesHidden && plot.phase2dFitTimeDiv) Plotly.Plots.resize(plot.phase2dFitTimeDiv);
         if (plot.div) Plotly.Plots.resize(plot.div);
+        // The pane's floating fit buttons go with it.
+        this._refreshAnalysisFitButtons(plot);
     };
 
     proto._togglePhase2dOptions = function(panelId) {

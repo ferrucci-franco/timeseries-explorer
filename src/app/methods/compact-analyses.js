@@ -18,6 +18,15 @@
 // the panel it acts on, its plot, and `refresh()` to rebuild the open sheet so
 // a toggle shows its new state.
 
+// `mainPane` says what the plot an analysis is built on IS: the time series
+// for all of them but the 2D fit, whose own plot is the result (x against y)
+// and whose time series is the pane beside it. `hidden` says which of the two
+// the user can fold away — `main` for the pane the plot is built on, `pane`
+// for the one beside it. The desktop layout asks it to know whose the toolbar's
+// Fit X / Fit Y / Fit all are: they belong to the time series while it is on
+// screen, and to the analysis when it is not
+// (src/plots/methods/analysis-fit-methods.js).
+
 const flip = (layout) => (layout === 'horizontal' ? 'vertical' : 'horizontal');
 
 // Each analysis's drawing in the Analyze sheet, in the hand of the data tools'
@@ -68,6 +77,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         windowZoom: true,
         removeTrace: ({ pm, panelId, plot }, trace) => pm._removeFftTraceFromLegend(panelId, plot, trace),
+        mainPane: 'time',
+        hidden: { main: ({ pm, plot }) => !!pm._ensureFftState(plot).timeSeriesHidden },
         pane: {
             name: 'spectrum',
             div: 'fftDiv',
@@ -99,6 +110,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         windowZoom: true,
         removeTrace: ({ pm, panelId, plot }, trace) => pm._removeHistogramTraceFromLegend(panelId, plot, trace),
+        mainPane: 'time',
+        hidden: { main: ({ pm, plot }) => !!pm._ensureHistogramState(plot).timeSeriesHidden },
         pane: {
             name: 'bars',
             div: 'histogramDiv',
@@ -137,6 +150,8 @@ export const COMPACT_ANALYSES = [
         // Its time pane is a time series, so a finger draws a window on it.
         windowZoom: true,
         removeTrace: ({ pm, panelId, plot }, trace) => pm._removeCalendarHeatmapTraceFromLegend(panelId, plot, trace),
+        mainPane: 'time',
+        hidden: { main: ({ pm, plot }) => !!pm._ensureCalendarHeatmapState(plot).timeSeriesHidden },
         pane: {
             name: 'calendar',
             div: 'heatmapDiv',
@@ -182,6 +197,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         windowZoom: true,
         removeTrace: ({ pm, panelId, plot }, trace) => pm._removeTemporalProfileTraceFromLegend(panelId, plot, trace),
+        mainPane: 'time',
+        hidden: { main: ({ pm, plot }) => !!pm._ensureTemporalProfileState(plot).timeSeriesHidden },
         pane: {
             name: 'profile',
             div: 'temporalProfileDiv',
@@ -216,6 +233,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         windowZoom: true,
         removeTrace: ({ pm, panelId, plot }, trace) => pm._removeIntegralTraceFromLegend(panelId, plot, trace),
+        mainPane: 'time',
+        hidden: { main: ({ pm, plot }) => !!pm._ensureIntegralState(plot).timeSeriesHidden },
         pane: {
             name: 'integral',
             div: 'integralDiv',
@@ -252,6 +271,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         windowZoom: true,
         removeTrace: ({ pm, panelId, plot }, trace) => pm._removeCurveFitTraceFromLegend(panelId, plot, trace),
+        mainPane: 'time',
+        hidden: { pane: ({ pm, plot }) => !!pm._ensureCurveFitState(plot).residualsHidden },
         pane: {
             name: 'residuals',
             div: 'curveFitResidualDiv',
@@ -280,6 +301,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         windowZoom: true,
         removeTrace: ({ pm, panelId, plot }, trace) => pm._removeTrendTraceFromLegend(panelId, plot, trace),
+        mainPane: 'time',
+        hidden: { pane: ({ pm, plot }) => !!pm._ensureTrendState(plot).tableHidden },
         pane: {
             name: 'segments',
             // Its second pane is a table of the segments, not a chart: there
@@ -315,6 +338,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         windowZoom: true,
         removePair: ({ pm, panelId, plot }, pair) => pm._removeCorrelationPairFromLegend(panelId, plot, pair),
+        mainPane: 'time',
+        hidden: { main: ({ pm, plot }) => !!pm._ensureCorrelationState(plot).timeSeriesHidden },
         pane: {
             name: 'correlation',
             div: 'correlationDiv',
@@ -379,6 +404,8 @@ export const COMPACT_ANALYSES = [
         fit: true,
         // Its main pane is the 2D plot: x against y, no window to draw.
         windowZoom: false,
+        mainPane: 'result',
+        hidden: { pane: ({ pm, plot }) => !!pm._ensurePhase2dState(plot).timeSeriesHidden },
         pane: {
             name: 'fit-time',
             div: 'phase2dFitTimeDiv',

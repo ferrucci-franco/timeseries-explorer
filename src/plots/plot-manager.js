@@ -15,6 +15,7 @@ import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-method
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
 import { installPlotAnalysisBusyMethods } from './methods/analysis-busy-methods.js';
 import { installPlotAnalysisRangeMethods } from './methods/analysis-range-methods.js';
+import { installPlotAnalysisFitMethods } from './methods/analysis-fit-methods.js';
 import { installPlotFitLazyMethods } from './methods/fit-lazy-methods.js';
 import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
 import { installPlotCurveFitMethods } from './methods/curve-fit-methods.js';
@@ -908,6 +909,9 @@ class PlotManager {
         // their share of the plot. Their row of value chips sits under it.
         this._syncStateBandLanes?.(plot);
         this._renderStateBandLegend?.(plot);
+        // The analysis pane's own fit buttons: made with the pane, and shown
+        // only while the time series is beside it.
+        this._refreshAnalysisFitButtons?.(plot);
     }
 
     autoZoomAll() {
@@ -4704,10 +4708,21 @@ class PlotManager {
             return Plotly.relayout(plot.div, update)
                 .then(() => { if (plot.mode === 'timeseries') this._refreshElapsedDateTimeAxisTicks(plot); });
         }
-        // Split analysis modes: the per-axis buttons fit the analysis output pane
-        // (spectrum / histogram / heatmap / profile / correlation view), each with
-        // its own axis conventions. Heatmap has no vertical fit (fixed categorical
-        // Y), so its 'y' path is a no-op and the button is not shown.
+        // An analysis panel has two panes, and these buttons belong to the one
+        // the panel is BUILT ON — the time series, for every analysis but the
+        // 2D fit — while it is on screen. The analysis' own pane has three
+        // floating buttons of its own in its corner while both are shown
+        // (analysis-fit-methods.js). Fold the time series away and there is
+        // one pane left, which is what the toolbar then fits, as it always did.
+        const plan = this._analysisFitPlan?.(plot);
+        if (plan?.toolbarOwnsMain) {
+            const update = this._autoScaleAxisUpdate(plot, axis, { treatAsTimeseries: true });
+            if (!Object.keys(update).length) return Promise.resolve();
+            return Plotly.relayout(plot.div, update);
+        }
+        // With the time series folded away, each analysis fits its own pane,
+        // with its own axis conventions. Heatmap has no vertical fit (fixed
+        // categorical Y), so its 'y' path is a no-op and the button is hidden.
         if (plot.mode === 'fft') return this._autoScaleFftAxis(plot, axis);
         if (plot.mode === 'histogram') return this._autoScaleHistogramAxis(plot, axis);
         if (plot.mode === 'heatmap') return this._autoScaleHeatmapAxis(plot, axis);
@@ -4721,6 +4736,11 @@ class PlotManager {
 
     _autoScalePlot(panelId, plot = this.plots.get(panelId)) {
         if (!plot?.div) return Promise.resolve();
+
+        // As for the per-axis buttons: while the time series is on screen this
+        // is its button, and the analysis' pane has its own in its corner.
+        const fitPlan = this._analysisFitPlan?.(plot);
+        if (fitPlan?.toolbarOwnsMain) return Promise.resolve(this._autoScalePlotTimeOnly(plot));
 
         if (plot.mode === 'fft') {
             return this._autoScaleFftPanel(panelId, plot);
@@ -5714,6 +5734,7 @@ installPlotRepeatedMethods(PlotManager);
 installPlotMarksMethods(PlotManager);
 // Before the analyses: every one of them builds its range section with it.
 installPlotAnalysisRangeMethods(PlotManager);
+installPlotAnalysisFitMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotHistogramLazyMethods(PlotManager);

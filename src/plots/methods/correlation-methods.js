@@ -885,6 +885,9 @@ export function installPlotCorrelationMethods(TargetClass) {
         }
         if (!state.timeSeriesHidden && plot.div) Plotly.Plots.resize(plot.div);
         if (plot.correlationDiv) Plotly.Plots.resize(plot.correlationDiv);
+        // The analysis pane's floating fit buttons go when it is the only pane
+        // left: the toolbar's are then its own.
+        this._refreshAnalysisFitButtons(plot);
     };
 
     proto._toggleCorrelationOptions = function(panelId) {

@@ -1615,6 +1615,9 @@ proto._toggleCalendarHeatmapTimeSeries = function(panelId) {
     this._applyCalendarHeatmapMinHeight(plot);
     if (plot.heatmapDiv) this._resizePlotlyDiv(plot.heatmapDiv);
     this._syncCursorDisplay?.(panelId, plot);
+    // The analysis pane's floating fit buttons go when it is the only pane
+    // left: the toolbar's are then its own.
+    this._refreshAnalysisFitButtons(plot);
 };
 
 proto._toggleCalendarHeatmapOptions = function(panelId) {

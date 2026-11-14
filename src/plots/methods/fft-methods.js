@@ -2053,6 +2053,9 @@ proto._toggleFftTimeSeries = function(panelId) {
     }
     if (plot.fftDiv) Plotly.Plots.resize(plot.fftDiv);
     this._syncCursorDisplay(panelId, plot);
+    // The analysis pane's floating fit buttons go when it is the only pane
+    // left: the toolbar's are then its own.
+    this._refreshAnalysisFitButtons(plot);
 };
 
 proto._toggleFftOptions = function(panelId) {

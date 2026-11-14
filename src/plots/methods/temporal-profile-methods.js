@@ -1283,6 +1283,9 @@ proto._toggleTemporalProfileTimeSeries = function(panelId) {
         this._refreshPanelDomOverlays(plot);
     }
     if (plot.temporalProfileDiv) this._resizePlotlyDiv(plot.temporalProfileDiv);
+    // The analysis pane's floating fit buttons go when it is the only pane
+    // left: the toolbar's are then its own.
+    this._refreshAnalysisFitButtons(plot);
 };
 
 proto._toggleTemporalProfileOptions = function(panelId) {
