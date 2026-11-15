@@ -1338,23 +1338,43 @@ export default class DuckDbSource {
         if (signal?.aborted) throw this._queryAbortError();
         let conn = null;
         let reader = null;
+        let sending = null;
+        let batches = null;
         let done = false;
         let aborted = false;
+        // An abort ends the stream at once, not when DuckDB next delivers a
+        // batch: a scan that skips millions of rows before the first one in
+        // range can take seconds to deliver it, and the consumer (a
+        // superseded FFT, #174) waited all that time to hear it was over.
+        let rejectAborted = null;
+        const abortedPromise = new Promise((_, reject) => { rejectAborted = reject; });
+        abortedPromise.catch(() => null);
+        const untilAborted = promise => (signal ? Promise.race([promise, abortedPromise]) : promise);
         const cancel = () => {
             aborted = true;
+            rejectAborted(this._queryAbortError());
             if (reader?.cancel) Promise.resolve().then(() => reader.cancel()).catch(() => null);
+            // The connection is this stream's alone: interrupting what it
+            // runs cannot hit anyone else's query.
+            if (conn?.cancelSent) Promise.resolve().then(() => conn.cancelSent()).catch(() => null);
         };
         signal?.addEventListener?.('abort', cancel, { once: true });
         try {
             if (signal?.aborted) throw this._queryAbortError();
             conn = await this._openStreamConnection();
-            reader = await conn.send(sql);
+            if (signal?.aborted) throw this._queryAbortError();
+            sending = conn.send(sql);
+            reader = await untilAborted(sending);
             if (signal?.aborted) throw this._queryAbortError();
 
             let pending = [];
             let pendingRows = 0;
             let rowStart = 0;
-            for await (const batch of reader) {
+            batches = reader[Symbol.asyncIterator]();
+            for (;;) {
+                const step = await untilAborted(batches.next());
+                if (step.done) break;
+                const batch = step.value;
                 if (aborted || signal?.aborted) throw this._queryAbortError();
                 if (!batch?.numRows) continue;
                 pending.push(batch);
@@ -1371,16 +1391,34 @@ export default class DuckDbSource {
             if (aborted || signal?.aborted) throw this._queryAbortError();
             if (pendingRows) yield toChunk(pending, rowStart);
             done = true;
+        } catch (err) {
+            // Cancelling the reader under a pending read makes Arrow throw
+            // whatever it trips on (a TypeError reading a schema that is no
+            // longer there). The stream was aborted: say that.
+            if ((aborted || signal?.aborted) && err?.name !== 'AbortError') throw this._queryAbortError();
+            throw err;
         } finally {
             signal?.removeEventListener?.('abort', cancel);
             // A consumer that stopped early leaves DuckDB mid-query. The
             // connection is this stream's alone, so interrupting it cannot hit
             // anyone else's work; closing it is what frees it.
-            if (!done && reader) {
-                try { await reader.cancel?.(); } catch (_) { /* already finished */ }
-                try { await conn?.cancelSent?.(); } catch (_) { /* nothing running */ }
-            }
-            await this._closeStreamConnection(conn);
+            const cleanup = async () => {
+                // Aborted while the query was still being sent: its reader
+                // comes later, or never (the interrupt makes the send fail).
+                const openReader = reader || (sending ? await sending.catch(() => null) : null);
+                if (!done && openReader) {
+                    try { await batches?.return?.(); } catch (_) { /* already finished */ }
+                    try { await openReader.cancel?.(); } catch (_) { /* already finished */ }
+                    try { await conn?.cancelSent?.(); } catch (_) { /* nothing running */ }
+                }
+                await this._closeStreamConnection(conn);
+            };
+            // An aborted consumer is not kept waiting for DuckDB to wind the
+            // query down (it finishes the batch it is producing first); one
+            // that left on its own waits, so the connection is closed when
+            // its loop ends.
+            if (aborted) cleanup().catch(() => null);
+            else await cleanup();
         }
     }
 
@@ -5344,6 +5382,9 @@ export default class DuckDbSource {
                     return arr;
                 }
             } catch (_) { /* fall through */ }
+        } else {
+            const withNulls = float64WithNulls(child);
+            if (withNulls) return withNulls;
         }
         // Fallback: iterate.
         const arr = new Float64Array(child.length);
@@ -5425,4 +5466,45 @@ function conversionCancelled() {
     err.name = 'ConversionCancelledError';
     err.cancelled = true;
     return err;
+}
+
+// A DOUBLE column that has NULLs, as a Float64Array with NaN for each NULL,
+// read straight from its Arrow buffers: the values and the validity bitmap of
+// each chunk. Reading it row by row through `get(i)` costs ~150 ns a row —
+// over a second for the all-NULL row-index column of a 10 M-row FFT read
+// (#174). Same numbers as that loop: a valid row is its stored double, a NULL
+// is NaN. Null (the caller falls back to the loop) for any column that is not
+// plain float64 chunks.
+function float64WithNulls(child) {
+    const chunks = child?.data;
+    if (!Array.isArray(chunks) || !chunks.length) return null;
+    const total = Number(child.length) || 0;
+    const out = new Float64Array(total);
+    let at = 0;
+    for (const data of chunks) {
+        const values = data?.values;
+        const n = Number(data?.length) || 0;
+        if (at + n > total) return null;
+        // Every row NULL: nothing to read, whatever the buffers hold.
+        if (n > 0 && Number(data.nullCount) === n) {
+            out.fill(NaN, at, at + n);
+            at += n;
+            continue;
+        }
+        if (!(values instanceof Float64Array) || values.length < n) return null;
+        if (data.stride !== undefined && data.stride !== 1) return null;
+        if (!(Number(data.nullCount) > 0)) {
+            out.set(values.subarray(0, n), at);
+        } else {
+            const bitmap = data.nullBitmap;
+            if (!bitmap) return null;
+            const offset = Number(data.offset) || 0;
+            for (let i = 0; i < n; i++) {
+                const pos = offset + i;
+                out[at + i] = (bitmap[pos >> 3] & (1 << (pos & 7))) !== 0 ? values[i] : NaN;
+            }
+        }
+        at += n;
+    }
+    return at === total ? out : null;
 }

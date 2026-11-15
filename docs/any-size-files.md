@@ -77,7 +77,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Perfil temporal | exacto en SQL desde la 3a; **resuelto** lo mismo que el heatmap, más *fines de semana combinados* (que la consulta lazy ignoraba) y los períodos cortados por la selección, que los dos modos cuentan ahora igual | `temporalProfileLazyDerivedUnsupported` |
 | Derivadas del eje de tiempo (`index`, `delta`) | ~~calculadas sobre el overview~~ **SQL sobre el archivo desde la 4a** (el número de fila y la diferencia de filas consecutivas, `rowIndexWindow` y `timeAxisDeltaWindows`); esta fila había quedado vieja | — |
 | Análisis de tendencia | **exacto sobre todas las filas de cada tramo** (sección "Implementado: análisis de tendencia exacto"): los agregados de las dos pasadas en una consulta por pasada para todos los tramos; se rechaza, diciéndolo, una señal que solo está en el resumen y un eje generado del número de fila | `trendLazyOverviewOnly`, `trendLazyGeneratedAxis` |
-| FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
+| FFT | filas crudas hasta `_fftHardMaxNfft`, leídas por trozos con `streamColumns` (antes `getRawColumnsRange`, que congelaba la página: sección "Implementado: la FFT lazy no congela la página") | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Estadísticas del panel (Σ) | ~~calculadas sobre el resumen, sin aviso~~ **exactas sobre todas las filas** (sección "Implementado: estadísticas del panel exactas"); una señal que existe solo en el resumen se nombra debajo de la tabla, sin cifras | `statsLazyOverviewOnly` |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
 | Escuchar (🔊) | ~~deshabilitado: solo el resumen está en memoria~~ **lee del archivo cada fila del rango que suena** (sección "Implementado: escuchar un archivo lazy"); la uniformidad del paso se comprueba en el rango al leerlo, no en el archivo entero, y se rechaza, diciéndolo, una señal que existe solo en el resumen | `audioRangeNotUniform`, `audioReasonLazyNoSource` |
@@ -1953,6 +1953,100 @@ aparece sobre el resultado anterior, Cancelar aborta la consulta, quita la
 píldora, deja el resultado, devuelve el parámetro que se había cambiado (el
 rango, el modelo) y lo dice; nada se relanza solo, y luego el análisis vuelve
 a calcular. Elegir de nuevo el análisis activo en el menú lo deja como está.
+
+### Implementado: la FFT lazy no congela la página (#174)
+
+El informe (0.3.0): un archivo de ~350 MB abierto en lazy, la FFT abierta; al
+cambiar el rango la app se congelaba hasta terminar la FFT — no se podía mover
+otra vez el rango y el puntero quedaba en la flecha de redimensionar. La
+transformada ya corría en un worker; lo que congelaba era **la lectura de las
+filas**, en el hilo principal y de un bloque:
+
+- `getRawColumnsRange` traía el resultado entero y lo convertía de Arrow a
+  `Float64Array`. La columna `rn` de un eje de tiempo real es toda NULL, y una
+  columna con NULL se leía fila por fila con `get(i)`: 1,0–1,6 s para 8 M filas;
+- `_transformFetchedPhaseTrajectory` volvía a preguntar por cada fila lo que es
+  igual para todas (el modo del eje, el paso, el signo de la variable): unos
+  500 ns por fila, 4–6 s para 8 M;
+- `selectFftRange` copiaba otra vez el rango, y `_finiteExtent` recorría los
+  8 M bins del espectro con `for…of`;
+- y un rango nuevo **no abortaba** la lectura en curso: una corrida superada se
+  descartaba por su token, pero su consulta seguía y la nueva esperaba detrás
+  en la conexión compartida.
+
+Lo que cambia, con los mismos números bit a bit:
+
+- **la lectura es un stream** (`_fftLazySeries`, `streamColumns`, las mismas
+  filas que `getRawColumnsRange`: los dos son `_rawRowsSql`), en su propia
+  conexión, y cada trozo de 131 072 filas se transforma al llegar, con una
+  vuelta del bucle de eventos entre trozos (un `MessageChannel`, no
+  `setTimeout`, que se recorta a 4 ms). Pasado el tope de filas deja de leer
+  en el acto, en vez de traer el tope más una fila para enterarse;
+- **los trozos van al worker tal cual** (transferidos, no copiados), y el
+  worker los une y corta el rango (`selectFftRangeFromParts`, que es
+  `selectFftRange` sobre la unión) antes de la transformada; también calcula
+  ahí el extremo del eje Y del espectro lineal (`finiteExtent`, el mismo
+  recorrido que `_finiteExtent`). Debajo del umbral del worker se hace lo mismo
+  en el hilo principal, con el mismo código;
+- `_transformFetchedPhaseTrajectory` pregunta una vez por archivo, no por fila
+  (`_timeDisplayMapperForVar`, `_generatedIndexDisplayMapper`), con las mismas
+  expresiones en el mismo orden; `_extractColumnAsFloat64` lee una columna
+  DOUBLE con NULL directamente de sus buffers y su mapa de validez
+  (`float64WithNulls`). Las dos cosas aceleran a todos los que leen filas
+  crudas (fase, ajustes, histograma), no solo la FFT;
+- **cada corrida tiene su señal** (`_fftRunSignal`), atada a la del panel: la
+  aborta Cancelar, la aborta la corrida que la reemplaza y la aborta
+  `_scheduleFftRecompute` en cuanto se pide otro rango, antes del debounce. La
+  lectura de la FFT no se comparte con nadie (no hay caché de por medio), así
+  que abortarla no le quita nada a otro panel;
+- **un stream abortado termina en el acto** (`_streamSql`): la espera del
+  próximo lote compite con la señal, y la conexión propia del stream se
+  interrumpe (`cancelSent`) y se cierra después, sin hacer esperar al
+  consumidor. Antes un abort se notaba recién cuando DuckDB entregaba el
+  siguiente lote — segundos, si el escaneo saltaba millones de filas antes del
+  rango.
+
+Medido en Chromium headless (4 núcleos compartidos, cargados), CSV de 10 M
+filas × 3 columnas (269 MB), abierto en lazy, rango tecleado de 10 % a 90 %
+(8 M muestras):
+
+| | antes | después |
+|---|---|---|
+| Tarea más larga del hilo principal mientras se leen las filas | 7 957 ms (una sola: conversión 1,5 s + transformación 6,3 s + corte) | 70 ms |
+| Mayor hueco entre cuadros (rAF) en el recálculo | 7 960 ms | ~400–500 ms, en el pintado final (abajo) |
+| Abortar la lectura superada al soltar el deslizador | no se abortaba: la nueva esperaba detrás (12,8 s hasta su primer resultado) | 5 ms |
+
+Con 1,2 M filas (el archivo de la prueba e2e) la tarea más larga de la lectura
+pasa de 1 268 ms a 0–51 ms. Lo que queda por encima de 200 ms es el pintado del
+resultado: `Plotly.react` del espectro (12 000 puntos `scattergl`) y el dibujo
+WebGL que sigue, que Chromium headless hace por software (SwiftShader): un
+`Plotly.react` del mismo espectro sin nada más da una tarea de ~320 ms en esta
+máquina. Con una GPU es otra cosa; no es trabajo de la lectura y pasa una vez
+por resultado, no por trozo.
+
+Pruebas: `scripts/test-lazy-fft.mjs` (DuckDB-WASM real, Node) compara el
+espectro de tres caminos — en memoria, la lectura de un bloque de antes y el
+stream con los trozos unidos en el módulo real del worker — frecuencia por
+frecuencia y amplitud por amplitud, sin transformaciones y con todas (recorte,
+desplazamiento, ganancia, offset, signo), sobre todo el archivo y una
+selección, con eje de tiempo real y generado; el tope de filas, el abort a
+mitad de lectura y antes del primer lote, la señal por corrida, y la columna
+con NULL leída como la lee el bucle de Arrow.
+`scripts/e2e-lazy-fft-responsive.mjs` (Chromium, 1,2 M filas): ninguna tarea
+del hilo principal pasa de 250 ms mientras se leen las filas de un rango
+tecleado (antes: 1,3 s); arrastrar el deslizador durante la lectura la aborta
+al soltarlo, con un `AbortError`, el espectro que sale es el del rango
+arrastrado y no queda ninguna conexión de stream abierta.
+
+**Hueco conocido, encontrado aquí y no cerrado:** el rango *Full* de una FFT
+lazy es `_fftDomain`, los extremos del tiempo del **resumen** en memoria, no
+los del archivo. En el CSV de 10 M filas el resumen empieza en 1,68 s y
+termina en 9 999,228 s, así que *Full* deja fuera 2 451 de los 10 M filas
+(lee 9 997 549). En un eje generado (número de fila) es peor: el dominio está
+en posiciones del resumen. El histograma ya toma su dominio de
+`_lazyTimeExtent` ("la selección llega a los extremos del archivo"); la FFT
+debería hacer lo mismo. No se cambió aquí porque cambia el resultado de la FFT,
+y este cambio es, a propósito, bit a bit el de antes.
 
 ### Regla: lo nuevo nace funcionando en lazy
 

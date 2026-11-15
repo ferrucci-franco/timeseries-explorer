@@ -13,6 +13,7 @@ import {
     normalizeFftWindow,
     normalizeZeroPaddingFactor,
     selectFftRange,
+    selectFftRangeFromParts,
     estimateFftDurationMs,
     FFT_AUTO_SLOW_MS,
     FFT_AUTO_TARGET_POINTS,
@@ -54,6 +55,10 @@ const FFT_AXIS_LIMIT_KEYS = new Set(['fMin', 'fMax', 'yMin', 'yMax']);
 // total bins, since a zero-padded spectrum can be tens of millions of samples.
 const FFT_SPECTRUM_CACHE_MAX_ENTRIES = 8;
 const FFT_SPECTRUM_CACHE_MAX_BINS = 2 ** 23;
+
+// Rows of a lazy file read and transformed per turn of the event loop
+// (_fftLazySeries). A chunk takes a few milliseconds to convert.
+const FFT_LAZY_CHUNK_ROWS = 131072;
 
 // Identity of a file's transform cache, as a comparable number. Every path that
 // can change the numbers behind a trace (new data, live append, a transform, a
@@ -1172,6 +1177,13 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.fftDiv || plot.mode !== 'fft') return;
     clearTimeout(plot._fftRecomputeTimer);
+    // What is being computed now answers settings the user has just changed:
+    // its result would be dropped when this run starts anyway. Stop it now, so
+    // its reads and its worker do not hold DuckDB and the CPU through the
+    // debounce, and the new range is not queued behind it (#174). The
+    // spectrum on screen stays, as Cancel leaves it.
+    this._abortFftRun(plot);
+    this._abortFftWorkerJob(plot);
     // Merge view-preservation flags across coalesced calls: one "don't
     // preserve" request wins over any queued "preserve" ones.
     const prev = plot._fftRecomputeView || {};
@@ -1447,6 +1459,8 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     const token = (plot._fftToken || 0) + 1;
     plot._fftToken = token;
     this._abortFftWorkerJob(plot);
+    // This run's reads; the run it supersedes is stopped here.
+    const runSignal = this._fftRunSignal(plot);
     const state = this._ensureFftState(plot);
     const range = this._activeFftRange(plot);
     const visible = (plot.traces || []).filter(trace => this._isVisible(trace));
@@ -1493,7 +1507,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         if (!spectrum) {
             let series;
             try {
-                series = await this._fftSeriesForTrace(trace, range, state, this._analysisSignal(plot));
+                series = await this._fftSeriesForTrace(trace, range, state, runSignal);
             } catch (err) {
                 // Cancelled from the computing pill: its token is already gone.
                 if (err?.name === 'AbortError') return;
@@ -1549,7 +1563,12 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
             visible: trace.visible ?? true,
             frequencies: spectrum.frequencies,
             amplitudes: scaled.amplitudes,
-            yExtent: this._finiteExtent([scaled.amplitudes]),
+            // A spectrum from the worker brings the extent of its linear
+            // amplitudes, found there: over the millions of bins of a large
+            // transform the scan is a block of the main thread (#174).
+            yExtent: scaled.amplitudes === spectrum.rawAmplitudes && spectrum.rawExtent !== undefined
+                ? spectrum.rawExtent
+                : this._finiteExtent([scaled.amplitudes]),
         });
     }
 
@@ -1641,6 +1660,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     // Terminal for this token (superseding runs manage their own pill on the
     // token-mismatch early returns above, so this only fires for the live run).
     this._setFftComputing(plot, false);
+    this._settleFftRun(plot, runSignal);
 };
 
 // Order the spectrum pane's traces the way the panel lists its curves. Plotly
@@ -1773,6 +1793,7 @@ proto._fftSeriesForTrace = async function(trace, range, state, signal = null) {
     if (!fileData?.variables?.[trace.varName]) return { ok: false, reason: 'missingVariable' };
     const lazyMeta = fileData._duckdb;
     const source = lazyMeta?.source;
+    if (source?.streamColumns) return this._fftLazySeries(trace, range, state, signal);
     if (source?.getRawColumnsRange) {
         const timeVar = this._getTimeVar(trace.fileId);
         const sourceRange = this._sourceRangeForDisplayRange(trace.fileId, range, timeVar);
@@ -1799,6 +1820,108 @@ proto._fftSeriesForTrace = async function(trace, range, state, signal = null) {
         values: selected.values,
         timeKind: this._fftTimeKind(trace.fileId),
     };
+};
+
+// The rows of a lazy file in the FFT's range, every one of them, read as a
+// stream rather than in one result (#174). The same rows as
+// getRawColumnsRange (both are _rawRowsSql), the same transforms and the same
+// cut, so the series — and the spectrum — are bit for bit the ones the single
+// read gave. What changes is where the time goes:
+//
+//  · the rows arrive a chunk at a time and each chunk is transformed as it
+//    comes, with a turn of the event loop in between, so the range controls,
+//    the time series and the Cancel button keep answering while millions of
+//    rows are converted. The single read converted them in one block of the
+//    main thread: ~8 s for 8 M rows, during which nothing could be dragged;
+//  · the stream runs on a connection of its own, so the time series' own
+//    viewport queries do not wait behind it;
+//  · a newer range aborts it (the run's signal, _fftRunSignal) and the query
+//    stops where it is, instead of the new read queueing behind the old one;
+//  · past the row limit it stops reading at once, rather than fetching the
+//    limit plus one row to find out.
+proto._fftLazySeries = async function(trace, range, state, signal = null) {
+    const fileData = this.files.get(trace.fileId)?.data;
+    const source = fileData?._duckdb?.source;
+    const timeVar = this._getTimeVar(trace.fileId);
+    const sourceRange = this._sourceRangeForDisplayRange(trace.fileId, range, timeVar);
+    if (!sourceRange || !sourceRange.every(Number.isFinite)) return { ok: false, reason: 'invalidRange' };
+    const maxRows = this._fftMaxRawRowsForState(state);
+    // getRawColumnsRange's row index: the row number for generated time (the
+    // stream's t is that number), nothing for a real time column.
+    const generated = !!fileData._duckdb.generatedTime;
+    const timeParts = [];
+    const valueParts = [];
+    let rows = 0;
+    let kept = 0;
+    const stream = source.streamColumns(fileData, [trace.varName], {
+        t0: sourceRange[0],
+        t1: sourceRange[1],
+        signal,
+        chunkRows: FFT_LAZY_CHUNK_ROWS,
+    });
+    for await (const chunk of stream) {
+        rows += chunk.x.length;
+        // Leaving the loop closes the stream, which cancels its query.
+        if (rows > maxRows) return { ok: false, reason: 'tooManyPoints' };
+        const transformed = this._transformFetchedPhaseTrajectory(
+            trace.fileId, chunk.x, generated ? chunk.x : null, chunk.yByVar, [trace.varName],
+        );
+        timeParts.push(transformed.time);
+        valueParts.push(transformed.valuesByVar.get(trace.varName));
+        kept += transformed.time.length;
+        // A batch DuckDB has already delivered resolves without a new task;
+        // give the page one per chunk so a drag or a click is not held.
+        await yieldToBrowser();
+        if (signal?.aborted) throw abortError();
+    }
+    // Handed over as the chunks they came in, with the range: joining 8 M rows
+    // and cutting the range out of them is a block of the main thread of its
+    // own, so the worker does it (selectFftRangeFromParts) when it takes the
+    // transform; a small read is joined here.
+    return {
+        ok: true,
+        parts: { times: timeParts, values: valueParts, length: kept },
+        range,
+        timeKind: this._fftTimeKind(trace.fileId),
+    };
+};
+
+// The signal a run of the FFT hands its reads: its own, tied to the panel's
+// analysis signal so Cancel stops it too. A newer run aborts the one it
+// supersedes (#174). Unlike the heatmap's, the FFT's reads are this run's
+// alone — nothing cached is shared with another panel or a later run — so
+// stopping one costs nothing but the work it would have thrown away; leaving
+// it running made the next range wait behind it on DuckDB.
+proto._fftRunSignal = function(plot) {
+    this._abortFftRun(plot);
+    const panelSignal = this._analysisSignal(plot);
+    if (typeof AbortController !== 'function') return panelSignal;
+    const controller = new AbortController();
+    const forward = () => controller.abort();
+    if (panelSignal?.aborted) controller.abort();
+    else panelSignal?.addEventListener?.('abort', forward, { once: true });
+    plot._fftRunAbort = {
+        controller,
+        release: () => panelSignal?.removeEventListener?.('abort', forward),
+    };
+    return controller.signal;
+};
+
+// Stop the FFT run in flight, if any: its reads and its worker.
+proto._abortFftRun = function(plot) {
+    const run = plot?._fftRunAbort;
+    if (!run) return;
+    plot._fftRunAbort = null;
+    run.release();
+    run.controller.abort();
+};
+
+// A run that has finished lets go of the panel's signal.
+proto._settleFftRun = function(plot, signal) {
+    const run = plot?._fftRunAbort;
+    if (!run || run.controller.signal !== signal) return;
+    plot._fftRunAbort = null;
+    run.release();
 };
 
 // Token that changes whenever the data behind a trace could have changed.
@@ -1873,14 +1996,29 @@ proto._rememberFftSpectrum = function(plot, key, spectrum) {
 };
 
 proto._computeFftSpectrumForSeries = async function(plot, series, state) {
-    const times = series.times instanceof Float64Array ? series.times : Float64Array.from(series.times || []);
-    const values = series.values instanceof Float64Array ? series.values : Float64Array.from(series.values || []);
+    // A lazy read comes as chunks (_fftLazySeries): joined and cut to the
+    // range by the worker when the worker takes it, here otherwise.
+    const parts = series.parts || null;
     const zeroPaddingFactor = normalizeZeroPaddingFactor(state.zeroPaddingFactor);
-    const n = Math.min(times.length || 0, values.length || 0);
+    // An upper bound for chunks, whose range has yet to be cut; it only
+    // chooses where the transform runs.
+    const n = parts
+        ? Number(parts.length) || 0
+        : Math.min(series.times?.length || 0, series.values?.length || 0);
     const estimatedNfft = nextPowerOfTwo(n) * zeroPaddingFactor;
+    const offMainThread = estimatedNfft > this._fftWorkerThresholdNfft() && this._canUseFftWorker();
+    let times = null;
+    let values = null;
+    if (!parts) {
+        times = series.times instanceof Float64Array ? series.times : Float64Array.from(series.times || []);
+        values = series.values instanceof Float64Array ? series.values : Float64Array.from(series.values || []);
+    } else if (!offMainThread) {
+        ({ times, values } = selectFftRangeFromParts(parts, series.range));
+    }
     const input = {
         times,
         values,
+        ...(parts && offMainThread ? { parts, range: series.range } : {}),
         timeKind: series.timeKind,
         removeMean: state.removeMean,
         windowType: state.windowType,
@@ -3518,10 +3656,14 @@ proto._autoScalePlotTimeOnly = function(plot) {
 
 function transferFftInputBuffers(input) {
     const buffers = new Set();
-    for (const key of ['times', 'values']) {
-        const buffer = input?.[key]?.buffer;
+    const add = (array) => {
+        const buffer = array?.buffer;
         if (buffer instanceof ArrayBuffer && buffer.byteLength > 0) buffers.add(buffer);
-    }
+    };
+    add(input?.times);
+    add(input?.values);
+    // A lazy read's chunks: each its own buffer, moved rather than copied.
+    for (const part of [...(input?.parts?.times || []), ...(input?.parts?.values || [])]) add(part);
     return [...buffers];
 }
 
@@ -3571,4 +3713,25 @@ function periodExtentOf(frequencies) {
     }
     if (!Number.isFinite(lowest) || !Number.isFinite(highest)) return { xMin: 0, xMax: 1 };
     return { xMin: 1 / highest, xMax: 1 / lowest };
+}
+
+// One turn of the event loop, as a task: a resolved promise would not let the
+// browser handle input or paint in between. A MessageChannel rather than
+// setTimeout, whose nested calls are clamped to 4 ms each.
+function yieldToBrowser() {
+    if (typeof MessageChannel !== 'function') return new Promise(resolve => setTimeout(resolve, 0));
+    return new Promise((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+            channel.port1.close();
+            resolve();
+        };
+        channel.port2.postMessage(null);
+    });
+}
+
+function abortError() {
+    const err = new Error('FFT run superseded');
+    err.name = 'AbortError';
+    return err;
 }

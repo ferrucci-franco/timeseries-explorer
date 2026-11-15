@@ -583,32 +583,65 @@ proto._timeDisplayValue = function(fileId, rawTime) {
 };
 
 proto._timeDisplayValueForVar = function(fileId, rawTime, timeVar = null) {
+    return this._timeDisplayMapperForVar(fileId, timeVar)(rawTime);
+};
+
+// _timeDisplayValueForVar as a function of the raw time alone, with every
+// decision about the file's axis taken once. A loop over millions of rows read
+// from a lazy file (_transformFetchedPhaseTrajectory) asked those questions
+// again for each row, and the asking cost more than the arithmetic: about half
+// a microsecond a row, seconds of main thread for a large lazy FFT (#174). The
+// arithmetic is the same expressions in the same order, so a row maps to the
+// same number either way.
+proto._timeDisplayMapperForVar = function(fileId, timeVar = null) {
     if (this._isGeneratedIndexTime(fileId, timeVar)) {
-        return this._generatedIndexDisplayTime(fileId, rawTime, timeVar);
+        return this._generatedIndexDisplayMapper(fileId, timeVar);
     }
     if (this._isNumericCalendarAxis(fileId, timeVar)) {
         // Value-preserving promotion: the raw value is seconds from the origin.
-        return this._timeOriginMsForVar(fileId, timeVar) + Number(rawTime) * 1000;
+        const originMs = this._timeOriginMsForVar(fileId, timeVar);
+        return rawTime => originMs + Number(rawTime) * 1000;
     }
     if (this._isElapsedTimeForVar(fileId, timeVar)) {
         const originMs = this._timeOriginMsForVar(fileId, timeVar);
-        return (rawTime - originMs) / 1000;
+        return rawTime => (rawTime - originMs) / 1000;
     }
-    return rawTime;
+    return rawTime => rawTime;
 };
 
 proto._generatedIndexDisplayTime = function(fileId, rowIndex, timeVar = null) {
-    const row = Number(rowIndex);
-    if (!Number.isFinite(row)) return NaN;
+    return this._generatedIndexDisplayMapper(fileId, timeVar)(rowIndex);
+};
+
+// _generatedIndexDisplayTime with its decisions taken once (see
+// _timeDisplayMapperForVar).
+proto._generatedIndexDisplayMapper = function(fileId, timeVar = null) {
     const mode = this._indexTimeStepMode(fileId);
     if (mode !== 'index' && this._isGeneratedCalendarTime(fileId, timeVar)) {
+        const step = this._indexTimeStepSeconds(fileId);
         if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) {
-            return row * this._indexTimeStepSeconds(fileId);
+            return (rowIndex) => {
+                const row = Number(rowIndex);
+                return Number.isFinite(row) ? row * step : NaN;
+            };
         }
         const originMs = this._timeOriginMsForVar(fileId, timeVar);
-        return originMs + row * this._indexTimeStepSeconds(fileId) * 1000;
+        return (rowIndex) => {
+            const row = Number(rowIndex);
+            return Number.isFinite(row) ? originMs + row * step * 1000 : NaN;
+        };
     }
-    return mode === 'index' ? row : row * this._indexTimeStepSeconds(fileId);
+    if (mode === 'index') {
+        return (rowIndex) => {
+            const row = Number(rowIndex);
+            return Number.isFinite(row) ? row : NaN;
+        };
+    }
+    const step = this._indexTimeStepSeconds(fileId);
+    return (rowIndex) => {
+        const row = Number(rowIndex);
+        return Number.isFinite(row) ? row * step : NaN;
+    };
 };
 
 // The calendar axis of a lazy file as the panel shows it, in epoch ms, as SQL
@@ -1774,29 +1807,43 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
     const generatedCalendar = generatedFromDetectedTime && this._isGeneratedCalendarTime(fileId, timeVar);
     const highResolutionCalendar = generatedCalendar && this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
     const generatedCalendarOrigin = generatedCalendar ? this._timeOriginMsForVar(fileId, timeVar) : 0;
+    // Everything that is the same for every row is asked once, here, not per
+    // row: on a multi-million-row lazy read the per-row questions cost seconds
+    // of main thread (#174). Same expressions, same order, same numbers.
+    let displayTimeOf;
+    if (generatedFromDetectedTime) {
+        const indexMode = this._indexTimeStepMode(fileId) === 'index';
+        const step = indexMode ? NaN : this._indexTimeStepSeconds(fileId);
+        displayTimeOf = indexMode
+            ? (rn) => rn
+            : generatedCalendar
+                ? (highResolutionCalendar
+                    ? (rn) => rn * step
+                    : (rn) => generatedCalendarOrigin + rn * step * 1000)
+                : (rn) => rn * step;
+    }
+    const displayRaw = generatedFromDetectedTime ? null : this._timeDisplayMapperForVar(fileId, timeVar);
+    const gain = transform.gain;
+    for (const col of outCols) {
+        col.sign = this.isVariableSignInverted?.(fileId, col.name) ? -1 : 1;
+    }
+    const numericCols = outCols.filter(col => !col.text);
+    const textCols = outCols.filter(col => col.text);
     for (let i = 0; i < n; i++) {
-        const rn = Number(rowIndex?.[i]);
-        const raw = Number(rawTime[i]);
         const displayTime = generatedFromDetectedTime
-            ? (this._indexTimeStepMode(fileId) === 'index'
-                ? rn
-                : generatedCalendar
-                    ? (highResolutionCalendar
-                        ? rn * this._indexTimeStepSeconds(fileId)
-                        : generatedCalendarOrigin + rn * this._indexTimeStepSeconds(fileId) * 1000)
-                    : rn * this._indexTimeStepSeconds(fileId))
-            : this._timeDisplayValueForVar(fileId, raw, timeVar);
+            ? displayTimeOf(Number(rowIndex?.[i]))
+            : displayRaw(Number(rawTime[i]));
         if (!Number.isFinite(displayTime)) continue;
         if (cropped && (displayTime < lo || displayTime > hi)) continue;
         outTime[k] = displayTime + timeShift;
-        for (const col of outCols) {
-            if (col.text) {
-                col.dst[k] = col.src ? col.src[i] ?? '' : '';
-                continue;
-            }
+        for (let c = 0; c < numericCols.length; c++) {
+            const col = numericCols[c];
             const value = col.src ? Number(col.src[i]) : NaN;
-            const sign = this.isVariableSignInverted?.(fileId, col.name) ? -1 : 1;
-            col.dst[k] = Number.isFinite(value) ? value * transform.gain * sign + yOffset : value;
+            col.dst[k] = Number.isFinite(value) ? value * gain * col.sign + yOffset : value;
+        }
+        for (let c = 0; c < textCols.length; c++) {
+            const col = textCols[c];
+            col.dst[k] = col.src ? col.src[i] ?? '' : '';
         }
         k++;
     }
