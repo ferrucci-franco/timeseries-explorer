@@ -1839,36 +1839,77 @@ proto._fftSeriesForTrace = async function(trace, range, state, signal = null) {
 //    stops where it is, instead of the new read queueing behind the old one;
 //  · past the row limit it stops reading at once, rather than fetching the
 //    limit plus one row to find out.
+//
+// Which rows, as the histogram reads them (_lazyHistogramPass): "Full" is
+// every row of the file, not the span of the overview in memory, whose ends
+// are a sample's and miss the file's first and last rows; and an axis
+// generated from the row number is read whole and cut on the row's
+// transformed time, each row at its position in the file — its source range
+// cannot be told from the overview's ends.
 proto._fftLazySeries = async function(trace, range, state, signal = null) {
     const fileData = this.files.get(trace.fileId)?.data;
     const source = fileData?._duckdb?.source;
     const timeVar = this._getTimeVar(trace.fileId);
-    const sourceRange = this._sourceRangeForDisplayRange(trace.fileId, range, timeVar);
-    if (!sourceRange || !sourceRange.every(Number.isFinite)) return { ok: false, reason: 'invalidRange' };
+    const full = state?.rangeFull === true;
+    const byRow = this._isGeneratedIndexTime(trace.fileId, timeVar)
+        || this._isGeneratedFromDetectedTime(trace.fileId, timeVar);
+    const options = { signal, chunkRows: FFT_LAZY_CHUNK_ROWS };
+    if (!full && !byRow) {
+        const sourceRange = this._sourceRangeForDisplayRange(trace.fileId, range, timeVar);
+        if (!sourceRange || !sourceRange.every(Number.isFinite)) return { ok: false, reason: 'invalidRange' };
+        options.t0 = sourceRange[0];
+        options.t1 = sourceRange[1];
+    }
+    let lo = -Infinity;
+    let hi = Infinity;
+    if (!full) {
+        lo = Number(range?.[0]);
+        hi = Number(range?.[1]);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { ok: false, reason: 'invalidRange' };
+        if (lo > hi) [lo, hi] = [hi, lo];
+    }
+    // On a row-number axis the whole file is read for any selection, so only
+    // the rows in it count against the limit; elsewhere every row read does
+    // (the read is the range).
+    const cutHere = byRow && !full;
     const maxRows = this._fftMaxRawRowsForState(state);
     // getRawColumnsRange's row index: the row number for generated time (the
-    // stream's t is that number), nothing for a real time column.
+    // stream's t is that number), nothing for a real time column; on a
+    // row-number axis, the row's position in the file.
     const generated = !!fileData._duckdb.generatedTime;
     const timeParts = [];
     const valueParts = [];
     let rows = 0;
     let kept = 0;
-    const stream = source.streamColumns(fileData, [trace.varName], {
-        t0: sourceRange[0],
-        t1: sourceRange[1],
-        signal,
-        chunkRows: FFT_LAZY_CHUNK_ROWS,
-    });
-    for await (const chunk of stream) {
-        rows += chunk.x.length;
-        // Leaving the loop closes the stream, which cancels its query.
-        if (rows > maxRows) return { ok: false, reason: 'tooManyPoints' };
+    for await (const chunk of source.streamColumns(fileData, [trace.varName], options)) {
+        const n = chunk.x.length;
+        if (!cutHere) {
+            rows += n;
+            // Leaving the loop closes the stream, which cancels its query.
+            if (rows > maxRows) return { ok: false, reason: 'tooManyPoints' };
+        }
+        let rowIndex = generated ? chunk.x : null;
+        if (byRow) {
+            rowIndex = new Float64Array(n);
+            for (let i = 0; i < n; i++) rowIndex[i] = chunk.rowStart + i;
+        }
         const transformed = this._transformFetchedPhaseTrajectory(
-            trace.fileId, chunk.x, generated ? chunk.x : null, chunk.yByVar, [trace.varName],
+            trace.fileId, chunk.x, rowIndex, chunk.yByVar, [trace.varName],
         );
-        timeParts.push(transformed.time);
-        valueParts.push(transformed.valuesByVar.get(trace.varName));
-        kept += transformed.time.length;
+        let time = transformed.time;
+        let values = transformed.valuesByVar.get(trace.varName);
+        if (cutHere) {
+            // The cut selectFftRange makes on the whole series, chunk by
+            // chunk: the same rows, since a row-number axis only ascends.
+            ({ times: time, values } = selectFftRange(time, values, [lo, hi], { views: true }));
+            rows += time.length;
+            if (rows > maxRows) return { ok: false, reason: 'tooManyPoints' };
+        }
+        if (time.length) {
+            timeParts.push(time);
+            valueParts.push(values);
+            kept += time.length;
+        }
         // A batch DuckDB has already delivered resolves without a new task;
         // give the page one per chunk so a drag or a click is not held.
         await yieldToBrowser();
@@ -1881,7 +1922,8 @@ proto._fftLazySeries = async function(trace, range, state, signal = null) {
     return {
         ok: true,
         parts: { times: timeParts, values: valueParts, length: kept },
-        range,
+        // Full: every row read, nothing to cut.
+        range: full ? null : range,
         timeKind: this._fftTimeKind(trace.fileId),
     };
 };
@@ -2357,6 +2399,16 @@ proto._fftDomain = function(plot) {
         for (let i = 0; i < probe; i++) {
             const hi = Number(values[n - 1 - i]);
             if (Number.isFinite(hi)) { max = Math.max(max, hi); break; }
+        }
+        // A lazy file's overview is a sample of its rows: its ends are the
+        // file's, read from the metadata (as the histogram's domain).
+        if (this.files.get(trace.fileId)?.data?._duckdb) {
+            const extent = this._lazyTimeExtent?.(trace.fileId);
+            for (const value of extent || []) {
+                if (!Number.isFinite(value)) continue;
+                min = Math.min(min, value);
+                max = Math.max(max, value);
+            }
         }
     }
     return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;

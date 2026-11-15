@@ -17,8 +17,11 @@
 //     threshold, the same done on the main thread.
 //
 // With no transform and with every one on (crop, shift, gain, offset, sign),
-// over the whole file and a selection, on a real time column and a generated
-// one. Also: the worker's Y extent is the panel's _finiteExtent; past the row
+// with "Full" and selections, on a real time column and a generated one
+// (counted and not). "Full" reads every row of the file — not the span of the
+// overview in memory, whose ends are a sample's — and the range controls'
+// domain reaches the file's ends. On a generated axis the file is read whole
+// and only the rows of a selection count against the row limit. Also: the worker's Y extent is the panel's _finiteExtent; past the row
 // limit the read is refused, and stops; an abort ends the read at once, with
 // an AbortError, and its connection is closed; a newer run's signal aborts the
 // one it supersedes and Cancel aborts it too; and a NULL-holding column reads
@@ -48,7 +51,7 @@ function sliceBlock(startText, endText) {
 const methodNames = [
     '_fftSeriesForTrace', '_fftLazySeries', '_fftRunSignal', '_abortFftRun', '_settleFftRun',
     '_computeFftSpectrumForSeries', '_fftMaxRawRowsForState', '_fftComputationMaxNfft', '_fftLiveMaxNfft',
-    '_fftWorkerThresholdNfft', '_fftHardMaxNfft', '_fftTimeKind',
+    '_fftWorkerThresholdNfft', '_fftHardMaxNfft', '_fftTimeKind', '_fftDomain',
 ];
 const code = [
     sliceBlock('const FFT_LAZY_CHUNK_ROWS', ';\n'),
@@ -231,19 +234,27 @@ async function previousLazySeries(h, trace, range) {
     return { times: selected.times, values: selected.values, timeKind: h._fftTimeKind(trace.fileId) };
 }
 
-// The first and last time of the trace's overview, transformed: what
-// _fftDomain reads for "Full".
-function overviewSpan(h, trace) {
-    const time = h._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
-    return [Number(time[0]), Number(time[time.length - 1])];
-}
+// "Full" — the whole file — and selections, compared with the file in memory.
+const FULL = 'full';
 
 // ── The same spectrum three ways ────────────────────────────────────────────
-for (const [axisLabel, profile] of [['a real time column', null], ['a generated axis', generatedProfile]]) {
+for (const [axisLabel, profile, countRows] of [
+    ['a real time column', null, false],
+    ['a generated axis', generatedProfile, false],
+    // As the app has it once it has counted the rows (_ensureLazyRowCount).
+    ['a generated axis with its rows counted', generatedProfile, true],
+]) {
     const lazy = await loadLazy('f.csv', profile);
     assert.ok(lazy.variables.a.data.length < ROWS / 10, `${axisLabel}: what is in memory is an overview`);
     const eager = await eagerFrom(lazy);
     assert.equal(eager.variables.a.data.length, ROWS, `${axisLabel}: the in-memory copy has every row`);
+    if (countRows) {
+        assert.equal(await harness(lazy)._ensureLazyRowCount('f'), ROWS, `${axisLabel}: the rows are counted`);
+    }
+    // The overview is a sample: its ends are not the file's (the gap "Full"
+    // had, reading the overview's span).
+    const overviewTime = harness(lazy)._getTransformedTimeDataForVariable('f', 'a');
+    assert.ok(overviewTime.length < ROWS / 10, `${axisLabel}: the overview has few rows`);
     let checks = 0;
     for (const [label, transform, inverted] of [
         ['no transform', {}, []],
@@ -251,35 +262,47 @@ for (const [axisLabel, profile] of [['a real time column', null], ['a generated 
         ['crop, shift, gain, offset, sign', { gain: 2.5, yOffset: -3, timeShift: 7, ...(profile ? { cropStart: 2000, cropEnd: 280000 } : { cropStart: 20, cropEnd: 280 }) }, ['a']],
     ]) {
         const shift = transform.timeShift || 0;
-        // On a generated axis (one row per unit) "Full" is the overview's span
-        // in overview positions (the same known gap), so only selections are
-        // compared there.
+        // A generated axis counts one unit per row.
         const ranges = profile
-            ? [[2057.1234, 2211.5], [3000 + shift, 211500 + shift], [3000.5, 250000]]
-            : [null, [57.1234, 211.5], [100 + shift, 211.5 + shift]];
+            ? [FULL, [2057.1234, 2211.5], [3000 + shift, 211500 + shift], [3000.5, 250000]]
+            : [FULL, [57.1234, 211.5], [100 + shift, 211.5 + shift]];
         for (const range of ranges) {
             for (const varName of ['a', 'b']) {
                 const trace = { fileId: 'f', varName };
+                const full = range === FULL;
                 const what = `${axisLabel}, ${label}, ${varName}, range ${JSON.stringify(range)}`;
                 const lh = harness(lazy, transform, inverted);
                 const eh = harness(eager, transform, inverted);
-                // The panel's range: the selection, or what "Full" asks for,
-                // the span _fftDomain gives — on a lazy file, the ends of the
-                // overview's time (a known gap: docs/any-size-files.md).
-                const span = range || overviewSpan(lh, trace);
-                const inMemory = await eh._fftSeriesForTrace(trace, span, state);
+                const runState = full ? { ...state, rangeFull: true } : state;
+                // What the panel hands over for "Full": its domain, which on a
+                // lazy file now reaches the file's ends.
+                const span = full ? [-1e12, 1e12] : range;
+                const inMemory = await eh._fftSeriesForTrace(trace, span, runState);
                 assert.equal(inMemory.ok, true, `${what}: in memory`);
+                if (full) {
+                    const rowsInMemory = eh._getTransformedTimeDataForVariable('f', varName).length;
+                    assert.equal(inMemory.times.length, rowsInMemory, `${what}: in memory, every row`);
+                }
                 const want = spectrumOf(inMemory);
-                const previousSeries = await previousLazySeries(lh, trace, span);
-                const previous = spectrumOf(previousSeries);
-                sameSpectrum(previous, want, `${what}: the single lazy read`);
+                // On a real time column, a selection reads the rows the single
+                // read of before did: the same spectrum.
+                if (!full && !profile) {
+                    sameSpectrum(spectrumOf(await previousLazySeries(lh, trace, span)), want, `${what}: the single lazy read`);
+                }
 
                 // As the panel reads it now: chunks, into the worker.
-                const series = await lh._fftSeriesForTrace(trace, span, state, null);
+                // (Full reads the whole file whatever the span; with the axis not yet
+                // counted, a cropped generated axis may have no domain at all.)
+                const lazyDomain = full ? lh._fftDomain({ traces: [trace] }) : null;
+                const lazySpan = full ? (lazyDomain ? [lazyDomain.min, lazyDomain.max] : [0, 1]) : span;
+                const series = await lh._fftSeriesForTrace(trace, lazySpan, runState, null);
                 assert.equal(series.ok, true, `${what}: the stream`);
-                if (!range) assert.ok(series.parts.times.length > 1, `${what}: the rows came in several chunks`);
+                if (full) {
+                    assert.ok(series.parts.times.length > 1, `${what}: the rows came in several chunks`);
+                    assert.equal(series.parts.length, inMemory.times.length, `${what}: "Full" reads every row of the file (${series.parts.length})`);
+                }
                 const before = workerJobs;
-                const inWorker = await lh._computeFftSpectrumForSeries({}, series, state);
+                const inWorker = await lh._computeFftSpectrumForSeries({}, series, runState);
                 assert.equal(workerJobs, before + 1, `${what}: transformed in the worker`);
                 sameSpectrum(inWorker, want, `${what}: streamed, joined and cut in the worker`);
                 assert.deepEqual(inWorker.rawExtent, lh._finiteExtent([inWorker.rawAmplitudes]), `${what}: the worker's Y extent is the panel's`);
@@ -287,14 +310,21 @@ for (const [axisLabel, profile] of [['a real time column', null], ['a generated 
                 // Below the worker threshold, the same on the main thread.
                 const small = harness(lazy, transform, inverted);
                 small.workerThreshold = Infinity;
-                const onMain = await small._computeFftSpectrumForSeries({}, await small._fftSeriesForTrace(trace, span, state, null), state);
+                const onMain = await small._computeFftSpectrumForSeries({}, await small._fftSeriesForTrace(trace, lazySpan, runState, null), runState);
                 assert.equal(workerJobs, before + 1, `${what}: a small transform stays on the main thread`);
                 sameSpectrum(onMain, want, `${what}: streamed and joined on the main thread`);
                 checks++;
             }
         }
     }
-    console.log(`lazy fft: ${checks} spectra on ${axisLabel} identical in memory, read whole and streamed`);
+    // The domain the range controls offer reaches the file's ends too.
+    if (!profile) {
+        const domain = harness(lazy)._fftDomain({ traces: [{ fileId: 'f', varName: 'a' }] });
+        assert.deepEqual([domain.min, domain.max], [0, Number(((ROWS - 1) * 0.001).toFixed(3))], `${axisLabel}: the domain is the file's, not the overview's`);
+        assert.ok(overviewTime[0] > 0 || overviewTime[overviewTime.length - 1] < domain.max, `${axisLabel}: which the overview alone would not reach`);
+    }
+    await duck.release?.(lazy);
+    console.log(`lazy fft: ${checks} spectra on ${axisLabel} identical in memory ("Full" and selections), streamed`);
 }
 
 // ── The row limit, an abort, a newer run ────────────────────────────────────
@@ -307,6 +337,21 @@ for (const [axisLabel, profile] of [['a real time column', null], ['a generated 
     assert.deepEqual(refused, { ok: false, reason: 'tooManyPoints' }, 'past the row limit the read is refused');
     assert.equal(duck._streamConns.size, 0, 'and its stream is closed');
     h.maxRows = null;
+
+    // A row-number axis is read whole for a selection: only the rows in the
+    // selection count against the limit, and past it the read stops.
+    const generatedLazy = await loadLazy('f.csv', generatedProfile);
+    const g = harness(generatedLazy);
+    g.maxRows = 100000;
+    const selection = await g._fftSeriesForTrace(trace, [1000, 50999], state, null);
+    assert.equal(selection.ok, true, 'a selection under the limit on a row-number axis is read');
+    assert.equal(selection.parts.length, 50000, 'with exactly its rows');
+    const tooLong = await g._fftSeriesForTrace(trace, [0, 150000], state, null);
+    assert.deepEqual(tooLong, { ok: false, reason: 'tooManyPoints' }, 'and one past it is refused');
+    const wholeTooLong = await g._fftSeriesForTrace(trace, [0, 1], { ...state, rangeFull: true }, null);
+    assert.deepEqual(wholeTooLong, { ok: false, reason: 'tooManyPoints' }, 'as is "Full" past it');
+    assert.equal(duck._streamConns.size, 0, 'its streams are closed');
+    await duck.release?.(generatedLazy);
 
     // Aborted between two chunks: the read ends there, with an AbortError.
     const controller = new AbortController();

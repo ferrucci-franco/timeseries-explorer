@@ -11,7 +11,7 @@
 //
 // In Chromium, on a generated CSV opened lazily (1.2 M rows by default):
 //
-//   1. the FFT is opened, over the whole file;
+//   1. the FFT is opened, over the whole file: every row of it;
 //   2. the range is typed in: from the change to the moment the transform is
 //      handed to the worker (the whole read of ~1 M rows), no main-thread task
 //      lasts longer than MAX_BLOCK_MS;
@@ -144,6 +144,8 @@ try {
     assert.equal(opened.type, 'ready', `the FFT of the whole file comes out (${opened.status})`);
     const wholeSamples = await samplesShown();
     console.log(`lazy fft: whole file, ${wholeSamples} samples, in ${Date.now() - started} ms`);
+    // Every row of the file, not the span of the overview in memory.
+    if (generated) assert.equal(wholeSamples, ROWS, '"Full" transforms every row of the file');
     const domain = await page.evaluate(id => window.app.plotManager._fftDomain(window.app.plotManager.plots.get(id)), panelId);
     const span = domain.max - domain.min;
 

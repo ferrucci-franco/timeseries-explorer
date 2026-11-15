@@ -1413,12 +1413,11 @@ export default class DuckDbSource {
                 }
                 await this._closeStreamConnection(conn);
             };
-            // An aborted consumer is not kept waiting for DuckDB to wind the
-            // query down (it finishes the batch it is producing first); one
-            // that left on its own waits, so the connection is closed when
-            // its loop ends.
-            if (aborted) cleanup().catch(() => null);
-            else await cleanup();
+            // Awaited on an abort too, as before: whoever catches the
+            // AbortError finds the stream's connection closed (a job that then
+            // drops its sink, a test that counts the connections). It is
+            // quick: the query was interrupted when the abort came.
+            await cleanup();
         }
     }
 

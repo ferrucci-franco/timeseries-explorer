@@ -2029,7 +2029,7 @@ espectro de tres caminos — en memoria, la lectura de un bloque de antes y el
 stream con los trozos unidos en el módulo real del worker — frecuencia por
 frecuencia y amplitud por amplitud, sin transformaciones y con todas (recorte,
 desplazamiento, ganancia, offset, signo), sobre todo el archivo y una
-selección, con eje de tiempo real y generado; el tope de filas, el abort a
+selección, con eje de tiempo real y generado (sección siguiente); el tope de filas, el abort a
 mitad de lectura y antes del primer lote, la señal por corrida, y la columna
 con NULL leída como la lee el bucle de Arrow.
 `scripts/e2e-lazy-fft-responsive.mjs` (Chromium, 1,2 M filas): ninguna tarea
@@ -2038,15 +2038,31 @@ tecleado (antes: 1,3 s); arrastrar el deslizador durante la lectura la aborta
 al soltarlo, con un `AbortError`, el espectro que sale es el del rango
 arrastrado y no queda ninguna conexión de stream abierta.
 
-**Hueco conocido, encontrado aquí y no cerrado:** el rango *Full* de una FFT
-lazy es `_fftDomain`, los extremos del tiempo del **resumen** en memoria, no
-los del archivo. En el CSV de 10 M filas el resumen empieza en 1,68 s y
-termina en 9 999,228 s, así que *Full* deja fuera 2 451 de los 10 M filas
-(lee 9 997 549). En un eje generado (número de fila) es peor: el dominio está
-en posiciones del resumen. El histograma ya toma su dominio de
-`_lazyTimeExtent` ("la selección llega a los extremos del archivo"); la FFT
-debería hacer lo mismo. No se cambió aquí porque cambia el resultado de la FFT,
-y este cambio es, a propósito, bit a bit el de antes.
+#### *Full* lee todas las filas del archivo
+
+Al medir apareció otra diferencia con el modo estándar, más vieja que #174:
+*Full* era el rango `_fftDomain`, los extremos del tiempo del **resumen** en
+memoria, que es una muestra. En el CSV de 10 M filas el resumen empieza en
+1,68 s y termina en 9 999,228 s, así que *Full* dejaba fuera 2 451 filas (leía
+9 997 549 de 10 000 000). En un eje generado (número de fila) era peor: el rango
+de origen se deducía de los extremos del resumen, y una selección leía filas
+corridas.
+
+Ahora la FFT lee como el histograma (`_lazyHistogramPass`):
+
+- *Full* lee **todas las filas** del archivo, sin rango, y no corta nada;
+- en un eje generado del número de fila se lee el archivo entero, cada fila con
+  su posición en el archivo (`rowStart + i`), y la selección se corta por
+  trozos sobre el tiempo transformado, con el mismo corte que
+  `selectFftRange`; solo las filas de la selección cuentan para el tope;
+- el dominio de los controles de rango (`_fftDomain`) suma el del archivo
+  (`_lazyTimeExtent`, el mismo que usa el histograma), así que los deslizadores
+  llegan a sus extremos.
+
+Esto sí cambia el resultado de *Full* en lazy: ahora es el del modo estándar,
+bit a bit (`scripts/test-lazy-fft.mjs`, *Full* y selecciones, eje real y
+generado, contado y sin contar; `scripts/e2e-lazy-fft-responsive.mjs`
+comprueba que *Full* transforma las 1 200 000 filas).
 
 ### Regla: lo nuevo nace funcionando en lazy
 
