@@ -3041,6 +3041,36 @@
     white-space: nowrap;
 }
 
+/* An action: its icon in a fixed column, so the labels line up. */
+.timeseries-axis-menu .legend-menu-item {
+    display: grid;
+    grid-template-columns: 16px max-content;
+    column-gap: 8px;
+    align-items: center;
+}
+
+.timeseries-axis-menu .legend-menu-icon {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    color: var(--text-secondary);
+}
+
+.timeseries-axis-menu .legend-menu-icon svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+
+.timeseries-axis-menu .legend-menu-item:hover .legend-menu-icon {
+    color: var(--text-primary);
+}
+
+.timeseries-axis-menu .legend-menu-danger .legend-menu-icon,
+.timeseries-axis-menu .legend-menu-danger:hover .legend-menu-icon {
+    color: var(--danger-color);
+}
+
 .timeseries-axis-menu button:hover {
     background-color: var(--hover-bg);
 }

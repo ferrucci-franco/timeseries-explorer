@@ -112,6 +112,7 @@
     "test:touch-plot-gestures": "node scripts/test-touch-plot-gestures.mjs",
     "test:anim-pacing": "node scripts/test-anim-pacing.mjs",
     "test:legend-toggle-layout": "node scripts/test-legend-toggle-layout.mjs",
+    "test:legend-trace-menu": "node scripts/test-legend-trace-menu.mjs",
     "test:compact-layout": "node scripts/test-compact-layout.mjs",
     "test:compact-derived": "node scripts/test-compact-derived.mjs",
     "test:compact-tools": "node scripts/test-compact-tools.mjs",

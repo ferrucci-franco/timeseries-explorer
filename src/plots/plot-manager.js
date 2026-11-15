@@ -4,6 +4,7 @@ import { tableText } from '../utils/clipboard.js';
 import { formatReadout } from '../utils/readout-format.js';
 import Plotly, { onPlotDrawn } from '../vendor/plotly.js';
 import { installLegendToggle, resetLegendToggles, syncAllLegendToggles } from '../ui/legend-toggle.js';
+import { legendMenuIcon } from '../ui/legend-menu-icons.js';
 import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
 import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
@@ -2355,6 +2356,9 @@ class PlotManager {
         return true;
     }
 
+    // The legend's context menu, for every mode: show/hide, only this, remove,
+    // then the caller's own `extraActions` ({ labelKey, action, className?,
+    // icon? }, the icon a name from ui/legend-menu-icons.js).
     _showLegendTraceMenu(event, trace, actions, extraActions = []) {
         document.querySelector('.timeseries-axis-menu')?.remove();
         const menu = document.createElement('div');
@@ -2364,11 +2368,21 @@ class PlotManager {
             menu.remove();
             document.removeEventListener('pointerdown', close, true);
         };
-        const addAction = (labelKey, action, className = '') => {
+        // Each action: its icon in a column of its own (so the labels line
+        // up), then its label, which stays the button's accessible name.
+        const addAction = (labelKey, action, className = '', icon = '') => {
             const actionButton = document.createElement('button');
             actionButton.type = 'button';
-            actionButton.textContent = i18n.t(labelKey);
-            if (className) actionButton.className = className;
+            actionButton.className = ['legend-menu-item', className].filter(Boolean).join(' ');
+            const iconEl = document.createElement('span');
+            iconEl.className = 'legend-menu-icon';
+            iconEl.setAttribute('aria-hidden', 'true');
+            iconEl.innerHTML = legendMenuIcon(icon);
+            if (icon) actionButton.dataset.icon = icon;
+            const labelEl = document.createElement('span');
+            labelEl.className = 'legend-menu-label';
+            labelEl.textContent = i18n.t(labelKey);
+            actionButton.append(iconEl, labelEl);
             actionButton.addEventListener('click', async () => {
                 actionButton.disabled = true;
                 close();
@@ -2383,12 +2397,12 @@ class PlotManager {
         };
         const hidden = trace.visible === 'legendonly' || trace.visible === false;
         addAction(hidden ? 'legendMenuShowTrace' : 'legendMenuHideTrace', () =>
-            hidden ? actions.onShow?.() : actions.onHide?.());
+            hidden ? actions.onShow?.() : actions.onHide?.(), '', hidden ? 'show' : 'hide');
         addAction('legendMenuSelectOnlyTrace', () =>
-            actions.onOnly?.());
+            actions.onOnly?.(), '', 'only');
         addAction('legendMenuRemoveTrace', () =>
-            actions.onRemove?.());
-        for (const item of extraActions) addAction(item.labelKey, item.action, item.className || '');
+            actions.onRemove?.(), 'legend-menu-danger', 'remove');
+        for (const item of extraActions) addAction(item.labelKey, item.action, item.className || '', item.icon || '');
         document.body.appendChild(menu);
         const x = Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8);
         const y = Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8);
@@ -2409,10 +2423,12 @@ class PlotManager {
             labelKey: moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft',
             action: () => this._moveTimeseriesTraceToAxis(panelId, plot, trace, moveRight ? 'y2' : 'y'),
             className: 'timeseries-axis-menu-divider',
+            icon: moveRight ? 'axisRight' : 'axisLeft',
         }, {
             // Stairs vs straight line: helps read discrete/sampled variables.
             labelKey: stepped ? 'legendMenuLineLinear' : 'legendMenuLineStairs',
             action: () => this._setTimeseriesTraceLineShape(panelId, plot, trace, stepped ? 'linear' : 'hv'),
+            icon: stepped ? 'linear' : 'stairs',
         }]);
     }
 
