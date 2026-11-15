@@ -2038,6 +2038,10 @@ tecleado (antes: 1,3 s); arrastrar el deslizador durante la lectura la aborta
 al soltarlo, con un `AbortError`, el espectro que sale es el del rango
 arrastrado y no queda ninguna conexión de stream abierta.
 
+La misma medición para todos los demás análisis, en lazy y en memoria, antes
+de arreglarlos: `docs/analysis-responsiveness.md` (el arnés es
+`scripts/bench-analysis-responsiveness.mjs`).
+
 #### *Full* lee todas las filas del archivo
 
 Al medir apareció otra diferencia con el modo estándar, más vieja que #174:
