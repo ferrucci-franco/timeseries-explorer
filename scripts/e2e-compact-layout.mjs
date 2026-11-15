@@ -38,6 +38,53 @@ const sidewaysProblems = page => page.evaluate(() => {
     return problems.slice(0, 12);
 });
 
+// The plot's corner buttons are drawn above the cursor and hover lines (#370).
+// Each line is laid through the middle of each button in turn, and asked what
+// is on top there. Both overlays let the pointer through, which is also what
+// elementFromPoint skips, so for the question they are made to take it.
+const linesUnderCornerButtons = (page, panelId) => page.evaluate(async (id) => {
+    const pm = window.app.plotManager;
+    const plot = pm.plots.get(id);
+    const div = plot.div;
+    const r = div.getBoundingClientRect();
+    const xa = div._fullLayout.xaxis;
+    const saved = { a: plot.cursors.a, b: plot.cursors.b };
+    const probe = document.createElement('style');
+    probe.textContent = '.cursor-plot-overlay, .cursor-plot-overlay *, .hover-plot-overlay, .hover-plot-overlay * { pointer-events: auto !important; }';
+    document.head.appendChild(probe);
+    const name = el => (el ? `${el.tagName}.${el.className?.baseVal ?? el.className}` : 'nothing');
+    const buttons = [...div.querySelectorAll('.compact-fit-group:not([hidden]) .compact-fit-btn:not([hidden]), .legend-toggle-btn, .analysis-fit-group:not([hidden]) button')]
+        .filter(btn => btn.getBoundingClientRect().width > 0);
+    const wrong = [];
+    try {
+        for (const btn of buttons) {
+            const b = btn.getBoundingClientRect();
+            const x = b.left + b.width / 2;
+            const y = b.top + b.height / 2;
+            const value = xa.p2l(x - r.left - xa._offset);
+            const label = btn.dataset.axis || btn.className;
+            plot.cursors.a = value;
+            plot.cursors.b = value;
+            pm._renderCursorOverlay(plot, { force: true });
+            const overCursor = document.elementFromPoint(x, y);
+            if (!btn.contains(overCursor)) wrong.push(`${label}: a cursor line (${name(overCursor)})`);
+            const cursorOverlay = div.querySelector('.cursor-plot-overlay');
+            cursorOverlay.style.visibility = 'hidden';
+            pm._renderHoverOverlay(plot, value);
+            const overHover = document.elementFromPoint(x, y);
+            if (!btn.contains(overHover)) wrong.push(`${label}: the hover line (${name(overHover)})`);
+            pm._hideHoverOverlay(plot);
+            cursorOverlay.style.visibility = '';
+        }
+    } finally {
+        probe.remove();
+        plot.cursors.a = saved.a;
+        plot.cursors.b = saved.b;
+        pm._renderCursorOverlay(plot, { force: true });
+    }
+    return { count: buttons.length, wrong };
+}, panelId);
+
 const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
 await server.listen();
 const baseUrl = `http://127.0.0.1:${server.httpServer.address().port}/`;
@@ -545,6 +592,15 @@ try {
     assert.match(await page.locator('.compact-cursor-values').innerText(), /ΔX=.*\n?.*ΔY=/s, 'the sheet reads the cursors');
     assert.match(cursors.chip, /ΔX=.*ΔY=/, 'and the app bar has Δx and Δy');
     await shot(page, 'cursors');
+
+    // A line through the corner buttons passes under them: A|B, the one that
+    // turns the cursors off, was crossed by A's line (#370).
+    {
+        const under = await linesUnderCornerButtons(page, await page.evaluate(() => window.app._compactActivePanelId()));
+        assert.ok(under.count >= 5, `the legend, A|B, fit X, fit Y and fit all are checked (${under.count})`);
+        assert.deepEqual(under.wrong, [], 'no cursor or hover line is drawn over a corner button');
+        cursors = await cursorState();
+    }
 
     // A finger on A's tab drags A, and only A; the plot does not pan.
     await dragTab(cursors.handles.find(h => h.which === 'a'), cursors.rect, 60);
@@ -1661,6 +1717,23 @@ try {
     await dpage.waitForFunction(() => !document.documentElement.classList.contains('compact'));
     assert.equal(await dpage.locator('.top-bar').isVisible(), true, 'Automatic brings the desktop layout back');
     assert.equal(await dpage.locator('#sidebar').isVisible(), true, 'with its sidebar where it was');
+
+    // The desktop's corner button, the legend's, is above the lines too (#370).
+    {
+        await dpage.setInputFiles('#file-input', [makeCsv()]);
+        await dpage.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+        const panelId = await dpage.evaluate(() => document.querySelector('.layout-panel').dataset.id);
+        await dpage.evaluate((id) => {
+            const panelEl = document.querySelector(`.layout-panel[data-id="${id}"]`);
+            window.app.plotManager.addTrace(id, 'voltage', panelEl);
+        }, panelId);
+        await dpage.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?._fullLayout?.xaxis?._length > 0, panelId);
+        await dpage.evaluate(id => window.app.plotManager._toggleCursors(id), panelId);
+        await dpage.waitForTimeout(400);
+        const under = await linesUnderCornerButtons(dpage, panelId);
+        assert.ok(under.count >= 1, 'the legend’s button is checked on the desktop');
+        assert.deepEqual(under.wrong, [], 'no cursor or hover line is drawn over it');
+    }
     assert.deepEqual(derrors, [], 'no page errors on the desktop');
     await desktop.close();
 

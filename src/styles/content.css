@@ -3373,7 +3373,8 @@ body.cursor-box-dragging {
 
 .legend-toggle-btn {
     position: absolute;
-    z-index: 5;
+    /* Above the hover and cursor lines (see .cursor-plot-overlay). */
+    z-index: 7;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3487,7 +3488,8 @@ body.cursor-box-dragging {
     position: absolute;
     top: 6px;
     right: 8px;
-    z-index: 5;
+    /* Above the hover and cursor lines (see .cursor-plot-overlay). */
+    z-index: 7;
     display: flex;
     gap: 4px;
     pointer-events: none;
@@ -4310,6 +4312,17 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     }
 }
 
+/* What is drawn over a plot, from the bottom up (#370):
+ *   5  the hover line and its dots (.hover-plot-overlay)
+ *   6  the measurement cursors: lines, dots, the A-B line, the phone's tabs
+ *   7  the plot's corner buttons: the legend's button (.legend-toggle-btn),
+ *      the analysis pane's fit buttons (.analysis-fit-group) and the phone's
+ *      legend, A|B, fit X, fit Y and fit-all group (.compact-fit-group)
+ *   8  the pills (.lazy-detail-indicator, the computing pill)
+ * A line runs the full height of the plotting area, and the buttons sit in
+ * its corner: drawn above them, a cursor line crossed the button that turns
+ * the cursors off. Both overlays let the pointer through, so the order is
+ * only what is seen; a press on a button was always the button's. */
 .cursor-plot-overlay {
     position: absolute;
     inset: 0;

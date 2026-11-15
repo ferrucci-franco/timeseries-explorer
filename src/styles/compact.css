@@ -1526,7 +1526,9 @@ html.compact .plots-area .js-plotly-plot {
 
 html.compact .plots-area .compact-fit-group {
     position: absolute;
-    z-index: 5;
+    /* Above the hover and cursor lines and the cursors' tabs: the order is
+       written out above .cursor-plot-overlay in content.css (#370). */
+    z-index: 7;
     display: flex;
     gap: 6px;
     pointer-events: none;

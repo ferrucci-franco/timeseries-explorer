@@ -593,6 +593,9 @@ measurements. Only how they are reached and read changes.
   each other: B's goes one row up. A tab does not cover the dot that reads its
   curve: where the curve runs along the bottom (a spectrum's floor) the tab sits
   just above the dot.
+- **Under the corner buttons**: the lines, their dots, their tabs and the A–B
+  line pass under the plot's corner buttons (the legend's, A|B, Fit), as the hover
+  line does: a button is never crossed by the line it would turn off (#370).
 - **Out of view**: a cursor past an edge leaves its tab at that edge (‹A, B›).
   Dragging it brings the cursor to the finger.
 - **Both together**: a tab (or line) held still for 0.45 s, then dragged, moves A
