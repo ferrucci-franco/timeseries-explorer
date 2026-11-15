@@ -71,7 +71,9 @@ for (const [id, [file, pattern]] of Object.entries(showsPill)) {
 
 // ── The queries carry the signal ──
 const queries = {
-    'src/plots/methods/fft-methods.js': /_fftSeriesForTrace\(trace, range, state, this\._analysisSignal\(plot\)\)/,
+    // Each FFT run reads with a signal of its own, tied to the panel's: Cancel
+    // aborts it, and so does the run that supersedes it (#174).
+    'src/plots/methods/fft-methods.js': /^(?=[\s\S]*proto\._fftRunSignal = function\(plot\) \{[^}]*?this\._analysisSignal\(plot\);)(?=[\s\S]*const runSignal = this\._fftRunSignal\(plot\);)(?=[\s\S]*_fftSeriesForTrace\(trace, range, state, runSignal\))/,
     'src/plots/methods/heatmap-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getCalendarHeatmapAggregates\([\s\S]*?signal,\n/,
     'src/plots/methods/temporal-profile-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getTemporalProfileAggregates\([\s\S]*?signal,\n/,
     'src/plots/methods/integral-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getDefiniteIntegralByDay\([\s\S]*?signal,\n/,

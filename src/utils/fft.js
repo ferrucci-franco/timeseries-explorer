@@ -507,17 +507,22 @@ export function computeAmplitudeSpectrum(input = {}) {
     };
 }
 
-export function selectFftRange(times, values, range) {
+// `views`: hand back views of `times` and `values` (subarray) instead of
+// copies wherever a copy would be cut. Only for arrays the caller owns — the
+// lazy FFT's own read, which a copy of tens of megabytes would only double
+// (#174). The numbers are the same either way.
+export function selectFftRange(times, values, range, { views = false } = {}) {
     const n = Math.min(times?.length || 0, values?.length || 0);
+    const cut = views ? viewLike : sliceLike;
     if (!Array.isArray(range) || range.length < 2) {
         return {
-            times: sliceLike(times, 0, n),
-            values: sliceLike(values, 0, n),
+            times: cut(times, 0, n),
+            values: cut(values, 0, n),
         };
     }
     let [lo, hi] = range.map(Number);
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-        return { times: sliceLike(times, 0, n), values: sliceLike(values, 0, n) };
+        return { times: cut(times, 0, n), values: cut(values, 0, n) };
     }
     if (lo > hi) [lo, hi] = [hi, lo];
     // Time axes are normalized to ascending order by the import pipeline.
@@ -541,8 +546,8 @@ export function selectFftRange(times, values, range) {
         }
         const end = left;
         return {
-            times: sliceLike(times, start, end),
-            values: sliceLike(values, start, end),
+            times: cut(times, start, end),
+            values: cut(values, start, end),
         };
     }
     const outTimes = [];
@@ -558,6 +563,49 @@ export function selectFftRange(times, values, range) {
         times: Float64Array.from(outTimes),
         values: Float64Array.from(outValues),
     };
+}
+
+// The chunks of a read, end to end, in one Float64Array.
+export function joinFloat64(parts, length) {
+    if (parts.length === 1 && parts[0].length === length) return parts[0];
+    const out = new Float64Array(length);
+    let at = 0;
+    for (const part of parts) {
+        out.set(part, at);
+        at += part.length;
+    }
+    return out;
+}
+
+// The FFT's series from the chunks a lazy read delivered (fft-methods.js,
+// _fftLazySeries): the chunks joined, then the range cut out of them as
+// selectFftRange cuts it — as views, the arrays being the read's own. The
+// worker runs this (fft-worker.js), so a large read is never joined on the
+// main thread; a small one is joined there, by the same code.
+export function selectFftRangeFromParts(parts, range) {
+    const length = Number(parts?.length) || 0;
+    return selectFftRange(
+        joinFloat64(parts?.times || [], length),
+        joinFloat64(parts?.values || [], length),
+        range,
+        { views: true },
+    );
+}
+
+// The smallest and largest finite values of an array, in the order they come,
+// or null if it has none: PlotManager._finiteExtent of one array, as a
+// function a worker can run (fft-worker.js).
+export function finiteExtent(values) {
+    let min = Infinity;
+    let max = -Infinity;
+    const n = values?.length || 0;
+    for (let i = 0; i < n; i++) {
+        const value = values[i];
+        if (!Number.isFinite(value)) continue;
+        if (value < min) min = value;
+        if (value > max) max = value;
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
 }
 
 export function estimateFftDurationMs(sampleCount, zeroPaddingFactor = 1) {
@@ -655,4 +703,9 @@ function sliceLike(values, start, end) {
     if (!values) return [];
     if (typeof values.slice === 'function') return values.slice(start, end);
     return Array.from(values).slice(start, end);
+}
+
+function viewLike(values, start, end) {
+    if (values && typeof values.subarray === 'function') return values.subarray(start, end);
+    return sliceLike(values, start, end);
 }
