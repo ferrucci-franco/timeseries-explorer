@@ -258,7 +258,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         }
         plot._analysisAbort?.abort();
         plot._analysisAbort = null;
-        for (const slot of ['_fftRunAbort', '_calendarHeatmapRunAbort', '_temporalProfileRunAbort', '_correlationRunAbort']) {
+        for (const slot of ['_fftRunAbort', '_calendarHeatmapRunAbort', '_temporalProfileRunAbort', '_correlationRunAbort', '_integralRunAbort']) {
             this._abortAnalysisRun(plot, slot);
         }
         plot._histAbort?.abort();

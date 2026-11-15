@@ -28,8 +28,8 @@
 // detectSamplingGaps, so the two features never disagree about what is missing.
 
 import { asFloat64, INTEGRAL_METHODS, normalizeTimeContext } from './shared.js';
-import { detectGapIndices, detectSamplingGaps, GAP_THRESHOLD_FACTOR } from '../../utils/sampling-gaps.js';
-import { bridgeNonFinite } from './integral.js';
+import { GAP_THRESHOLD_FACTOR } from '../../utils/sampling-gaps.js';
+import { createStepMedian, STEP_COLLECT_LIMIT } from '../../utils/step-median.js';
 
 export const MS_PER_DAY = 86400000;
 
@@ -156,65 +156,6 @@ export function calendarPeriodWindows(startMs, endMs, period, options = {}) {
     return { ok: true, windows };
 }
 
-/**
- * Split per-UTC-day integral partials into calendar groups.
- *
- * The lazy path receives one partial per day, and every grouping period is a
- * whole number of UTC days, so grouping is a partition of those partials — no
- * second query, and byte-for-byte the same arithmetic the ungrouped total runs.
- *
- * @returns {Map<number, object[]>} period start (epoch ms) → its day entries
- */
-export function groupDailyIntegralEntries(days = [], period) {
-    const byPeriod = new Map();
-    for (const entry of days) {
-        const dayIndex = Number(entry?.day);
-        if (!Number.isFinite(dayIndex)) continue;
-        const key = utcPeriodStart(utcDayStart(dayIndex), period);
-        if (!Number.isFinite(key)) continue;
-        if (!byPeriod.has(key)) byPeriod.set(key, []);
-        byPeriod.get(key).push(entry);
-    }
-    return byPeriod;
-}
-
-/**
- * One reduced integral per calendar window, from per-UTC-day partials.
- *
- * The lazy counterpart of integrating each window separately, and the place the
- * one asymmetry lives: `extendLastSample` means "each sample lasts until the
- * next one", and only the LAST sample of the record has no next one. Applied in
- * every period it would invent a step of area per period out of samples that do
- * have a successor — and the groups would then over-count the total.
- *
- * @param {object[]} days  per-day partials, as getDefiniteIntegralByDay returns
- * @param {Array<{periodStartMs:number, periodEndMs:number, startMs:number, endMs:number}>} windows
- * @returns {Array<{startMs:number, endMs:number, result:object}>}
- */
-export function reduceDailyIntegralByPeriod(days = [], windows = [], period, params = {}) {
-    const byPeriod = groupDailyIntegralEntries(days, period);
-    let lastSampledDay = null;
-    for (const entry of days) {
-        const dayIndex = Number(entry?.day);
-        if (!Number.isFinite(dayIndex) || !((entry.sampleCount || 0) > 0)) continue;
-        if (lastSampledDay == null || dayIndex > lastSampledDay) lastSampledDay = dayIndex;
-    }
-    const tailPeriod = lastSampledDay == null ? null : utcPeriodStart(utcDayStart(lastSampledDay), period);
-    return windows.map(periodWindow => ({
-        startMs: periodWindow.periodStartMs,
-        endMs: periodWindow.periodEndMs,
-        result: reduceDailyIntegral(byPeriod.get(periodWindow.periodStartMs) || [], {
-            ...params,
-            rangeStart: periodWindow.startMs,
-            rangeEnd: periodWindow.endMs,
-            extendLastSample: params.extendLastSample === true && periodWindow.periodStartMs === tailPeriod,
-            // The window ends where the calendar says, never one step later:
-            // the ungrouped pass already widened the range it needed to widen.
-            explicitRangeEnd: true,
-        }),
-    }));
-}
-
 // Cut [a, b] at every UTC midnight it crosses. Only called when day exclusion
 // is actually in play — splitting otherwise would change the float summation
 // order for no reason.
@@ -233,23 +174,44 @@ function splitAtDayBoundaries(a, b) {
     return pieces;
 }
 
-// Shared reading of the inputs. `times` is null for an index axis, where the
-// abscissa is the row number and nothing calendar-shaped can be asserted.
-function readContext(sourceValues, time, params) {
-    const values = asFloat64(sourceValues);
-    const ctx = normalizeTimeContext(time);
-    const useTimes = !!(ctx.values && ctx.kind !== 'index');
-    const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
-    return {
-        values,
-        ctx,
-        useTimes,
-        at: useTimes ? (i => ctx.values[i]) : (i => i),
-        isDatetime: ctx.kind === 'datetime',
-        rectangular: method === 'rectangular',
-        method,
-    };
-}
+// ─── The kernel, as passes over the rows ──────────────────────────────────
+//
+// The definite integral is written as a sequence of PASSES over the rows, in
+// file order, so that the same code integrates arrays in memory and a file in
+// memory-saving (lazy) mode that is read as a stream and never held whole
+// (src/plots/methods/integral-lazy-methods.js). A pass is an object with
+// `chunk(t, v)`: the rows' abscissae and values, aligned, in as many pieces as
+// the caller likes. Every running quantity carries on from one chunk to the
+// next — the previous row, the open hole, the sums — so feeding a pass the
+// whole arrays at once or a stream of pieces gives the same doubles, in the
+// same order of summation. computeDefiniteIntegral feeds them the arrays.
+//
+// The passes, by `stage` (the order a driver runs them in):
+//
+//   scan   the row count, the first and last abscissa (the data extent), the
+//          time axis' order and its positive steps (for the gap scan), and the
+//          long runs of non-finite values (for 'interpolate');
+//   steps  only when the median step is not settled by the scan: further
+//          passes over the steps (src/utils/step-median.js). Never on an array
+//          in memory, where every step is kept, as detectSamplingGaps does;
+//   days   only on a calendar axis with a whole-day policy or the
+//          incomplete-ends trim: the UTC days holding a hole, and the first
+//          and last sample in the range;
+//   area   the quadrature itself, with the counts.
+//
+// Two inputs may be given as functions, read when they are needed rather than
+// when the kernel starts, for a caller that learns them from other passes:
+//   nominalStep   read after the scan (a calendar group's window inherits the
+//                 whole range's step, known once that range's scan is done);
+//   excludedDays  read before the area pass ('discard-day-all' needs every
+//                 signal's hole days, known once their days passes are done).
+
+export const INTEGRAL_PASS_STAGES = Object.freeze(['scan', 'steps', 'days', 'area']);
+
+// A run of non-finite values longer than this is noted by the scan, so the
+// area pass can bridge it ('interpolate') as it goes; a shorter one is held
+// until its end is read. So no pass ever holds more than this many rows.
+const BRIDGE_HOLD_ROWS = 4096;
 
 // `null` means "no bound given, use the data extent" — and it has to be tested
 // for explicitly, because Number(null) is 0, a perfectly finite number that
@@ -263,303 +225,97 @@ function boundOrNull(value) {
 // `explicitEnd` matters for `extendLastSample`: read as periods, the DOMAIN runs
 // one step past the last sample, so the implied end has to move with it. A range
 // the user actually typed or dragged is never widened — it means what it says.
-function resolveRange(at, n, params) {
+function resolveRange(firstT, lastT, params) {
     const startBound = boundOrNull(params.rangeStart);
     const endBound = boundOrNull(params.rangeEnd);
-    const start = startBound === null ? at(0) : startBound;
-    const end = endBound === null ? at(n - 1) : endBound;
+    const start = startBound === null ? firstT : startBound;
+    const end = endBound === null ? lastT : endBound;
     if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
     const range = start <= end ? [start, end] : [end, start];
     range.explicitEnd = endBound !== null;
     return range;
 }
 
-function scanGaps(ctx, useTimes, params) {
-    if (params.detectGaps === false || !useTimes) {
-        return { hasNominalStep: false, medianDt: null, gapEnds: null };
-    }
-    // A WINDOW of a longer series inherits the series' nominal step instead of
-    // trying to establish one from its own handful of rows. A single day of an
-    // hourly record has too few steps to pass the agreement gate, and a window
-    // that decided for itself would read its own missing rows differently from
-    // the ungrouped total — so the parts would stop adding up to the whole.
-    const injected = Number(params.nominalStep);
-    if (Number.isFinite(injected) && injected > 0) {
-        const gaps = detectGapIndices(ctx.values, injected, GAP_THRESHOLD_FACTOR);
-        return {
-            hasNominalStep: gaps.monotonic,
-            medianDt: injected,
-            gapEnds: gaps.count ? new Set(Array.from(gaps.ends)) : null,
-        };
-    }
-    const info = detectSamplingGaps(ctx.values);
-    return {
-        hasNominalStep: info.hasNominalStep,
-        medianDt: Number.isFinite(info.medianDt) ? info.medianDt : null,
-        gapEnds: info.gaps.length ? new Set(info.gaps.map(gap => gap.index + 1)) : null,
-    };
-}
-
-// A segment is a hole when the source has no usable value for it, or when the
-// detector says rows are missing across it. Read from the SOURCE, never from
-// the bridged copy: whether the file has data is a property of the file, not of
-// the policy chosen about it.
-function segmentIsHole(values, i, rectangular, gapEnds) {
-    const y0 = values[i - 1];
-    const y1 = values[i];
-    const usable = rectangular
-        ? Number.isFinite(y0)
-        : (Number.isFinite(y0) && Number.isFinite(y1));
-    const missingRow = gapEnds !== null && gapEnds.has(i);
-    return { usable, missingRow, hole: !usable || missingRow };
+function positiveStepOrNull(value) {
+    const step = Number(value);
+    return Number.isFinite(step) && step > 0 ? step : null;
 }
 
 /**
- * Fold per-UTC-day partial sums into the same result a whole-array run would
- * have produced. This is what lets a lazy (DuckDB-backed) file share the eager
- * semantics instead of re-deriving them in SQL: the query answers "area,
- * covered time and holes, per day", and every policy that operates on WHOLE
- * DAYS — discard-day-own, discard-day-all, discard-incomplete-ends — is then
- * decided here, against the same rules the eager kernel applies.
+ * The definite integral (or, with `options.daysOnly`, collectMissingDays) as a
+ * generator of passes. Yields `{ stage, chunk(t, v), end() }`; returns the
+ * result. `timeKind` is the axis kind ('datetime' | 'numeric' | 'index');
+ * `hasTimes` false means there are no abscissae (the row number is the axis).
  *
- * `days` entries: { day, areaMs, coveredMs, uncoveredMs, hasHole, sampleCount,
- * firstT, lastT }. Areas and durations arrive in raw ms; the seconds conversion
- * happens here so callers cannot forget it.
- *
- * @returns {object} the shape computeDefiniteIntegral returns
+ * options:
+ *   collectLimit  steps kept as they are by the gap scan (Infinity in memory)
+ *   stepCapacity  the steps expected, when known (one allocation)
+ *   probe         an object that receives `verdict` ({ hasNominalStep,
+ *                 medianDt }) once the gap scan is settled, and `ready` once
+ *                 nothing more will be written to it
+ *   daysOnly      stop after the days pass, returning collectMissingDays' shape
  */
-export function reduceDailyIntegral(days = [], params = {}) {
-    const toSeconds = 1 / 1000;
-    const rangeStart = Number(params.rangeStart);
-    const medianDt = Number.isFinite(params.medianDt) ? params.medianDt : null;
-    const step = Number.isFinite(medianDt) && medianDt > 0 && params.hasNominalStep ? medianDt : 0;
-    const extendLastSample = params.extendLastSample === true && step > 0;
-    const excluded = new Set();
-    if (params.excludedDays) {
-        for (const day of params.excludedDays) if (Number.isFinite(day)) excluded.add(day);
+export function* definiteIntegralPasses(params = {}, timeKind = 'numeric', hasTimes = true, options = {}) {
+    const probe = options.probe || null;
+    try {
+        return yield* integralPasses(params, timeKind, hasTimes, options, probe);
+    } finally {
+        if (probe) probe.ready = true;
     }
+}
+
+function* integralPasses(params, timeKind, hasTimes, options, probe) {
+    const kind = timeKind === 'datetime' ? 'datetime' : (timeKind === 'index' ? 'index' : 'numeric');
+    const useTimes = !!hasTimes && kind !== 'index';
+    const isDatetime = kind === 'datetime';
+    const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
+    const rectangular = method === 'rectangular';
     const policy = INTEGRAL_MISSING_POLICIES.has(params.missingPolicy) ? params.missingPolicy : 'zero';
-    const sorted = days.slice().sort((a, b) => a.day - b.day);
-
-    // The trailing period the last sample owns, added here rather than in SQL:
-    // the query already reports the last timestamp and value per day, and doing
-    // it in JS keeps eager and lazy reading from one rule instead of two.
-    const withSamples = sorted.filter(entry => (entry.sampleCount || 0) > 0);
-    const lastEntry = withSamples[withSamples.length - 1] || null;
-    let rangeEnd = Number(params.rangeEnd);
-    let tail = null;
-    if (extendLastSample && lastEntry && Number.isFinite(lastEntry.lastFiniteT)) {
-        const from = lastEntry.lastFiniteT;
-        if (!params.explicitRangeEnd && Number.isFinite(rangeEnd) && from >= rangeEnd) rangeEnd += step;
-        const to = Math.min(from + step, rangeEnd);
-        if (Number.isFinite(lastEntry.lastValue) && to > from) {
-            tail = { from, to, value: lastEntry.lastValue };
-        }
-    }
-
-    if (policy === 'discard-day-own' || policy === 'discard-day-all') {
-        for (const entry of sorted) if (entry.hasHole) excluded.add(entry.day);
-    }
-    if (params.discardIncompleteEnds) {
-        const first = withSamples[0];
-        // Same agreement the eager kernel enforces: the day gets one step of
-        // slack only when that step is actually integrated.
-        const tolerance = extendLastSample ? step : 0;
-        if (first && first.firstT > utcDayStart(first.day)) excluded.add(first.day);
-        if (lastEntry && lastEntry.lastT < utcDayStart(lastEntry.day + 1) - tolerance) excluded.add(lastEntry.day);
-    }
-
-    let area = 0;
-    let covered = 0;
-    let uncovered = 0;
-    let discarded = 0;
-    let sampleCount = 0;
-    for (const entry of sorted) {
-        sampleCount += Number(entry.sampleCount) || 0;
-        uncovered += Number(entry.uncoveredMs) || 0;
-        if (excluded.has(entry.day)) {
-            discarded += Number(entry.coveredMs) || 0;
-            continue;
-        }
-        area += Number(entry.areaMs) || 0;
-        covered += Number(entry.coveredMs) || 0;
-    }
-    if (tail) {
-        // Split at midnight like any other interval: a step that does not divide
-        // the day evenly can put the tail on both sides of it.
-        for (const [pieceStart, pieceEnd] of splitAtDayBoundaries(tail.from, tail.to)) {
-            const span = pieceEnd - pieceStart;
-            if (!(span > 0)) continue;
-            if (excluded.has(utcDayIndex(pieceStart))) discarded += span;
-            else { area += tail.value * span; covered += span; }
-        }
-    }
-
-    let dayCount = 0;
-    let discardedDays = [];
-    if (Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && rangeEnd > rangeStart) {
-        const firstDay = utcDayIndex(rangeStart);
-        const lastDay = lastDayIndex(rangeEnd);
-        dayCount = Math.max(0, lastDay - firstDay + 1);
-        discardedDays = [...excluded].filter(day => day >= firstDay && day <= lastDay).sort((a, b) => a - b);
-    }
-
-    const negativeDtCount = Number(params.negativeDtCount) || 0;
-    const reason = negativeDtCount > 0
-        ? 'unsorted'
-        : covered > 0
-            ? null
-            : (discardedDays.length ? 'allDiscarded' : 'noData');
-
-    return {
-        ok: reason === null,
-        reason,
-        value: reason === null ? area * toSeconds : null,
-        method: INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal',
-        missingPolicy: policy,
-        extendLastSample,
-        timeKind: 'datetime',
-        rangeStart: Number.isFinite(rangeStart) ? rangeStart : null,
-        rangeEnd: Number.isFinite(rangeEnd) ? rangeEnd : null,
-        spanTime: Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) ? (rangeEnd - rangeStart) * toSeconds : 0,
-        coveredTime: covered * toSeconds,
-        uncoveredTime: uncovered * toSeconds,
-        discardedTime: discarded * toSeconds,
-        sampleCount,
-        gapCount: Number(params.gapCount) || 0,
-        nanSegmentCount: Number(params.nanSegmentCount) || 0,
-        negativeDtCount,
-        hasNominalStep: !!params.hasNominalStep,
-        medianDt: medianDt == null ? null : medianDt * toSeconds,
-        dayCount,
-        discardedDayCount: discardedDays.length,
-        discardedDays,
-        // Marks the number as coming from the file itself rather than from a
-        // downsampled overview, which is the whole point of the lazy path.
-        exact: true,
-    };
-}
-
-/**
- * UTC days (as day indexes) that hold a hole inside the range. The panel unions
- * these across signals to implement `discard-day-all`, which is the only way
- * every bar can claim the same integrated duration.
- *
- * @returns {{ days: number[], medianDt: number|null, hasNominalStep: boolean }}
- */
-export function collectMissingDays(sourceValues, time, params = {}) {
-    const { values, ctx, useTimes, at, isDatetime, rectangular } = readContext(sourceValues, time, params);
-    const n = values.length;
-    const blank = { days: [], medianDt: null, hasNominalStep: false };
-    if (n < 2 || !isDatetime) return blank;
-    const range = resolveRange(at, n, params);
-    if (!range) return blank;
-    const [rangeStart, rangeEnd] = range;
-    const { hasNominalStep, medianDt, gapEnds } = scanGaps(ctx, useTimes, params);
-
-    const days = new Set();
-    for (let i = 1; i < n; i++) {
-        const ta = at(i - 1);
-        const tb = at(i);
-        if (!Number.isFinite(ta) || !Number.isFinite(tb) || !(tb > ta)) continue;
-        const from = Math.max(ta, rangeStart);
-        const to = Math.min(tb, rangeEnd);
-        if (!(to > from)) continue;
-        if (!segmentIsHole(values, i, rectangular, gapEnds).hole) continue;
-        for (let day = utcDayIndex(from); day <= lastDayIndex(to); day++) days.add(day);
-    }
-    return { days: [...days].sort((a, b) => a - b), medianDt, hasNominalStep };
-}
-
-// The first and last UTC day of the range, when the data does not cover them
-// end to end.
-//
-// The slack allowed at the end is exactly one nominal step, but ONLY when the
-// last sample is taken to own that step (`extendLastSample`). The two settings
-// have to agree or the panel contradicts itself: hourly samples at 00:00…23:00
-// either cover the day — in which case the integral must run to midnight too —
-// or they do not, in which case the day is not complete and goes. Reporting
-// "32 days integrated" over 31 days and 23 hours is the one thing neither
-// reading permits.
-function incompleteEndDays(at, n, rangeStart, rangeEnd, medianDt, extendLastSample) {
-    let firstT = null;
-    let lastT = null;
-    for (let i = 0; i < n; i++) {
-        const t = at(i);
-        if (!Number.isFinite(t) || t < rangeStart || t > rangeEnd) continue;
-        if (firstT === null) firstT = t;
-        lastT = t;
-    }
-    if (firstT === null) return [];
-    const step = Number.isFinite(medianDt) && medianDt > 0 ? medianDt : 0;
-    const tolerance = extendLastSample ? step : 0;
-    const out = [];
-    const firstDay = utcDayIndex(firstT);
-    if (firstT > utcDayStart(firstDay)) out.push(firstDay);
-    const lastDay = utcDayIndex(lastT);
-    if (lastT < utcDayStart(lastDay + 1) - tolerance && !out.includes(lastDay)) out.push(lastDay);
-    return out;
-}
-
-/**
- * The trailing interval the last sample owns, when the data is read as periods
- * rather than as points.
- *
- * A trapezoid needs a sample on both sides, so a series ending at 23:45 leaves
- * the last 15 minutes of the day uncovered — the total is short by one step and
- * the reported duration says so. That is right for a sampled signal and wrong
- * for a PyPSA-style snapshot, where each timestamp REPRESENTS the step that
- * follows it and a whole day of quarter-hours is 24 h by construction.
- *
- * Only a series with a nominal step can be extended: without one there is no
- * defensible length to give the last period, and inventing the median of a
- * spread of unrelated distances would be a guess dressed as data.
- *
- * @returns {{ from: number, to: number, value: number }|null} in raw time units
- */
-function trailingPeriod(values, at, n, rangeEnd, medianDt, hasNominalStep) {
-    if (!hasNominalStep || !(medianDt > 0)) return null;
-    for (let i = n - 1; i >= 0; i--) {
-        const t = at(i);
-        const value = values[i];
-        if (!Number.isFinite(t) || !Number.isFinite(value)) continue;
-        if (t >= rangeEnd) return null;
-        return { from: t, to: Math.min(t + medianDt, rangeEnd), value };
-    }
-    return null;
-}
-
-/**
- * Definite integral over [rangeStart, rangeEnd].
- *
- * params:
- *   method                 'trapezoidal' | 'rectangular' (left) — as Data Tools
- *   missingPolicy          see INTEGRAL_MISSING_POLICIES; defaults to 'zero'
- *   rangeStart, rangeEnd   raw abscissa units (epoch ms on a calendar axis);
- *                          null/absent means the data extent
- *   discardIncompleteEnds  drop the first/last UTC day when not fully covered
- *   extendLastSample       read the samples as periods: the last one owns one
- *                          nominal step, so a whole day of quarter-hours
- *                          integrates to 24 h instead of 23 h 45 min
- *   excludedDays           extra UTC day indexes to remove (the panel's union,
- *                          for 'discard-day-all')
- *   detectGaps             false disables missing-row detection entirely
- *   nominalStep            the series' sampling step in raw abscissa units,
- *                          supplied when `values` is a WINDOW of a longer
- *                          series (calendar grouping): too short a window
- *                          cannot establish a step of its own
- *
- * The returned `value` carries the signal's unit times SECONDS on a calendar
- * axis and times the abscissa unit otherwise; `timeKind` says which, because
- * calling row numbers "seconds" would invent hours out of indexes. Every other
- * duration in the result is in those same units.
- */
-export function computeDefiniteIntegral(sourceValues, time, params = {}) {
-    const { values, ctx, useTimes, at, isDatetime, rectangular, method } =
-        readContext(sourceValues, time, params);
-    const n = values.length;
-    const policy = INTEGRAL_MISSING_POLICIES.has(params.missingPolicy) ? params.missingPolicy : 'zero';
+    const interpolate = policy === 'interpolate';
     const toSeconds = isDatetime ? 1 / 1000 : 1;
+    const daysOnly = options.daysOnly === true;
+    const detect = params.detectGaps !== false && useTimes;
+    const deferredStep = typeof params.nominalStep === 'function';
+    const givenStep = deferredStep ? null : positiveStepOrNull(params.nominalStep);
+    const collectLimit = options.collectLimit ?? STEP_COLLECT_LIMIT;
+
+    const blankDays = { days: [], medianDt: null, hasNominalStep: false };
+    if (daysOnly && !isDatetime) return blankDays;
+
+    // ── scan ──
+    let stats = detect && !deferredStep && givenStep === null
+        ? createStepMedian({ collectLimit, capacity: options.stepCapacity })
+        : null;
+    const S0 = {
+        useTimes,
+        n: 0,
+        firstT: NaN,
+        lastT: NaN,
+        prevT: NaN,
+        negativeAny: false,     // detectGapIndices' order test: any d < 0
+        negativeFinite: false,  // detectSamplingGaps': a finite d < 0
+        stats,
+        // Long non-finite runs, by first row: { end, y1, t1 } (end = n: never ends).
+        longRuns: interpolate && !daysOnly ? new Map() : null,
+        runStart: -1,
+    };
+    const scan = {
+        stage: 'scan',
+        more: false,
+        ended: false,
+        chunk(t, v) { scanRows(S0, t, v); },
+        end() {
+            if (this.ended) return;
+            this.ended = true;
+            if (S0.longRuns && S0.runStart >= 0 && S0.n - S0.runStart > BRIDGE_HOLD_ROWS) {
+                S0.longRuns.set(S0.runStart, { end: S0.n, y1: NaN, t1: NaN });
+            }
+            this.more = S0.stats ? S0.stats.endPass() : false;
+        },
+    };
+    yield scan;
+    scan.end();
+    const { n, firstT, lastT, negativeAny, negativeFinite, longRuns } = S0;
 
     const empty = {
         ok: false,
@@ -567,7 +323,7 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
         value: null,
         method,
         missingPolicy: policy,
-        timeKind: ctx.kind,
+        timeKind: kind,
         rangeStart: null,
         rangeEnd: null,
         spanTime: 0,
@@ -584,117 +340,211 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
         discardedDayCount: 0,
         discardedDays: [],
     };
-    if (n < 2) return empty;
-
-    const range = resolveRange(at, n, params);
-    if (!range) return empty;
+    if (n < 2) return daysOnly ? blankDays : empty;
+    const range = resolveRange(firstT, lastT, params);
+    if (!range) return daysOnly ? blankDays : empty;
     const [rangeStart] = range;
-    let rangeEnd = range[1];
+    const declaredEnd = range[1];
+    let rangeEnd = declaredEnd;
 
-    const { hasNominalStep, medianDt, gapEnds } = scanGaps(ctx, useTimes, params);
-    const work = policy === 'interpolate' ? bridgeNonFinite(values, ctx) : values;
+    // ── the gap verdict: detectGapIndices for a given step, detectSamplingGaps
+    //    otherwise ──
+    let hasNominalStep = false;
+    let medianDt = null;
+    let gapsActive = false;
+    let threshold = NaN;
+    if (detect) {
+        const step = deferredStep ? positiveStepOrNull(params.nominalStep()) : givenStep;
+        if (step !== null) {
+            hasNominalStep = !negativeAny;
+            medianDt = step;
+            threshold = step * GAP_THRESHOLD_FACTOR;
+            gapsActive = hasNominalStep && Number.isFinite(threshold);
+        } else if (n >= 3 && !negativeFinite) {
+            let more = scan.more;
+            if (!stats) {
+                // The step was to be inherited and is not there: measure it.
+                stats = createStepMedian({ collectLimit, capacity: options.stepCapacity });
+                const pass = stepsPass(stats, useTimes);
+                yield pass;
+                pass.end();
+                more = pass.more;
+            }
+            if (stats.count >= 2) {
+                while (more) {
+                    const pass = stepsPass(stats, useTimes);
+                    yield pass;
+                    pass.end();
+                    more = pass.more;
+                }
+                const verdict = stats.verdict();
+                const median = verdict.medianDt;
+                medianDt = Number.isFinite(median) ? median : null;
+                hasNominalStep = Number.isFinite(median) && median > 0 && verdict.agreementOk;
+                threshold = hasNominalStep ? median * GAP_THRESHOLD_FACTOR : NaN;
+                gapsActive = hasNominalStep;
+            }
+        }
+    }
+    stats = null;
+    if (probe) probe.verdict = { hasNominalStep, medianDt };
+
     const extendLastSample = params.extendLastSample === true;
     // Read as periods with no explicit end, the domain reaches one step past the
     // last sample — that is what makes a day of quarter-hours 24 h long.
-    if (extendLastSample && !range.explicitEnd && hasNominalStep && medianDt > 0) {
+    if (!daysOnly && extendLastSample && !range.explicitEnd && hasNominalStep && medianDt > 0) {
         rangeEnd += medianDt;
     }
-
+    // ── days ──
     // Days removed from the domain of integration. Only a calendar axis has
     // days; on any other axis both policies fall back to 'zero', which the
     // panel also reflects by disabling the controls.
+    const dayPolicy = policy === 'discard-day-own' || policy === 'discard-day-all';
+    const wantHoles = daysOnly || (isDatetime && dayPolicy);
+    const wantEnds = !daysOnly && isDatetime && !!params.discardIncompleteEnds;
+    const D = {
+        useTimes,
+        rectangular,
+        rangeStart,
+        rangeEnd,
+        // The range as given: a hole past the data is not in it, whatever the
+        // periods reading adds.
+        declaredEnd,
+        gapsActive,
+        threshold,
+        wantHoles,
+        wantEnds,
+        holeDays: new Set(),
+        endFirstT: null,
+        endLastT: null,
+        g: 0,
+        lastT: NaN,
+        lastV: NaN,
+    };
+    const holeDays = D.holeDays;
+    if (wantHoles || wantEnds) {
+        const days = {
+            stage: 'days',
+            chunk(t, v) { daysRows(D, t, v); },
+            end() {},
+            // What this signal holds holes on: the panel unions these across
+            // signals for 'discard-day-all'.
+            holeDays: () => [...holeDays].sort((a, b) => a - b),
+        };
+        yield days;
+    }
+    if (daysOnly) return { days: [...holeDays].sort((a, b) => a - b), medianDt, hasNominalStep };
+
     const excluded = new Set();
     if (isDatetime) {
-        if (params.excludedDays) {
-            for (const day of params.excludedDays) {
+        const extra = typeof params.excludedDays === 'function' ? params.excludedDays() : params.excludedDays;
+        if (extra) {
+            for (const day of extra) {
                 if (Number.isFinite(day)) excluded.add(day);
             }
         }
-        if (policy === 'discard-day-own' || policy === 'discard-day-all') {
-            for (const day of collectMissingDays(sourceValues, time, params).days) excluded.add(day);
-        }
-        if (params.discardIncompleteEnds) {
-            for (const day of incompleteEndDays(at, n, rangeStart, rangeEnd, medianDt, extendLastSample)) {
-                excluded.add(day);
-            }
-        }
-    }
-
-    let area = 0;
-    let covered = 0;
-    let uncovered = 0;
-    let discarded = 0;
-    let gapCount = 0;
-    let nanSegmentCount = 0;
-    let negativeDtCount = 0;
-    let sampleCount = 0;
-
-    for (let i = 0; i < n; i++) {
-        const t = at(i);
-        if (Number.isFinite(t) && t >= rangeStart && t <= rangeEnd) sampleCount++;
-    }
-
-    for (let i = 1; i < n; i++) {
-        const ta = at(i - 1);
-        const tb = at(i);
-        if (!Number.isFinite(ta) || !Number.isFinite(tb)) continue;
-        if (tb < ta) { negativeDtCount++; continue; }
-        if (tb === ta) continue;
-        const from = Math.max(ta, rangeStart);
-        const to = Math.min(tb, rangeEnd);
-        if (!(to > from)) continue;
-
-        const { usable: sourceUsable, missingRow, hole: sourceHole } =
-            segmentIsHole(values, i, rectangular, gapEnds);
-        if (missingRow) gapCount++;
-        if (!sourceUsable) nanSegmentCount++;
-        // Counted against the SOURCE, before any policy touches it: how much of
-        // the range the file has no data for is a property of the file, not of
-        // what was decided about it. So 'interpolate' still reports the hole it
-        // bridged, and the panel can say the total rests on an assumption.
-        if (sourceHole) uncovered += to - from;
-
-        const y0 = work[i - 1];
-        const y1 = work[i];
-        const workUsable = rectangular
-            ? Number.isFinite(y0)
-            : (Number.isFinite(y0) && Number.isFinite(y1));
-        // Under 'interpolate' a missing row is not a hole to skip: running the
-        // quadrature straight across it IS the linear bridge the policy
-        // promises, which is what makes an absent row agree with an empty cell.
-        const skip = !workUsable || (missingRow && policy !== 'interpolate');
-
-        const pieces = excluded.size ? splitAtDayBoundaries(from, to) : [[from, to]];
-        for (const [pieceStart, pieceEnd] of pieces) {
-            const span = pieceEnd - pieceStart;
-            if (!(span > 0)) continue;
-            if (excluded.size && excluded.has(utcDayIndex(pieceStart))) { discarded += span; continue; }
-            if (skip) continue;
-            if (rectangular) {
-                area += y0 * span;
-            } else {
-                const width = tb - ta;
-                const ya = y0 + (y1 - y0) * ((pieceStart - ta) / width);
-                const yb = y0 + (y1 - y0) * ((pieceEnd - ta) / width);
-                area += 0.5 * (ya + yb) * span;
-            }
-            covered += span;
+        if (dayPolicy) for (const day of holeDays) excluded.add(day);
+        const { endFirstT, endLastT } = D;
+        if (wantEnds && endFirstT !== null) {
+            // The first and last UTC day of the range, when the data does not
+            // cover them end to end. The slack allowed at the end is exactly
+            // one nominal step, but ONLY when the last sample is taken to own
+            // that step (`extendLastSample`). The two settings have to agree or
+            // the panel contradicts itself: hourly samples at 00:00…23:00
+            // either cover the day — in which case the integral must run to
+            // midnight too — or they do not, in which case the day is not
+            // complete and goes. Reporting "32 days integrated" over 31 days
+            // and 23 hours is the one thing neither reading permits.
+            const step = Number.isFinite(medianDt) && medianDt > 0 ? medianDt : 0;
+            const tolerance = extendLastSample ? step : 0;
+            const firstDay = utcDayIndex(endFirstT);
+            const ends = [];
+            if (endFirstT > utcDayStart(firstDay)) ends.push(firstDay);
+            const lastDay = utcDayIndex(endLastT);
+            if (endLastT < utcDayStart(lastDay + 1) - tolerance && !ends.includes(lastDay)) ends.push(lastDay);
+            for (const day of ends) excluded.add(day);
         }
     }
+
+    // ── area ──
+    const A = {
+        useTimes,
+        interpolate,
+        rectangular,
+        rangeStart,
+        rangeEnd,
+        gapsActive,
+        threshold,
+        excluded,
+        n,
+        longRuns,
+        g: 0,
+        // The row integrated last: its abscissa, source value and integrated
+        // value ('interpolate' integrates the bridged copy).
+        started: false,
+        lastT: NaN,
+        lastV: NaN,
+        lastW: NaN,
+        area: 0,
+        covered: 0,
+        uncovered: 0,
+        discarded: 0,
+        gapCount: 0,
+        nanSegmentCount: 0,
+        negativeDtCount: 0,
+        sampleCount: 0,
+        // The last row with a finite abscissa and a finite value: the one that
+        // owns the trailing period.
+        tailT: NaN,
+        tailV: NaN,
+        // 'interpolate': the open run of non-finite values, and its rows held
+        // until its far end is read.
+        run: null,
+        held: 0,
+        heldT: null,
+        heldV: null,
+        heldW: null,
+    };
+    const areaPass = {
+        stage: 'area',
+        ended: false,
+        chunk(t, v) { areaRows(A, t, v, null); },
+        end() {
+            if (this.ended) return;
+            this.ended = true;
+            // A run still open at the last row has no far end: left as it is.
+            if (A.run && !A.run.long) releaseHeld(A, NaN, NaN, false);
+            A.run = null;
+            A.heldT = A.heldV = A.heldW = null;
+        },
+    };
+    yield areaPass;
+    areaPass.end();
+    let { area, covered, discarded } = A;
+    const { uncovered, gapCount, nanSegmentCount, negativeDtCount, sampleCount, tailT, tailV } = A;
 
     // The step the last sample owns, when the data is read as periods. Held
     // constant (there is nothing to interpolate towards), clipped to the range
     // and split at midnight like every other interval, so a day that only
     // leaves it out is no longer reported as fully integrated.
-    if (extendLastSample) {
-        const tail = trailingPeriod(values, at, n, rangeEnd, medianDt, hasNominalStep);
-        if (tail && tail.to > tail.from) {
-            const pieces = excluded.size ? splitAtDayBoundaries(tail.from, tail.to) : [[tail.from, tail.to]];
+    //
+    // A trapezoid needs a sample on both sides, so a series ending at 23:45
+    // leaves the last 15 minutes of the day uncovered — the total is short by
+    // one step and the reported duration says so. That is right for a sampled
+    // signal and wrong for a PyPSA-style snapshot, where each timestamp
+    // REPRESENTS the step that follows it. Only a series with a nominal step
+    // can be extended: without one there is no defensible length to give the
+    // last period.
+    if (extendLastSample && hasNominalStep && medianDt > 0 && Number.isFinite(tailT) && tailT < rangeEnd) {
+        const from = tailT;
+        const to = Math.min(tailT + medianDt, rangeEnd);
+        if (to > from) {
+            const pieces = excluded.size ? splitAtDayBoundaries(from, to) : [[from, to]];
             for (const [pieceStart, pieceEnd] of pieces) {
                 const span = pieceEnd - pieceStart;
                 if (!(span > 0)) continue;
                 if (excluded.size && excluded.has(utcDayIndex(pieceStart))) { discarded += span; continue; }
-                area += tail.value * span;
+                area += tailV * span;
                 covered += span;
             }
         }
@@ -725,7 +575,7 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
         method,
         missingPolicy: policy,
         extendLastSample,
-        timeKind: ctx.kind,
+        timeKind: kind,
         rangeStart,
         rangeEnd,
         spanTime: (rangeEnd - rangeStart) * toSeconds,
@@ -742,4 +592,401 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
         discardedDayCount: discardedDays.length,
         discardedDays,
     };
+}
+
+// The days pass over one chunk: the UTC days a hole touches inside the range,
+// and the first and last sample in it.
+function daysRows(D, t, v) {
+    const { useTimes, rectangular, rangeStart, rangeEnd, declaredEnd, gapsActive, threshold, wantHoles, wantEnds, holeDays } = D;
+    let g = D.g;
+    let pt = D.lastT;
+    let pv = D.lastV;
+    let endFirstT = D.endFirstT;
+    let endLastT = D.endLastT;
+    const len = v.length;
+    for (let k = 0; k < len; k++, g++) {
+        const tb = useTimes ? t[k] : g;
+        const vb = v[k];
+        if (wantEnds && Number.isFinite(tb) && tb >= rangeStart && tb <= rangeEnd) {
+            if (endFirstT === null) endFirstT = tb;
+            endLastT = tb;
+        }
+        if (wantHoles && g > 0) {
+            const ta = pt;
+            if (Number.isFinite(ta) && Number.isFinite(tb) && tb > ta) {
+                const from = Math.max(ta, rangeStart);
+                const to = Math.min(tb, declaredEnd);
+                if (to > from) {
+                    const usable = rectangular
+                        ? Number.isFinite(pv)
+                        : (Number.isFinite(pv) && Number.isFinite(vb));
+                    // Rows are missing across a step above the threshold: the
+                    // detector's own subtraction.
+                    if (!usable || (gapsActive && (tb - ta) > threshold)) {
+                        for (let day = utcDayIndex(from); day <= lastDayIndex(to); day++) holeDays.add(day);
+                    }
+                }
+            }
+        }
+        pt = tb;
+        pv = vb;
+    }
+    D.g = g;
+    D.lastT = pt;
+    D.lastV = pv;
+    D.endFirstT = endFirstT;
+    D.endLastT = endLastT;
+}
+
+// The value bridgeNonFinite (integral.js) gives row k of a run of non-finite
+// values between (t0, y0) and (t1, y1): the straight line, by abscissa.
+function bridgedValue(tk, t0, y0, t1, y1) {
+    const span = t1 - t0;
+    const frac = span && Number.isFinite(tk) ? (tk - t0) / span : 0;
+    return y0 + frac * (y1 - y0);
+}
+
+// The held rows of a short run, now that its far end (t1, y1) is read — or the
+// rows ran out (`ends` false), and the run stays as it is.
+function releaseHeld(A, t1, y1, ends) {
+    const run = A.run;
+    // Bridged only with a finite row on both sides, as bridgeNonFinite does.
+    const ok = ends && run.hasPrev && Number.isFinite(run.y0) && Number.isFinite(y1)
+        && Number.isFinite(run.t0) && Number.isFinite(t1);
+    const held = A.held;
+    A.held = 0;
+    for (let j = 0; j < held; j++) {
+        A.heldW[j] = ok ? bridgedValue(A.heldT[j], run.t0, run.y0, t1, y1) : A.heldV[j];
+    }
+    areaRows(A, A.heldT.subarray(0, held), A.heldV.subarray(0, held), A.heldW);
+}
+
+// The area pass over one chunk: every interval between consecutive rows,
+// clipped to the range, split at midnight when days are excluded, integrated
+// unless it is a hole. A function of its own over a state object, with the
+// running sums in locals: the loop runs once per row of the file.
+//
+// `w`, when given, are the rows' integrated values, already bridged: the held
+// rows of a run, replayed once its far end is known (their samples were
+// counted when they were first read).
+function areaRows(A, t, v, w) {
+    const useTimes = A.useTimes;
+    const interpolate = A.interpolate && w === null;
+    const replay = w !== null;
+    const rectangular = A.rectangular;
+    const rangeStart = A.rangeStart;
+    const rangeEnd = A.rangeEnd;
+    const gapsActive = A.gapsActive;
+    const threshold = A.threshold;
+    const excluded = A.excluded;
+    const split = excluded.size > 0;
+    // Under 'interpolate' a missing row is not a hole to skip: running the
+    // quadrature straight across it IS the linear bridge the policy promises,
+    // which is what makes an absent row agree with an empty cell.
+    const skipMissingRows = !A.interpolate;
+    let g = A.g;
+    let started = A.started;
+    let lastT = A.lastT;
+    let lastV = A.lastV;
+    let lastW = A.lastW;
+    let area = A.area;
+    let covered = A.covered;
+    let uncovered = A.uncovered;
+    let discarded = A.discarded;
+    let gapCount = A.gapCount;
+    let nanSegmentCount = A.nanSegmentCount;
+    let negativeDtCount = A.negativeDtCount;
+    let sampleCount = A.sampleCount;
+    let tailT = A.tailT;
+    let tailV = A.tailV;
+    const len = v.length;
+    for (let k = 0; k < len; k++) {
+        const tb = replay ? t[k] : (useTimes ? t[k] : g);
+        const vb = v[k];
+        let wb = replay ? w[k] : vb;
+        if (!replay) {
+            g++;
+            if (Number.isFinite(tb)) {
+                if (tb >= rangeStart && tb <= rangeEnd) sampleCount++;
+                if (Number.isFinite(vb)) { tailT = tb; tailV = vb; }
+            }
+        }
+        if (interpolate) {
+            if (Number.isFinite(vb)) {
+                const run = A.run;
+                if (run !== null) {
+                    A.run = null;
+                    if (!run.long && A.held) {
+                        A.run = run;
+                        A.g = g; A.started = started; A.lastT = lastT; A.lastV = lastV; A.lastW = lastW;
+                        A.area = area; A.covered = covered; A.uncovered = uncovered; A.discarded = discarded;
+                        A.gapCount = gapCount; A.nanSegmentCount = nanSegmentCount; A.negativeDtCount = negativeDtCount;
+                        releaseHeld(A, tb, vb, true);
+                        A.run = null;
+                        started = A.started; lastT = A.lastT; lastV = A.lastV; lastW = A.lastW;
+                        area = A.area; covered = A.covered; uncovered = A.uncovered; discarded = A.discarded;
+                        gapCount = A.gapCount; nanSegmentCount = A.nanSegmentCount; negativeDtCount = A.negativeDtCount;
+                    }
+                }
+            } else {
+                // `g` has moved past this row: its index is g - 1.
+                let run = A.run;
+                if (run === null) {
+                    run = { t0: lastT, y0: lastV, hasPrev: g - 1 > 0, long: A.longRuns.get(g - 1) || null };
+                    A.run = run;
+                }
+                if (run.long !== null) {
+                    const { end, y1, t1 } = run.long;
+                    const ok = run.hasPrev && end < A.n && Number.isFinite(run.y0) && Number.isFinite(y1)
+                        && Number.isFinite(run.t0) && Number.isFinite(t1);
+                    if (ok) wb = bridgedValue(tb, run.t0, run.y0, t1, y1);
+                } else {
+                    if (A.heldT === null) {
+                        // Allocated with the first held row: a kernel per calendar
+                        // period must not each carry the buffers.
+                        A.heldT = new Float64Array(BRIDGE_HOLD_ROWS);
+                        A.heldV = new Float64Array(BRIDGE_HOLD_ROWS);
+                        A.heldW = new Float64Array(BRIDGE_HOLD_ROWS);
+                    }
+                    A.heldT[A.held] = tb;
+                    A.heldV[A.held] = vb;
+                    A.held++;
+                    continue;
+                }
+            }
+        }
+        if (started) {
+            const ta = lastT;
+            if (Number.isFinite(ta) && Number.isFinite(tb)) {
+                if (tb < ta) {
+                    negativeDtCount++;
+                } else if (tb !== ta) {
+                    const from = Math.max(ta, rangeStart);
+                    const to = Math.min(tb, rangeEnd);
+                    if (to > from) {
+                        // A segment is a hole when the source has no usable
+                        // value for it, or when the detector says rows are
+                        // missing across it (its step is above the threshold:
+                        // the detector's own subtraction). Read from the
+                        // SOURCE, never from the bridged copy: whether the file
+                        // has data is a property of the file, not of the policy
+                        // chosen about it.
+                        const ya = lastV;
+                        const sourceUsable = rectangular
+                            ? Number.isFinite(ya)
+                            : (Number.isFinite(ya) && Number.isFinite(vb));
+                        const missingRow = gapsActive && (tb - ta) > threshold;
+                        if (missingRow) gapCount++;
+                        if (!sourceUsable) nanSegmentCount++;
+                        // Counted against the SOURCE, before any policy touches
+                        // it: so 'interpolate' still reports the hole it
+                        // bridged, and the panel can say the total rests on an
+                        // assumption.
+                        if (!sourceUsable || missingRow) uncovered += to - from;
+                        const wa = lastW;
+                        const workUsable = rectangular
+                            ? Number.isFinite(wa)
+                            : (Number.isFinite(wa) && Number.isFinite(wb));
+                        const skip = !workUsable || (missingRow && skipMissingRows);
+                        if (!split) {
+                            const span = to - from;
+                            if (span > 0 && !skip) {
+                                if (rectangular) {
+                                    area += wa * span;
+                                } else {
+                                    const width = tb - ta;
+                                    const yA = wa + (wb - wa) * ((from - ta) / width);
+                                    const yB = wa + (wb - wa) * ((to - ta) / width);
+                                    area += 0.5 * (yA + yB) * span;
+                                }
+                                covered += span;
+                            }
+                        } else {
+                            for (const [pieceStart, pieceEnd] of splitAtDayBoundaries(from, to)) {
+                                const span = pieceEnd - pieceStart;
+                                if (!(span > 0)) continue;
+                                if (excluded.has(utcDayIndex(pieceStart))) { discarded += span; continue; }
+                                if (skip) continue;
+                                if (rectangular) {
+                                    area += wa * span;
+                                } else {
+                                    const width = tb - ta;
+                                    const yA = wa + (wb - wa) * ((pieceStart - ta) / width);
+                                    const yB = wa + (wb - wa) * ((pieceEnd - ta) / width);
+                                    area += 0.5 * (yA + yB) * span;
+                                }
+                                covered += span;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        started = true;
+        lastT = tb;
+        lastV = vb;
+        lastW = wb;
+    }
+    A.g = g;
+    A.started = started;
+    A.lastT = lastT;
+    A.lastV = lastV;
+    A.lastW = lastW;
+    A.area = area;
+    A.covered = covered;
+    A.uncovered = uncovered;
+    A.discarded = discarded;
+    A.gapCount = gapCount;
+    A.nanSegmentCount = nanSegmentCount;
+    A.negativeDtCount = negativeDtCount;
+    A.sampleCount = sampleCount;
+    A.tailT = tailT;
+    A.tailV = tailV;
+}
+
+// The scan pass over one chunk. A function of its own over a state object,
+// with the running values in locals: the loop runs once per row of the file.
+function scanRows(S, t, v) {
+    const useTimes = S.useTimes;
+    const stats = S.stats;
+    const longRuns = S.longRuns;
+    let g = S.n;
+    let prevT = S.prevT;
+    let negativeAny = S.negativeAny;
+    let negativeFinite = S.negativeFinite;
+    let runStart = S.runStart;
+    const len = v.length;
+    if (stats !== null && useTimes) stats.addSteps(t, len, prevT);
+    for (let k = 0; k < len; k++, g++) {
+        const tg = useTimes ? t[k] : g;
+        if (g === 0) S.firstT = tg;
+        if (useTimes && g > 0) {
+            const d = tg - prevT;
+            if (d < 0) {
+                negativeAny = true;
+                if (Number.isFinite(d)) negativeFinite = true;
+            }
+        }
+        prevT = tg;
+        if (longRuns !== null) {
+            const value = v[k];
+            if (Number.isFinite(value)) {
+                if (runStart >= 0 && g - runStart > BRIDGE_HOLD_ROWS) longRuns.set(runStart, { end: g, y1: value, t1: tg });
+                runStart = -1;
+            } else if (runStart < 0) {
+                runStart = g;
+            }
+        }
+    }
+    if (len) S.lastT = useTimes ? t[len - 1] : g - 1;
+    S.n = g;
+    S.prevT = prevT;
+    S.negativeAny = negativeAny;
+    S.negativeFinite = negativeFinite;
+    S.runStart = runStart;
+}
+
+// A pass over the positive steps only, for the median's further passes.
+function stepsPass(stats, useTimes) {
+    let prev = NaN;
+    return {
+        stage: 'steps',
+        more: false,
+        ended: false,
+        chunk(t, v) {
+            const len = v.length;
+            if (!useTimes || !len) return;
+            stats.addSteps(t, len, prev);
+            prev = t[len - 1];
+        },
+        end() {
+            if (this.ended) return;
+            this.ended = true;
+            this.more = stats.endPass();
+        },
+    };
+}
+
+// Every pass over the same arrays: the in-memory driver.
+export function runIntegralPassesOnArrays(passes, t, v) {
+    let step = passes.next();
+    while (!step.done) {
+        step.value.chunk(t, v);
+        step.value.end();
+        step = passes.next();
+    }
+    return step.value;
+}
+
+// The kernel's inputs from the in-memory call: values as doubles, and the
+// abscissae aligned with them (an absent one reads NaN, as an out-of-range
+// index did).
+function arrayInputs(sourceValues, time) {
+    const values = asFloat64(sourceValues);
+    const ctx = normalizeTimeContext(time);
+    const useTimes = !!(ctx.values && ctx.kind !== 'index');
+    let times = null;
+    if (useTimes) {
+        times = ctx.values;
+        if (times.length !== values.length) {
+            const aligned = new Float64Array(values.length).fill(NaN);
+            aligned.set(times.subarray(0, Math.min(times.length, values.length)));
+            times = aligned;
+        }
+    }
+    return { values, ctx, times, hasTimes: !!ctx.values };
+}
+
+/**
+ * UTC days (as day indexes) that hold a hole inside the range. The panel unions
+ * these across signals to implement `discard-day-all`, which is the only way
+ * every bar can claim the same integrated duration.
+ *
+ * @returns {{ days: number[], medianDt: number|null, hasNominalStep: boolean }}
+ */
+export function collectMissingDays(sourceValues, time, params = {}) {
+    const { values, ctx, times, hasTimes } = arrayInputs(sourceValues, time);
+    const passes = definiteIntegralPasses(params, ctx.kind, hasTimes, {
+        daysOnly: true,
+        collectLimit: Infinity,
+        stepCapacity: values.length,
+    });
+    return runIntegralPassesOnArrays(passes, times, values);
+}
+
+/**
+ * Definite integral over [rangeStart, rangeEnd].
+ *
+ * params:
+ *   method                 'trapezoidal' | 'rectangular' (left) — as Data Tools
+ *   missingPolicy          see INTEGRAL_MISSING_POLICIES; defaults to 'zero'
+ *   rangeStart, rangeEnd   raw abscissa units (epoch ms on a calendar axis);
+ *                          null/absent means the data extent
+ *   discardIncompleteEnds  drop the first/last UTC day when not fully covered
+ *   extendLastSample       read the samples as periods: the last one owns one
+ *                          nominal step, so a whole day of quarter-hours
+ *                          integrates to 24 h instead of 23 h 45 min
+ *   excludedDays           extra UTC day indexes to remove (the panel's union,
+ *                          for 'discard-day-all')
+ *   detectGaps             false disables missing-row detection entirely
+ *   nominalStep            the series' sampling step in raw abscissa units,
+ *                          supplied when `values` is a WINDOW of a longer
+ *                          series (calendar grouping): too short a window
+ *                          cannot establish a step of its own
+ *
+ * The returned `value` carries the signal's unit times SECONDS on a calendar
+ * axis and times the abscissa unit otherwise; `timeKind` says which, because
+ * calling row numbers "seconds" would invent hours out of indexes. Every other
+ * duration in the result is in those same units.
+ *
+ * The arrays are fed to the passes of definiteIntegralPasses whole; a lazy
+ * file streams the same passes a chunk at a time and gets the same doubles.
+ */
+export function computeDefiniteIntegral(sourceValues, time, params = {}) {
+    const { values, ctx, times, hasTimes } = arrayInputs(sourceValues, time);
+    const passes = definiteIntegralPasses(params, ctx.kind, hasTimes, {
+        collectLimit: Infinity,
+        stepCapacity: values.length,
+    });
+    return runIntegralPassesOnArrays(passes, times, values);
 }

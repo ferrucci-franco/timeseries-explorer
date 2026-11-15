@@ -48,7 +48,7 @@ const statusNotes = (fn, kindVar, pill) => new RegExp(`proto\\.${fn} = function[
 const showsPill = {
     fft: ['src/plots/methods/fft-methods.js', /proto\._setFftComputing = function\(plot, loading\) \{[\s\S]*?this\._setAnalysisComputing\(plot, loading/],
     'temporal-profile': ['src/plots/methods/temporal-profile-methods.js', /proto\._setTemporalProfileComputing = function\(plot, loading\) \{[\s\S]*?this\._setAnalysisComputing\(plot, loading/],
-    integral: ['src/plots/methods/integral-methods.js', /proto\._setIntegralComputing = function\(plot, loading\) \{[\s\S]*?this\._setAnalysisComputing\(plot, loading/],
+    integral: ['src/plots/methods/integral-methods.js', /proto\._setIntegralComputing = function\(plot, loading(, label = null)?\) \{[\s\S]*?this\._setAnalysisComputing\(plot, loading/],
     histogram: ['src/plots/methods/histogram-methods.js', statusNotes('_setHistogramStatus', 'kind', true)],
     heatmap: ['src/plots/methods/heatmap-methods.js', statusNotes('_setCalendarHeatmapStatus', 'kind', true)],
     'curve-fit': ['src/plots/methods/curve-fit-methods.js', statusNotes('_setCurveFitStatus', 'type', true)],
@@ -81,7 +81,9 @@ const queries = {
     // correlation (#384).
     'src/plots/methods/heatmap-methods.js': /const signal = this\._analysisRunSignal\(plot, '_calendarHeatmapRunAbort'\);[\s\S]*?getCalendarHeatmapAggregates\([\s\S]*?signal,\n/,
     'src/plots/methods/temporal-profile-methods.js': /const signal = this\._analysisRunSignal\(plot, '_temporalProfileRunAbort'\);[\s\S]*?getTemporalProfileAggregates\([\s\S]*?signal,\n/,
-    'src/plots/methods/integral-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getDefiniteIntegralByDay\([\s\S]*?signal,\n/,
+    // The lazy integral streams the file with a run signal of its own (#385).
+    'src/plots/methods/integral-methods.js': /const signal = this\._analysisRunSignal\(plot, '_integralRunAbort'\);[\s\S]*?_lazyIntegralResults\([\s\S]*?signal,\n/,
+    'src/plots/methods/integral-lazy-methods.js': /streamColumns\(file\.data, file\.names, options\)[\s\S]*?neighborTimes\(file\.data, a, b, \{ signal \}\)/,
     'src/plots/methods/correlation-methods.js': /const signal = this\._analysisRunSignal\(plot, '_correlationRunAbort'\);[\s\S]*?getPairCorrelations\([\s\S]*?signal \}/,
     'src/plots/methods/phase2d-fit-methods.js': /getPhaseRegressionStats\([\s\S]*?signal \}/,
     'src/plots/methods/fit-lazy-methods.js': /getRawColumnsRange\([^\n]*\{ signal \}\)/,
@@ -95,6 +97,7 @@ for (const [file, fn, slot] of [
     ['src/plots/methods/heatmap-methods.js', '_scheduleCalendarHeatmapRecompute', '_calendarHeatmapRunAbort'],
     ['src/plots/methods/temporal-profile-methods.js', '_scheduleTemporalProfileRecompute', '_temporalProfileRunAbort'],
     ['src/plots/methods/correlation-methods.js', '_scheduleCorrelationRecompute', '_correlationRunAbort'],
+    ['src/plots/methods/integral-methods.js', '_scheduleIntegralRecompute', '_integralRunAbort'],
 ]) {
     const text = read(file);
     const body = text.slice(text.indexOf(`proto.${fn} = function`), text.indexOf('const run = ', text.indexOf(`proto.${fn} = function`)));
@@ -103,10 +106,11 @@ for (const [file, fn, slot] of [
 }
 const source = read('src/data/duckdb-source.js');
 has(source, /async getRawColumnsRange\([^)]*\{ signal = null \} = \{\}\)[\s\S]*?this\._interactiveQuery\(sql, \{ signal \}\)/, 'getRawColumnsRange passes it on');
-for (const method of ['getCalendarHeatmapAggregates', 'getDefiniteIntegralByDay', 'getTemporalProfileAggregates', 'getPairCorrelations', 'getPhaseRegressionStats', 'getTrendStats']) {
+for (const method of ['getCalendarHeatmapAggregates', 'getTemporalProfileAggregates', 'getPairCorrelations', 'getPhaseRegressionStats', 'getTrendStats']) {
     has(source, new RegExp(`async ${method}\\([^)]*\\) \\{\\n[^\\n]*\\n\\s*const signal = options\\?\\.signal \\|\\| null;`), `${method} reads the signal`);
 }
 has(source, /pairExprs, active, signal\);/, 'the regression queries get it');
+has(source, /async neighborTimes\([^)]*\{ signal = null \} = \{\}\)[\s\S]*?\{ signal \}\)\);/, 'the lazy integral\'s neighbours query gets it');
 has(source, /_interactiveQuery\(sql, \{ signal: opts\?\.signal \|\| null \}\)[\s\S]*_interactiveQuery\(sql, \{ signal: opts\?\.signal \|\| null \}\)/, 'both heatmap queries get it');
 // Shared through the cache, each caller lets go with its own signal; the
 // query stops when nobody waits for it (scripts/test-lazy-superseded-query.mjs

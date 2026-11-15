@@ -12,17 +12,18 @@ import {
     calendarPeriodWindows,
     collectMissingDays,
     computeDefiniteIntegral,
-    groupDailyIntegralEntries,
+    definiteIntegralPasses,
     INTEGRAL_GROUPINGS,
     INTEGRAL_MAX_GROUPS,
+    INTEGRAL_PASS_STAGES,
     MS_PER_DAY,
-    reduceDailyIntegral,
-    reduceDailyIntegralByPeriod,
     utcDayIndex,
     utcDayStart,
     utcPeriodEnd,
     utcPeriodStart,
 } from '../src/compute/kernels/definite-integral.js';
+import { detectSamplingGaps } from '../src/utils/sampling-gaps.js';
+import { createStepMedian } from '../src/utils/step-median.js';
 
 let checks = 0;
 
@@ -329,87 +330,93 @@ function hourlyTime(count, start = day0) {
     close(r.value, 10 * 7200, 'and the whole span is integrated');
 }
 
-// ─── 11. The daily reducer (the lazy path's other half) ───────────────────
-// A lazy file answers in per-day partials; this folds them into the same
-// result the eager kernel returns. The point of the split is that every
-// whole-day POLICY is decided here, so eager and lazy cannot drift apart.
+// ─── 11. The kernel as passes (the lazy path's half) ─────────────────────
+// computeDefiniteIntegral feeds whole arrays to definiteIntegralPasses; a lazy
+// file streams the same passes a chunk at a time. Every number must be the
+// same either way, and the median step must be detectSamplingGaps' even when
+// only a few hundred steps may be kept (the histogram path).
 {
-    const day = (index) => utcDayIndex(day0) + index;
-    const wholeDay = (index, area, hasHole = false) => ({
-        day: day(index),
-        areaMs: area,
-        coveredMs: 24 * 3600000,
-        uncoveredMs: hasHole ? 3600000 : 0,
-        hasHole,
-        sampleCount: 24,
-        firstT: day(index) * MS_PER_DAY,
-        lastT: day(index) * MS_PER_DAY + 23 * HOUR,
-    });
-    // 100 MW × 24 h in ms-space is 100 × 86400000.
-    const AREA = 100 * 24 * 3600000;
-    const range = { rangeStart: day0, rangeEnd: day0 + 3 * MS_PER_DAY, medianDt: HOUR };
-
-    const clean = reduceDailyIntegral([wholeDay(0, AREA), wholeDay(1, AREA), wholeDay(2, AREA)], range);
-    close(clean.value, 100 * 72 * 3600, 'three clean days fold into 72 h of energy');
-    close(clean.coveredTime, 72 * 3600, 'with the covered time in seconds');
-    equal(clean.dayCount, 3, 'and the day count comes from the range');
-    equal(clean.ok, true, 'the fold succeeds');
-    equal(clean.timeKind, 'datetime', 'the lazy path is calendar-only, and says so');
-
-    const dirty = [wholeDay(0, AREA), wholeDay(1, AREA, true), wholeDay(2, AREA)];
-    const kept = reduceDailyIntegral(dirty, range);
-    close(kept.value, 100 * 72 * 3600, 'under the default policy a holed day still contributes');
-    close(kept.uncoveredTime, 3600, 'while the hole itself is reported');
-
-    const dropped = reduceDailyIntegral(dirty, { ...range, missingPolicy: 'discard-day-own' });
-    close(dropped.value, 100 * 48 * 3600, 'discarding the day removes exactly that day');
-    equal(dropped.discardedDayCount, 1, 'and reports it');
-    close(dropped.discardedTime, 24 * 3600, 'with the time it took out');
-
-    // The union path: a clean signal drops the day another signal poisoned.
-    const shared = reduceDailyIntegral([wholeDay(0, AREA), wholeDay(1, AREA), wholeDay(2, AREA)], {
-        ...range, missingPolicy: 'discard-day-all', excludedDays: [day(1)],
-    });
-    close(shared.coveredTime, dropped.coveredTime, 'so both signals integrate the same duration');
-
-    // Ragged ends: a first day that starts at 06:00 is not a whole day. The
-    // reducer applies the SAME points-vs-periods agreement as the eager kernel,
-    // so the last day only earns its step of slack when that step is integrated.
-    const ragged = [
-        { ...wholeDay(0, AREA / 2), coveredMs: 18 * 3600000, firstT: day(0) * MS_PER_DAY + 6 * HOUR },
-        wholeDay(1, AREA),
-    ];
-    const raggedRange = {
-        rangeStart: day0 + 6 * HOUR, rangeEnd: day0 + 2 * MS_PER_DAY - HOUR,
-        medianDt: HOUR, hasNominalStep: true, discardIncompleteEnds: true,
+    const same = (got, want, label) => {
+        if (typeof want === 'number' || typeof got === 'number') {
+            ok(Object.is(got, want), `${label}: ${got} vs ${want}`);
+            return;
+        }
+        if (want && typeof want === 'object') {
+            for (const key of new Set([...Object.keys(want), ...Object.keys(got || {})])) same(got?.[key], want[key], `${label}.${key}`);
+            return;
+        }
+        equal(got, want, label);
     };
-    const asPeriods = reduceDailyIntegral(ragged, { ...raggedRange, extendLastSample: true });
-    equal(asPeriods.discardedDayCount, 1, 'read as periods, only the ragged first day is trimmed');
-    close(asPeriods.value, 100 * 24 * 3600, 'and the whole day integrates to 24 h');
+    const chunked = (params, kind, t, v, size, collectLimit) => {
+        const passes = definiteIntegralPasses(params, kind, true, { collectLimit });
+        const stages = [];
+        let step = passes.next();
+        while (!step.done) {
+            stages.push(step.value.stage);
+            for (let at = 0; at < v.length; at += size) step.value.chunk(t?.subarray(at, at + size), v.subarray(at, at + size));
+            step.value.end();
+            step = passes.next();
+        }
+        return { result: step.value, stages };
+    };
+    let seed = 11;
+    const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const n = 9001;
+    const t = new Float64Array(n);
+    const v = new Float64Array(n);
+    let at = day0;
+    for (let i = 0; i < n; i++) {
+        // A 15-minute step with a few milliseconds of jitter, dropped rows,
+        // empty cells and a long empty run.
+        at += 15 * 60000 + Math.round((random() - 0.5) * 6) + (i % 601 === 5 ? 15 * 60000 : 0);
+        t[i] = at;
+        v[i] = (i % 97 === 3 || (i > 4000 && i < 8600)) ? NaN : 50 + 20 * Math.sin(i / 50);
+    }
+    const time = { values: t, kind: 'datetime' };
+    for (const params of [
+        {},
+        { method: 'rectangular' },
+        { missingPolicy: 'interpolate', extendLastSample: true },
+        { missingPolicy: 'discard-day-own', discardIncompleteEnds: true },
+        { rangeStart: t[100] + 12345, rangeEnd: t[7000] - 999, missingPolicy: 'interpolate' },
+        { nominalStep: 15 * 60000, missingPolicy: 'discard-day-all', excludedDays: [utcDayIndex(t[3000])] },
+    ]) {
+        const want = computeDefiniteIntegral(v, time, params);
+        for (const [size, limit] of [[n, Infinity], [1, Infinity], [777, 50], [4096, 0]]) {
+            const { result, stages } = chunked(params, 'datetime', t, v, size, limit);
+            same(result, want, `${JSON.stringify(params)} in chunks of ${size}, ${limit} steps kept`);
+            ok(stages.every(stage => INTEGRAL_PASS_STAGES.includes(stage)), 'every pass has a known stage');
+            if (limit < 100 && params.nominalStep === undefined) {
+                ok(stages.includes('steps'), 'with few steps kept, the median takes further passes over the steps');
+            }
+        }
+    }
+    // The index axis has no abscissae at all.
+    const indexWant = computeDefiniteIntegral(v, { values: null, kind: 'index' }, { missingPolicy: 'interpolate' });
+    same(chunked({ missingPolicy: 'interpolate' }, 'index', null, v, 1000, Infinity).result, indexWant, 'the index axis in chunks');
 
-    const asPoints = reduceDailyIntegral(ragged, raggedRange);
-    equal(asPoints.discardedDayCount, 2, 'read as points, the last day is short of midnight too');
-    equal(asPoints.reason, 'allDiscarded', 'which leaves nothing');
-
-    // The trailing period is held at the last value and attributed to its day.
-    const tailOnly = reduceDailyIntegral(
-        [{ ...wholeDay(0, AREA), coveredMs: 23 * 3600000, lastFiniteT: day(0) * MS_PER_DAY + 23 * HOUR, lastValue: 100 }],
-        { rangeStart: day0, rangeEnd: day0 + 23 * HOUR, medianDt: HOUR, hasNominalStep: true, extendLastSample: true },
-    );
-    close(tailOnly.coveredTime, 24 * 3600, 'the tail closes the day');
-    close(tailOnly.value, (100 * 24 * 3600000 + 100 * 3600000) / 1000,
-        'adding exactly one step of the last value');
-
-    // Disorder is fatal on the lazy path too.
-    const unsorted = reduceDailyIntegral([wholeDay(0, AREA)], { ...range, negativeDtCount: 3 });
-    equal(unsorted.ok, false, 'disordered rows produce no total');
-    equal(unsorted.reason, 'unsorted', 'and say why');
-
-    // Every day discarded is distinct from having no data at all.
-    const none = reduceDailyIntegral([wholeDay(0, AREA, true)], {
-        rangeStart: day0, rangeEnd: day0 + MS_PER_DAY, missingPolicy: 'discard-day-own',
-    });
-    equal(none.reason, 'allDiscarded', 'discarding everything is its own answer');
+    // The streamed median and its gate are detectSamplingGaps', whatever is kept.
+    for (const steps of [
+        Array.from({ length: 5000 }, () => 1000),
+        Array.from({ length: 5001 }, (_, i) => 1000 + (i % 3)),
+        Array.from({ length: 4000 }, () => 1 + random() * 1e-9),
+        Array.from({ length: 3000 }, () => random() * 10 + 0.001),
+        Array.from({ length: 6000 }, (_, i) => (i % 5 ? 60 : 61 + i)),
+    ]) {
+        const axis = new Float64Array(steps.length + 1);
+        for (let i = 0; i < steps.length; i++) axis[i + 1] = axis[i] + steps[i];
+        const want = detectSamplingGaps(axis);
+        for (const limit of [Infinity, 1000, 10, 0]) {
+            const stats = createStepMedian({ collectLimit: limit });
+            stats.addSteps(axis, axis.length, NaN);
+            let passes = 1;
+            while (stats.endPass()) { stats.addSteps(axis, axis.length, NaN); passes++; }
+            const verdict = stats.verdict();
+            ok(Object.is(verdict.medianDt, want.medianDt), `the median step, ${limit} kept: ${verdict.medianDt} vs ${want.medianDt}`);
+            equal(verdict.agreementOk, want.hasNominalStep, `and the agreement gate, ${limit} kept`);
+            ok(passes <= 6, `in at most six passes (${passes})`);
+        }
+    }
 }
 
 // ─── Calendar grouping ────────────────────────────────────────────────────
@@ -566,83 +573,6 @@ function hourlyTime(count, start = day0) {
         ok(uncovered > 0, 'the hole is reported at all');
     }
 
-    // Lazy grouping is a partition of the per-day partials: every period is a
-    // whole number of UTC days, so no day can land in two groups or in none.
-    {
-        const firstDay = utcDayIndex(Date.UTC(2021, 0, 28));
-        const days = Array.from({ length: 10 }, (_, index) => ({ day: firstDay + index, areaMs: 1, coveredMs: 1, sampleCount: 1 }));
-        const byMonth = groupDailyIntegralEntries(days, 'month');
-        equal([...byMonth.keys()].sort((a, b) => a - b).map(ms => new Date(ms).toISOString().slice(0, 10)),
-            ['2021-01-01', '2021-02-01'], 'ten days across a month boundary make two monthly groups');
-        equal(byMonth.get(Date.UTC(2021, 0, 1)).length, 4, 'four of them are in January');
-        equal(byMonth.get(Date.UTC(2021, 1, 1)).length, 6, 'and six in February');
-        const total = [...byMonth.values()].reduce((sum, list) => sum + list.length, 0);
-        equal(total, days.length, 'and no day is lost or counted twice');
-        equal(groupDailyIntegralEntries([{ day: NaN }, {}], 'month').size, 0,
-            'entries with no day index are dropped rather than grouped under a guess');
-    }
-
-    // And the lazy reduction obeys the same identity as the eager one: the
-    // periods sum to the ungrouped total, with `extendLastSample` applied in
-    // exactly one of them.
-    {
-        const dayCount = 40;
-        const firstDay = utcDayIndex(Date.UTC(2021, 0, 20));
-        const level = 7;
-        const days = Array.from({ length: dayCount }, (_, index) => {
-            const day = firstDay + index;
-            const dayStartMs = utcDayStart(day);
-            const last = index === dayCount - 1;
-            // A full day of hourly samples: 24 ticks, the last of which only
-            // covers its hour once the samples are read as periods.
-            return {
-                day,
-                areaMs: level * (last ? 23 : 24) * HOUR,
-                coveredMs: (last ? 23 : 24) * HOUR,
-                uncoveredMs: 0,
-                hasHole: false,
-                sampleCount: 24,
-                firstT: dayStartMs,
-                lastT: dayStartMs + 23 * HOUR,
-                lastFiniteT: dayStartMs + 23 * HOUR,
-                lastValue: level,
-            };
-        });
-        const params = {
-            method: 'trapezoidal',
-            missingPolicy: 'zero',
-            medianDt: HOUR,
-            hasNominalStep: true,
-            extendLastSample: true,
-        };
-        const rangeStart = utcDayStart(firstDay);
-        const rangeEnd = utcDayStart(firstDay + dayCount - 1) + 23 * HOUR;
-        const whole = reduceDailyIntegral(days, { ...params, rangeStart, rangeEnd });
-        close(whole.coveredTime, dayCount * 24 * 3600,
-            'read as periods, forty days of hourly samples cover forty whole days');
-        for (const period of ['month', 'week', 'day']) {
-            const built = calendarPeriodWindows(rangeStart, rangeEnd, period, { clip: false });
-            const groups = reduceDailyIntegralByPeriod(days, built.windows, period, { ...params, rangeStart, rangeEnd });
-            equal(groups.length, built.windows.length, `${period}: one reduction per window`);
-            const area = groups.reduce((sum, group) => sum + (group.result.value || 0), 0);
-            const covered = groups.reduce((sum, group) => sum + (group.result.coveredTime || 0), 0);
-            close(area, whole.value, `${period}: the lazy groups sum to the lazy total`, 1e-12);
-            close(covered, whole.coveredTime, `${period}: and cover the same duration`, 1e-12);
-            const extending = groups.filter(group => group.result.extendLastSample).length;
-            equal(extending, 1, `${period}: only the period holding the last sample extends it`);
-            equal(groups.at(-1).result.extendLastSample, true, `${period}: and that is the last one`);
-        }
-        // With the trailing period off, the record is one step shorter and the
-        // groups still agree with the total.
-        const points = { ...params, extendLastSample: false };
-        const pointWhole = reduceDailyIntegral(days, { ...points, rangeStart, rangeEnd });
-        const pointGroups = reduceDailyIntegralByPeriod(
-            days, calendarPeriodWindows(rangeStart, rangeEnd, 'week', { clip: false }).windows, 'week',
-            { ...points, rangeStart, rangeEnd });
-        close(pointGroups.reduce((sum, group) => sum + (group.result.value || 0), 0), pointWhole.value,
-            'read as instants, the weekly groups still sum to the total', 1e-12);
-        ok(pointWhole.value < whole.value, 'and that total is the smaller of the two readings');
-    }
 }
 
 console.log(`definite integral: ${checks} checks passed`);
