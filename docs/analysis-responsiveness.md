@@ -855,6 +855,47 @@ What held the thread:
 
 - **10.0 M, lazy, param: quadratic → exponential**: a task of 10135 ms, 10107 ms of it computation. Under `runPassesOnChunks (src/utils/fit-passes.js:35)` → `expFamilyFitSteps (src/utils/exp-fit.js:271)` → `brent (src/utils/exp-fit.js:214)` → `solveForRate (src/utils/exp-fit.js:88)` → `add (src/utils/exp-fit.js:105)` → `basis (src/utils/exp-fit.js:79)`. Self: `basis (src/utils/exp-fit.js:79)` 9279 ms, `add (src/utils/exp-fit.js:105)` 669 ms.
 
+## After the fixes
+
+One section per issue, filled in by the change that closes it: what was
+done, and the same measurements after it.
+
+### #381: In-memory analyses on the compute worker
+
+Not landed yet.
+
+### #382: Lazy exponential fits
+
+Not landed yet.
+
+### #383: Lazy histogram
+
+Not landed yet.
+
+### #384: Superseded lazy SQL queries, and Trend's Cancel
+
+Not landed yet.
+
+### #385: Lazy integral
+
+Not landed yet.
+
+### #386: Borderline tasks
+
+Not landed yet.
+
+### #387: Temporal profile's range block
+
+Not landed yet.
+
+### #388: Cross-correlation tool past its budget
+
+Not landed yet.
+
+### #389: The CI check
+
+Not landed yet.
+
 ## Running it
 
 ```
