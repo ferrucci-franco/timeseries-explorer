@@ -2054,7 +2054,7 @@ issue se cierre:
 | Ajustes exponenciales (curve fit, trend, ajuste 2D) con hasta 6 M filas en el rango | el ajuste corre en el hilo principal (1–10 s) | #382 |
 | ~~Heatmap, perfil temporal, correlación de pares~~ | **resuelto**: un cambio nuevo aborta la consulta que reemplaza (una señal por corrida, `_analysisRunSignal`); una consulta compartida con otro panel no se corta para ese panel | #384 |
 | ~~Trend~~ | **resuelto**: la interrupción de DuckDB llega como `AbortError` y el estado dice "cancelado" | #384 |
-| Herramienta de correlación cruzada, archivo por encima de 8 M filas | 14 s de consultas sin cancelación antes de rechazar el archivo | #388 |
+| ~~Herramienta de correlación cruzada, archivo por encima de 8 M filas~~ | **resuelto**: el presupuesto de filas se comprueba antes de medir el eje (rechazo en ~17 ms, sin consultas), y las consultas del eje llevan señal de cancelación | #388 |
 
 #### *Full* lee todas las filas del archivo
 
