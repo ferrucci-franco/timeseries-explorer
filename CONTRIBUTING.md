@@ -145,7 +145,8 @@ every row in its range, never over the overview. When you add or change one:
 
 - read the file, not the overview: SQL in `src/data/duckdb-source.js`, or a
   chunked stream (`streamColumns`, `src/data/column-stream.js`) through a kernel
-  that accumulates chunk by chunk (for several passes, `src/utils/fit-passes.js`);
+  that accumulates chunk by chunk (for several passes, `src/utils/fit-passes.js`,
+  or `definiteIntegralPasses` in `src/compute/kernels/definite-integral.js`);
 - run the same kernel code on both paths, so the results match;
 - do not cap or sample silently; prefer streaming past a limit, and if a gap
   remains, say so in the UI and record it in `docs/any-size-files.md`;
@@ -168,8 +169,8 @@ does the same:
 - pass `_analysisSignal(plot)` to its DuckDB queries and streams — or, where
   a newer run supersedes the one in flight, a run signal tied to it
   (`_analysisRunSignal(plot, slot)`), aborted from the analysis' schedule
-  (`_abortAnalysisRun`), as the FFT, the heatmap, the temporal profile and
-  the pair correlation do;
+  (`_abortAnalysisRun`), as the FFT, the heatmap, the temporal profile, the
+  pair correlation and the integral do;
 - register its pane, its tokens and where its settings live there;
 - extend `scripts/e2e-analysis-cancel.mjs`.
 

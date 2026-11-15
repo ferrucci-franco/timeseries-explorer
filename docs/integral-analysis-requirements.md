@@ -262,7 +262,7 @@ Tabla `Summary` con Signal (chip de color) · Integral · Per day · Mean value 
 
 **La barra superior lleva el resumen, no el texto de los warnings.** Dice qué es: `3 signals totalled over 9.96 d`. Si las señales no cubrieron la misma duración, nombrar una sería afirmar algo falso sobre las otras, así que usa `integralStatusMixed` y apunta al resumen. Cuando hay warnings solo se agrega un puntero corto (`Warning: see the message in the Integral side panel`); el texto completo va en el panel lateral y en el tooltip — es el mismo reparto que ya hacen FFT y Profile.
 
-Warnings implementados: `integralNoData`, `integralAllDiscarded`, `integralUnsorted`, `integralIndexAxis`, `integralAssumedSeconds`, `integralMixedUnits`, `integralUnknownUnits`, `integralUnequalCoverage`, `integralUncovered`, `integralUncoveredInterpolated`, `integralLazyUnsupported`, `integralPieMixedSigns`, `integralPieMixedUnits` — los cuatro idiomas.
+Warnings implementados: `integralNoData`, `integralAllDiscarded`, `integralUnsorted`, `integralIndexAxis`, `integralAssumedSeconds`, `integralMixedUnits`, `integralUnknownUnits`, `integralUnequalCoverage`, `integralUncovered`, `integralUncoveredInterpolated`, `integralLazyUnsupported`, `integralLazyFailed`, `integralPieMixedSigns`, `integralPieMixedUnits` — los cuatro idiomas.
 
 `integralUnequalCoverage` es el importante: cuando las señales integran duraciones distintas, las barras dejan de ser comparables y el panel lo dice en voz alta.
 
@@ -312,20 +312,17 @@ El corte permite testear todo el comportamiento sin Plotly ni DOM, y garantiza q
 
 ## 15. Archivos lazy (DuckDB)
 
-**Implementado.** `getDefiniteIntegralByDay` ([`duckdb-source.js`](../src/data/duckdb-source.js)) devuelve **una fila por día UTC y por variable**: área, tiempo cubierto, tiempo de hueco, bandera de hueco, nº de muestras y primer/último timestamp del día. `reduceDailyIntegral` ([`definite-integral.js`](../src/compute/kernels/definite-integral.js)) las pliega en el mismo objeto que devuelve el kernel eager.
+**Implementado (#385).** Un archivo lazy corre **el mismo kernel** que la memoria, sobre todas las filas del rango, en cualquier eje (calendario, numérico, número de fila). El kernel está escrito como una secuencia de **pasadas** sobre las filas (`definiteIntegralPasses` en [`definite-integral.js`](../src/compute/kernels/definite-integral.js)): `computeDefiniteIntegral` les da los arreglos enteros; en lazy ([`integral-lazy-methods.js`](../src/plots/methods/integral-lazy-methods.js)) cada pasada es un stream del archivo (`streamColumns`), un trozo a la vez, con las transformaciones del panel. Los totales y los períodos de *Agrupar por* son los de memoria, bit a bit (`scripts/test-lazy-integral.mjs`).
 
-El corte es deliberado: **el SQL contesta solo "cuánto y dónde", nunca "cuenta o no"**. Todas las políticas de día —descartar para esta señal, para todas, recortar los extremos— se deciden en JS, con las mismas reglas que aplica el camino eager. Eso es lo que impide que los dos caminos se separen con el tiempo.
+- **Las mismas filas.** En memoria cada total se calcula sobre el rango más una muestra vecina de cada lado (`_integralSeriesForTrace`), y cada período sobre su ventana con sus dos vecinas (`_integralEagerGroups`). En lazy un enrutador (`createSliceRouter`) corta el stream, sobre el tiempo transformado, en esas mismas porciones; el stream lee desde la última fila conocida antes de la selección (del resumen en memoria, que son filas del archivo, o de sus metadatos) hasta la primera conocida después —si el primer trozo no empieza en esa fila, se le piden al archivo los vecinos exactos (`DuckDbSource.neighborTimes`, una agregación)— y se corta en cuanto tiene la fila que sigue a la selección.
+- **El paso mediano**, del que depende el veredicto de huecos, es una estadística de orden: se calcula por pasadas sobre los pasos sin guardarlos todos (`src/utils/step-median.js`: hasta 1 M de pasos se guardan y se hace lo de `detectSamplingGaps`; por encima, un histograma por los bits del double y, si hace falta, una o dos pasadas más). Da el mismo double.
+- **`interpolate`** puentea cada racha de NaN como `bridgeNonFinite`, al vuelo: una racha corta se retiene hasta leer su otro extremo; una de más de 4 096 filas la anota la primera pasada, así que ninguna pasada retiene más que eso.
+- **Las políticas de día** se deciden en el kernel, como en memoria. *Descartar el día para todas las señales* espera, antes de la cuadratura, a que todas las señales (en memoria y lazy) hayan dicho qué días tienen huecos.
+- **El orden de las filas** se ve (el stream llega en el orden del archivo): un archivo desordenado da `unsorted`, como en memoria.
 
-Decisiones dentro de la consulta:
+Sigue sin integrarse una variable lazy sin columna fuente (que existe solo en el resumen en memoria): `integralLazyUnsupported` la nombra, y no tiene barra.
 
-- **No se filtra por el rango al escanear.** El paso mediano y el veredicto de huecos son propiedades de la serie entera (es lo que ve `detectSamplingGaps` en eager), y un intervalo que cruza el borde del rango necesita su extremo de afuera para interpolar en el límite. Ambas cosas saldrían mal si se filtraran las filas primero; el recorte se hace por intervalo.
-- **La compuerta de paso nominal está replicada en SQL** (mediana, 10 % de tolerancia, 80 % de acuerdo con ≥8 pasos), así que un archivo genuinamente irregular tampoco reclama huecos por el camino lazy.
-- `interpolate` empareja **muestras finitas consecutivas** en vez de puentear valores: es exactamente equivalente —los valores puenteados caen sobre la recta que las une, y los trapecios de sus trozos suman el trapecio entero— y cuesta un `WHERE` en lugar de cuatro funciones de ventana.
-- **El orden de filas no se juzga.** Un escaneo paralelo devuelve las filas en el orden en que terminan los hilos, así que un `LAG` sobre el orden "físico" reporta desorden que es un artefacto del escaneo: disparó sobre un CSV de 320 000 filas perfectamente ordenado. Se reporta `negativeDtCount: 0` —"no se sabe"— en vez de negarse a calcular. `file_row_number` de `read_csv` es la vía si alguna vez hace falta contestarlo; es la misma postura que ya toma el reductor de buckets lazy.
-
-Sigue sin soportarse: un archivo lazy **sin eje temporal calendario**, y una variable lazy sin columna fuente exacta (derivada solo del overview). Ambos casos producen `integralLazyUnsupported` con el motivo, y ninguna barra.
-
-Mientras la consulta corre, el panel muestra la misma píldora de progreso no bloqueante que usan el FFT y el Profile lazy: las barras anteriores siguen legibles.
+Mientras lee, la píldora de cálculo dice *"Integrando todas las filas del archivo: pasada 2, 1 234 567 filas leídas…"*; su botón **Cancelar** detiene el stream y deja las barras anteriores. Un cambio hecho mientras lee detiene la lectura que reemplaza (`_analysisRunSignal`, ranura `_integralRunAbort`); una interrupción que la corrida no pidió la vuelve a lanzar, nunca dibuja un resultado parcial.
 
 ---
 

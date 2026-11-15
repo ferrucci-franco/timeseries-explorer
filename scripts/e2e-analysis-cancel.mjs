@@ -15,10 +15,10 @@
 //      the one of that result — the status says so;
 //   5. with queries answering again, the analysis computes as before.
 //
-// The lazy SQL analyses (heatmap, temporal profile, pair correlation) and the
-// FFT also: a newer request made while a query hangs aborts that query when
-// it is scheduled, not when it would have ended, and the previous result
-// stays until the newest answers (#384).
+// The lazy SQL analyses (heatmap, temporal profile, pair correlation), the
+// FFT and the integral (#385) also: a newer request made while a query or a
+// stream hangs aborts it when the newer run is scheduled, not when it would
+// have ended, and the previous result stays until the newest answers (#384).
 //
 // Trend's hung query is interrupted as DuckDB-WASM interrupts one: the
 // pending send fails with DuckDB's own error ("INTERRUPT Error"), not with a
@@ -324,7 +324,7 @@ try {
         ['Histogram', 'histogram', 'histogram', '_scheduleHistogramRecompute', false],
         ['Heatmap', 'heatmap', 'heatmap', '_scheduleCalendarHeatmapRecompute', true],
         ['Temporal profile', 'temporal-profile', 'temporalProfile', '_scheduleTemporalProfileRecompute', true],
-        ['Integral', 'integral', 'integral', '_scheduleIntegralRecompute', false],
+        ['Integral', 'integral', 'integral', '_scheduleIntegralRecompute', true],
     ]) {
         const recompute = () => toggleRange(timeId, key, schedule);
         await checkCancel({

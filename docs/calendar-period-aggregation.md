@@ -73,7 +73,7 @@ Tres cosas hacen falta para que la identidad se cumpla:
 
 ### 3.2 Camino lazy
 
-Sin consulta nueva: `getDefiniteIntegralByDay` ya devuelve una parcial por día UTC, y **todo período de agrupación es un número entero de días UTC**, así que agrupar es una partición de esas parciales (`groupDailyIntegralEntries`) y `reduceDailyIntegral` se aplica por grupo con los mismos parámetros. La única corrección: solo el período que contiene el último día muestreado puede extender esa muestra a su paso siguiente; hacerlo en cada período inventaría un paso de área por período.
+El mismo cálculo que en memoria, sobre todas las filas (#385): cada período es un kernel más que viaja en los mismos streams del archivo que el total (`integral-lazy-methods.js`), con su ventana y sus dos muestras vecinas cortadas del stream como las corta `_integralSeriesForTrace`, y el paso de la serie heredado del total. Por eso las reglas de arriba —ventanas enteras o recortadas, el paso que baja, el período final solo en la ventana que tiene la última muestra— valen igual en lazy, y los períodos son los de memoria bit a bit.
 
 ### 3.3 La unidad de un acumulado: `mm/h` → `mm`
 
@@ -106,7 +106,7 @@ Ahora el exponente automático se toma sólo cuando `scaleUnitLabel` lo pliega d
 |---|---|---|
 | Kernel profile | `src/utils/temporal-profile.js` | `multi-year`, `multiYearBinEdges`, ranura única por período |
 | SQL profile | `src/data/temporal-profile-sql.js` | geometría `multi-year`, bin por año, filtro estructural |
-| Kernel integral | `src/compute/kernels/definite-integral.js` | `calendarPeriodWindows`, `utcPeriodStart/End`, `groupDailyIntegralEntries`, `nominalStep` |
+| Kernel integral | `src/compute/kernels/definite-integral.js` | `calendarPeriodWindows`, `utcPeriodStart/End`, `nominalStep` |
 | Presentación integral | `src/utils/integral-presentation.js` | `groupBy`, `series`/`categories`, etiquetas de período, exportación agrupada, compuerta de torta, cancelación `/h`, prefijo automático |
 | Modos (DOM/Plotly) | `temporal-profile-methods.js`, `integral-methods.js` | controles, ejes, resumen, estado |
 

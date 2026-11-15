@@ -52,7 +52,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
   **sin `ORDER BY`**: orden físico del archivo, porque ordenar millones de filas
   es lo que agota la memoria de DuckDB-WASM) para la FFT y la fase.
 - **Análisis exactos empujados a SQL**, sin traer filas a JS: heatmap
-  calendario, integral definida por día, perfil temporal, trayectoria de fase,
+  calendario, perfil temporal, trayectoria de fase,
   correlaciones por pares, intervalos faltantes, `countOutOfBounds`. Es el
   patrón que este documento extiende.
 - **Una herramienta de datos**: *quitar outliers por cotas*. No como array: como
@@ -1832,6 +1832,131 @@ Pruebas:
   de los nueve que prueba la píldora, el Cancelar, el resultado que queda y los
   ajustes que vuelven.
 
+### Implementado: el análisis Integral sobre todas las filas, en cualquier eje (#385)
+
+El análisis Integral (el modo del panel, no la herramienta de datos) tenía en
+lazy un camino propio en SQL, `getDefiniteIntegralByDay`: una fila por día UTC
+con área, tiempo cubierto y huecos, que `reduceDailyIntegral` plegaba en JS.
+Tres defectos (medidos en `docs/analysis-responsiveness.md`): a 10 M filas
+DuckDB-WASM se quedaba sin memoria (*"Out of Memory Error … 1.4 GiB/1.4 GiB
+used"*, tras 12–16 s: la consulta ordenaba todo el archivo para sus `LAG` y su
+mediana); en un eje de tiempo numérico se negaba (`integralLazyUnsupported`); y
+un cambio hecho mientras corría esperaba a que terminara.
+
+Ahora un archivo lazy corre **el mismo kernel que la memoria**, sobre todas las
+filas del rango, en cualquier eje (calendario, numérico, número de fila):
+
+- **El kernel como pasadas.** `computeDefiniteIntegral`
+  (`src/compute/kernels/definite-integral.js`) es ahora el conductor en memoria
+  de `definiteIntegralPasses`, un generador que entrega pasadas —objetos con
+  `chunk(t, v)`— y al retomarse lee lo que acumularon: *scan* (cuántas filas,
+  la extensión, el orden del eje, sus pasos), *steps* (solo si la mediana del
+  paso no quedó resuelta), *days* (solo con una política de día o el recorte de
+  extremos, en un eje calendario) y *area* (la cuadratura y los conteos). Cada
+  cantidad sigue de un trozo al siguiente, así que darle los arreglos enteros o
+  un stream en trozos da **los mismos doubles, en el mismo orden de suma**. La
+  firma y los resultados de `computeDefiniteIntegral` no cambian (una prueba
+  diferencial contra el kernel anterior, con entradas al azar, da `Object.is`
+  en cada número); su tiempo en memoria es el de antes.
+- **La mediana del paso sin guardar todos los pasos** (`src/utils/step-median.js`).
+  El veredicto de huecos depende de la mediana de los pasos positivos
+  (`detectSamplingGaps` → `medianInPlace`/`selectKth`) y de cuántos están a
+  10 % de ella. Hasta 1 M de pasos se guardan y se hace exactamente lo de
+  `detectSamplingGaps` (en memoria el límite es infinito: es ese código). Por
+  encima, un histograma por los 16 bits altos del double (los doubles positivos
+  se ordenan como sus bits), con mínimo y máximo por casilla: si la casilla de
+  la mediana tiene mínimo = máximo, ya está (un eje regular: ninguna pasada
+  más); si no, una pasada más guarda los pasos de esa casilla o hace el
+  histograma de sus 16 bits siguientes (a lo sumo cuatro niveles). El acuerdo
+  del 80 % se acota con las casillas y solo se cuenta exacto si la cota cae a
+  los dos lados del umbral. Es una estadística de orden: el mismo double.
+- **`interpolate` al vuelo.** El puente de `bridgeNonFinite` se hace dentro de
+  la cuadratura: una racha de NaN corta se retiene hasta leer su otro extremo;
+  una de más de 4 096 filas la anota la primera pasada (dónde termina y con qué
+  valor), así que ninguna pasada retiene más que eso.
+- **Las mismas filas que en memoria** (`src/plots/methods/integral-lazy-methods.js`,
+  sin Plotly para probarlo en Node). En memoria el total se calcula sobre el
+  rango más una muestra vecina de cada lado (`_integralSeriesForTrace`) y cada
+  período de *Agrupar por* sobre su ventana con sus dos vecinas
+  (`_integralEagerGroups`, con el paso del total heredado). En lazy cada pasada
+  es un `streamColumns` de las filas desde la vecina anterior a la posterior,
+  transformadas por `_transformFetchedPhaseTrajectory` (recorte,
+  desplazamiento, ganancia, offset, signo), y un enrutador
+  (`createSliceRouter`) las corta sobre el tiempo transformado en esas mismas
+  porciones: el total, y un kernel por señal y período que viaja en los mismos
+  streams. El stream se corta en cuanto llegó la fila que sigue a la selección.
+  Sus límites salen de filas que el panel ya conoce —el resumen en memoria es
+  filas del archivo, y los metadatos tienen su primera y su última—: desde la
+  última de ellas antes de la selección hasta la primera después, unas filas
+  de más que el enrutador descarta, sin una consulta. Solo si el primer trozo
+  no empieza en esa fila (no son filas del stream) o no hay ninguna antes de la
+  selección se le pregunta al archivo (`DuckDbSource.neighborTimes`, una
+  agregación): una lectura entera de un CSV menos por corrida.
+  Un eje generado del número de fila se lee entero, cada fila con su posición
+  en el archivo, como en la FFT y el histograma. *Full* (y las ventanas de
+  *Agrupar por*) llegan a la primera y la última fila del archivo
+  (`_integralDomain` suma `_lazyTimeExtent`).
+- **Cuántas lecturas.** Por archivo, todas las señales en cada una: dos en un
+  eje regular (*scan* y *area*); tres con una política de día; una o dos más
+  si la mediana necesita el histograma con un paso que varía en sus últimos
+  dígitos. *Descartar el día para todas las señales* espera, antes de la
+  cuadratura, a que todas las señales —en memoria y lazy— hayan dicho qué días
+  tienen huecos.
+- **Lo que se ve.** La píldora de cálculo dice *"Integrando todas las filas del
+  archivo: pasada 2, 1 234 567 filas leídas…"*; su botón **Cancelar** corta el
+  stream y deja las barras y los ajustes anteriores. Cada corrida lee con una
+  señal propia (`_analysisRunSignal`, ranura `_integralRunAbort`) que
+  `_scheduleIntegralRecompute` aborta al pedir una nueva, y `_dropAnalysisRuns`
+  al cancelar, y cerrar el análisis. Un `AbortError` que la corrida no pidió
+  (la agregación de los vecinos, interrumpida por el `cancelActiveQuery` de
+  otro) vuelve a lanzar la
+  corrida: nunca se dibuja un resultado parcial. Entre trozos el stream cede el
+  hilo (cada trozo son 131 072 filas: unos milisegundos de transformación y
+  kernel).
+- **El orden de las filas ahora se ve**: el stream llega en el orden del
+  archivo, así que un archivo desordenado da `unsorted`, como en memoria (la
+  consulta anterior lo declaraba "desconocido").
+
+Lo único que sigue sin integrarse en lazy es una señal sin columna fuente en el
+archivo (existe solo en el resumen en memoria): `integralLazyUnsupported` la
+nombra y no tiene barra, como en el heatmap.
+
+Se fueron `getDefiniteIntegralByDay`, `reduceDailyIntegral`,
+`reduceDailyIntegralByPeriod` y `groupDailyIntegralEntries`, y los avisos
+cambiaron en las cinco traducciones (`integralLazyUnsupported`,
+`integralLazyFailed`, el nuevo `integralLazyStreaming`).
+
+Medido (Chromium headless, el arnés de `docs/analysis-responsiveness.md`,
+sección "#385"): a 10 M filas lazy, el eje calendario se integra en 11–12 s
+(antes: *Out of Memory* tras 12–16 s) y el numérico en 20–24 s (antes: rechazado;
+su eje de 4 kHz pide tres lecturas, la mediana por histograma); a 1,2 M filas,
+2,0–2,1 s (antes 3,6–4,7 s) y 1,3–3,2 s. Un arrastre mientras lee aborta la
+lectura en curso en 0 ms. La tarea más larga del hilo principal mientras lee:
+68 ms de cálculo; lo único más largo es Plotly dibujando las barras al abrir
+(hasta 205 ms). En memoria el kernel cuesta lo de antes o menos.
+
+Pruebas:
+
+- `scripts/test-definite-integral.mjs`: el kernel en trozos de 1, 777 y 4 096
+  filas y con 0 o 50 pasos guardados, igual (`Object.is`) a los arreglos
+  enteros, con cada política; la mediana por pasadas igual a la de
+  `detectSamplingGaps` en ejes regulares, con variación en el último dígito,
+  irregulares y con huecos.
+- `scripts/test-lazy-integral.mjs` (`test:lazy-integral`, DuckDB-WASM real,
+  24 007 filas con huecos, celdas vacías, un `inf` y una racha vacía de 5 000
+  filas): eje calendario, numérico y de número de fila; total y por día,
+  semana y mes; todo el archivo y una selección; las cuatro políticas, los dos
+  métodos, el período final, el recorte de extremos y *descartar para todas*
+  con dos señales; sin transformaciones y con todas; en trozos de 5 003 filas y
+  con la mediana por histograma: 132 configuraciones, cada número igual al de
+  memoria. Además: el enrutador corta las porciones de memoria en trozos de
+  cualquier tamaño; una selección corta deja de leer después de ella; Cancelar
+  detiene la corrida; un abort que la corrida no pidió la vuelve a lanzar, sin
+  resultado parcial ni aviso; una señal sin columna fuente se nombra.
+- `scripts/e2e-analysis-cancel.mjs`: la Integral con su stream colgado hasta
+  que lo aborten: Cancelar lo aborta y devuelve el rango; un pedido nuevo
+  aborta el que reemplaza en cuanto se programa.
+
 ### Implementado: escuchar un archivo lazy
 
 El reproductor del panel (🔊, `src/plots/methods/audio-methods.js`) no sonaba con
@@ -1921,7 +2046,7 @@ Cancelar detiene el trabajo de verdad, no solo lo ignora:
 
 - las consultas de análisis de `DuckDbSource` (`getRawColumnsRange`,
   `getCalendarHeatmapAggregates`, `getTemporalProfileAggregates`,
-  `getDefiniteIntegralByDay`, `getPairCorrelations`,
+  `getPairCorrelations`,
   `getPhaseRegressionStats`) aceptan `signal`, que cada análisis toma de
   `_analysisSignal(plot)` y que `_interactiveQuery` convierte en una
   cancelación de la consulta en DuckDB;

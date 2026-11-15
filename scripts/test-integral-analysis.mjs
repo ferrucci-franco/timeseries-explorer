@@ -568,23 +568,18 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(methods.includes('_buildAnalysisRangeSection({'), 'the range is the shared block, labels and all');
     ok(methods.includes('_syncAnalysisRangeSection('), 'and it is kept in step with the same code');
 
-    // The lazy path: the SQL answers per-day partials, JS decides the policies.
-    // Keeping the day decisions out of SQL is what stops eager and lazy drifting.
-    const duckdb = read('src/data/duckdb-source.js');
-    ok(duckdb.includes('async getDefiniteIntegralByDay('), 'DuckDB exposes the per-day integral query');
-    ok(duckdb.includes('unnest(range('), 'intervals are split at day boundaries in SQL');
-    ok(/1\.5 \* \(SELECT m FROM med\)/.test(duckdb), 'the gap threshold matches the shared 1.5x median rule');
-    ok(/< 0\.8 THEN FALSE/.test(duckdb), 'and the 80% nominal-step gate is mirrored');
-    ok(duckdb.includes('negativeDtCount: 0'), 'row order is reported as unknown, not guessed, on the lazy path');
-    ok(methods.includes('_queryLazyIntegralDays'), 'the mode queries lazy files');
-    ok(methods.includes('reduceDailyIntegral('), 'and folds the per-day rows with the shared reducer');
-    ok(/for \(const entry of lazyByTrace\.values\(\)\)[\s\S]{0,200}hasHole/.test(methods),
+    // The lazy path: the in-memory kernel, streamed over every row of the
+    // file (#385). scripts/test-lazy-integral.mjs holds it to the in-memory
+    // numbers; here, that it is wired.
+    const lazyMethods = read('src/plots/methods/integral-lazy-methods.js');
+    ok(lazyMethods.includes('definiteIntegralPasses('), 'a lazy file runs the kernel as passes');
+    ok(lazyMethods.includes('streamColumns(file.data, file.names, options)'), 'each pass a stream of the file');
+    ok(lazyMethods.includes('_transformFetchedPhaseTrajectory('), 'transformed as the other lazy analyses transform rows');
+    ok(methods.includes('this._lazyIntegralResults(readable, {'), 'the mode streams lazy files');
+    ok(/eagerHoleDays: \[\.\.\.eagerHoleDays\]/.test(methods) && /\.\.\.lazyRun\.holeDays/.test(methods),
         'the discard-day-all union spans lazy signals too, or the bars stop being comparable');
-    ok(methods.includes('_setIntegralComputing'), 'a lazy query shows the non-blocking progress pill');
-    // The trailing period needs the last finite sample AND its value; without
-    // both, the lazy reducer cannot close the day the eager kernel closes.
-    ok(duckdb.includes('last_finite_t'), 'the query reports the last finite timestamp per day');
-    ok(duckdb.includes('arg_max(vf, t_ms)'), 'and the value at it');
+    ok(methods.includes('_setIntegralComputing'), 'a lazy read shows the non-blocking progress pill');
+    ok(methods.includes("text('integralLazyStreaming')"), 'with its progress');
     ok(methods.includes('extendLastSample: state.extendLastSample'), 'both paths get the periods setting');
 
     // The pie lives in its own pane behind its own splitter, and the inner split
@@ -920,6 +915,7 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
 {
     const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
     const methods = read('src/plots/methods/integral-methods.js');
+    const lazyMethods = read('src/plots/methods/integral-lazy-methods.js');
     const translations = read('src/i18n/translations.js');
 
     ok(methods.includes("row(text('integralGroupBy'), select(["), 'the panel offers Group by');
@@ -927,13 +923,9 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
         'and disables the calendar periods when the axis has no calendar');
     ok(methods.includes('_integralGroupWindows'), 'the mode lays out the windows');
     ok(methods.includes('_integralEagerGroups'), 'integrates each window for eager signals');
-    ok(methods.includes('_integralLazyGroups'), 'and partitions the per-day partials for lazy ones');
+    ok(lazyMethods.includes('groupWindows.forEach((periodWindow, windowIndex) => {'), 'and each window for lazy ones, on the same streams');
     ok(methods.includes('nominalStep'), 'handing the series step down so a short window keeps it');
-    ok(methods.includes('reduceDailyIntegralByPeriod(entry.days || [], windows, groupBy, reduceParams)'),
-        'through the kernel, which is where the trailing-period rule lives');
-    const kernel = read('src/compute/kernels/definite-integral.js');
-    ok(/extendLastSample: params\.extendLastSample === true && periodWindow\.periodStartMs === tailPeriod/.test(kernel),
-        'only the period holding the last sample may extend it');
+    ok(lazyMethods.includes('nominalStep,'), 'on both paths');
     ok(methods.includes("barmode: grouped ? 'group' : 'overlay'"), 'grouped bars are drawn side by side');
     ok(methods.includes('sortSelect.disabled = grouped'), 'Order is disabled while the columns are a timeline');
 

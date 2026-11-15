@@ -27,6 +27,7 @@ import { installPlotTrendLazyMethods } from './methods/trend-lazy-methods.js';
 import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
 import { installPlotTemporalProfileMethods } from './methods/temporal-profile-methods.js';
 import { installPlotIntegralMethods } from './methods/integral-methods.js';
+import { installPlotIntegralLazyMethods } from './methods/integral-lazy-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { installPlotAudioLazyMethods } from './methods/audio-lazy-methods.js';
@@ -2702,6 +2703,8 @@ class PlotManager {
                 plot.correlationContainer = null;
                 plot.correlationOptionsEl = null;
             } else if (integralContainer) {
+                // A lazy file's integral still reading it stops with the pane.
+                this._abortAnalysisRun?.(plot, '_integralRunAbort');
                 if (plot.integralDiv) Plotly.purge(plot.integralDiv);
                 if (plot.integralPieDiv) Plotly.purge(plot.integralPieDiv);
                 Plotly.purge(plot.div);
@@ -5885,6 +5888,7 @@ installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);
 installPlotTemporalProfileMethods(PlotManager);
 installPlotIntegralMethods(PlotManager);
+installPlotIntegralLazyMethods(PlotManager);
 installPlotCurveFitMethods(PlotManager);
 installPlotTrendLazyMethods(PlotManager);
 installPlotTrendMethods(PlotManager);

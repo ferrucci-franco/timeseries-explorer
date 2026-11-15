@@ -943,7 +943,110 @@ FFT already paid.
 
 ### #385: Lazy integral
 
-Not landed yet.
+The lazy integral had a SQL path of its own (`getDefiniteIntegralByDay`: one
+row per UTC day, folded in JS) that ran out of memory at 10 M rows, refused a
+numeric time axis, and ran on while a newer request waited for it. It is gone.
+A lazy file now runs **the in-memory kernel** over every row of the range, on
+any axis, a chunk at a time:
+
+- **The kernel as passes.** `computeDefiniteIntegral`
+  (`src/compute/kernels/definite-integral.js`) keeps its signature and its
+  results; it is now the in-memory driver of `definiteIntegralPasses`, a
+  generator of passes over the rows (`scan`: extent, order, steps; `steps`:
+  only when the median step is not settled; `days`: only for a whole-day
+  policy or the incomplete-ends trim; `area`: the quadrature). Every running
+  quantity carries over from one chunk to the next, so whole arrays and a
+  stream of chunks give the same doubles in the same order of summation. A
+  differential fuzz against the previous kernel (random series with gaps,
+  disorder, NaN runs, every policy, ranges, injected steps; about 12 000
+  cases, each also fed in random chunks with a few steps kept)
+  matched with `Object.is` on every field. In memory it costs what it did:
+  10 M rows, `--modes=eager`, open / type / param 844 / 670 / 696 ms on the
+  numeric axis (771 / 1186 / 811 before) and 545 / 429 / 731 ms on the
+  calendar one (663 / 685 / 1291 before) — #381 moves it off the main thread.
+- **The median step over a stream** (`src/utils/step-median.js`). The gap
+  verdict needs the median of the positive steps and the share within 10 % of
+  it. Up to 1 M steps are kept and it does what `detectSamplingGaps` does (in
+  memory the limit is infinite: that very code). Past that, a histogram keyed
+  by the top 16 bits of each step's IEEE pattern, with each bucket's min and
+  max: a bucket whose min equals its max holds the answer (a regular axis, no
+  further pass); otherwise one more pass keeps that bucket's steps or
+  histograms its next 16 bits. The 80 % agreement is bounded from the buckets
+  and counted exactly only when the bounds straddle the gate. An order
+  statistic is the same double however it is found.
+- **`interpolate` on the fly**: a short NaN run is held until its far end is
+  read; one longer than 4 096 rows is noted by the scan, so no pass holds more.
+- **The rows the in-memory path reads**
+  (`src/plots/methods/integral-lazy-methods.js`, no Plotly, run in Node by
+  the test). Each pass is one `streamColumns` of the file, transformed by
+  `_transformFetchedPhaseTrajectory`; a router (`createSliceRouter`) cuts it,
+  on the transformed time, into exactly the slices `_integralSeriesForTrace`
+  and `_integralEagerGroups` take — the range and one neighbour on each side,
+  each calendar period with its two — so the totals and the periods of
+  *Group by* ride on the same streams. The stream's bounds come from rows the
+  panel already holds (the overview and the file's first and last row), checked
+  on the first chunk; only when that check fails, or there is no known row
+  before the range, is the file asked for the exact neighbours (one
+  aggregate). A stream stops once the row after the range is read. *Full* and
+  the periods reach the file's first and last rows (`_integralDomain` adds
+  `_lazyTimeExtent`, as the FFT's does).
+- **Streams per file**: two on a regular axis (scan, quadrature); one more for a
+  whole-day policy; one or two more when the steps differ in their last digits
+  and the median needs the histogram — the 4 kHz numeric file of these tables
+  is such an axis: three.
+- **Stopping.** Each run reads with a run signal of its own
+  (`_analysisRunSignal`, slot `_integralRunAbort`), aborted by
+  `_scheduleIntegralRecompute` when a newer run is asked for, by
+  `_dropAnalysisRuns` on Cancel, and when the pane closes. An `AbortError` the
+  run did not ask for (the neighbours' aggregate interrupted by someone else's
+  `cancelActiveQuery`, now that #384 turns the interrupt into an `AbortError`)
+  starts the run again; it never draws a partial result. The pill shows the
+  progress: *"Integrating every row of the file: pass 2, 1,234,567 rows
+  read…"*.
+- **Tests.** `scripts/test-lazy-integral.mjs` (`test:lazy-integral`): the
+  same CSV lazy on DuckDB-WASM (Node build) and in memory, through the panel's
+  own in-memory code; calendar, numeric and row-number axes; total and by day,
+  week and month; whole file and a selection; every policy, both methods, the
+  trailing period, the ends trim and *discard for all signals* across two
+  signals; no transform and every transform; small chunks and the median by
+  histogram: 132 configurations, 16 610 numbers equal with `Object.is`. Also:
+  the router against the in-memory slices; early stop; bounds from the
+  overview, and the fallback when they are not rows of the stream; Cancel; a
+  foreign abort runs again with nothing partial shown. `test:definite-integral`
+  checks the passes in chunks and the streamed median against
+  `detectSamplingGaps`. `scripts/e2e-analysis-cancel.mjs` now checks the
+  integral's supersede too (a newer request aborts the hung stream when it is
+  scheduled).
+
+After, lazy (`--modes=lazy --analyses=integral,integral-calendar`, one run,
+the same machine as the tables above):
+
+| File | Action | Before | After | Longest task (computation) |
+|---|---|---|---|---|
+| numeric axis, 1.2 M | open (whole file) | refused | 3.2 s | 154 ms (22) |
+| numeric axis, 1.2 M | type (10–90 %) | refused | 1.5 s | 0 |
+| numeric axis, 10 M | open | refused | 23.7 s | 213 ms (29) |
+| numeric axis, 10 M | type / param | refused | 20.1 s / 19.7 s | 0 |
+| numeric axis, 10 M | drag while it reads | refused | 15.0 s; the read in flight aborted 0 ms after the release | 0 |
+| calendar axis, 1.2 M | open / type / param (group by day) | 4.7 / 3.8 / 3.6 s | 2.1 / 2.0 / 2.0 s | 235 ms (29) |
+| calendar axis, 1.2 M | drag while it reads | 6.0 s, the read ran to its end | 1.8 s, aborted 0 ms after | 0 |
+| calendar axis, 10 M | open | fails after 15.8 s (out of memory) | 12.3 s | 143 ms (68) |
+| calendar axis, 10 M | type / param (group by day) | fails after 13.6 / 11.9 s | 11.3 s / 11.4 s | 81 ms (11) |
+| calendar axis, 10 M | drag while it reads | 23.3 s, ran to its end, then failed | 10.4 s, aborted 0 ms after | 0 |
+| every file | cancel | — | stopped in 1–4 ms, the range back | 0 |
+
+The longest task of every lazy action is Plotly drawing the bars on *open*
+(119–205 ms); the read and the kernel never held the thread more than 68 ms (a
+chunk is 131 072 rows). The time is DuckDB reading the CSV, once per pass:
+about 6–8 s a pass at 10 M rows. Kept for later: a change that leaves the rows
+alone (the method, the policy) could reuse the scan of the run before, which
+would save one of the passes; not done.
+
+Seen once and not again: in the first full run, the page of the numeric 10 M
+lazy session was lost during the *drag* (*"Execution context was destroyed"*)
+and, in another run, the eager calendar 10 M page while loading; both
+sessions completed when run again (twice for the lazy one), on a machine
+shared with other jobs.
 
 ### #386: Borderline tasks
 

@@ -12,8 +12,6 @@ import {
     INTEGRAL_GROUPINGS,
     INTEGRAL_MAX_GROUPS,
     INTEGRAL_MISSING_POLICIES,
-    reduceDailyIntegral,
-    reduceDailyIntegralByPeriod,
 } from '../../compute/kernels/definite-integral.js';
 import {
     axisDuration,
@@ -95,7 +93,8 @@ const fallbackText = {
     integralUnequalCoverage: 'signals cover different durations — compare with care',
     integralUncovered: 'missing time in the range: {time}. It contributed nothing, so the totals are lower bounds.',
     integralUncoveredInterpolated: 'missing time in the range: {time}. It was crossed by linear interpolation.',
-    integralLazyUnsupported: 'this large (lazy) signal has no exact source column, or its file has no calendar time axis',
+    integralLazyUnsupported: 'this large (lazy) signal has no source column in its file: only an overview of it is in memory',
+    integralLazyStreaming: 'Integrating every row of the file: pass {pass}, {rows} rows read…',
     integralPieMixedSigns: 'the pie is hidden: the totals do not all share one sign, and a pie cannot show a sum with cancellations',
     integralPieMixedUnits: 'the pie is hidden: the signals do not share one unit',
     integralCoverage: 'Coverage',
@@ -123,7 +122,7 @@ const fallbackText = {
     integralQuantityTip: 'What the bars carry. All three appear in the summary and the hover regardless.',
     integralPerDay: 'Per day',
     integralMean: 'Mean value',
-    integralLazyFailed: 'the file could not be queried for this total',
+    integralLazyFailed: 'the file could not be read for this total',
     integralGroupBy: 'Group by',
     integralGroupNone: 'Whole range',
     integralGroupDay: 'Day',
@@ -577,7 +576,21 @@ proto._integralDomain = function(plot) {
         if (values?.length) arrays.push(values);
     }
     const extent = this._finiteSortedExtent(arrays);
-    return extent ? { min: extent.min, max: extent.max } : null;
+    let min = extent ? extent.min : Infinity;
+    let max = extent ? extent.max : -Infinity;
+    // A lazy file's overview is a sample of its rows: its ends are the file's,
+    // read from the metadata (as the FFT's and the histogram's domain), so
+    // "Full" and the calendar periods of "Group by" reach the first and last
+    // rows the lazy integral reads.
+    for (const trace of plot?.traces || []) {
+        if (!this.files.get(trace.fileId)?.data?._duckdb) continue;
+        for (const value of this._lazyTimeExtent?.(trace.fileId) || []) {
+            if (!Number.isFinite(value)) continue;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+        }
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
 };
 
 proto._activeIntegralRange = function(plot) {
@@ -882,6 +895,10 @@ proto._scheduleIntegralRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.integralDiv || plot.mode !== 'integral') return;
     clearTimeout(plot._integralRecomputeTimer);
+    // A lazy file's read in flight answers settings that have just changed:
+    // stop it now, so the new one does not wait behind it (#385). What it drew
+    // stays on screen until the new result replaces it.
+    this._abortAnalysisRun(plot, '_integralRunAbort');
     const run = () => {
         const state = this._ensureIntegralState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'integral');
@@ -948,34 +965,40 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
         });
     }
 
-    const lazyByTrace = await this._queryLazyIntegralDays(plot, lazy, state, range, warnings);
-    if (plot._integralToken !== token) return;
-
-    // `discard-day-all` needs every signal's holes before any total can be
-    // computed, so that all bars end up integrating exactly the same days. The
-    // union spans eager and lazy alike — a day missing from a large file must
-    // leave the domain of the small one too, or the bars stop being comparable.
-    let sharedExcludedDays = null;
-    if (state.missingPolicy === 'discard-day-all') {
-        const union = new Set();
-        for (const candidate of eager) {
-            if (candidate.base.kind !== 'datetime') continue;
-            const params = this._integralKernelParams(state, candidate, range, null);
-            for (const day of collectMissingDays(candidate.values, params.time, params.options).days) union.add(day);
-        }
-        for (const entry of lazyByTrace.values()) {
-            for (const day of entry.days || []) if (day.hasHole) union.add(day.day);
-        }
-        sharedExcludedDays = [...union];
-    }
-
     // Calendar grouping: the whole-range total is still computed for every
     // signal — it is what the summary and the status line report, and what the
     // columns must add up to — and each period is then integrated separately
     // over a window sharing its edges with its neighbours.
     const groupWindows = this._integralGroupWindows(plot, state, warnings);
     const groupBy = groupWindows ? state.groupBy : 'none';
+
+    // `discard-day-all` needs every signal's holes before any total can be
+    // computed, so that all bars end up integrating exactly the same days. The
+    // union spans eager and lazy alike — a day missing from a large file must
+    // leave the domain of the small one too, or the bars stop being comparable.
+    const eagerHoleDays = new Set();
+    if (state.missingPolicy === 'discard-day-all') {
+        for (const candidate of eager) {
+            if (candidate.base.kind !== 'datetime') continue;
+            const params = this._integralKernelParams(state, candidate, range, null);
+            for (const day of collectMissingDays(candidate.values, params.time, params.options).days) eagerHoleDays.add(day);
+        }
+    }
+
+    // Lazy traces: the same kernel over every row of the file, streamed
+    // (integral-lazy-methods.js), with the eager holes in its union.
+    const lazyRun = await this._runLazyIntegral(panelId, plot, token, lazy, {
+        state, range, groupWindows, eagerHoleDays: [...eagerHoleDays], warnings,
+    });
+    if (plot._integralToken !== token || lazyRun.aborted) return;
+    // The pane may have been closed while the file was read.
+    if (!plot.integralDiv || plot.mode !== 'integral') return;
     plot._integralGroupBy = groupBy;
+
+    let sharedExcludedDays = null;
+    if (state.missingPolicy === 'discard-day-all') {
+        sharedExcludedDays = [...new Set([...eagerHoleDays, ...lazyRun.holeDays])];
+    }
 
     let assumedSeconds = false;
     let indexAxis = false;
@@ -1003,34 +1026,18 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     }, warnings);
     if (measured.superseded) return;
     for (const candidate of lazy) {
-        const entry = lazyByTrace.get(candidate.trace);
+        const entry = lazyRun.byTrace.get(candidate.trace);
         if (!entry) continue;
-        const reduceParams = {
-            method: state.method,
-            missingPolicy: state.missingPolicy,
-            rangeStart: entry.rangeStart,
-            rangeEnd: entry.rangeEnd,
-            medianDt: entry.medianDt,
-            hasNominalStep: entry.hasNominalStep,
-            negativeDtCount: entry.negativeDtCount,
-            gapCount: entry.gapCount,
-            nanSegmentCount: entry.nanSegmentCount,
-            discardIncompleteEnds: state.discardIncompleteEnds,
-            extendLastSample: state.extendLastSample,
-            explicitRangeEnd: !state.rangeFull,
-            excludedDays: sharedExcludedDays,
-        };
-        const result = reduceDailyIntegral(entry.days, reduceParams);
+        if (candidate.base.assumed) assumedSeconds = true;
+        if (candidate.base.kind === 'index') indexAxis = true;
         models.push({
             trace: candidate.trace,
             traceIndex: candidate.traceIndex,
             name: candidate.name,
             unit: this._integralValueUnit(candidate.trace),
             base: candidate.base,
-            result,
-            groups: groupWindows
-                ? this._integralLazyGroups(entry, groupWindows, groupBy, reduceParams)
-                : null,
+            result: entry.result,
+            groups: entry.groups,
             lazy: true,
         });
     }
@@ -1137,79 +1144,68 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     this._setIntegralStatus(plot, summary, warnings, 'ready', notes);
 };
 
-// Per-day integral partials for the lazy traces, one query per file. The SQL
-// answers only "how much, where"; every whole-day policy is decided afterwards
-// by reduceDailyIntegral, against the same rules the eager kernel applies.
+// The lazy traces of a run: every row of their files, streamed through the
+// in-memory kernel (_lazyIntegralResults, integral-lazy-methods.js), on any
+// time axis. A trace whose values exist only on the overview (no SQL over the
+// file) is left out and named.
 //
-// Anything the query cannot answer degrades to a named warning and no bar —
-// never to a number that looks exact and is not.
-proto._queryLazyIntegralDays = async function(plot, lazy, state, range, warnings) {
-    const byTrace = new Map();
-    if (!lazy.length) return byTrace;
-    const byFile = new Map();
+// The run's reads carry a signal of their own (_analysisRunSignal): a newer
+// run aborts it when it is scheduled (_scheduleIntegralRecompute), and Cancel
+// through the panel's signal. Resolves to { aborted: true } when stopped, for
+// the caller to draw nothing — and an abort the run did not ask for (a query
+// interrupted by someone else, its signal untouched) starts the run again,
+// never shows a partial result.
+proto._runLazyIntegral = async function(panelId, plot, token, lazy, { state, range, groupWindows, eagerHoleDays, warnings }) {
+    const empty = { aborted: false, byTrace: new Map(), holeDays: [] };
+    if (!lazy.length) return empty;
+    const readable = [];
     for (const candidate of lazy) {
-        if (!byFile.has(candidate.trace.fileId)) byFile.set(candidate.trace.fileId, []);
-        byFile.get(candidate.trace.fileId).push(candidate);
+        const data = this.files.get(candidate.trace.fileId)?.data;
+        const variable = data?.variables?.[candidate.trace.varName];
+        if (variable && data?._duckdb?.source?.hasSqlValue?.(variable)) readable.push(candidate);
+        else warnings.push(`${candidate.name}: ${text('integralLazyUnsupported')}`);
     }
-    const signal = this._analysisSignal(plot);
-    for (const [fileId, candidates] of byFile) {
-        const data = this.files.get(fileId)?.data;
-        const source = data?._duckdb?.source;
-        if (!source?.getDefiniteIntegralByDay) {
-            for (const candidate of candidates) warnings.push(`${candidate.name}: ${text('integralLazyUnsupported')}`);
-            continue;
-        }
-        const transform = this._fileTransform(fileId);
-        const timeShiftMs = this._parseTimeShift(fileId, transform.timeShift) || 0;
-        const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
-        const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
-        const cropRange = (cropStart != null || cropEnd != null)
-            ? [cropStart ?? -Infinity, cropEnd ?? Infinity]
-            : null;
-        const transforms = {};
-        for (const candidate of candidates) {
-            const sign = this.isVariableSignInverted?.(fileId, candidate.trace.varName) ? -1 : 1;
-            transforms[candidate.trace.varName] = { gain: transform.gain * sign, yOffset: transform.yOffset };
-        }
-        try {
-            const result = await source.getDefiniteIntegralByDay(data, candidates.map(c => c.trace.varName), {
-                timeShiftMs,
-                cropRange,
+    if (!readable.length) return empty;
+    const signal = this._analysisRunSignal(plot, '_integralRunAbort');
+    try {
+        return {
+            aborted: false,
+            ...await this._lazyIntegralResults(readable, {
+                state,
                 range,
-                missingPolicy: state.missingPolicy,
-                transforms,
+                groupWindows,
+                eagerHoleDays,
                 signal,
-            });
-            if (!result?.ok) {
-                for (const candidate of candidates) warnings.push(`${candidate.name}: ${text('integralLazyUnsupported')}`);
-                continue;
+                onProgress: ({ pass, rows }) => {
+                    if (plot._integralToken !== token || signal?.aborted) return;
+                    this._setIntegralComputing(plot, true, text('integralLazyStreaming')
+                        .replace('{pass}', String(pass))
+                        .replace('{rows}', i18n.formatNumber(rows)));
+                },
+            }),
+        };
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            if (this._isForeignAbort(error, signal) && plot._integralToken === token) {
+                plot._integralToken = token + 1;
+                this._scheduleIntegralRecompute(panelId, { immediate: true });
             }
-            for (const blockedName of result.blocked || []) {
-                warnings.push(`${this._traceName(blockedName, fileId)}: ${text('integralLazyUnsupported')}`);
-            }
-            const entryByVar = new Map(result.traces.map(entry => [entry.varName, entry]));
-            for (const candidate of candidates) {
-                const entry = entryByVar.get(candidate.trace.varName);
-                if (entry) byTrace.set(candidate.trace, entry);
-            }
-        } catch (error) {
-            // Cancelled from the computing pill: the caller's token is gone.
-            if (error?.name === 'AbortError') return byTrace;
-            for (const candidate of candidates) {
-                warnings.push(`${candidate.name}: ${text('integralLazyFailed')}`);
-            }
-            console.warn('Integral: lazy query failed', error);
+            return { ...empty, aborted: true };
         }
+        console.warn('Integral: lazy read failed', error);
+        for (const candidate of readable) warnings.push(`${candidate.name}: ${text('integralLazyFailed')}`);
+        return empty;
+    } finally {
+        this._settleAnalysisRun(plot, '_integralRunAbort', signal);
     }
-    return byTrace;
 };
 
 // The shared computing pill (analysis-busy-methods.js): it sits above the
 // analysis pane with pointer-events off, so the previous bars stay readable
 // and pannable while the replacement is being computed; its Cancel button
 // stops the computation and keeps them.
-proto._setIntegralComputing = function(plot, loading) {
-    this._setAnalysisComputing(plot, loading, { label: text('integralCalculating'), className: 'integral-computing-indicator' });
+proto._setIntegralComputing = function(plot, loading, label = null) {
+    this._setAnalysisComputing(plot, loading, { label: label || text('integralCalculating'), className: 'integral-computing-indicator' });
 };
 
 // ─── Calendar grouping ────────────────────────────────────────────────────
@@ -1262,13 +1258,6 @@ proto._integralEagerGroups = function(state, candidate, windows, sharedExcludedD
             }),
         };
     });
-};
-
-// The same split for a lazy signal, from the per-day partials the file already
-// gave up. Every grouping period is a whole number of UTC days, so grouping is
-// a partition of those partials: no second query, and the same arithmetic.
-proto._integralLazyGroups = function(entry, windows, groupBy, reduceParams) {
-    return reduceDailyIntegralByPeriod(entry.days || [], windows, groupBy, reduceParams);
 };
 
 // The kernel's inputs for one candidate: the time context in raw abscissa units
