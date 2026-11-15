@@ -36,7 +36,7 @@ function hslToHex(h, s, l) {
     return `#${hexByte((r + m) * 255)}${hexByte((g + m) * 255)}${hexByte((b + m) * 255)}`;
 }
 
-// A colour as the '#rrggbb' a native colour input takes, or null when it is
+// A colour as '#rrggbb' (what a session saves), or null when it is
 // none the app writes: '#rgb', '#rrggbb', 'rgb(…)' and the 'hsl(…)' a trace
 // gets once the palette is used up (PlotManager._nextTraceColor).
 export function traceColorHex(color) {
@@ -50,6 +50,46 @@ export function traceColorHex(color) {
     match = /^hsla?\(\s*([-\d.]+)(?:deg)?\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%/.exec(text);
     if (match) return hslToHex(+match[1], +match[2] / 100, +match[3] / 100);
     return null;
+}
+
+const clampUnit = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+
+// The picker of a colour of one's own works in hue (0–360), saturation and
+// value (0–1): a square of saturation by value, and a strip of hue beside it.
+// A hex colour as that triple; null when it is not a colour (traceColorHex).
+export function hexToHsv(color) {
+    const hex = traceColorHex(color);
+    if (!hex) return null;
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const max = Math.max(r, g, b);
+    const delta = max - Math.min(r, g, b);
+    let h = 0;
+    if (delta > 0) {
+        h = max === r ? ((g - b) / delta) % 6
+            : max === g ? (b - r) / delta + 2
+            : (r - g) / delta + 4;
+        h = (h * 60 + 360) % 360;
+    }
+    return { h, s: max === 0 ? 0 : delta / max, v: max };
+}
+
+// And back: the '#rrggbb' of a hue, saturation and value.
+export function hsvToHex(h, s, v) {
+    const hue = (((Number.isFinite(h) ? h : 0) % 360) + 360) % 360;
+    const sat = clampUnit(s);
+    const val = clampUnit(v);
+    const c = val * sat;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = val - c;
+    const [r, g, b] = hue < 60 ? [c, x, 0]
+        : hue < 120 ? [x, c, 0]
+        : hue < 180 ? [0, c, x]
+        : hue < 240 ? [0, x, c]
+        : hue < 300 ? [x, 0, c]
+        : [c, 0, x];
+    return `#${hexByte((r + m) * 255)}${hexByte((g + m) * 255)}${hexByte((b + m) * 255)}`;
 }
 
 // Where `where` puts the item at `index` in a list of `length`, or -1 when it

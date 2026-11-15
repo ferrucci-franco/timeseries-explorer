@@ -1,6 +1,8 @@
 import i18n from '../../i18n/index.js';
 import {
     TRACE_COLOR_SWATCHES,
+    hexToHsv,
+    hsvToHex,
     moveTraceInList,
     setTraceColor,
     traceColorHex,
@@ -125,9 +127,17 @@ export function installPlotTraceStyleMethods(TargetClass) {
         return true;
     };
 
-    // The colour picker: the palette, then a colour of one's own through the
-    // browser's picker. A pick applies at once and closes it; Escape or a
-    // press outside closes it with nothing changed.
+    // The colour picker: the palette, then a colour of one's own. A palette
+    // pick applies at once and closes it; Escape or a press outside closes it
+    // with nothing changed.
+    //
+    // A colour of one's own is chosen in the picker's own square and strip,
+    // by pressing or sliding (a finger or the mouse), and applied only by its
+    // Apply button. It was the browser's picker (<input type="color">) at
+    // first, applied on `change`: on a phone that event comes on every move
+    // of the finger, so sliding to look for a colour rebuilt the panel many
+    // times a second and removed the input its own picker was open on, and
+    // the browser closed. Nothing here touches the plot until Apply.
     proto._showTraceColorPopover = function(point, trace, { onChange = null } = {}) {
         document.querySelector('.trace-color-popover')?.remove();
         const current = traceColorHex(trace?.color);
@@ -146,6 +156,13 @@ export function installPlotTraceStyleMethods(TargetClass) {
         const pick = (color) => {
             close();
             this._setTraceStyleColor(trace, color, { onChange });
+        };
+        const place = () => {
+            const at = point || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+            const x = Math.min(at.x, window.innerWidth - popover.offsetWidth - 8);
+            const y = Math.min(at.y, window.innerHeight - popover.offsetHeight - 8);
+            popover.style.left = `${Math.max(8, x)}px`;
+            popover.style.top = `${Math.max(8, y)}px`;
         };
 
         const title = document.createElement('div');
@@ -169,25 +186,189 @@ export function installPlotTraceStyleMethods(TargetClass) {
         }
         popover.appendChild(grid);
 
-        const custom = document.createElement('label');
+        // ── A colour of one's own ───────────────────────────────────────
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'trace-color-custom-toggle';
+        toggle.textContent = i18n.t('traceColorCustom');
+        toggle.setAttribute('aria-expanded', 'false');
+        popover.appendChild(toggle);
+
+        const custom = document.createElement('div');
         custom.className = 'trace-color-custom';
-        const input = document.createElement('input');
-        input.type = 'color';
-        input.value = current || TRACE_COLOR_SWATCHES[0];
-        // `change`, not `input`: the browser's picker sends `input` on every
-        // move of its cursor, and each pick rebuilds the panel.
-        input.addEventListener('change', () => pick(input.value));
-        const customLabel = document.createElement('span');
-        customLabel.textContent = i18n.t('traceColorCustom');
-        custom.append(input, customLabel);
+        custom.hidden = true;
         popover.appendChild(custom);
 
+        // The colour being looked for: the picker's own state, the plot's
+        // only on Apply. Kept as hue, saturation and value, so the hue is not
+        // lost on the way through a grey or black.
+        const hsv = hexToHsv(current || TRACE_COLOR_SWATCHES[0]);
+
+        const area = document.createElement('div');
+        area.className = 'trace-color-area';
+        area.tabIndex = 0;
+        area.setAttribute('role', 'slider');
+        area.setAttribute('aria-label', i18n.t('traceColorShade'));
+        const areaThumb = document.createElement('div');
+        areaThumb.className = 'trace-color-thumb';
+        area.appendChild(areaThumb);
+
+        const hue = document.createElement('div');
+        hue.className = 'trace-color-hue';
+        hue.tabIndex = 0;
+        hue.setAttribute('role', 'slider');
+        hue.setAttribute('aria-label', i18n.t('traceColorHue'));
+        hue.setAttribute('aria-valuemin', '0');
+        hue.setAttribute('aria-valuemax', '360');
+        const hueThumb = document.createElement('div');
+        hueThumb.className = 'trace-color-thumb';
+        hue.appendChild(hueThumb);
+
+        const row = document.createElement('div');
+        row.className = 'trace-color-result';
+        const preview = document.createElement('span');
+        preview.className = 'trace-color-preview';
+        const before = document.createElement('span');
+        before.style.background = current || 'transparent';
+        const after = document.createElement('span');
+        preview.append(before, after);
+        const hex = document.createElement('input');
+        hex.type = 'text';
+        hex.className = 'trace-color-hex';
+        hex.maxLength = 7;
+        hex.spellcheck = false;
+        hex.autocapitalize = 'off';
+        hex.autocomplete = 'off';
+        hex.setAttribute('aria-label', i18n.t('traceColorHex'));
+        row.append(preview, hex);
+
+        const actions = document.createElement('div');
+        actions.className = 'trace-color-actions';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'trace-color-cancel';
+        cancel.textContent = i18n.t('cancel');
+        const apply = document.createElement('button');
+        apply.type = 'button';
+        apply.className = 'trace-color-apply';
+        apply.textContent = i18n.t('apply');
+        actions.append(cancel, apply);
+
+        custom.append(area, hue, row, actions);
+
+        const chosen = () => hsvToHex(hsv.h, hsv.s, hsv.v);
+        const render = ({ keepText = false } = {}) => {
+            const color = chosen();
+            area.style.setProperty('--trace-color-hue', String(Math.round(hsv.h)));
+            areaThumb.style.left = `${hsv.s * 100}%`;
+            areaThumb.style.top = `${(1 - hsv.v) * 100}%`;
+            areaThumb.style.background = color;
+            hueThumb.style.left = `${(hsv.h / 360) * 100}%`;
+            hueThumb.style.background = hsvToHex(hsv.h, 1, 1);
+            after.style.background = color;
+            area.setAttribute('aria-valuetext', color);
+            hue.setAttribute('aria-valuenow', String(Math.round(hsv.h)));
+            popover.dataset.color = color;
+            if (!keepText) hex.value = color;
+        };
+
+        // Pressing or sliding on `element` reports where, as two fractions of
+        // its box. The pointer is captured, so a slide that leaves the box
+        // keeps going; CSS gives the box `touch-action: none`, so a finger
+        // slides the colour and not the page.
+        const slide = (element, onAt) => {
+            const report = (event) => {
+                const rect = element.getBoundingClientRect();
+                if (!(rect.width > 0 && rect.height > 0)) return;
+                onAt(
+                    Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+                    Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+                );
+            };
+            element.addEventListener('pointerdown', (down) => {
+                if (down.button > 0) return;
+                down.preventDefault();
+                element.focus({ preventScroll: true });
+                try {
+                    element.setPointerCapture(down.pointerId);
+                } catch {
+                    // A pointer that is already gone: the press still counts.
+                }
+                report(down);
+                const move = (event) => {
+                    if (event.pointerId === down.pointerId) report(event);
+                };
+                const end = (event) => {
+                    if (event.pointerId !== down.pointerId) return;
+                    element.removeEventListener('pointermove', move);
+                    element.removeEventListener('pointerup', end);
+                    element.removeEventListener('pointercancel', end);
+                };
+                element.addEventListener('pointermove', move);
+                element.addEventListener('pointerup', end);
+                element.addEventListener('pointercancel', end);
+            });
+        };
+        slide(area, (x, y) => {
+            hsv.s = x;
+            hsv.v = 1 - y;
+            render();
+        });
+        slide(hue, (x) => {
+            hsv.h = x * 360;
+            render();
+        });
+
+        const arrows = (element, onStep) => {
+            element.addEventListener('keydown', (event) => {
+                const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[event.key];
+                if (!step) return;
+                event.preventDefault();
+                onStep(step[0], step[1], event.shiftKey ? 5 : 1);
+                render();
+            });
+        };
+        arrows(area, (dx, dy, times) => {
+            hsv.s = Math.max(0, Math.min(1, hsv.s + dx * 0.02 * times));
+            hsv.v = Math.max(0, Math.min(1, hsv.v + dy * 0.02 * times));
+        });
+        arrows(hue, (dx, dy, times) => {
+            hsv.h = Math.max(0, Math.min(360, hsv.h + (dx || dy) * 2 * times));
+        });
+
+        const typed = () => {
+            const text = hex.value.trim();
+            return /^#?(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(text) ? hexToHsv(text.startsWith('#') ? text : `#${text}`) : null;
+        };
+        hex.addEventListener('input', () => {
+            const value = typed();
+            hex.classList.toggle('is-invalid', !value);
+            if (!value) return;
+            Object.assign(hsv, value);
+            render({ keepText: true });
+        });
+        hex.addEventListener('blur', () => {
+            hex.classList.remove('is-invalid');
+            render();
+        });
+        hex.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            if (typed()) pick(chosen());
+        });
+
+        toggle.addEventListener('click', () => {
+            const open = custom.hidden;
+            custom.hidden = !open;
+            toggle.setAttribute('aria-expanded', String(open));
+            if (open) render();
+            place();
+        });
+        cancel.addEventListener('click', () => close());
+        apply.addEventListener('click', () => pick(chosen()));
+
         document.body.appendChild(popover);
-        const at = point || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-        const x = Math.min(at.x, window.innerWidth - popover.offsetWidth - 8);
-        const y = Math.min(at.y, window.innerHeight - popover.offsetHeight - 8);
-        popover.style.left = `${Math.max(8, x)}px`;
-        popover.style.top = `${Math.max(8, y)}px`;
+        place();
         (grid.querySelector('[aria-pressed="true"]') || grid.firstElementChild)?.focus?.();
         setTimeout(() => {
             if (!popover.isConnected) return;
