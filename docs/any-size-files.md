@@ -2038,6 +2038,24 @@ tecleado (antes: 1,3 s); arrastrar el deslizador durante la lectura la aborta
 al soltarlo, con un `AbortError`, el espectro que sale es el del rango
 arrastrado y no queda ninguna conexión de stream abierta.
 
+La misma medición para todos los demás análisis, en lazy y en memoria, antes
+de arreglarlos: `docs/analysis-responsiveness.md` (el arnés es
+`scripts/bench-analysis-responsiveness.mjs`). El trabajo que pide está
+repartido en los issues #381 a #389, listados allí ("The work, by issue").
+
+Huecos conocidos que esa medición encontró en lazy, abiertos hasta que su
+issue se cierre:
+
+| Hueco | Qué pasa hoy | Issue |
+|---|---|---|
+| Integral (análisis) sobre 10 M filas, eje calendario | `getDefiniteIntegralByDay` termina en *Out of Memory* de DuckDB (1,4 GiB) tras 12–16 s; el panel dice que no se pudo consultar el archivo | #385 |
+| Integral (análisis) con eje de tiempo numérico | se rechaza con aviso (`integralLazyUnsupported`) | #385 |
+| Histograma | lee todas las filas, pero los cuartiles se calculan después en el hilo principal (0,6–1,7 s) | #383 |
+| Ajustes exponenciales (curve fit, trend, ajuste 2D) con hasta 6 M filas en el rango | el ajuste corre en el hilo principal (1–10 s) | #382 |
+| Heatmap, perfil temporal, correlación de pares | un cambio hecho durante una consulta no la cancela: el resultado tarda el doble | #384 |
+| Trend | tras Cancel el estado no dice "cancelado" | #384 |
+| Herramienta de correlación cruzada, archivo por encima de 8 M filas | 14 s de consultas sin cancelación antes de rechazar el archivo | #388 |
+
 #### *Full* lee todas las filas del archivo
 
 Al medir apareció otra diferencia con el modo estándar, más vieja que #174:
