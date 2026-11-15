@@ -666,6 +666,10 @@ proto._scheduleTemporalProfileRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.temporalProfileDiv || plot.mode !== 'temporal-profile') return;
     clearTimeout(plot._temporalProfileRecomputeTimer);
+    // A lazy file's query in flight answers settings that have just changed:
+    // stop it now, so the new one does not queue behind it on DuckDB (#384).
+    // What it drew stays on screen until the new result replaces it.
+    this._abortAnalysisRun(plot, '_temporalProfileRunAbort');
     const run = () => {
         const state = this._ensureTemporalProfileState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'temporal-profile');
@@ -785,7 +789,8 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
         // panel shows (_lazyCalendarTimeSql) with the file's transforms; a
         // signal with SQL over the file (a column, a data tool's output, a
         // formula) is exact, one that exists only on the overview is left out.
-        const signal = this._analysisSignal(plot);
+        // This run's signal: a newer run aborts it, and so does Cancel.
+        const signal = this._analysisRunSignal(plot, '_temporalProfileRunAbort');
         const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
             const data = this.files.get(fileId)?.data;
             const source = data?._duckdb?.source;
@@ -823,10 +828,17 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
                 return { fileId, entries, error };
             }
         });
-        const settled = await Promise.all(jobs);
-        // A query shared with a panel whose analysis was cancelled: this run
-        // did not ask for that, so it starts again. Cancelled here: its token
-        // is gone, and the check below drops it.
+        let settled;
+        try {
+            settled = await Promise.all(jobs);
+        } finally {
+            this._settleAnalysisRun(plot, '_temporalProfileRunAbort', signal);
+        }
+        // Stopped: Cancel (its token is gone), or a newer run that takes over.
+        // Either way, what is on screen stays.
+        if (signal?.aborted) return;
+        // An abort this run did not ask for (a query stopped by someone else):
+        // it starts again.
         if (settled.some(job => job.foreign) && plot._temporalProfileToken === token) {
             plot._temporalProfileToken += 1;
             this._scheduleTemporalProfileRecompute(panelId, { immediate: true });

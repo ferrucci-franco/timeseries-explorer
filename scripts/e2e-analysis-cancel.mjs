@@ -15,6 +15,15 @@
 //      the one of that result — the status says so;
 //   5. with queries answering again, the analysis computes as before.
 //
+// The lazy SQL analyses (heatmap, temporal profile, pair correlation) and the
+// FFT also: a newer request made while a query hangs aborts that query when
+// it is scheduled, not when it would have ended, and the previous result
+// stays until the newest answers (#384).
+//
+// Trend's hung query is interrupted as DuckDB-WASM interrupts one: the
+// pending send fails with DuckDB's own error ("INTERRUPT Error"), not with a
+// clean AbortError, so the test sees that the app treats it as a cancel.
+//
 // Needs a Chromium for Playwright. Run with `npm run e2e:analysis-cancel`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
@@ -60,9 +69,37 @@ try {
             else signal.addEventListener('abort', fail, { once: true });
         });
         const query = source._interactiveQuery.bind(source);
-        source._interactiveQuery = (sql, options = {}) => (window.__hang.on && options?.signal
-            ? hangUntilAborted(options.signal)
-            : query(sql, options));
+        // __hang.duckdbError: the query goes through the real
+        // _interactiveQuery, and the connection holds it until cancelSent
+        // interrupts it — failing with DuckDB's error, as DuckDB-WASM does.
+        window.__hang.duckdbError = false;
+        const hungSql = new Set();
+        const conn = source._conn;
+        const send = conn.send.bind(conn);
+        const cancelSent = conn.cancelSent.bind(conn);
+        let interrupt = null;
+        conn.send = (sql, ...rest) => {
+            if (!hungSql.delete(sql)) return send(sql, ...rest);
+            window.__hang.started++;
+            return new Promise((resolve, reject) => {
+                interrupt = () => {
+                    interrupt = null;
+                    window.__hang.aborted++;
+                    reject(new Error('INTERRUPT Error: Interrupted!'));
+                };
+            });
+        };
+        conn.cancelSent = (...args) => {
+            if (!interrupt) return cancelSent(...args);
+            interrupt();
+            return Promise.resolve(true);
+        };
+        source._interactiveQuery = (sql, options = {}) => {
+            if (!(window.__hang.on && options?.signal)) return query(sql, options);
+            if (!window.__hang.duckdbError) return hangUntilAborted(options.signal);
+            hungSql.add(sql);
+            return query(sql, options);
+        };
         const stream = source.streamColumns.bind(source);
         source.streamColumns = (data, names, options = {}) => {
             if (!(window.__hang.on && options?.signal)) return stream(data, names, options);
@@ -152,7 +189,8 @@ try {
     });
 
     // `setting()` reads what the recompute changes; Cancel must put it back.
-    async function checkCancel({ name, id, mode, open, recompute, setting }) {
+    // `duckdbError`: the hung query is interrupted as DuckDB interrupts one.
+    async function checkCancel({ name, id, mode, open, recompute, setting, duckdbError = false }) {
         await open();
         await settled(id, mode);
         const before = await drawn(id, mode);
@@ -160,7 +198,7 @@ try {
 
         const hang = await page.evaluate(() => ({ ...window.__hang }));
         const settingBefore = await setting();
-        await page.evaluate(() => { window.__hang.on = true; });
+        await page.evaluate((duckdbError) => { window.__hang.on = true; window.__hang.duckdbError = duckdbError; }, duckdbError);
         await recompute();
         assert.notDeepEqual(await setting(), settingBefore, `${name}: the recompute changes a setting`);
         await page.waitForFunction(({ id, started }) => {
@@ -199,11 +237,47 @@ try {
         await page.waitForTimeout(600);
         assert.equal(await pillShown(id), false, `${name}: no recompute starts by itself`);
 
-        await page.evaluate(() => { window.__hang.on = false; });
+        await page.evaluate(() => { window.__hang.on = false; window.__hang.duckdbError = false; });
         await recompute();
         await settled(id, mode);
         assert.doesNotMatch(await statusText(id), /cancelled/, `${name}: and then it computes again`);
         console.log(`ok  ${name}`);
+    }
+
+    // A newer request while a query runs: the query it supersedes is aborted
+    // when the new run is scheduled (#384), and the previous result stays
+    // until the newest one replaces it.
+    async function checkSupersede({ name, id, mode, recompute }) {
+        await settled(id, mode);
+        const before = await drawn(id, mode);
+        const hang = await page.evaluate(() => ({ ...window.__hang }));
+        await page.evaluate(() => { window.__hang.on = true; });
+        await recompute();
+        await page.waitForFunction(({ id, started }) => {
+            const panel = document.querySelector(`.layout-panel[data-id="${id}"]`);
+            return window.__hang.started > started
+                && !!panel?.querySelector('.analysis-computing-indicator.active .analysis-cancel-btn');
+        }, { id, started: hang.started }, { timeout: 60000 });
+        const first = await page.evaluate(() => ({ ...window.__hang }));
+        assert.equal(first.aborted, hang.aborted, `${name}: the first query hangs`);
+
+        // The newer request: its schedule stops the hung query there and then.
+        await recompute();
+        const scheduled = await page.evaluate(() => ({ ...window.__hang }));
+        assert.ok(scheduled.aborted > first.aborted, `${name}: the superseded query is aborted when the newer run is scheduled`);
+        await page.waitForFunction(({ started }) => window.__hang.started > started, { started: first.started }, { timeout: 60000 });
+        assert.equal(await drawn(id, mode), before, `${name}: the previous result stays while the newest computes`);
+        assert.equal(await pillShown(id), true, `${name}: and the pill says it computes`);
+        assert.doesNotMatch(await statusText(id), /cancelled/, `${name}: a superseded run is not a cancel`);
+
+        // With queries answering again, the newest request settles.
+        const second = await page.evaluate(() => ({ ...window.__hang }));
+        await page.evaluate(() => { window.__hang.on = false; });
+        await recompute();
+        assert.ok((await page.evaluate(() => window.__hang.aborted)) > second.aborted, `${name}: and so is the next one it supersedes`);
+        await settled(id, mode);
+        assert.doesNotMatch(await statusText(id), /cancelled/, `${name}: the newest result is drawn`);
+        console.log(`ok  ${name}: a newer request aborts the query it supersedes`);
     }
 
     const pm = (fn, ...args) => page.evaluate(({ fn, args }) => {
@@ -245,19 +319,21 @@ try {
         await pm(schedule, id, { immediate: true });
     };
     const rangeOf = (id, key) => () => stateOf(id, key, ['rangeFull', 'x1', 'x2']);
-    for (const [name, mode, key, schedule] of [
-        ['FFT', 'fft', 'fft', '_scheduleFftRecompute'],
-        ['Histogram', 'histogram', 'histogram', '_scheduleHistogramRecompute'],
-        ['Heatmap', 'heatmap', 'heatmap', '_scheduleCalendarHeatmapRecompute'],
-        ['Temporal profile', 'temporal-profile', 'temporalProfile', '_scheduleTemporalProfileRecompute'],
-        ['Integral', 'integral', 'integral', '_scheduleIntegralRecompute'],
+    for (const [name, mode, key, schedule, supersede] of [
+        ['FFT', 'fft', 'fft', '_scheduleFftRecompute', true],
+        ['Histogram', 'histogram', 'histogram', '_scheduleHistogramRecompute', false],
+        ['Heatmap', 'heatmap', 'heatmap', '_scheduleCalendarHeatmapRecompute', true],
+        ['Temporal profile', 'temporal-profile', 'temporalProfile', '_scheduleTemporalProfileRecompute', true],
+        ['Integral', 'integral', 'integral', '_scheduleIntegralRecompute', false],
     ]) {
+        const recompute = () => toggleRange(timeId, key, schedule);
         await checkCancel({
             name, id: timeId, mode,
             open: () => toggle(timeId, mode),
-            recompute: () => toggleRange(timeId, key, schedule),
+            recompute,
             setting: rangeOf(timeId, key),
         });
+        if (supersede) await checkSupersede({ name, id: timeId, mode, recompute });
     }
     let curveModel = 'linear';
     await checkCancel({
@@ -276,10 +352,11 @@ try {
 
     // The trend analysis: its numbers come back from aggregate queries that
     // carry the panel's cancel signal, and its range is what a recompute
-    // changes — the whole signal ↔ the middle of it.
+    // changes — the whole signal ↔ the middle of it. Its hung query is
+    // interrupted as DuckDB interrupts one: Cancel must still read as a cancel.
     let trendFull = true;
     await checkCancel({
-        name: 'Trend analysis', id: timeId, mode: 'trend',
+        name: 'Trend analysis', id: timeId, mode: 'trend', duckdbError: true,
         open: async () => {
             await toggle(timeId, 'trend');
             await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.trendTableEl, timeId, { timeout: 30000 });
@@ -308,6 +385,10 @@ try {
         open: () => pick2d(twoDId, 'correlation'),
         recompute: () => toggleRange(twoDId, 'correlation', '_scheduleCorrelationRecompute'),
         setting: rangeOf(twoDId, 'correlation'),
+    });
+    await checkSupersede({
+        name: 'Correlation', id: twoDId, mode: 'correlation',
+        recompute: () => toggleRange(twoDId, 'correlation', '_scheduleCorrelationRecompute'),
     });
     let pairModel = 'linear';
     const setPairModel = (model) => page.evaluate(({ id, model }) => {

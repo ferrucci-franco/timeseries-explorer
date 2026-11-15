@@ -12,7 +12,10 @@
 //   · every analysis shows the shared pill (directly, or from its status
 //     setter while 'loading'), and the old private pills are gone;
 //   · its DuckDB queries carry the panel's analysis signal, and the
-//     DuckDbSource methods pass it to the query;
+//     DuckDbSource methods pass it to the query; the FFT and the lazy SQL
+//     analyses (heatmap, temporal profile, pair correlation) a run signal of
+//     their own, tied to it and aborted when a newer run is scheduled (#384);
+//     DuckDB's interrupt reaches the caller as an AbortError;
 //   · _dropAnalysisRuns stops every analysis' token, timer and paint wait,
 //     and _cancelPanelAnalysis uses it;
 //   · the texts exist in every language; the button takes the pointer and the
@@ -73,16 +76,31 @@ for (const [id, [file, pattern]] of Object.entries(showsPill)) {
 const queries = {
     // Each FFT run reads with a signal of its own, tied to the panel's: Cancel
     // aborts it, and so does the run that supersedes it (#174).
-    'src/plots/methods/fft-methods.js': /^(?=[\s\S]*proto\._fftRunSignal = function\(plot\) \{[^}]*?this\._analysisSignal\(plot\);)(?=[\s\S]*const runSignal = this\._fftRunSignal\(plot\);)(?=[\s\S]*_fftSeriesForTrace\(trace, range, state, runSignal\))/,
-    'src/plots/methods/heatmap-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getCalendarHeatmapAggregates\([\s\S]*?signal,\n/,
-    'src/plots/methods/temporal-profile-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getTemporalProfileAggregates\([\s\S]*?signal,\n/,
+    'src/plots/methods/fft-methods.js': /^(?=[\s\S]*proto\._fftRunSignal = function\(plot\) \{[^}]*?this\._analysisRunSignal\(plot, '_fftRunAbort'\);)(?=[\s\S]*const runSignal = this\._fftRunSignal\(plot\);)(?=[\s\S]*_fftSeriesForTrace\(trace, range, state, runSignal\))/,
+    // So does each lazy run of the heatmap, the temporal profile and the pair
+    // correlation (#384).
+    'src/plots/methods/heatmap-methods.js': /const signal = this\._analysisRunSignal\(plot, '_calendarHeatmapRunAbort'\);[\s\S]*?getCalendarHeatmapAggregates\([\s\S]*?signal,\n/,
+    'src/plots/methods/temporal-profile-methods.js': /const signal = this\._analysisRunSignal\(plot, '_temporalProfileRunAbort'\);[\s\S]*?getTemporalProfileAggregates\([\s\S]*?signal,\n/,
     'src/plots/methods/integral-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getDefiniteIntegralByDay\([\s\S]*?signal,\n/,
-    'src/plots/methods/correlation-methods.js': /const signal = this\._analysisSignal\(plot\);[\s\S]*?getPairCorrelations\([\s\S]*?signal \}/,
+    'src/plots/methods/correlation-methods.js': /const signal = this\._analysisRunSignal\(plot, '_correlationRunAbort'\);[\s\S]*?getPairCorrelations\([\s\S]*?signal \}/,
     'src/plots/methods/phase2d-fit-methods.js': /getPhaseRegressionStats\([\s\S]*?signal \}/,
     'src/plots/methods/fit-lazy-methods.js': /getRawColumnsRange\([^\n]*\{ signal \}\)/,
     'src/plots/methods/trend-lazy-methods.js': /getTrendStats\([\s\S]*?signal,\n/,
 };
 for (const [file, pattern] of Object.entries(queries)) has(read(file), pattern, `${file}: its queries carry the signal`);
+has(busy, /proto\._analysisRunSignal = function\(plot, slot\) \{\n\s*this\._abortAnalysisRun\(plot, slot\);\n\s*const panelSignal = this\._analysisSignal\(plot\);/, 'a run signal is tied to the panel\'s, and stops the run before it');
+// A newer run is scheduled: the run in flight is stopped there and then.
+for (const [file, fn, slot] of [
+    ['src/plots/methods/fft-methods.js', '_scheduleFftRecompute', null],
+    ['src/plots/methods/heatmap-methods.js', '_scheduleCalendarHeatmapRecompute', '_calendarHeatmapRunAbort'],
+    ['src/plots/methods/temporal-profile-methods.js', '_scheduleTemporalProfileRecompute', '_temporalProfileRunAbort'],
+    ['src/plots/methods/correlation-methods.js', '_scheduleCorrelationRecompute', '_correlationRunAbort'],
+]) {
+    const text = read(file);
+    const body = text.slice(text.indexOf(`proto.${fn} = function`), text.indexOf('const run = ', text.indexOf(`proto.${fn} = function`)));
+    has(body, slot ? new RegExp(`this\\._abortAnalysisRun\\(plot, '${slot}'\\);`) : /this\._abortFftRun\(plot\);/, `${fn} stops the run it supersedes`);
+    if (slot) assert.ok(busy.includes(`'${slot}'`), `_dropAnalysisRuns stops ${slot}`);
+}
 const source = read('src/data/duckdb-source.js');
 has(source, /async getRawColumnsRange\([^)]*\{ signal = null \} = \{\}\)[\s\S]*?this\._interactiveQuery\(sql, \{ signal \}\)/, 'getRawColumnsRange passes it on');
 for (const method of ['getCalendarHeatmapAggregates', 'getDefiniteIntegralByDay', 'getTemporalProfileAggregates', 'getPairCorrelations', 'getPhaseRegressionStats', 'getTrendStats']) {
@@ -90,6 +108,18 @@ for (const method of ['getCalendarHeatmapAggregates', 'getDefiniteIntegralByDay'
 }
 has(source, /pairExprs, active, signal\);/, 'the regression queries get it');
 has(source, /_interactiveQuery\(sql, \{ signal: opts\?\.signal \|\| null \}\)[\s\S]*_interactiveQuery\(sql, \{ signal: opts\?\.signal \|\| null \}\)/, 'both heatmap queries get it');
+// Shared through the cache, each caller lets go with its own signal; the
+// query stops when nobody waits for it (scripts/test-lazy-superseded-query.mjs
+// runs it).
+for (const [method, cache] of [
+    ['getCalendarHeatmapAggregates', '_heatmapCache'],
+    ['getTemporalProfileAggregates', '_temporalProfileCache'],
+    ['getPairCorrelations', '_correlationCache'],
+]) {
+    const body = source.slice(source.indexOf(`async ${method}(`), source.indexOf('\n    }\n', source.indexOf(`async ${method}(`)));
+    has(body, new RegExp(`this\\._sharedQuery\\(this\\.${cache}, cacheKey, signal, `), `${method} shares its query by the caller's signal`);
+}
+has(source, /\} catch \(err\) \{[^}]*?if \(\(active\.cancelled \|\| signal\?\.aborted\) && err\?\.name !== 'AbortError'\) throw this\._queryAbortError\(\);/, 'an interrupted interactive query throws an AbortError');
 
 // ── One stop for everything ──
 for (const key of [

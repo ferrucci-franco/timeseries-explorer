@@ -874,7 +874,72 @@ Not landed yet.
 
 ### #384: Superseded lazy SQL queries, and Trend's Cancel
 
-Not landed yet.
+What was done:
+
+- **A run signal per run.** The heatmap, the temporal profile and the pair
+  correlation hand their lazy query a signal of the run's own, tied to the
+  panel's (`_analysisSignal`) so that Cancel still stops it, and aborted by
+  the analysis' schedule (`_scheduleCalendarHeatmapRecompute`,
+  `_scheduleTemporalProfileRecompute`, `_scheduleCorrelationRecompute`) the
+  moment a newer run is asked for. The FFT's `_fftRunSignal` became the
+  shared helper: `_analysisRunSignal(plot, slot)`, `_abortAnalysisRun`,
+  `_settleAnalysisRun` in `src/plots/methods/analysis-busy-methods.js`; the
+  FFT now uses it too, and `_dropAnalysisRuns` stops every slot. A run whose
+  signal was aborted draws nothing: the previous result stays until the
+  newest one replaces it.
+- **A shared query is let go of, not killed.** The three queries are shared
+  through the source's caches by their settings (two panels asking the same,
+  or a run and its successor with the same key). `DuckDbSource._sharedQuery`
+  now counts who waits on each one: a caller's signal releases that caller at
+  once with an `AbortError`, and the query itself is interrupted only when
+  nobody waits for it any more (its key is then forgotten, so the next ask
+  starts afresh). Aborting a superseded run therefore never kills a query
+  another panel still needs. An `AbortError` a run did not ask for still
+  means "run again"; the correlation, which reported it as an error, now
+  does that too.
+- **An interrupt is an `AbortError`.** `_interactiveQueryUnlocked` turns
+  DuckDB's interrupt (*"INTERRUPT Error: Interrupted!"*, or Arrow tripping on
+  the cancelled reader) into an `AbortError` when the query was stopped, by
+  its signal or by `cancelActiveQuery`, as `_streamSql` does. Trend on a lazy
+  file now says *"Calculation cancelled — the previous result and its
+  settings are back"* after Cancel. The callers were checked: those that test
+  for an `AbortError` now take their abort branch for an interrupt (a file
+  load stopped mid-scan is reported as cancelled rather than as a read
+  failure; an analysis whose query `cancelActiveQuery` interrupted for
+  someone else runs again rather than showing an error); the others catch
+  every error alike.
+- **Tests.** `scripts/test-lazy-superseded-query.mjs`
+  (`test:lazy-superseded-query`): the sharing rules, the interrupt as an
+  `AbortError`, and the three queries shared on a real DuckDB-WASM engine.
+  `scripts/e2e-analysis-cancel.mjs`: for the FFT, the heatmap, the temporal
+  profile and the correlation, a newer request made while a query hangs
+  aborts it when it is scheduled, keeps the previous result and the pill, and
+  then settles; Trend's hung query is interrupted as DuckDB interrupts one
+  (the pending send fails with DuckDB's own error), and Cancel must still
+  read as a cancel — without the fix in `_interactiveQueryUnlocked` the e2e
+  fails on *"Segments: 1"*.
+
+After, at 10 M rows, lazy (`--rows=10000000 --modes=lazy
+--analyses=heatmap,temporal-profile,correlation --actions=open,type,drag`,
+one run, on the same kind of machine as the tables above: Chromium 153
+headless, 4 cores of a Xeon at 2.1 GHz shared with other jobs, 16 GB):
+
+| Analysis | Range typed alone (before → after) | Drag while a query runs (before → after) | A newer request stops the one in flight |
+|---|---|---|---|
+| Heatmap | 10.8 s → 11.1 s | 20.5 s → **8.7 s** | yes: aborted 0 ms after the release, ended 118 ms later |
+| Temporal profile | 18.0 s → 16.1 s | 33.0 s → **12.5 s** | yes: aborted 0 ms after, ended 148 ms later |
+| Correlation of pairs | 3.6 s → 4.2 s | 6.9 s → **4.1 s** | yes: aborted 0 ms after, ended 115 ms later |
+
+A change made while a query runs now takes about what the change alone
+takes; the drag's result even comes a little sooner, as its range (5–40 %)
+is narrower than the typed one (10–90 %). The longest task stays under
+70 ms in every case. The integral keeps the old behaviour: it is #385's.
+
+What the run signal costs: a schedule that does not change the query (none
+of these three analyses has one today; they reschedule for a new range, a new
+trace, new data or an aggregation that needs another query) would restart
+the query from the start rather than join the one in flight — the price the
+FFT already paid.
 
 ### #385: Lazy integral
 

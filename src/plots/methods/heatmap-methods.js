@@ -892,6 +892,10 @@ proto._scheduleCalendarHeatmapRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.heatmapDiv || plot.mode !== 'heatmap') return;
     clearTimeout(plot._calendarHeatmapRecomputeTimer);
+    // A lazy file's query in flight answers settings that have just changed:
+    // stop it now, so the new one does not queue behind it on DuckDB (#384).
+    // What it drew stays on screen until the new result replaces it.
+    this._abortAnalysisRun(plot, '_calendarHeatmapRunAbort');
     const run = () => {
         const state = this._ensureCalendarHeatmapState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'heatmap');
@@ -1071,7 +1075,9 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
         })
         : Promise.resolve();
 
-    lazyPromise.then(() => {
+    lazyPromise.then((outcome) => {
+        // Its query was stopped: Cancel, or a newer run that takes over.
+        if (outcome?.aborted) return;
         if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
         // Preserve original trace order across the eager/lazy split.
         const models = allTraces.map(trace => modelByTrace.get(trace)).filter(Boolean);
@@ -1115,13 +1121,25 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
 // (_lazyCalendarTimeSql) and with the file's transforms; a signal whose values
 // have SQL over the file — a column, a data tool's output, a formula — is
 // exact, and one that exists only on the overview is left out and said so.
+// Resolves to { aborted: true } when its queries were stopped (Cancel, or a
+// newer run scheduled: _scheduleCalendarHeatmapRecompute), for the caller to
+// draw nothing.
 proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces, densifyOptions, ctx) {
+    // This run's signal: a newer run aborts it, and so does Cancel.
+    const signal = this._analysisRunSignal(plot, '_calendarHeatmapRunAbort');
+    try {
+        return await this._runLazyCalendarHeatmapQueries(panelId, plot, token, lazyTraces, densifyOptions, ctx, signal);
+    } finally {
+        this._settleAnalysisRun(plot, '_calendarHeatmapRunAbort', signal);
+    }
+};
+
+proto._runLazyCalendarHeatmapQueries = async function(panelId, plot, token, lazyTraces, densifyOptions, ctx, signal) {
     const byFile = new Map();
     for (const trace of lazyTraces) {
         if (!byFile.has(trace.fileId)) byFile.set(trace.fileId, []);
         byFile.get(trace.fileId).push(trace);
     }
-    const signal = this._analysisSignal(plot);
     for (const [fileId, traces] of byFile) {
         if (plot._calendarHeatmapToken !== token) return;
         const data = this.files.get(fileId)?.data;
@@ -1203,7 +1221,7 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
                     plot._calendarHeatmapToken = (plot._calendarHeatmapToken || 0) + 1;
                     this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
                 }
-                return;
+                return { aborted: true };
             }
             for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
         }

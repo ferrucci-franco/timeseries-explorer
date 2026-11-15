@@ -1930,40 +1930,23 @@ proto._fftLazySeries = async function(trace, range, state, signal = null) {
 
 // The signal a run of the FFT hands its reads: its own, tied to the panel's
 // analysis signal so Cancel stops it too. A newer run aborts the one it
-// supersedes (#174). Unlike the heatmap's, the FFT's reads are this run's
-// alone — nothing cached is shared with another panel or a later run — so
-// stopping one costs nothing but the work it would have thrown away; leaving
-// it running made the next range wait behind it on DuckDB.
+// supersedes (#174): the FFT's reads are this run's alone — nothing cached is
+// shared with another panel or a later run — so stopping one costs nothing
+// but the work it would have thrown away; leaving it running made the next
+// range wait behind it on DuckDB. The shared helper (_analysisRunSignal) also
+// serves the lazy SQL analyses (#384).
 proto._fftRunSignal = function(plot) {
-    this._abortFftRun(plot);
-    const panelSignal = this._analysisSignal(plot);
-    if (typeof AbortController !== 'function') return panelSignal;
-    const controller = new AbortController();
-    const forward = () => controller.abort();
-    if (panelSignal?.aborted) controller.abort();
-    else panelSignal?.addEventListener?.('abort', forward, { once: true });
-    plot._fftRunAbort = {
-        controller,
-        release: () => panelSignal?.removeEventListener?.('abort', forward),
-    };
-    return controller.signal;
+    return this._analysisRunSignal(plot, '_fftRunAbort');
 };
 
 // Stop the FFT run in flight, if any: its reads and its worker.
 proto._abortFftRun = function(plot) {
-    const run = plot?._fftRunAbort;
-    if (!run) return;
-    plot._fftRunAbort = null;
-    run.release();
-    run.controller.abort();
+    this._abortAnalysisRun(plot, '_fftRunAbort');
 };
 
 // A run that has finished lets go of the panel's signal.
 proto._settleFftRun = function(plot, signal) {
-    const run = plot?._fftRunAbort;
-    if (!run || run.controller.signal !== signal) return;
-    plot._fftRunAbort = null;
-    run.release();
+    this._settleAnalysisRun(plot, '_fftRunAbort', signal);
 };
 
 // Token that changes whenever the data behind a trace could have changed.

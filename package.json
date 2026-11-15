@@ -225,6 +225,7 @@
     "test:exp-fit": "node scripts/test-exp-fit.mjs",
     "test:fit-passes": "node scripts/test-fit-passes.mjs",
     "test:analysis-cancel": "node scripts/test-analysis-cancel.mjs",
+    "test:lazy-superseded-query": "node scripts/test-lazy-superseded-query.mjs",
     "test:analysis-range": "node scripts/test-analysis-range.mjs",
     "test:analysis-side": "node scripts/test-analysis-side.mjs",
     "test:scrollbars": "node scripts/test-scrollbars.mjs",
