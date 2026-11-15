@@ -928,7 +928,10 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(methods.includes('_integralGroupWindows'), 'the mode lays out the windows');
     ok(methods.includes('_integralEagerGroups'), 'integrates each window for eager signals');
     ok(methods.includes('_integralLazyGroups'), 'and partitions the per-day partials for lazy ones');
-    ok(methods.includes('nominalStep'), 'handing the series step down so a short window keeps it');
+    // The integrals of the windows are the analysis job's (the same kernel in a
+    // worker and on the main thread): the step is handed down there.
+    const analysisKernels = read('src/compute/analysis-kernels.js');
+    ok(/'integral:compute'[\s\S]*?nominalStep/.test(analysisKernels), 'handing the series step down so a short window keeps it');
     ok(methods.includes('reduceDailyIntegralByPeriod(entry.days || [], windows, groupBy, reduceParams)'),
         'through the kernel, which is where the trailing-period rule lives');
     const kernel = read('src/compute/kernels/definite-integral.js');

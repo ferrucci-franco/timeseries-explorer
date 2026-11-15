@@ -862,7 +862,155 @@ done, and the same measurements after it.
 
 ### #381: In-memory analyses on the compute worker
 
-Not landed yet.
+What was done:
+
+- **Analysis jobs.** A kernel over a file in memory no longer runs in the
+  task that asked for it. `src/compute/analysis-kernels.js` is a registry of
+  kernels (`histogram:stats`, `histogram:count`, `heatmap:build`,
+  `profile:build`, `integral:missingDays`, `integral:compute`,
+  `correlation:pearson`, `fit:curve`, `fit:trend`, `fit:pair`), each a thin
+  call of the kernel module the analysis always used.
+  `src/core/analysis-jobs.js` opens a job in a compute worker
+  (`src/workers/compute-worker.js`, in workers of the jobs' own: an abort
+  **terminates** the worker, and a finished job hands it back warm), hands it
+  the rows of the range in chunks of 2¹⁹ — each a copy that is transferred,
+  with a turn of the event loop between two chunks — and runs the kernel
+  there. `docs/architecture.md`, "Analysis jobs".
+- **Every in-memory analysis computes through one**: the histogram (its
+  statistics and its counting), the heatmap, the temporal profile, the
+  integral (the totals, the periods of a grouping, the missing days), the
+  pair correlation, the curve fit, the trend and the 2D curve fit. The three
+  fits hand their results to what draws them synchronously, so a fit of a
+  file in memory is now left pending as a lazy file's is, and painted when
+  its job answers; the previous fit stays drawn until then.
+- **The same bits.** The registry calls the same kernel functions with the
+  same arguments, over a copy of the same rows. `scripts/test-analysis-kernels.mjs`
+  (`test:analysis-kernels`) compares, with `deepStrictEqual`, every kernel
+  called directly, as a job on the caller's thread, and as a job in the real
+  worker module fed in chunks (181 computations: typed and plain arrays,
+  ranges, columns of unequal length, every fit model). The ranges are
+  positions in the signal's arrays now (`_analysisTraceScope`); the test
+  checks them against the slices the analyses used to cut.
+- **A run signal.** A job carries `_analysisJobSignal(plot)`: #384's shared
+  run signal (`_analysisRunSignal(plot, slot)`), in the jobs' slot. Cancel
+  aborts it through the panel's signal, and every `_schedule…Recompute`
+  aborts the job in flight before its debounce (`_abortAnalysisJob`; the
+  histogram its `_histAbort`; the fits `_stopStaleCurveFits`,
+  `_stopStaleTrends`, `_stopStalePhase2dFits`).
+- **The 2D fit fits once.** Its fits are kept by their settings
+  (`_phase2dLazyFits` with a worker, `_phase2dEagerFits` without), so the two
+  calls of `_computePhase2dFits` per recompute share one fit.
+- **Cancel works on a file in memory**, in every analysis: the kernel is in
+  a worker, so the press is taken, the worker is terminated, the previous
+  result stays and its settings come back. This includes a bound typed in
+  the 2D fit's range block, which Cancel used to leave typed: the settings of
+  the request were noted as those of the result on screen before the fit had
+  run (`_phase2dPairFitsAsync` now tells `_analysisSettled` that an in-memory
+  fit is still to come).
+- **Without a worker** (a page opened from `file://` that brought none, a
+  Node test), and for a signal whose values are not a typed array (a cropped
+  or re-indexed file keeps a plain `Array`, which may hold `null`), the job
+  runs on the caller's thread through the same registry: the same result,
+  and the main thread held as before. That is the gap that remains.
+- **Tests.** `test:analysis-kernels` (above). `scripts/e2e-analysis-cancel.mjs`
+  now runs over the lazy file and then over the same file in memory, where
+  the kernels of the analysis jobs hang until their signal is aborted: for
+  the histogram, the heatmap, the temporal profile, the integral, the curve
+  fit, the trend, the correlation and the 2D fit (and its typed bound), the
+  pill shows over the previous result, Cancel aborts the job, the result and
+  the setting come back; for the first four and the correlation a newer
+  request aborts the job it supersedes when it is scheduled. It also checks
+  that every job ran in a worker.
+
+After, in memory (`--modes=eager`, every analysis and action, one run of each
+size, on the same kind of machine as the tables above; the 10 M run on the
+tree that also has #384, #386 and #388). The longest **computation** task, in
+ms; "on a change" is a range typed, a parameter changed, a slider dragged and
+a Cancel:
+
+| Analysis | 1.2 M: before | after, on a change | after, on open | 10 M: before | after, on a change | after, on open |
+|---|---|---|---|---|---|---|
+| Histogram | **1028** | 0 | 35 | **1724** | 13 | 44 |
+| Heatmap | **510** | 11 | 63 | **2861** | 99 | 64 |
+| Temporal profile | **459** | 56 | 60 | **3757** | 0 | 72 |
+| Integral, numeric time axis | 137 | 0 | 40 | **1186** | 0 | 66 |
+| Integral, calendar time axis | 195 | 4 | 36 | **1291** | 19 | 83 |
+| Curve fit: linear, quadratic | 131 | 68 | 63 | **879** | 17 | 50 |
+| Curve fit: exponential | **1199** | 74 | | **18576** | 17 | |
+| Trend: mean, linear, quadratic, value band | 177 | 19 | 40 | **1040** | 11 | 45 |
+| Trend: exponential | **1228** | 12 | | **18851** | 15 | |
+| Correlation of the pairs | 47 | 0 | 107 | **358** | 0 | 72 |
+| 2D curve fit: linear, quadratic | 126 | 48 | 50 | **1001** | 143 ¹ | 136 ¹ |
+| 2D curve fit: exponential | **5676** | 35 | | **44167** | 141 ¹ | |
+
+¹ Drawing, not fitting: on a change the 2D plot cuts its own trace to the
+8 M rows of the range (`_phase2dRangeLimitedVisual`, 160–180 ms of a profiled
+task); on open it builds its time pane.
+
+No kernel holds the main thread any more. In the tasks profiled (those over
+120 ms at 10 M rows, in a run made before #386) the job's own share was
+`feedAnalysisJob`, 6–15 ms, and no kernel function appeared; the rest was the
+time pane's `_finiteExtent`, which #386 then cached — before it, opening an
+analysis at 10 M rows still cost 288–424 ms in the temporal profile, the
+correlation and the two fits, none of it a kernel.
+
+The time to a result, for a range typed or a parameter changed (the worst of
+them), before → after. The rows are now copied to the worker, which adds
+0.1–0.7 s at these sizes (2 s to the 19 s of an exponential fit over 8 M
+rows); the exponential 2D fit is twice as fast because it fits once:
+
+| Analysis | 1.2 M rows | 10 M rows |
+|---|---|---|
+| Histogram | 0.7 s → 1.1 s | 1.7 s → 2.1 s |
+| Heatmap | 0.7 s → 0.7 s | 3.0 s → 3.7 s |
+| Temporal profile | 0.6 s → 0.7 s | 3.5 s → 2.9 s |
+| Integral, numeric time axis | 0.3 s → 0.6 s | 1.4 s → 1.6 s |
+| Integral, calendar time axis | 0.4 s → 0.6 s | 1.5 s → 1.9 s |
+| Curve fit: linear, quadratic | 0.2 s → 0.4 s | 0.9 s → 1.2 s |
+| Curve fit: exponential | 1.2 s → 1.6 s | 19 s → 21 s |
+| Trend: mean, linear, quadratic, value band | 0.2 s → 0.3 s | 1.1 s → 1.4 s |
+| Trend: exponential | 1.3 s → 1.5 s | 19 s → 21 s |
+| Correlation of the pairs | 0.1 s → 0.1 s | 0.3 s → 0.4 s |
+| 2D curve fit: linear, quadratic | 0.2 s → 0.3 s | 1.0 s → 1.0 s |
+| 2D curve fit: exponential | 5.7 s → **3.0 s** | 44 s → **24 s** |
+
+During those 20 s of an exponential fit the page answers: the longest task
+of all, drawing included, is 186 ms at 10 M rows (the 2D fit) and 174 ms at
+1.2 M, where the kernel alone held the page 18.6 s (44 s in the 2D fit).
+
+**A request in flight when a newer one arrives**: where a job was in flight
+when the slider was released (the histogram at both sizes; the heatmap, the
+temporal profile and both integrals at 10 M), its worker is terminated. In
+the other cases the job had already answered, or — the three fits, which
+start on the release — had not started. The slider's own events waited at
+most 162 ms at 1.2 M rows (before: up to 702 ms) and 205 ms at 10 M (before:
+up to 3461 ms).
+
+**Cancel**: taken in 0–40 ms and the work stopped, in all ten cases at both
+sizes, with the range put back (before: in 14 of the 20 cases the page could
+not take the press before the result was drawn).
+
+**The automatic preview.** An expensive range is first computed over 262 144
+samples and that pass is timed, to decide whether the whole range is
+affordable (`_measureAnalysisKernel`). With the kernel in a worker the clock
+would also count the worker's start and its messages, which do not grow with
+the rows; so each job times its own kernels and the projection uses that
+time. One difference remains, and is measured: the first kernel a worker runs
+is slower than the same kernel warm. On the 10 M-row file the temporal
+profile's preview took 172 ms of kernel in a fresh worker (projected to 6.5 s:
+the preview is kept, with its notice) and 114 ms in a warm one (4.3 s: the
+range is widened, and the whole file then took 3.1 s). On the main thread
+that preview used to come in under the 5 s line. The decision is on the safe
+side, as it always was; but the line was drawn for a kernel that froze the
+page, and it could be moved now that the kernel does not.
+
+**Not done here**: the first build of the time-series pane at 10 M rows in
+memory is still one task of 359 ms (`scanFiniteExtent` 121 ms,
+`decimateRangeIndexes` 81 ms, then the monotonic check and the audio's
+sampling check, each one pass over the axis, once per array). It is the plot
+itself, built synchronously for Plotly; an analysis job does not make it
+cheaper. Reading those three facts of the axis in a worker when the file is
+loaded would.
 
 ### #382: Lazy exponential fits
 

@@ -17,7 +17,8 @@
 
 import { fitPair, fitSteps, buildFitCurve, predict } from '../../utils/regression.js';
 import { runPassesOnChunks } from '../../utils/fit-passes.js';
-import { createMinMaxDecimator, decimateMinMax, shiftedTime } from '../curve-fit-state.js';
+import { createMinMaxDecimator, shiftedTime } from '../curve-fit-state.js';
+import { curveFitOverRows } from '../../compute/analysis-kernels.js';
 
 // The most rows of a lazy file a fit computed outside SQL (the exponential
 // family, and the time-series fit) fetches in one piece and fits in memory:
@@ -134,20 +135,34 @@ export function installPlotFitLazyMethods(TargetClass) {
         plot._phase2dLazyJob = null;
     };
 
+    // The fit of rows held here, computed on the spot: the kernel
+    // (curveFitOverRows, src/compute/analysis-kernels.js), then what the panes
+    // draw from it.
     proto._curveFitFromRows = function(plot, entry, trace, range, info, times, values) {
-        const t0 = range[0];
-        const tPrime = shiftedTime(times, t0, info.scale);
-        const fit = fitPair(entry.model, tPrime, values);
-        let residual = { x: [], y: [] };
-        if (fit?.status === 'ok') {
-            const r = new Float64Array(tPrime.length);
-            for (let i = 0; i < tPrime.length; i++) {
-                const y = Number(values[i]);
-                r[i] = Number.isFinite(y) && Number.isFinite(tPrime[i]) ? y - predict(fit, tPrime[i]) : NaN;
-            }
-            residual = decimateMinMax(times, r, RESIDUAL_BUCKETS);
+        const { fit, residual, nScope } = curveFitOverRows(times, values, {
+            model: entry.model, t0: range[0], scale: info.scale, buckets: RESIDUAL_BUCKETS,
+        });
+        return this._curveFitResult(trace, range, info, fit, residual, nScope);
+    };
+
+    // The same fit of a signal held in memory, as an analysis job
+    // (src/core/analysis-jobs.js): the rows of the range go to a worker, a
+    // chunk at a time, and the same kernel runs there — so an exponential over
+    // 8 M rows no longer holds the page for the 19 s it takes, and `signal`
+    // (Cancel, a newer request) stops it. `r` is a pending result of
+    // _computeCurveFits with its `rows` (the signal's arrays and the positions
+    // of the range in them).
+    proto._curveFitInMemory = async function(r, signal = null) {
+        const { times, values, start, end } = r.rows;
+        const job = await this._analysisJobOver({ times, values }, { start, end, signal });
+        try {
+            const { fit, residual, nScope } = await job.run('fit:curve', {
+                model: r.entry.model, t0: r.range[0], scale: r.info.scale, buckets: RESIDUAL_BUCKETS,
+            });
+            return this._curveFitResult(r.trace, r.range, r.info, fit, residual, nScope);
+        } finally {
+            job.close();
         }
-        return this._curveFitResult(trace, range, info, fit, residual, times.length);
     };
 
     // What the panes and the drawer draw from, once the fit and its residuals

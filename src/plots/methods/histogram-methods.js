@@ -497,13 +497,17 @@ proto._scheduleHistogramRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.histogramDiv || plot.mode !== 'histogram') return;
     clearTimeout(plot._histRecomputeTimer);
+    // The run in flight is of no use from now on: its read of a lazy file and
+    // its analysis job stop here, not when the next run starts after the
+    // debounce. Its result stays drawn, under the pill.
+    plot._histAbort?.abort();
     const run = () => {
         const state = this._ensureHistogramState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'histogram');
         if (adjusted) this._updateHistogramSelectionShapes(panelId, plot);
         this._setHistogramStatus(plot, i18n.t('integralCalculating'), 'loading');
         // Give the status and any adjusted green range one frame to paint
-        // before the bounded synchronous histogram passes begin.
+        // before the histogram passes begin.
         this._runAnalysisAfterPaint(
             plot,
             '_histRecomputeRun',
@@ -530,6 +534,24 @@ proto._histogramSamplesForTrace = function(trace, range) {
     // The selected count was already preflighted. Slice only those samples:
     // scanning the complete 160M-point source here defeated the range cap.
     return values.slice(start, end);
+};
+
+// The same samples as the rows `[start, end)` of the trace's values, not yet
+// copied: an analysis job is handed them a chunk at a time, so that a range of
+// 8 M rows is never one 64 MB copy on the main thread. The bounds are
+// _histogramSamplesForTrace's (scripts/test-analysis-kernels.mjs compares them).
+proto._histogramScopeForTrace = function(trace, range) {
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    if (!values || !values.length) return { values: [], start: 0, end: 0 };
+    const whole = { values, start: 0, end: values.length };
+    if (!range) return whole;
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+    if (!times || times.length !== values.length) return whole;
+    let [lo, hi] = range;
+    if (lo > hi) [lo, hi] = [hi, lo];
+    const start = Math.max(0, Math.min(values.length, this._lowerBound(times, lo)));
+    const end = Math.max(start, Math.min(values.length, this._upperBound(times, hi)));
+    return { values, start, end };
 };
 
 proto._recomputeHistogram = async function(panelId, plot = this.plots.get(panelId)) {
@@ -560,7 +582,19 @@ proto._recomputeHistogram = async function(panelId, plot = this.plots.get(panelI
     }
 };
 
+// One pass, and the analysis job it opened for the traces held in memory
+// closed behind it (the worker is handed back, or stopped if the pass was
+// superseded while a kernel ran).
 proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
+    const jobs = [];
+    try {
+        return await this._histogramPass(panelId, plot, token, signal, jobs);
+    } finally {
+        for (const job of jobs) job.close();
+    }
+};
+
+proto._histogramPass = async function(panelId, plot, token, signal, jobs) {
     const state = this._ensureHistogramState(plot);
     const range = state.rangeFull ? null : this._activeHistogramRange(plot);
     const allTraces = plot.traces || [];
@@ -599,15 +633,25 @@ proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
     // Pass 1: per-trace samples + finite stats for every eager trace. This is
     // the part whose cost scales with the range, so it is what the auto-limit
     // reconsider measures.
+    //
+    // The values go to an analysis job (one for the panel's traces, a column
+    // each) and the kernel runs there: in a worker, so a histogram of 10 M
+    // rows no longer holds the page for the 1.7 s its statistics take. The
+    // job keeps the values for the counting pass below.
     const byTrace = new Map();
     const eager = usable.filter(trace => !lazy.includes(trace));
     if (eager.length) {
-        const measured = this._measureAnalysisKernel(panelId, plot, () => {
-            for (const trace of eager) {
-                const samples = this._histogramSamplesForTrace(trace, range);
-                byTrace.set(trace, { samples, stat: histogramFiniteStats(samples) });
+        const scopes = eager.map(trace => this._histogramScopeForTrace(trace, range));
+        const job = this._openAnalysisJob(Object.fromEntries(scopes.map((scope, i) => [`v${i}`, scope.values])), { signal });
+        jobs.push(job);
+        const measured = await this._measureAnalysisKernel(panelId, plot, async () => {
+            for (let i = 0; i < eager.length; i++) {
+                const { values, start, end } = scopes[i];
+                await this._feedAnalysisJob(job, { [`v${i}`]: values }, { start, end, signal });
+                const stat = await job.run('histogram:stats', { column: `v${i}` });
+                byTrace.set(eager[i], { job, column: `v${i}`, stat });
             }
-        }, warnings);
+        }, warnings, () => plot._histToken === token);
         // The measurement widened the range and rescheduled; this pass is stale.
         if (measured.superseded) return;
     }
@@ -685,9 +729,12 @@ proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
     let totalBinned = 0;
     for (const p of perTrace) {
         if (p.stat.nFinite <= 0) p.counted = null;
-        else p.counted = p.lazy ? lazyCounts.get(p.trace) : countHistogramBins(p.samples, spec);
+        else if (p.lazy) p.counted = lazyCounts.get(p.trace);
+        // A trace in memory: counted by the job that holds its values.
+        else p.counted = await p.job.run('histogram:count', { column: p.column, spec });
         if (p.counted && p.visible) totalBinned += p.counted.nBinned;
     }
+    if (plot._histToken !== token) return;
 
     // Pass 2: normalization → bars. Every trace stays in the data (hidden
     // ones as legendonly) so its legend entry persists. Stacked normalizes each

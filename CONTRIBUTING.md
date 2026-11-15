@@ -170,8 +170,19 @@ does the same:
   (`_analysisRunSignal(plot, slot)`), aborted from the analysis' schedule
   (`_abortAnalysisRun`), as the FFT, the heatmap, the temporal profile and
   the pair correlation do;
+- compute a file in memory as an **analysis job**, never in a loop on the main
+  thread: register the kernel in `src/compute/analysis-kernels.js`, run it
+  through `_analysisJobOver…` (`src/plots/methods/analysis-job-methods.js`)
+  under `_analysisJobSignal(plot)` (the same run signal, in the jobs' slot),
+  and call `_abortAnalysisJob(plot)` where the recompute is scheduled. The
+  kernel then runs in a worker, Cancel terminates it, and a newer request
+  replaces the one in flight. Add the kernel to
+  `scripts/test-analysis-kernels.mjs`, which checks that a job gives the bits
+  the kernel gives when called directly (`docs/architecture.md`, "Analysis
+  jobs");
 - register its pane, its tokens and where its settings live there;
-- extend `scripts/e2e-analysis-cancel.mjs`.
+- extend `scripts/e2e-analysis-cancel.mjs`, which runs over a lazy file and
+  over the same file in memory.
 
 `CLAUDE.md` has the details.
 

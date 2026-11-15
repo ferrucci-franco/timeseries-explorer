@@ -3,12 +3,17 @@
 //
 // For each of the nine analyses — FFT, histogram, heatmap, temporal profile,
 // integral, curve fit and trend analysis on a time series; correlation and
-// curve fit on a 2D plot — over a file open in memory-saving (lazy) mode:
+// curve fit on a 2D plot — over a file open in memory-saving (lazy) mode, and
+// then over the same file loaded in memory (eager):
 //
 //   1. the analysis computes its first result;
-//   2. the queries and streams that carry the panel's cancel signal are made
-//      to hang until that signal is aborted (so the test also proves the
-//      analysis hands its queries the signal), and a recompute is asked for;
+//   2. the work that carries the cancel signal is made to hang until that
+//      signal is aborted (so the test also proves the analysis hands its work
+//      the signal), and a recompute is asked for. On a lazy file that work is
+//      the queries and streams of the file; on a file in memory it is the
+//      analysis job the kernel runs in (src/core/analysis-jobs.js) — before
+//      those jobs the kernel held the main thread and Cancel could not be
+//      pressed at all;
 //   3. the pill shows with its Cancel button, over the previous result;
 //   4. Cancel: the hung query is aborted, the pill goes, the previous result
 //      is still drawn, and the setting the recompute was asked with is back to
@@ -23,6 +28,9 @@
 // Trend's hung query is interrupted as DuckDB-WASM interrupts one: the
 // pending send fails with DuckDB's own error ("INTERRUPT Error"), not with a
 // clean AbortError, so the test sees that the app treats it as a cancel.
+//
+// In memory the FFT is left out: under its worker threshold it computes on the
+// main thread, in the task that draws it.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:analysis-cancel`.
 import assert from 'node:assert/strict';
@@ -41,22 +49,54 @@ const file = { name: 'lazy-cancel.csv', mimeType: 'text/csv', buffer: Buffer.fro
 const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
 await server.listen();
 const browser = await chromium.launch();
-try {
-    const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
+async function checkMode(lazy) {
+    const context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
+    const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/`);
     await page.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'), null, { timeout: 60000 });
-    await page.evaluate(() => window.app._saveAdvancedSettings({ ...window.app.advancedSettings, csvFullLoadMb: 2 }));
+    // Lazy: a 2 MB limit. In memory: no limit.
+    await page.evaluate(mb => window.app._saveAdvancedSettings({ ...window.app.advancedSettings, csvFullLoadMb: mb }), lazy ? 2 : 0);
     await page.setInputFiles('#file-input', [file]);
-    await page.waitForFunction(() => [...window.app.plotManager.files.values()][0]?.data?._duckdb, null, { timeout: 120000 });
+    await page.waitForFunction((lazy) => {
+        const data = [...window.app.plotManager.files.values()][0]?.data;
+        return lazy ? !!data?._duckdb : (!!data && !data._duckdb && data.variables?.a?.data?.length > 0 && !document.getElementById('file-loading-overlay'));
+    }, lazy, { timeout: 120000 });
 
     // Queries and streams that carry a cancel signal hang, while __hang.on,
     // until that signal is aborted. Everything else (overview, detail) runs.
-    await page.evaluate(() => {
+    // On the file in memory it is the kernels of an analysis job that hang
+    // until the job's signal is aborted.
+    await page.evaluate((lazy) => {
         const pm = window.app.plotManager;
-        const source = [...pm.files.values()][0].data._duckdb.source;
         window.__hang = { on: false, started: 0, aborted: 0 };
+        if (!lazy) {
+            const hangUntilAborted = (signal) => new Promise((resolve, reject) => {
+                window.__hang.started++;
+                const fail = () => {
+                    window.__hang.aborted++;
+                    const error = new Error('cancelled');
+                    error.name = 'AbortError';
+                    reject(error);
+                };
+                if (signal.aborted) fail();
+                else signal.addEventListener('abort', fail, { once: true });
+            });
+            const open = pm._openAnalysisJob;
+            window.__jobs = { opened: 0, inWorker: 0 };
+            pm._openAnalysisJob = function (columns, options = {}) {
+                const job = open.call(this, columns, options);
+                window.__jobs.opened++;
+                if (!job.local) window.__jobs.inWorker++;
+                const run = job.run.bind(job);
+                job.run = (...rest) => (window.__hang.on && options?.signal ? hangUntilAborted(options.signal) : run(...rest));
+                return job;
+            };
+            window.__clearAnalysisCaches = () => {};
+            return;
+        }
+        const source = [...pm.files.values()][0].data._duckdb.source;
         const hangUntilAborted = (signal) => new Promise((resolve, reject) => {
             window.__hang.started++;
             const fail = () => {
@@ -112,7 +152,7 @@ try {
             source._regressionCache?.clear?.();
             plot?._fftSpectrumCache?.clear?.();
         };
-    });
+    }, lazy);
 
     const panelIds = await page.evaluate(() => {
         const app = window.app;
@@ -241,7 +281,7 @@ try {
         await recompute();
         await settled(id, mode);
         assert.doesNotMatch(await statusText(id), /cancelled/, `${name}: and then it computes again`);
-        console.log(`ok  ${name}`);
+        console.log(`ok  ${name} (${lazy ? 'lazy' : 'in memory'})`);
     }
 
     // A newer request while a query runs: the query it supersedes is aborted
@@ -277,7 +317,7 @@ try {
         assert.ok((await page.evaluate(() => window.__hang.aborted)) > second.aborted, `${name}: and so is the next one it supersedes`);
         await settled(id, mode);
         assert.doesNotMatch(await statusText(id), /cancelled/, `${name}: the newest result is drawn`);
-        console.log(`ok  ${name}: a newer request aborts the query it supersedes`);
+        console.log(`ok  ${name}: a newer request aborts the ${lazy ? 'query' : 'job'} it supersedes (${lazy ? 'lazy' : 'in memory'})`);
     }
 
     const pm = (fn, ...args) => page.evaluate(({ fn, args }) => {
@@ -319,14 +359,18 @@ try {
         await pm(schedule, id, { immediate: true });
     };
     const rangeOf = (id, key) => () => stateOf(id, key, ['rangeFull', 'x1', 'x2']);
-    for (const [name, mode, key, schedule, supersede] of [
+    // `supersede`: a newer request aborts the work in flight when it is
+    // scheduled. Lazy: the FFT and the SQL analyses (#384). In memory: every
+    // analysis job (#381).
+    for (const [name, mode, key, schedule, supersedeLazy] of [
         ['FFT', 'fft', 'fft', '_scheduleFftRecompute', true],
         ['Histogram', 'histogram', 'histogram', '_scheduleHistogramRecompute', false],
         ['Heatmap', 'heatmap', 'heatmap', '_scheduleCalendarHeatmapRecompute', true],
         ['Temporal profile', 'temporal-profile', 'temporalProfile', '_scheduleTemporalProfileRecompute', true],
         ['Integral', 'integral', 'integral', '_scheduleIntegralRecompute', false],
-    ]) {
+    ].filter(([, mode]) => lazy || mode !== 'fft')) {
         const recompute = () => toggleRange(timeId, key, schedule);
+        const supersede = lazy ? supersedeLazy : true;
         await checkCancel({
             name, id: timeId, mode,
             open: () => toggle(timeId, mode),
@@ -410,6 +454,36 @@ try {
         },
         setting: () => page.evaluate(id => window.app.plotManager.plots.get(id).phaseTraces.map(pair => pair.fitModel), twoDId),
     });
+    // The same fit, asked to recompute by a bound typed in its range block —
+    // the control itself, not the state behind it. On a file in memory Cancel
+    // used to say the settings were back and leave the typed bound typed: the
+    // settings of the request had been noted as those of the result on screen
+    // before the fit had run.
+    const typeBound = (fraction) => page.evaluate(({ id, fraction }) => {
+        const panel = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        const slider = panel.querySelector('input[data-analysis-range-key="x1"][data-analysis-range-role="slider"]');
+        const field = panel.querySelector('input[data-analysis-range-key="x1"][data-analysis-range-role="input"]');
+        const value = Number(slider.min) + (Number(slider.max) - Number(slider.min)) * fraction;
+        field.value = field.type === 'datetime-local' ? new Date(value).toISOString().slice(0, 19) : String(value);
+        field.dispatchEvent(new Event('change'));
+    }, { id: twoDId, fraction });
+    let typed = 0.1;
+    await checkCancel({
+        name: '2D curve fit, a bound typed in the range block', id: twoDId, mode: 'phase2d',
+        open: async () => {
+            await page.evaluate((id) => {
+                const panel = document.querySelector(`.layout-panel[data-id="${id}"]`);
+                const selection = panel.querySelector('[data-analysis-range-full="false"]');
+                if (!selection.classList.contains('active')) selection.click();
+            }, twoDId);
+            await page.waitForTimeout(400);
+        },
+        recompute: async () => {
+            typed = typed === 0.2 ? 0.3 : 0.2;
+            await typeBound(typed);
+        },
+        setting: rangeOf(twoDId, 'phase2d'),
+    });
 
     // The Analysis menu: picking the analysis that is on changes nothing.
     for (const [id, key, mode] of [[timeId, 'curve-fit', 'curve-fit'], [twoDId, 'phase2d-fit', 'phase2d']]) {
@@ -426,7 +500,18 @@ try {
         if (key === 'phase2d-fit') assert.equal(now.fit, true, 'the 2D fit workspace stays open');
     }
 
+    if (!lazy) {
+        const jobs = await page.evaluate(() => window.__jobs);
+        assert.ok(jobs.opened >= 8, `the analyses of a file in memory compute as analysis jobs (${jobs.opened} opened)`);
+        assert.equal(jobs.inWorker, jobs.opened, 'every one of them in a worker');
+    }
     assert.deepEqual(errors, [], 'no page errors');
+    await context.close();
+}
+
+try {
+    await checkMode(true);
+    await checkMode(false);
     console.log('analysis cancel e2e: ok');
 } finally {
     await browser.close();

@@ -60,6 +60,10 @@ Owns plot state and every Plotly-driven behavior.
   - the range section every analysis shows (Full / Selection, and the two
     bounds with their sliders): one builder and one sync, so a new analysis
     gets the block rather than a copy of it
+- `methods/analysis-job-methods.js`
+  - how the analyses compute without holding the main thread: the signal of a
+    run, and an analysis job given the rows of a range held in memory; see
+    [Analysis jobs](#analysis-jobs) below
 - `methods/analysis-fit-methods.js`
   - whose the toolbar's Fit X / Fit Y / Fit all are: the time series while it
     is on screen, and the analysis' own pane when it is folded away — which
@@ -114,6 +118,60 @@ Split CSS source by concern:
 - `content.css`
 - `overlays.css`
 - `index.css`
+
+## Analysis jobs
+
+An analysis of a file in memory used to run its kernel on the main thread, in
+one task: the page did not answer, and the computing pill's Cancel could not be
+pressed, for as long as the kernel took (`docs/analysis-responsiveness.md` has
+the measurements: up to 44 s). Every analysis now computes as an **analysis
+job**; the FFT keeps the worker it already had.
+
+- `src/compute/analysis-kernels.js` is the registry of kernels: one entry per
+  computation (`histogram:stats`, `heatmap:build`, `profile:build`,
+  `integral:compute`, `correlation:pearson`, `fit:curve`, `fit:trend`,
+  `fit:pair`, …), each a thin call of the kernel module the analysis always
+  used. A kernel is `(job, params) => result`: it reads the job's columns
+  (`job.col(name)`), may keep state between calls (`job.state`), and takes and
+  returns plain data.
+- `src/core/analysis-jobs.js` is the client. `openAnalysisJob({ signal })`
+  gives a job; `feedAnalysisJob(job, columns, { start, end })` hands it rows of
+  arrays in memory, 2¹⁹ at a time, each chunk a copy that is transferred, with
+  a turn of the event loop between chunks; `job.run(kernel, params)` runs a
+  kernel on them; `job.close()` ends it.
+- The job lives in a compute worker (`src/workers/compute-worker.js`, the Data
+  tools' worker script, in workers of its own: the pool's supersede drops a
+  result but lets the kernel run on, and a twenty-second fit has to be
+  stopped). An abort of the job's signal **terminates the worker**; a job that
+  ends hands its worker back, warm, for the next one.
+- Where there is no worker (a page opened from `file://` that brought none, a
+  Node test), and for a column that is not a typed array (a cropped file's
+  values are a plain `Array`, which may hold `null`), the job runs on the
+  caller's thread through the same registry. So a result does not depend on
+  where it was computed: `scripts/test-analysis-kernels.mjs` compares, bit for
+  bit, each kernel called directly, as a job on the caller's thread and as a
+  job in the real worker module.
+- `src/plots/methods/analysis-job-methods.js` is what the analyses call:
+  `_analysisJobSignal(plot)` — the signal of one run's job: the panel's shared
+  run signal (`_analysisRunSignal(plot, slot)` in `analysis-busy-methods.js`,
+  which a lazy file's queries also use, each analysis in its own slot) in the
+  jobs' slot. It is tied to the panel's signal (Cancel aborts it) and aborted
+  by the run that replaces it and by `_abortAnalysisJob(plot)`, which every
+  `_schedule…Recompute` calls before its debounce; `_analysisTraceScope(trace,
+  range)` — the rows of a range as positions in the signal's arrays, not yet
+  copied; `_analysisJobOver…` — a job fed those rows.
+- A job times its kernels where they run (`kernelMs`, `onKernel`), and
+  `_measureAnalysisKernel` projects the automatic preview of a range from that
+  time rather than from the clock, which would count the worker's start too.
+- The fits (curve fit, trend, 2D fit) return their results synchronously to
+  what draws them. With a worker to compute in, a fit of a signal in memory is
+  left *pending*, exactly as a lazy file's is, and painted when its job
+  answers (`inMemory` on the pending result); without one it is computed on
+  the spot, as before.
+
+A new analysis registers its kernel there and runs it through a job: the
+kernel then never holds the page, and Cancel works on a file in memory as on a
+lazy one.
 
 ## Web updates
 

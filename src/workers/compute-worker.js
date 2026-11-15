@@ -12,8 +12,30 @@ import { runDataToolPipeline, runResample, runCrossCorrelation } from '../comput
 import { detectSpikeWindow } from '../compute/kernels/outliers.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
 import { detectSamplingGaps } from '../utils/sampling-gaps.js';
+import { createAnalysisJobState } from '../compute/analysis-kernels.js';
+
+// The analysis jobs this worker holds (src/core/analysis-jobs.js): the columns
+// each was given and what its kernels keep between calls. The page drops a job
+// when it is done; a job that is aborted takes the worker with it.
+const analysisJobs = new Map();
+const analysisJob = (id) => {
+    if (!analysisJobs.has(id)) analysisJobs.set(id, createAnalysisJobState());
+    return analysisJobs.get(id);
+};
 
 const HANDLERS = {
+    'analysis:put': ({ job, columns, total }) => {
+        analysisJob(job).put(columns, total);
+        return { result: true };
+    },
+    // `ms`: the kernel alone, timed here — what the automatic preview is
+    // projected from, free of the worker's start and of the messages' latency.
+    'analysis:run': ({ job, kernel, params, chunk }) => {
+        const startedAt = performance.now();
+        const value = analysisJob(job).run(kernel, params, chunk);
+        return { result: { value, ms: performance.now() - startedAt } };
+    },
+    'analysis:drop': ({ job }) => ({ result: analysisJobs.delete(job) }),
     'dataTool:pipeline': ({ values, time, steps }) => {
         const result = runDataToolPipeline(values, time, steps);
         return {

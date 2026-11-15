@@ -147,6 +147,9 @@ export function installPlotTrendMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot?.div || plot.mode !== 'trend') return;
         clearTimeout(plot._trendRecomputeTimer);
+        // What is in flight for inputs no longer asked for stops here, before
+        // the debounce: the old work is of no use from this moment.
+        this._stopStaleTrends?.(plot);
         const run = () => {
             if (this.plots.get(panelId) !== plot || plot.mode !== 'trend' || !plot.div) return;
             this._setTrendStatus(plot, i18n.t('trendCalculating'), 'loading');
@@ -185,7 +188,10 @@ export function installPlotTrendMethods(TargetClass) {
         const done = results.filter(r => r.result).length;
         const pending = results.some(r => r.lazy && !r.result && r.lazyStatus === 'pending');
         const cancelled = results.some(r => r.lazy && !r.result && r.lazyStatus === 'cancelled');
-        if (pending) this._setTrendStatus(plot, i18n.t('trendLazyPending'), 'loading');
+        // A lazy file is being read; a signal in memory is simply being
+        // computed (in a worker: an analysis job).
+        const lazyPending = results.some(r => r.lazy && !r.inMemory && !r.result && r.lazyStatus === 'pending');
+        if (pending) this._setTrendStatus(plot, i18n.t(lazyPending ? 'trendLazyPending' : 'trendCalculating'), 'loading');
         else if (cancelled) this._setTrendStatus(plot, i18n.t(results.some(r => r.staleResult) ? 'analysisCancelledKept' : 'analysisCancelled'), 'muted');
         else this._setTrendStatus(plot, done ? i18n.t('trendStatus').replace('{count}', String(done)) : '', 'muted');
     };

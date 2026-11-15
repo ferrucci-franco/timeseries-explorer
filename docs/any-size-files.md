@@ -1941,18 +1941,25 @@ guardado bajo la clave de esos parámetros, para que ningún refresco lo pida de
 nuevo. La línea de estado dice *"Cálculo cancelado: vuelven el resultado
 anterior y sus parámetros"*, y nada se relanza hasta que cambie lo pedido. En
 el menú Análisis, elegir el análisis que ya está activo no hace nada; solo
-*Ninguno* lo apaga. Un cálculo en memoria que ya empezó corre en el hilo principal y no
-puede interrumpirse: la píldora aparece antes de que empiece, y cancelado
-entonces no empieza. Una consulta compartida por caché entre dos paneles
+*Ninguno* lo apaga. Un cálculo sobre un archivo en memoria corre en un worker
+(un *analysis job*, #381; `docs/architecture.md`, "Analysis jobs") y Cancelar
+termina ese worker: se interrumpe como una consulta de un archivo lazy. Antes
+corría en el hilo principal y, una vez empezado, la página no podía recibir el
+clic hasta que terminara. Queda en el hilo principal, sin poder interrumpirse,
+el cálculo sobre una señal cuyos valores no son un arreglo tipado (un archivo
+recortado o reindexado) y la FFT por debajo de su umbral de worker. Una
+consulta compartida por caché entre dos paneles
 (heatmap, perfil) que se cancela en uno hace que el otro la vuelva a pedir.
 
-Prueba: `scripts/e2e-analysis-cancel.mjs` (Chromium, archivo lazy): para cada
-uno de los ocho análisis, las consultas que llevan la señal se cuelgan hasta
-abortarse —lo que prueba que la llevan—, se pide un recálculo, la píldora
-aparece sobre el resultado anterior, Cancelar aborta la consulta, quita la
-píldora, deja el resultado, devuelve el parámetro que se había cambiado (el
-rango, el modelo) y lo dice; nada se relanza solo, y luego el análisis vuelve
-a calcular. Elegir de nuevo el análisis activo en el menú lo deja como está.
+Prueba: `scripts/e2e-analysis-cancel.mjs` (Chromium, el mismo archivo en lazy
+y luego en memoria): para cada uno de los análisis, el trabajo que lleva la
+señal se cuelga hasta abortarse —lo que prueba que la lleva: en lazy las
+consultas y los streams, en memoria el *analysis job*—, se pide un recálculo,
+la píldora aparece sobre el resultado anterior, Cancelar aborta ese trabajo,
+quita la píldora, deja el resultado, devuelve el parámetro que se había
+cambiado (el rango, el modelo; en el ajuste 2D también un borde tecleado en el
+bloque de rango) y lo dice; nada se relanza solo, y luego el análisis vuelve a
+calcular. Elegir de nuevo el análisis activo en el menú lo deja como está.
 
 ### Implementado: la FFT lazy no congela la página (#174)
 

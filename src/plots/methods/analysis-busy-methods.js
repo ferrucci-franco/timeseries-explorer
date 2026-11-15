@@ -13,16 +13,20 @@
 // the options panel and the range selection, so what the panel says is what
 // it shows.
 //
-// Work already running synchronously on the main thread (an in-memory kernel)
-// cannot be interrupted; the pill shows before it starts, and a run cancelled
-// then never starts. Once it has started, the page cannot take the click
-// until it ends.
+// The kernel of a file in memory runs as an analysis job, in a worker
+// (analysis-job-methods.js): Cancel terminates it, as it aborts a query. What
+// still runs synchronously on the main thread — a signal whose values are not
+// a typed array, the FFT under its worker threshold, a page without workers —
+// cannot be interrupted: the pill shows before it starts, a run cancelled
+// then never starts, and once started the page cannot take the click until
+// it ends.
 //
 // Every analysis goes through here (_setAnalysisComputing while it computes,
 // _analysisSignal for the queries it makes), so a new analysis gets the pill
 // and its Cancel by doing the same — see CLAUDE.md.
 
 import i18n from '../../i18n/index.js';
+import { ANALYSIS_JOB_SLOT } from '../../core/analysis-jobs.js';
 
 const PILL_CLASS = 'analysis-computing-indicator';
 
@@ -258,7 +262,9 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         }
         plot._analysisAbort?.abort();
         plot._analysisAbort = null;
-        for (const slot of ['_fftRunAbort', '_calendarHeatmapRunAbort', '_temporalProfileRunAbort', '_correlationRunAbort']) {
+        // The runs in flight: a lazy file's queries, and the analysis job of a
+        // file in memory (a worker in the middle of a kernel is terminated).
+        for (const slot of ['_fftRunAbort', '_calendarHeatmapRunAbort', '_temporalProfileRunAbort', '_correlationRunAbort', ANALYSIS_JOB_SLOT]) {
             this._abortAnalysisRun(plot, slot);
         }
         plot._histAbort?.abort();
@@ -295,7 +301,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         if (mode === 'phase2d') {
             if (plot._phase2dLazyJob) return false;
             return !(plot.phaseTraces || []).some((pair) => {
-                if (pair.visible === false || this._phase2dPairModel?.(pair) === 'none' || !this._isLazyFile?.(pair.fileId)) return false;
+                if (pair.visible === false || this._phase2dPairModel?.(pair) === 'none' || !this._phase2dPairFitsAsync?.(pair)) return false;
                 const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
                 return !(cached && cached.status === 'ok' && cached.key === this._phase2dLazyFitKey(plot, pair));
             });

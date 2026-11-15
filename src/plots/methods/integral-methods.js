@@ -882,6 +882,9 @@ proto._scheduleIntegralRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.integralDiv || plot.mode !== 'integral') return;
     clearTimeout(plot._integralRecomputeTimer);
+    // The run in flight is of no use from now on: it stops here, not when the
+    // next one starts after the debounce. Its result stays drawn.
+    this._abortAnalysisJob(plot);
     const run = () => {
         const state = this._ensureIntegralState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'integral');
@@ -940,67 +943,96 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             lazy.push({ trace, traceIndex, name, base });
             continue;
         }
-        const selected = this._integralSeriesForTrace(trace, range);
-        eager.push({
-            trace, traceIndex, name, base,
-            times: selected.times,
-            values: selected.values,
-        });
+        // The rows of the range, one neighbour kept on each side
+        // (_integralSeriesForTrace), not copied yet: they go to the analysis
+        // job below a chunk at a time.
+        eager.push({ trace, traceIndex, name, base, scope: this._analysisTraceScope(trace, range, 1) });
     }
 
+    const isCurrent = () => plot._integralToken === token && this.plots.get(panelId) === plot && plot.mode === 'integral';
+    const runSignal = this._analysisJobSignal(plot);
     const lazyByTrace = await this._queryLazyIntegralDays(plot, lazy, state, range, warnings);
     if (plot._integralToken !== token) return;
 
-    // `discard-day-all` needs every signal's holes before any total can be
-    // computed, so that all bars end up integrating exactly the same days. The
-    // union spans eager and lazy alike — a day missing from a large file must
-    // leave the domain of the small one too, or the bars stop being comparable.
     let sharedExcludedDays = null;
-    if (state.missingPolicy === 'discard-day-all') {
-        const union = new Set();
-        for (const candidate of eager) {
-            if (candidate.base.kind !== 'datetime') continue;
-            const params = this._integralKernelParams(state, candidate, range, null);
-            for (const day of collectMissingDays(candidate.values, params.time, params.options).days) union.add(day);
-        }
-        for (const entry of lazyByTrace.values()) {
-            for (const day of entry.days || []) if (day.hasHole) union.add(day.day);
-        }
-        sharedExcludedDays = [...union];
-    }
-
-    // Calendar grouping: the whole-range total is still computed for every
-    // signal — it is what the summary and the status line report, and what the
-    // columns must add up to — and each period is then integrated separately
-    // over a window sharing its edges with its neighbours.
-    const groupWindows = this._integralGroupWindows(plot, state, warnings);
-    const groupBy = groupWindows ? state.groupBy : 'none';
-    plot._integralGroupBy = groupBy;
-
+    let groupWindows = null;
+    let groupBy = 'none';
     let assumedSeconds = false;
     let indexAxis = false;
-    // Measured over the real quadrature, before anything is drawn: if this says
-    // the full range is affordable after all, the reconsider widens it and
-    // reschedules, and this pass's output is superseded.
-    const measured = this._measureAnalysisKernel(panelId, plot, () => {
-        for (const candidate of eager) {
-            const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
-            const result = computeDefiniteIntegral(candidate.values, params.time, params.options);
-            if (candidate.base.assumed) assumedSeconds = true;
-            if (candidate.base.kind === 'index') indexAxis = true;
-            models.push({
-                trace: candidate.trace,
-                traceIndex: candidate.traceIndex,
-                name: candidate.name,
-                unit: this._integralValueUnit(candidate.trace),
-                base: candidate.base,
-                result,
-                groups: groupWindows
-                    ? this._integralEagerGroups(state, candidate, groupWindows, sharedExcludedDays, result)
-                    : null,
-            });
+    let measured;
+    // The eager kernels run as one analysis job (src/core/analysis-jobs.js),
+    // a pair of columns per signal: in a worker, so the quadrature of 10 M
+    // rows no longer holds the page for a second, and under the run's signal —
+    // Cancel and a newer request stop it.
+    let job = null;
+    try {
+        // Calendar grouping: the whole-range total is still computed for every
+        // signal — it is what the summary and the status line report, and what the
+        // columns must add up to — and each period is then integrated separately
+        // over a window sharing its edges with its neighbours.
+        groupWindows = this._integralGroupWindows(plot, state, warnings);
+        groupBy = groupWindows ? state.groupBy : 'none';
+        plot._integralGroupBy = groupBy;
+
+        job = await this._integralEagerJob(eager, groupWindows, runSignal);
+
+        // `discard-day-all` needs every signal's holes before any total can be
+        // computed, so that all bars end up integrating exactly the same days. The
+        // union spans eager and lazy alike — a day missing from a large file must
+        // leave the domain of the small one too, or the bars stop being comparable.
+        if (state.missingPolicy === 'discard-day-all') {
+            const union = new Set();
+            for (const candidate of eager) {
+                if (candidate.base.kind !== 'datetime') continue;
+                const params = this._integralKernelParams(state, candidate, range, null);
+                const missing = await job.run('integral:missingDays', { ...candidate.columns, timeKind: params.timeKind, options: params.options });
+                for (const day of missing.days) union.add(day);
+            }
+            for (const entry of lazyByTrace.values()) {
+                for (const day of entry.days || []) if (day.hasHole) union.add(day.day);
+            }
+            sharedExcludedDays = [...union];
         }
-    }, warnings);
+
+        // Measured over the real quadrature, before anything is drawn: if this says
+        // the full range is affordable after all, the reconsider widens it and
+        // reschedules, and this pass's output is superseded.
+        measured = await this._measureAnalysisKernel(panelId, plot, async () => {
+            for (const candidate of eager) {
+                const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
+                // One definite integral over the range and, grouped, one per
+                // window (see the kernel: _integralEagerGroups' arithmetic).
+                const computed = await job.run('integral:compute', {
+                    ...candidate.columns,
+                    timeKind: params.timeKind,
+                    options: params.options,
+                    windows: groupWindows ? candidate.windows : null,
+                    groupOptions: groupWindows
+                        ? this._integralKernelParams(state, candidate, null, sharedExcludedDays).options
+                        : null,
+                });
+                if (candidate.base.assumed) assumedSeconds = true;
+                if (candidate.base.kind === 'index') indexAxis = true;
+                models.push({
+                    trace: candidate.trace,
+                    traceIndex: candidate.traceIndex,
+                    name: candidate.name,
+                    unit: this._integralValueUnit(candidate.trace),
+                    base: candidate.base,
+                    result: computed.result,
+                    groups: computed.groups,
+                });
+            }
+        }, warnings, isCurrent);
+    } catch (error) {
+        // Stopped by Cancel or by the request that replaces this pass.
+        if (error?.name === 'AbortError' || !isCurrent()) return;
+        throw error;
+    } finally {
+        job?.close();
+        // The job is done: the run lets go of the panel's signal.
+        this._settleAnalysisJob(plot, runSignal);
+    }
     if (measured.superseded) return;
     for (const candidate of lazy) {
         const entry = lazyByTrace.get(candidate.trace);
@@ -1241,27 +1273,75 @@ proto._integralGroupWindows = function(plot, state, warnings = []) {
 // interpolates the value at the period edge instead of starting from whatever
 // sample happens to be nearest — and so the trailing period of a MID window is
 // suppressed, because its last sample is not the series' last sample.
-proto._integralEagerGroups = function(state, candidate, windows, sharedExcludedDays, total) {
-    const base = this._integralKernelParams(state, candidate, null, sharedExcludedDays);
-    // The step the WHOLE series has, handed to every window: the result reports
-    // it in seconds on a calendar axis, the kernel wants raw abscissa units.
-    const nominalStep = total?.hasNominalStep && Number.isFinite(total.medianDt)
-        ? total.medianDt * (total.timeKind === 'datetime' ? 1000 : 1)
-        : null;
+//
+// The integrals themselves are the analysis job's (the `integral:compute`
+// kernel, src/compute/analysis-kernels.js): here each window is given the rows
+// it reads, as positions in the signal's arrays — found with the same binary
+// bounds as _integralSeriesForTrace — for the job to cut from the rows it holds.
+proto._integralEagerGroups = function(candidate, windows) {
     return windows.map((periodWindow) => {
-        const selected = this._integralSeriesForTrace(candidate.trace, [periodWindow.startMs, periodWindow.endMs]);
-        const time = base.time.values === null ? base.time : { values: selected.times, kind: base.time.kind };
+        const { start, end } = this._analysisTraceScope(candidate.trace, [periodWindow.startMs, periodWindow.endMs], 1);
         return {
-            startMs: periodWindow.periodStartMs,
-            endMs: periodWindow.periodEndMs,
-            result: computeDefiniteIntegral(selected.values, time, {
-                ...base.options,
-                rangeStart: periodWindow.startMs,
-                rangeEnd: periodWindow.endMs,
-                nominalStep,
-            }),
+            startMs: periodWindow.startMs,
+            endMs: periodWindow.endMs,
+            periodStartMs: periodWindow.periodStartMs,
+            periodEndMs: periodWindow.periodEndMs,
+            start,
+            end,
         };
     });
+};
+
+// The analysis job the eager signals are integrated in: for each one, a pair
+// of columns holding the rows of its range and of its windows (one neighbour
+// kept on each side of every one of them). Each candidate is told its column
+// names and where its rows sit in them (`columns`, `windows`).
+proto._integralEagerJob = async function(eager, groupWindows, signal) {
+    if (!eager.length) return null;
+    const all = {};
+    eager.forEach((candidate, index) => {
+        const { scope } = candidate;
+        const windows = groupWindows ? this._integralEagerGroups(candidate, groupWindows) : null;
+        // What the job is given: the whole arrays when there is no range,
+        // else the rows from the first to the last any of them reads.
+        let from = scope.whole ? 0 : scope.start;
+        let to = scope.end;
+        if (!scope.whole) {
+            for (const item of windows || []) {
+                from = Math.min(from, item.start);
+                to = Math.max(to, item.end);
+            }
+        }
+        candidate.fed = scope.whole ? null : [from, to];
+        candidate.columns = {
+            times: `times${index}`,
+            values: `values${index}`,
+            rows: scope.whole ? null : [scope.start - from, scope.end - from],
+        };
+        candidate.windows = windows
+            ? windows.map(item => ({ ...item, rows: [item.start - from, item.end - from] }))
+            : null;
+        all[candidate.columns.times] = scope.times;
+        all[candidate.columns.values] = scope.values;
+    });
+    const job = this._openAnalysisJob(all, { signal });
+    try {
+        for (const candidate of eager) {
+            const { times, values } = candidate.scope;
+            const names = candidate.columns;
+            if (candidate.fed) {
+                await this._feedAnalysisJob(job, { [names.times]: times, [names.values]: values }, { start: candidate.fed[0], end: candidate.fed[1], signal });
+            } else {
+                // Whole, each as long as it is.
+                await this._feedAnalysisJob(job, { [names.times]: times }, { signal });
+                await this._feedAnalysisJob(job, { [names.values]: values }, { signal });
+            }
+        }
+    } catch (error) {
+        job.close();
+        throw error;
+    }
+    return job;
 };
 
 // The same split for a lazy signal, from the per-day partials the file already
@@ -1271,18 +1351,17 @@ proto._integralLazyGroups = function(entry, windows, groupBy, reduceParams) {
     return reduceDailyIntegralByPeriod(entry.days || [], windows, groupBy, reduceParams);
 };
 
-// The kernel's inputs for one candidate: the time context in raw abscissa units
-// (epoch ms on a calendar axis) plus the policy options from the panel.
+// The kernel's inputs for one candidate: the kind of its time context (whose
+// values, in raw abscissa units — epoch ms on a calendar axis — are the job's
+// time column; none on an index axis) plus the policy options from the panel.
 proto._integralKernelParams = function(state, candidate, range, sharedExcludedDays) {
     const kind = candidate.base.kind;
-    const time = kind === 'index'
-        ? { values: null, kind: 'index' }
-        : { values: candidate.times, kind: kind === 'datetime' ? 'datetime' : 'numeric' };
+    const timeKind = kind === 'index' ? 'index' : (kind === 'datetime' ? 'datetime' : 'numeric');
     // Day policies are calendar-only. On any other axis they fall back to
     // 'zero', which is also what the disabled controls in the panel show.
     const dayPolicy = state.missingPolicy === 'discard-day-own' || state.missingPolicy === 'discard-day-all';
     return {
-        time,
+        timeKind,
         options: {
             method: state.method,
             missingPolicy: dayPolicy && kind !== 'datetime' ? 'zero' : state.missingPolicy,

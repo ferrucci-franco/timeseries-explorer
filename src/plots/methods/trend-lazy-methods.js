@@ -32,6 +32,7 @@
 // the segment is refused and says so, rather than reporting the overview's
 // numbers as if they were the file's.
 
+import { trendOverRows } from '../../compute/analysis-kernels.js';
 import { fitPair, buildFitCurve, predict } from '../../utils/regression.js';
 import { runPassesOnArrays, runPassesOnChunks } from '../../utils/fit-passes.js';
 import { maskTrendValues, trendDelta, trendSteps } from '../../utils/trend-fit.js';
@@ -257,11 +258,43 @@ export function installPlotTrendLazyMethods(TargetClass) {
         return { times: times.slice(start, end), values: values.slice(start, end) };
     };
 
+    // The same rows, not copied yet: the signal's arrays and the positions
+    // `[start, end)` of the stretch in them (_trendEagerRows' bounds).
+    proto._trendEagerScope = function(trace, range) {
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
+        const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
+        const n = Math.min(times.length || 0, values.length || 0);
+        const [start, end] = rangeIndices(n === times.length ? times : times.slice(0, n), range[0], range[1]);
+        return { times, values, start, end };
+    };
+
+    // A segment's numbers from rows held here, computed on the spot: the
+    // kernel (trendOverRows, src/compute/analysis-kernels.js), then what the
+    // table and the panes read from it.
     proto._trendFromRows = function(segment, trace, range, info, band, times, values) {
-        const tPrime = shiftedTime(times, range[0], info.scale);
-        const trend = runPassesOnArrays(trendSteps({ band }), tPrime, values);
-        const exp = this._trendExpFromRows(segment, band, tPrime, values);
+        const { trend, exp } = trendOverRows(times, values, {
+            band, t0: range[0], scale: info.scale, expModel: segment?.expModel,
+        });
         return this._trendResult(trace, range, info, band, trend, exp);
+    };
+
+    // The same numbers for a signal held in memory, as an analysis job
+    // (src/core/analysis-jobs.js): the rows of the stretch go to a worker, a
+    // chunk at a time, and the same kernel runs there — the sums of 8 M rows
+    // took the page a second, their exponential nineteen — under `signal`
+    // (Cancel, a newer request). `r` is a pending result of _computeTrends
+    // with its `rows`.
+    proto._trendInMemory = async function(r, signal = null) {
+        const { times, values, start, end } = r.rows;
+        const job = await this._analysisJobOver({ times, values }, { start, end, signal });
+        try {
+            const { trend, exp } = await job.run('fit:trend', {
+                band: r.band, t0: r.range[0], scale: r.info.scale, expModel: r.segment?.expModel,
+            });
+            return this._trendResult(r.trace, r.range, r.info, r.band, trend, exp);
+        } finally {
+            job.close();
+        }
     };
 
     // The exponential of a segment that asked for one, over the rows the band
@@ -342,19 +375,26 @@ export function installPlotTrendLazyMethods(TargetClass) {
                 results.push({ ...base, result: cached.result, lazy });
                 return;
             }
-            if (lazy) {
+            // A signal in memory with a worker to compute it in: its numbers
+            // come from an analysis job (`inMemory`), so they never hold the
+            // page; without a worker they are computed here, as always.
+            const rows = lazy ? null : this._trendEagerScope(trace, range);
+            const inMemory = !lazy && !!this._analysisRunsOffThread?.({ times: rows.times, values: rows.values });
+            if (lazy || inMemory) {
                 // Until the new numbers arrive (or after they were cancelled)
                 // the previous ones stay on screen — staleResult, never
                 // `result`: the table's live row, the CSV and the status line
                 // read `result`, which is the answer to what is asked now.
+                // (`lazy` here says "still to come", for a lazy file and for a
+                // job over a signal in memory alike.)
                 const sameKey = cached?.key === key;
                 const lazyStatus = sameKey ? cached.status : 'pending';
                 const staleResult = sameKey ? (cached.previous || null) : (cached?.result || cached?.previous || null);
-                results.push({ ...base, lazy: true, lazyStatus, key, range, info, band, staleResult });
+                results.push({ ...base, lazy: true, inMemory, rows, lazyStatus, key, range, info, band, staleResult });
                 return;
             }
-            const rows = this._trendEagerRows(trace, range);
-            const result = this._trendFromRows(segment, trace, range, info, band, rows.times, rows.values);
+            const result = this._trendFromRows(segment, trace, range, info, band,
+                rows.times.slice(rows.start, rows.end), rows.values.slice(rows.start, rows.end));
             plot._trendCache.set(segment.id, { key, result, status: 'ok' });
             results.push({ ...base, result });
         });
@@ -371,6 +411,35 @@ export function installPlotTrendLazyMethods(TargetClass) {
             segment.expModel || 'none',
             token,
         ].join('\u0000');
+    };
+
+    // A segment's job in flight whose inputs are no longer what the segment
+    // asks for (or whose segment is gone) stops now: its queries and streams
+    // of a lazy file, its analysis job. Segments that share the stopped job
+    // (the sums of one file's segments are one batch) are forgotten with it,
+    // so the next pass asks for theirs again. A job still asked for under the
+    // same key is left alone.
+    proto._stopStaleTrends = function(plot) {
+        const jobs = plot?._trendLazyJobs;
+        if (!jobs?.size) return;
+        const wanted = new Map();
+        for (const segment of this._ensureTrendState(plot).segments) {
+            const trace = this._trendTraceFor(plot, segment);
+            if (!trace || !this._isVisible(trace)) continue;
+            const range = this._trendRange(plot, segment);
+            const info = this._trendTimeInfo(plot, trace);
+            wanted.set(segment.id, this._trendKey(plot, segment, trace, range, info, trendSegmentBand(segment)));
+        }
+        const stopped = new Set();
+        for (const [id, job] of jobs) {
+            if (wanted.get(id) === job.key) continue;
+            job.controller?.abort();
+            if (job.controller) stopped.add(job.controller);
+            jobs.delete(id);
+        }
+        for (const [id, job] of jobs) {
+            if (stopped.has(job.controller)) jobs.delete(id);
+        }
     };
 
     // ── A lazy file ───────────────────────────────────────────────
@@ -396,6 +465,17 @@ export function installPlotTrendLazyMethods(TargetClass) {
             jobs.delete(id);
         }
         const fresh = pending.filter(r => !jobs.has(r.segment.id));
+        if (!fresh.length) return;
+
+        // The segments of signals in memory: an analysis job each, started
+        // now. Nothing below — which is about reading a file — concerns them.
+        const inMemory = fresh.filter(r => r.inMemory);
+        for (const r of inMemory) {
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            jobs.set(r.segment.id, { key: r.key, controller });
+            this._runTrendLazyBatch(panelId, plot, { kind: 'memory', items: [r] });
+        }
+        if (inMemory.length) fresh.splice(0, fresh.length, ...fresh.filter(r => !r.inMemory));
         if (!fresh.length) return;
 
         // A lazy file whose axis is the row number must be counted before its
@@ -465,7 +545,8 @@ export function installPlotTrendLazyMethods(TargetClass) {
             plot._trendCache.set(r.segment.id, entry);
         };
         try {
-            if (batch.kind === 'sql') await this._runTrendSqlBatch(plot, batch, signal, settle);
+            if (batch.kind === 'memory') settle(first, { key: first.key, result: await this._trendInMemory(first, signal), status: 'ok' });
+            else if (batch.kind === 'sql') await this._runTrendSqlBatch(plot, batch, signal, settle);
             else await this._runTrendStreamBatch(plot, batch, signal, settle);
         } catch (err) {
             if (err?.name === 'AbortError') {

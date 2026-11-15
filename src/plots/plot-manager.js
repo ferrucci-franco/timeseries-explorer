@@ -17,6 +17,7 @@ import { installPlotHistogramLazyMethods } from './methods/histogram-lazy-method
 import { installPlotStatsLazyMethods } from './methods/stats-lazy-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
 import { installPlotAnalysisBusyMethods } from './methods/analysis-busy-methods.js';
+import { installPlotAnalysisJobMethods } from './methods/analysis-job-methods.js';
 import { installPlotAnalysisRangeMethods } from './methods/analysis-range-methods.js';
 import { installPlotAnalysisFitMethods } from './methods/analysis-fit-methods.js';
 import { installPlotFitLazyMethods } from './methods/fit-lazy-methods.js';
@@ -5880,6 +5881,7 @@ installPlotHistogramLazyMethods(PlotManager);
 installPlotStatsLazyMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);
 installPlotAnalysisBusyMethods(PlotManager);
+installPlotAnalysisJobMethods(PlotManager);
 installPlotFitLazyMethods(PlotManager);
 installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);

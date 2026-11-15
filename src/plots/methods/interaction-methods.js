@@ -1452,23 +1452,43 @@ proto._applyPendingAnalysisFocus = function(plot, mode = plot?.mode) {
 // Plotly.react and the options-panel rebuild — costs that do not grow with the
 // sample count — and extrapolating those linearly turned a 5 ms histogram over
 // 262k points into a projected two minutes over the full signal.
-proto._measureAnalysisKernel = function(panelId, plot, run, warnings = null) {
+//
+// The kernel may be asynchronous — it is, when it runs as an analysis job in a
+// worker (src/core/analysis-jobs.js) — and then so is the answer: a promise of
+// the same { result, elapsedMs, superseded }. `isCurrent` tells whether the
+// pass that asked is still the panel's: a pass that was replaced while its
+// kernel ran is reported superseded and measures nothing.
+//
+// When analysis jobs ran meanwhile, what is measured is the time their kernels
+// took (each job times its own, _openAnalysisJob adds them up), not the time
+// on the clock: the wait for a worker to start and for its messages does not
+// grow with the sample count either, and counting it kept a preview that the
+// kernel alone, on the main thread, used to prove unnecessary.
+proto._measureAnalysisKernel = function(panelId, plot, run, warnings = null, isCurrent = null) {
     const state = this._analysisStateForMode(plot, plot?.mode);
     // Callers seed their warning list from the pre-measurement guess before the
     // kernel runs. Remember that so the guess can be replaced in place, rather
     // than leaving the panel quoting a number the measurement just disproved.
-    const seededIndex = Array.isArray(warnings) && state?.autoRangeWarning
-        ? warnings.indexOf(state.autoRangeWarning)
-        : -1;
+    const seededWarning = Array.isArray(warnings) ? state?.autoRangeWarning : null;
     const startedAt = performance.now();
+    const kernelsBefore = this._analysisKernelClock || { ms: 0, runs: 0 };
+    const settle = (result) => {
+        const kernels = this._analysisKernelClock || kernelsBefore;
+        const elapsedMs = kernels.runs > kernelsBefore.runs
+            ? kernels.ms - kernelsBefore.ms
+            : performance.now() - startedAt;
+        if (isCurrent && !isCurrent()) return { result, elapsedMs, superseded: true };
+        const superseded = this._reconsiderAutoLimitedRange(panelId, plot, elapsedMs);
+        const seededIndex = seededWarning ? warnings.indexOf(seededWarning) : -1;
+        if (!superseded && seededIndex >= 0) {
+            if (state.autoRangeWarning) warnings[seededIndex] = state.autoRangeWarning;
+            else warnings.splice(seededIndex, 1);
+        }
+        return { result, elapsedMs, superseded };
+    };
     const result = run();
-    const elapsedMs = performance.now() - startedAt;
-    const superseded = this._reconsiderAutoLimitedRange(panelId, plot, elapsedMs);
-    if (!superseded && seededIndex >= 0) {
-        if (state.autoRangeWarning) warnings[seededIndex] = state.autoRangeWarning;
-        else warnings.splice(seededIndex, 1);
-    }
-    return { result, elapsedMs, superseded };
+    if (result && typeof result.then === 'function') return result.then(settle);
+    return settle(result);
 };
 
 proto._panelIdForPlot = function(plot) {

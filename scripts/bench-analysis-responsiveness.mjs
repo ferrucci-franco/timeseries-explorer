@@ -953,8 +953,12 @@ function supersedeVerdict(mode, { logs, detail }) {
     if (mode === 'eager') {
         const workers = logs.workers.filter(worker => worker.lastPost !== null && worker.lastPost >= detail.typedAt && worker.lastPost < released);
         if (workers.some(worker => worker.terminated !== null)) return 'yes: its worker is terminated';
-        if (detail.maxDelay > 100) return `no: on the main thread, which it held ${round(detail.maxDelay)} ms`;
-        return workers.length ? 'no: its worker ran on' : 'nothing in flight';
+        if (workers.length) return 'no: its worker ran on';
+        // No worker was at work on the older request. Either it had not started
+        // (a fit starts on the release of the slider), or it ran on the main
+        // thread, and then the delay says for how long.
+        if (detail.maxDelay > 100) return `nothing in a worker; the main thread was held ${round(detail.maxDelay)} ms`;
+        return 'nothing in flight';
     }
     const older = logs.queries.filter(entry => entry.start >= detail.typedAt && entry.start < released);
     const open = older.filter(entry => entry.end === null || entry.end > released);

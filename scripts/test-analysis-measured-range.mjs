@@ -207,6 +207,45 @@ for (const [label, overrides, elapsed] of [
     assert.equal(measured.result, 42, 'the kernel result survives without a warning list');
 }
 
+// ── A kernel in an analysis job is timed by the job, not by the clock ──────
+// The job's kernels are timed where they run (the worker) and added up on the
+// manager (_openAnalysisJob); the wait for the worker to start and for its
+// messages does not grow with the rows, and must not be projected over them.
+{
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    // 60 ms on the clock, 10 ms of kernel: over the full range that projects
+    // to ~1 s of kernel (re-open), where the clock would say ~6 s (keep).
+    const { app, state, plot } = makeApp();
+    const measured = await measureKernel.call(app, 'p1', plot, async () => {
+        await pause(60);
+        app._analysisKernelClock = { ms: 10, runs: 1 };
+        return 'from a job';
+    });
+    assert.equal(measured.result, 'from a job', 'an asynchronous kernel is awaited');
+    assert.equal(measured.elapsedMs, 10, 'what is measured is the time the kernels ran');
+    assert.equal(measured.superseded, true, 'so a cheap kernel behind a slow worker start still re-opens the range');
+    assert.equal(state.rangeFull, true, 'and the range is whole again');
+
+    // An earlier job's time is not this pass's: only what ran meanwhile counts.
+    const next = makeApp();
+    next.app._analysisKernelClock = { ms: 5000, runs: 7 };
+    const second = await measureKernel.call(next.app, 'p1', next.plot, async () => {
+        next.app._analysisKernelClock = { ms: 5010, runs: 8 };
+    });
+    assert.equal(second.elapsedMs, 10, 'the kernels of this pass alone');
+
+    // No job ran (a kernel on this thread, a lazy file): the clock, as before.
+    const plain = makeApp({ autoRangeSampleCount: 2, autoRangeFullCount: 100_000_000 });
+    const third = await measureKernel.call(plain.app, 'p1', plain.plot, async () => { await pause(20); });
+    assert.ok(third.elapsedMs >= 15, `without a job the pass is timed on the clock (${third.elapsedMs} ms)`);
+
+    // A pass replaced while its kernel ran measures nothing.
+    const stale = makeApp();
+    const fourth = await measureKernel.call(stale.app, 'p1', stale.plot, async () => {}, null, () => false);
+    assert.equal(fourth.superseded, true, 'a pass that is no longer current is superseded');
+    assert.equal(stale.state.autoRangeLimited, true, 'and re-opens nothing');
+}
+
 // ── Callers must honour the superseded flag ────────────────────────────────
 // A pass that keeps drawing after being superseded paints a result the
 // rescheduled recompute is about to replace.

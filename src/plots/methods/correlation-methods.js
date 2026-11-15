@@ -632,6 +632,22 @@ export function installPlotCorrelationMethods(TargetClass) {
         };
     };
 
+    // The same rows, not copied yet: the pair's two arrays and the positions
+    // `[start, end)` of the rows in the range. An analysis job is handed them a
+    // chunk at a time.
+    proto._correlationPairScope = function(pair, range, rangeFull) {
+        const times = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
+        const x = this._getTransformedVariableData(pair.fileId, pair.x);
+        const y = this._getTransformedVariableData(pair.fileId, pair.y);
+        const n = Math.min(times?.length || 0, x?.length || 0, y?.length || 0);
+        if (rangeFull) return { x, y, start: 0, end: n, nScope: n };
+        let [lo, hi] = range;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const start = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        const end = Math.max(start, Math.min(n, this._upperBound(times, hi)));
+        return { x, y, start, end, nScope: end - start };
+    };
+
     proto._isLazyFile = function(fileId) {
         return !!this.files.get(fileId)?.data?._duckdb;
     };
@@ -644,6 +660,9 @@ export function installPlotCorrelationMethods(TargetClass) {
         // changed: stop it now, so the new one does not queue behind it on
         // DuckDB (#384). The result on screen stays until the new one is in.
         this._abortAnalysisRun(plot, '_correlationRunAbort');
+        // So is the analysis job of a file in memory: its worker stops here, not
+        // when the next run starts after the debounce (#381).
+        this._abortAnalysisJob(plot);
         const run = () => {
             const state = this._ensureCorrelationState(plot);
             const adjusted = this._autoLimitAnalysisRange(plot, state, 'correlation');
@@ -712,18 +731,42 @@ export function installPlotCorrelationMethods(TargetClass) {
         const lazyByFile = new Map();
         // Pearson over the selected slice is the range-dependent cost; the
         // auto-limit reconsider measures exactly this.
-        const measured = this._measureAnalysisKernel(panelId, plot, () => {
-            pairs.forEach((pair, index) => {
-                if (this._isLazyFile(pair.fileId)) {
-                    if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
-                    lazyByFile.get(pair.fileId).push({ index, pair });
-                    return;
+        // It runs as an analysis job (src/core/analysis-jobs.js): in a worker,
+        // off the main thread, under the run's signal — Cancel and a newer
+        // request stop it.
+        const isCurrent = () => plot._correlationToken === token && this.plots.get(panelId) === plot && plot.mode === 'correlation';
+        const runSignal = this._analysisJobSignal(plot);
+        let measured;
+        try {
+            measured = await this._measureAnalysisKernel(panelId, plot, async () => {
+                for (let index = 0; index < pairs.length; index++) {
+                    const pair = pairs[index];
+                    if (this._isLazyFile(pair.fileId)) {
+                        if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
+                        lazyByFile.get(pair.fileId).push({ index, pair });
+                        continue;
+                    }
+                    // pearsonCorrelation over the pair's rows in the range
+                    // (_correlationPairSeries' rows), wherever the job runs.
+                    const scope = this._correlationPairScope(pair, range, state.rangeFull);
+                    const job = await this._analysisJobOver({ x: scope.x, y: scope.y }, { start: scope.start, end: scope.end, signal: runSignal });
+                    let stats;
+                    try {
+                        stats = await job.run('correlation:pearson', {});
+                    } finally {
+                        job.close();
+                    }
+                    results[index] = { pair, label: label(pair), nScope: scope.nScope, ...stats };
                 }
-                const series = this._correlationPairSeries(pair, range, state.rangeFull);
-                const stats = pearsonCorrelation(series.x, series.y);
-                results[index] = { pair, label: label(pair), nScope: series.nScope, ...stats };
-            });
-        });
+            }, null, isCurrent);
+        } catch (error) {
+            // Stopped by Cancel or by the request that replaces this pass.
+            if (error?.name === 'AbortError' || !isCurrent()) return;
+            throw error;
+        } finally {
+            // The jobs are done: the run lets go of the panel's signal.
+            this._settleAnalysisJob(plot, runSignal);
+        }
         // The measurement widened the range and rescheduled; this pass is stale.
         if (measured.superseded) return;
 

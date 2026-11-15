@@ -77,6 +77,7 @@
     "test:data-tools": "node scripts/test-data-tools.mjs",
     "test:datatool-display-name": "node scripts/test-datatool-display-name.mjs",
     "test:compute-kernels": "node scripts/test-compute-kernels.mjs",
+    "test:analysis-kernels": "node scripts/test-analysis-kernels.mjs",
     "test:resample-kernel": "node scripts/test-resample-kernel.mjs",
     "test:interpolate-regrid": "node scripts/test-interpolate-regrid.mjs",
     "test:detrend-filter": "node scripts/test-detrend-filter.mjs",

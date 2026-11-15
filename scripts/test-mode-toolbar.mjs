@@ -504,8 +504,8 @@ assert.match(
 );
 assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),
-    /buildTemporalProfile\(\{[\s\S]*?\.\.\.profileGeometryArgs\(state\)/,
-    'and the eager kernel is called with it',
+    /job\.run\('profile:build',[\s\S]*?\.\.\.profileGeometryArgs\(state\)/,
+    'and the eager kernel (buildTemporalProfile, as an analysis job) is called with it',
 );
 assert.match(
     temporalMethodAssignment('_temporalProfileMinimumResolutionMinutes'),
