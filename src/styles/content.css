@@ -3086,6 +3086,70 @@
     border-radius: 0 0 4px 4px !important;
 }
 
+/* A trace's colour (legend menu → Colour…): the palette, then the browser's
+   own picker for a colour of one's own. */
+.trace-color-popover {
+    position: fixed;
+    z-index: 5200;
+    display: grid;
+    gap: 8px;
+    padding: 8px;
+    max-width: calc(100vw - 16px);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+    font-size: 0.78rem;
+}
+
+.trace-color-title {
+    color: var(--text-secondary);
+}
+
+.trace-color-swatches {
+    display: grid;
+    grid-template-columns: repeat(8, 22px);
+    gap: 6px;
+}
+
+.trace-color-swatch {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.trace-color-swatch:hover,
+.trace-color-swatch:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.trace-color-swatch[aria-pressed="true"] {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+.trace-color-custom {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.trace-color-custom input[type="color"] {
+    width: 32px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+}
+
 @keyframes pending-pulse {
     0%, 100% { opacity: 0.55; }
     50%       { opacity: 0.85; }

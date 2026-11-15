@@ -1082,6 +1082,55 @@ html.compact .version-update-notice .dismissible-notice-action {
     border-radius: 3px;
 }
 
+/* A swatch that opens the trace's colour picker: a finger-sized button, its
+   mark where the plain swatch was. */
+.compact-trace-color {
+    margin-left: -12px;
+    margin-right: -10px;
+}
+
+.compact-trace-color .compact-swatch {
+    width: 18px;
+    height: 18px;
+    flex-basis: 18px;
+    border: 1px solid var(--border-color);
+}
+
+/* The legend menu and the colour picker, opened from a trace's row: at a
+   finger's size. */
+html.compact .timeseries-axis-menu button {
+    min-height: 44px;
+    font-size: 16px;
+}
+
+html.compact .timeseries-axis-menu .legend-menu-item {
+    grid-template-columns: 20px max-content;
+    column-gap: 12px;
+}
+
+html.compact .trace-color-popover {
+    font-size: 15px;
+}
+
+html.compact .trace-color-swatches {
+    grid-template-columns: repeat(8, 32px);
+    gap: 6px;
+}
+
+html.compact .trace-color-swatch {
+    width: 32px;
+    height: 32px;
+}
+
+html.compact .trace-color-custom {
+    min-height: 44px;
+}
+
+html.compact .trace-color-custom input[type="color"] {
+    width: 44px;
+    height: 32px;
+}
+
 .compact-trace-name {
     flex: 1 1 auto;
     min-width: 0;

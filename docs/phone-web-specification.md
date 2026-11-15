@@ -292,6 +292,12 @@ compact mode hides the panel toolbar.
 - **Statistics and export**: statistics (Σ) and **Export** (§8.3), built.
   Export closes the sheet before the dialog opens: the image is the plot at the
   size it has on the screen.
+- **Signals on this plot**: each signal (or 2D/3D pair) with its colour and a way
+  off. There is no right-click on the legend, so the row carries the legend menu's
+  colour and order actions: its swatch opens the colour picker (the palette and a
+  colour of one's own), and **⋯** opens **Colour…** and **Move up / down / to first
+  / to last**, the moves that would do nothing disabled (no ⋯ on a plot of one
+  signal). Built (`src/plots/methods/trace-style-methods.js`).
 
 Autoscale and the cursor toggle may also appear as a small floating button cluster
 on the plot. That cluster must avoid axes, legend and data, and must stay at most two

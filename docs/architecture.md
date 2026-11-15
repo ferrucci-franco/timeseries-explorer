@@ -65,6 +65,11 @@ Owns plot state and every Plotly-driven behavior.
     is on screen, and the analysis' own pane when it is folded away — which
     is also why that pane carries three floating buttons of its own while
     both are shown
+- `methods/trace-style-methods.js` (and `trace-style.js`, its pure part)
+  - a trace's colour and its place among the plot's traces, from the legend's
+    context menu (built once, in `_showLegendTraceMenu`, for every mode) and
+    from a trace's row on the phone; both live in the trace state, so every
+    analysis drawn from the series, a saved view and an export follow
 - `analysis-side.js`
   - an analysis' side panel: its own buttons (V/H, hide the time series,
     Reset, Options, status) as the header of its options drawer, rather than
