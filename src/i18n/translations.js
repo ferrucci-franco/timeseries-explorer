@@ -1308,6 +1308,11 @@ const translations = {
             lazyFileNoticeSettings: 'Open Settings',
             lazyFileNoticeUnderstood: "Got it",
             lazyFileIndicatorTooltip: 'Memory-saving mode: data is read from the file as needed instead of being fully loaded into memory.',
+            // A newer build deployed (src/app/methods/version-check-methods.js)
+            updateNoticeTitle: 'A new version is available',
+            updateNoticeBody: 'Reload the page to use it. Reloading closes the files that are open, and any unsaved work with them.',
+            updateNoticeReload: 'Reload',
+            updateNoticeLater: 'Later',
 
             // Tree
             component: 'Component',
@@ -4228,6 +4233,11 @@ const translations = {
             lazyFileNoticeSettings: 'Ouvrir Reglages',
             lazyFileNoticeUnderstood: "J ai compris",
             lazyFileIndicatorTooltip: 'Mode economie de memoire : les donnees sont lues depuis le fichier selon les besoins au lieu d etre chargees entierement en memoire.',
+            // A newer build deployed (src/app/methods/version-check-methods.js)
+            updateNoticeTitle: 'Une nouvelle version est disponible',
+            updateNoticeBody: 'Rechargez la page pour l’utiliser. Le rechargement ferme les fichiers ouverts, ainsi que tout travail non enregistré.',
+            updateNoticeReload: 'Recharger',
+            updateNoticeLater: 'Plus tard',
 
             // Tree
             component: 'Composant',
@@ -7336,6 +7346,11 @@ const translations = {
             lazyFileNoticeSettings: 'Abrir Ajustes',
             lazyFileNoticeUnderstood: "Entendido",
             lazyFileIndicatorTooltip: 'Modo de ahorro de memoria: los datos se leen desde el archivo cuando se necesitan en lugar de cargarse completamente en memoria.',
+            // A newer build deployed (src/app/methods/version-check-methods.js)
+            updateNoticeTitle: 'Hay una nueva versión disponible',
+            updateNoticeBody: 'Recargue la página para usarla. Al recargar se cierran los archivos abiertos y cualquier trabajo sin guardar.',
+            updateNoticeReload: 'Recargar',
+            updateNoticeLater: 'Más tarde',
             component: 'Componente',
             variable: 'Variable',
             parameter: 'Parámetro',
@@ -10420,6 +10435,11 @@ const translations = {
             lazyFileNoticeSettings: 'Apri Impostazioni',
             lazyFileNoticeUnderstood: "Ho capito",
             lazyFileIndicatorTooltip: 'Modalita risparmio memoria: i dati vengono letti dal file quando servono invece di essere caricati interamente in memoria.',
+            // A newer build deployed (src/app/methods/version-check-methods.js)
+            updateNoticeTitle: 'È disponibile una nuova versione',
+            updateNoticeBody: 'Ricarica la pagina per usarla. Ricaricando si chiudono i file aperti e ogni lavoro non salvato.',
+            updateNoticeReload: 'Ricarica',
+            updateNoticeLater: 'Più tardi',
             component: 'Componente',
             variable: 'Variabile',
             parameter: 'Parametro',
@@ -13703,6 +13723,11 @@ const translations = {
             lazyFileNoticeSettings: '打开设置',
             lazyFileNoticeUnderstood: "知道了",
             lazyFileIndicatorTooltip: '省内存模式：数据按需从文件中读取，而不是完整加载到内存中。',
+            // A newer build deployed (src/app/methods/version-check-methods.js)
+            updateNoticeTitle: '有新版本可用',
+            updateNoticeBody: '重新加载页面即可使用新版本。重新加载会关闭已打开的文件以及所有未保存的工作。',
+            updateNoticeReload: '重新加载',
+            updateNoticeLater: '稍后',
             // Tree
             component: '组件',
             variable: '变量',

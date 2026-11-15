@@ -328,6 +328,8 @@ npm run build:portable
 
 The published Light Web output is generated in `dist/`. This is the output intended for GitHub Pages.
 
+The build also writes `dist/version.json`, the commit it was made from. A browser that still has an older deploy cached reads it on start and moves onto the new build by itself, or, with files open, offers to; nobody needs Ctrl+Shift+R after a deploy. See [Web updates](docs/architecture.md#web-updates).
+
 ## Portable/offline build
 
 The portable web package supports two offline modes:
