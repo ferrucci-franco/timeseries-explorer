@@ -15,6 +15,8 @@ import {
     traceColorHex,
     traceMoveTarget,
     traceMovesAvailable,
+    hexToHsv,
+    hsvToHex,
 } from '../src/plots/trace-style.js';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -94,6 +96,37 @@ const translationsSource = read('src/i18n/translations.js');
     assert.equal(setTraceColor(null, '#000000'), false);
 }
 
+// ── A colour of one's own: the picker's hue, saturation and value ───────────
+{
+    assert.deepEqual(hexToHsv('#ff0000'), { h: 0, s: 1, v: 1 });
+    assert.deepEqual(hexToHsv('#00ff00'), { h: 120, s: 1, v: 1 });
+    assert.deepEqual(hexToHsv('#0000ff'), { h: 240, s: 1, v: 1 });
+    assert.deepEqual(hexToHsv('#000000'), { h: 0, s: 0, v: 0 }, 'black has no hue or saturation');
+    assert.deepEqual(hexToHsv('#ffffff'), { h: 0, s: 0, v: 1 });
+    assert.equal(hexToHsv('nonsense'), null, 'not a colour');
+    assert.equal(hexToHsv('#abc').v, hexToHsv('#aabbcc').v, 'the short form is read');
+    assert.equal(hsvToHex(0, 1, 1), '#ff0000');
+    assert.equal(hsvToHex(360, 1, 1), '#ff0000', 'the strip\'s far end is red again');
+    assert.equal(hsvToHex(-120, 1, 1), '#0000ff', 'a hue wraps');
+    assert.equal(hsvToHex(200, 0, 0.5), '#808080', 'no saturation is a grey');
+    assert.equal(hsvToHex(NaN, 2, -1), '#000000', 'out of range is clamped, not NaN');
+    // Every colour the picker can show goes there and back unchanged: what is
+    // applied is what the preview showed.
+    for (const color of [...TRACE_COLOR_SWATCHES, '#123456', '#fedcba', '#010203', '#7f7f80']) {
+        const { h, s: sat, v } = hexToHsv(color);
+        assert.equal(hsvToHex(h, sat, v), color, `${color} survives the round trip`);
+    }
+    // The browser's own picker is not used: on a phone it reports a change on
+    // every move of the finger (the crash this replaced). Nothing is applied
+    // but by a palette pick or the Apply button.
+    const methods = traceStyleMethodsSource;
+    assert.ok(!/\.type\s*=\s*['"]color['"]/.test(methods), 'no <input type="color"> is created');
+    assert.match(methods, /apply\.addEventListener\('click', \(\) => pick\(chosen\(\)\)\)/, 'Apply applies the chosen colour');
+    assert.ok(!/slide\([^)]*\{[^}]*pick\(/s.test(methods), 'a slide never applies');
+    const css = read('src/styles/content.css');
+    assert.match(css, /\.trace-color-area,\s*\.trace-color-hue\s*\{[^}]*touch-action:\s*none/s, 'a finger slides the colour, not the page');
+}
+
 // ── Order (#371) ─────────────────────────────────────────────────────────────
 {
     assert.deepEqual(TRACE_MOVES, ['up', 'down', 'first', 'last']);
@@ -135,8 +168,8 @@ const translationsSource = read('src/i18n/translations.js');
     assert.match(traceStyleMethodsSource, /_rebuildPanel\(panelId, \{ preserveView: true \}\)/,
         'a change rebuilds the panel with its view, so every analysis drawn from the series follows');
     assert.match(traceStyleMethodsSource, /queueMicrotask/, 'changes made in one go make one rebuild');
-    assert.match(traceStyleMethodsSource, /input\.type = 'color'/, 'a colour of one\'s own through the browser\'s picker');
-    assert.match(traceStyleMethodsSource, /addEventListener\('change'/, 'applied once picked, not on every move of the picker');
+    assert.match(traceStyleMethodsSource, /hsvToHex\(hsv\.h, hsv\.s, hsv\.v\)/, 'a colour of one\'s own in the app\'s own picker');
+    assert.match(traceStyleMethodsSource, /setPointerCapture\(down\.pointerId\)/, 'pressed or slid, the slide kept past the box');
     assert.match(traceStyleMethodsSource, /owner\.list\.length > 1/, 'one trace has nothing to order');
     assert.match(traceStyleMethodsSource, /activePairIndex = index/, 'the 2D fit drawer keeps the pair it showed');
     assert.match(sessionSource, /traces: plot\.traces\.map\(t => this\._cloneSerializable\(t\)\)/,

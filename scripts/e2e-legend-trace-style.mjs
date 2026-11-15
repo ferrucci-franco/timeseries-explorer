@@ -38,6 +38,22 @@ const lineColor = (page, panelId, divKey, name) => page.evaluate(([id, key, trac
     return trace?.line?.color ?? null;
 }, [panelId, divKey, name]);
 
+// How many times a panel is rebuilt from here on: a colour being looked for
+// must rebuild nothing, and Apply once.
+const countRebuilds = page => page.evaluate(() => {
+    const pm = window.app.plotManager;
+    if (!pm.__rebuildCounted) {
+        const original = pm._rebuildPanel;
+        pm._rebuildPanel = function(...args) {
+            window.__rebuilds += 1;
+            return original.apply(this, args);
+        };
+        pm.__rebuildCounted = true;
+    }
+    window.__rebuilds = 0;
+});
+const rebuilds = page => page.evaluate(() => window.__rebuilds);
+
 try {
     // ── Desktop ─────────────────────────────────────────────────────────────
     {
@@ -98,7 +114,9 @@ try {
         await page.locator('.timeseries-axis-menu button[data-icon="color"]').click();
         await page.waitForSelector('.trace-color-popover');
         assert.equal(await page.locator('.timeseries-axis-menu').count(), 0, 'the menu gives way to the picker');
-        assert.equal(await page.locator('.trace-color-popover input[type="color"]').count(), 1, 'a colour of one\'s own is offered');
+        assert.equal(await page.locator('.trace-color-popover .trace-color-custom-toggle').count(), 1, 'a colour of one\'s own is offered');
+        assert.equal(await page.locator('.trace-color-popover input[type="color"]').count(), 0, 'not through the browser\'s picker');
+        assert.equal(await page.locator('.trace-color-popover .trace-color-custom').isVisible(), false, 'its picker is folded until asked for');
         if (shots) await page.screenshot({ path: `${shots}/legend-color.png` });
         await page.locator('.trace-color-popover .trace-color-swatch[data-color="#e91e63"]').click();
         await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.traces[0]?.color === '#e91e63', panelId);
@@ -153,12 +171,51 @@ try {
         await fftItem.asElement().click({ button: 'right' });
         await page.waitForSelector('.timeseries-axis-menu button[data-icon="color"]');
         await page.locator('.timeseries-axis-menu button[data-icon="color"]').click();
-        await page.waitForSelector('.trace-color-popover input[type="color"]');
-        await page.locator('.trace-color-popover input[type="color"]').evaluate((input) => {
-            input.value = '#123456';
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-        });
+        await page.waitForSelector('.trace-color-popover .trace-color-custom-toggle');
+        await page.locator('.trace-color-popover .trace-color-custom-toggle').click();
+        await page.waitForSelector('.trace-color-popover .trace-color-area');
+        const colourBefore = (await traceState(page, panelId))[2].color;
+        await countRebuilds(page);
+        // Sliding the mouse over the square looks for a colour: the preview
+        // follows, the plot does not.
+        const areaBox = await page.locator('.trace-color-area').boundingBox();
+        await page.mouse.move(areaBox.x + 10, areaBox.y + 10);
+        await page.mouse.down();
+        const seen = new Set();
+        for (let k = 1; k <= 12; k++) {
+            await page.mouse.move(areaBox.x + 10 + k * 12, areaBox.y + 10 + k * 6);
+            seen.add(await page.locator('.trace-color-popover').getAttribute('data-color'));
+        }
+        // Past the box: the slide goes on, held at the edge.
+        await page.mouse.move(areaBox.x + areaBox.width + 60, areaBox.y - 40);
+        await page.mouse.up();
+        assert.ok(seen.size >= 8, `the preview follows the slide (${seen.size} colours)`);
+        const corner = await page.locator('.trace-color-popover').getAttribute('data-color');
+        const hueBox = await page.locator('.trace-color-hue').boundingBox();
+        await page.mouse.click(hueBox.x + hueBox.width / 3, hueBox.y + hueBox.height / 2);
+        assert.equal(await page.locator('.trace-color-popover').getAttribute('data-color'), '#00ff00', 'the strip sets the hue');
+        assert.notEqual(corner, '#00ff00');
+        assert.equal((await traceState(page, panelId))[2].color, colourBefore, 'nothing is applied while looking');
+        assert.equal(await rebuilds(page), 0, 'and the panel is not rebuilt');
+        // Cancel leaves the trace as it was.
+        await page.locator('.trace-color-popover .trace-color-cancel').click();
+        assert.equal(await page.locator('.trace-color-popover').count(), 0, 'Cancel closes the picker');
+        assert.equal((await traceState(page, panelId))[2].color, colourBefore, 'with nothing changed');
+        // A typed colour, then Apply.
+        await (await page.evaluateHandle(([id, index]) =>
+            window.app.plotManager.plots.get(id).fftDiv.querySelectorAll('.legend .traces')[index], [panelId, fftIndex]))
+            .asElement().click({ button: 'right' });
+        await page.locator('.timeseries-axis-menu button[data-icon="color"]').click();
+        await page.locator('.trace-color-popover .trace-color-custom-toggle').click();
+        await page.locator('.trace-color-popover .trace-color-hex').fill('#12345');
+        assert.equal(await page.locator('.trace-color-hex.is-invalid').count(), 1, 'a half-typed code is marked, not applied');
+        await page.locator('.trace-color-popover .trace-color-hex').fill('#123456');
+        assert.equal(await page.locator('.trace-color-popover').getAttribute('data-color'), '#123456');
+        assert.equal((await traceState(page, panelId))[2].color, colourBefore, 'typing applies nothing either');
+        await page.locator('.trace-color-popover .trace-color-apply').click();
         await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.traces[2]?.color === '#123456', panelId);
+        assert.equal(await page.locator('.trace-color-popover').count(), 0, 'Apply closes the picker');
+        assert.equal(await rebuilds(page), 1, 'Apply rebuilds the panel once');
         await page.waitForFunction(([id, n]) => {
             const div = window.app.plotManager.plots.get(id)?.fftDiv;
             return (div?.data || []).some(t => t.name === n && t.line?.color === '#123456' && (t.x?.length || 0) > 0);
@@ -225,6 +282,66 @@ try {
             const mark = document.querySelector('.compact-trace-row .compact-trace-color .compact-swatch');
             return mark && getComputedStyle(mark).backgroundColor === 'rgb(0, 150, 136)';
         });
+
+        // A colour of one's own, with a finger: slide over the square to look
+        // for it, then Apply. This is what closed the browser on a phone when
+        // the picker was the browser's own and every move of the finger
+        // rebuilt the panel.
+        await page.locator('.compact-trace-row .compact-trace-color').first().tap();
+        await page.waitForSelector('.trace-color-popover');
+        await page.locator('.trace-color-popover .trace-color-custom-toggle').tap();
+        await page.waitForSelector('.trace-color-popover .trace-color-area');
+        if (shots) await page.screenshot({ path: `${shots}/legend-phone-custom.png` });
+        const fits = await page.evaluate(() => {
+            const r = document.querySelector('.trace-color-popover').getBoundingClientRect();
+            const b = document.querySelector('.trace-color-apply').getBoundingClientRect();
+            const h = document.querySelector('.trace-color-hue').getBoundingClientRect();
+            return {
+                inside: r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight,
+                applyHeight: b.height, hueHeight: h.height,
+                touchAction: getComputedStyle(document.querySelector('.trace-color-area')).touchAction,
+            };
+        });
+        assert.equal(fits.inside, true, 'the open picker fits the phone\'s screen');
+        assert.ok(fits.applyHeight >= 44, `Apply is a finger\'s target (${fits.applyHeight})`);
+        assert.ok(fits.hueHeight >= 28, `so is the hue strip (${fits.hueHeight})`);
+        assert.equal(fits.touchAction, 'none', 'a slide is the picker\'s, not a scroll');
+        await countRebuilds(page);
+        const touch = await context.newCDPSession(page);
+        // A finger stops on the colour it found before it lifts. Lifted at
+        // full speed, Chromium takes the slide for a fling and swallows the
+        // tap that follows it at once, which no finger does.
+        const finger = async (type, x, y) => {
+            if (type === 'touchEnd') await page.waitForTimeout(200);
+            return touch.send('Input.dispatchTouchEvent', {
+                type, touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(x), y: Math.round(y) }],
+            });
+        };
+        const square = await page.locator('.trace-color-area').boundingBox();
+        const scrollBefore = await page.evaluate(() => [window.scrollX, window.scrollY]);
+        await finger('touchStart', square.x + 12, square.y + square.height - 12);
+        const slid = new Set();
+        for (let k = 1; k <= 40; k++) {
+            await finger('touchMove', square.x + 12 + k * (square.width - 24) / 40, square.y + square.height - 12 - k * (square.height - 24) / 40);
+            slid.add(await page.locator('.trace-color-popover').getAttribute('data-color'));
+        }
+        await finger('touchEnd');
+        assert.ok(slid.size >= 20, `the preview follows the finger (${slid.size} colours)`);
+        const band = await page.locator('.trace-color-hue').boundingBox();
+        await finger('touchStart', band.x + 8, band.y + band.height / 2);
+        for (let k = 1; k <= 20; k++) await finger('touchMove', band.x + 8 + k * (band.width * 2 / 3 - 8) / 20, band.y + band.height / 2);
+        await finger('touchEnd');
+        const looked = await page.locator('.trace-color-popover').getAttribute('data-color');
+        assert.match(looked, /^#[0-9a-f]{6}$/);
+        assert.notEqual(looked, '#009688', 'the finger found another colour');
+        assert.equal(await page.locator('.trace-color-popover').count(), 1, 'the picker stays open while looking');
+        assert.equal((await traceState(page, panelId))[0].color, '#009688', 'the trace keeps its colour until Apply');
+        assert.equal(await rebuilds(page), 0, 'sliding rebuilds nothing');
+        assert.deepEqual(await page.evaluate(() => [window.scrollX, window.scrollY]), scrollBefore, 'and scrolls nothing');
+        await page.locator('.trace-color-popover .trace-color-apply').tap();
+        await page.waitForFunction(([id, color]) => window.app.plotManager.plots.get(id)?.traces[0]?.color === color, [panelId, looked]);
+        assert.equal(await page.locator('.trace-color-popover').count(), 0, 'Apply closes the picker');
+        assert.equal(await rebuilds(page), 1, 'and rebuilds the panel once');
         assert.deepEqual(errors, [], 'no page errors on the phone');
         await context.close();
     }

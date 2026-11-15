@@ -1122,13 +1122,41 @@ html.compact .trace-color-swatch {
     height: 32px;
 }
 
-html.compact .trace-color-custom {
+/* A finger's sizes: the toggle and the buttons are 44 px targets, the strip
+   is tall enough to land on, and the marks are large enough to see beside
+   the finger that moves them. */
+html.compact .trace-color-custom-toggle {
     min-height: 44px;
 }
 
-html.compact .trace-color-custom input[type="color"] {
-    width: 44px;
+html.compact .trace-color-area {
+    height: 160px;
+}
+
+html.compact .trace-color-hue {
     height: 32px;
+}
+
+html.compact .trace-color-thumb {
+    width: 24px;
+    height: 24px;
+    border-width: 3px;
+}
+
+html.compact .trace-color-preview {
+    width: 72px;
+    height: 36px;
+}
+
+html.compact .trace-color-hex {
+    min-height: 36px;
+    /* 16 px: below it iOS zooms the page in when the field takes the focus. */
+    font-size: 16px;
+}
+
+html.compact .trace-color-actions button {
+    min-height: 44px;
+    min-width: 88px;
 }
 
 .compact-trace-name {

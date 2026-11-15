@@ -3086,8 +3086,8 @@
     border-radius: 0 0 4px 4px !important;
 }
 
-/* A trace's colour (legend menu → Colour…): the palette, then the browser's
-   own picker for a colour of one's own. */
+/* A trace's colour (legend menu → Colour…): the palette, then a colour of
+   one's own, looked for in a square and a strip and applied by a button. */
 .trace-color-popover {
     position: fixed;
     z-index: 5200;
@@ -3133,21 +3133,138 @@
     outline-offset: 2px;
 }
 
-.trace-color-custom {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.trace-color-custom-toggle {
+    justify-self: start;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    color: var(--primary-color);
+    font: inherit;
     cursor: pointer;
 }
 
-.trace-color-custom input[type="color"] {
-    width: 32px;
-    height: 22px;
-    padding: 0;
+.trace-color-custom-toggle:hover,
+.trace-color-custom-toggle:focus-visible {
+    text-decoration: underline;
+}
+
+.trace-color-custom {
+    display: grid;
+    gap: 8px;
+}
+
+.trace-color-custom[hidden] {
+    display: none;
+}
+
+/* Saturation across, value up: white to the hue, under transparent to black.
+   `touch-action: none` is what lets a finger slide the colour: without it the
+   browser takes the slide for a scroll and cancels the pointer. */
+.trace-color-area,
+.trace-color-hue {
+    position: relative;
     border: 1px solid var(--border-color);
     border-radius: 4px;
-    background: transparent;
+    cursor: crosshair;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.trace-color-area {
+    height: 120px;
+    background:
+        linear-gradient(to top, #000, rgba(0, 0, 0, 0)),
+        linear-gradient(to right, #fff, hsl(var(--trace-color-hue, 0) 100% 50%));
+}
+
+.trace-color-hue {
+    height: 14px;
+    background: linear-gradient(to right,
+        hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%),
+        hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%));
+}
+
+.trace-color-area:focus-visible,
+.trace-color-hue:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.trace-color-thumb {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.4);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.trace-color-hue .trace-color-thumb {
+    top: 50%;
+}
+
+.trace-color-result {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* The colour the trace has, and the one being looked for, side by side. */
+.trace-color-preview {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 56px;
+    height: 24px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.trace-color-preview span {
+    flex: 1 1 50%;
+}
+
+.trace-color-hex {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 7em;
+    padding: 3px 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.trace-color-hex.is-invalid {
+    border-color: var(--danger-color, #d32f2f);
+}
+
+.trace-color-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.trace-color-actions button {
+    padding: 4px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
     cursor: pointer;
+}
+
+.trace-color-actions .trace-color-apply {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
 }
 
 @keyframes pending-pulse {

@@ -294,10 +294,15 @@ compact mode hides the panel toolbar.
   size it has on the screen.
 - **Signals on this plot**: each signal (or 2D/3D pair) with its colour and a way
   off. There is no right-click on the legend, so the row carries the legend menu's
-  colour and order actions: its swatch opens the colour picker (the palette and a
-  colour of one's own), and **⋯** opens **Colour…** and **Move up / down / to first
+  colour and order actions: its swatch opens the colour picker, and **⋯** opens **Colour…** and **Move up / down / to first
   / to last**, the moves that would do nothing disabled (no ⋯ on a plot of one
   signal). Built (`src/plots/methods/trace-style-methods.js`).
+  The picker is the palette (a tap applies) and **a colour of one's own**: a
+  square and a hue strip the finger presses or slides on, a before/after
+  preview, and **Apply**. Nothing changes on the plot until Apply. It is the
+  app's own, not the browser's `<input type="color">`: on iOS that input reports
+  a change on every move of the finger, each one rebuilt the panel, and the
+  browser closed.
 
 Autoscale and the cursor toggle may also appear as a small floating button cluster
 on the plot. That cluster must avoid axes, legend and data, and must stay at most two
