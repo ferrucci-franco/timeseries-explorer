@@ -5860,3 +5860,16 @@ html.compact .audio-volume {
 html.compact .audio-strip-note {
     font-size: 0.8rem;
 }
+
+/* All | Visible window is in the Plot sheet's Sound section on a phone. */
+html.compact .audio-strip .audio-window {
+    display: none;
+}
+
+html.compact .audio-strip-loading {
+    font-size: 0.8rem;
+}
+
+html.compact .audio-loading-cancel {
+    min-height: 40px;
+}

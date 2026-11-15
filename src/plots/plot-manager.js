@@ -28,6 +28,7 @@ import { installPlotTemporalProfileMethods } from './methods/temporal-profile-me
 import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
+import { installPlotAudioLazyMethods } from './methods/audio-lazy-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
 import { installPlotDashboardMethods } from './methods/dashboard-methods.js';
 import { installPlotStateBandMethods, STATE_BAND_LEGEND_PX } from './methods/state-band-methods.js';
@@ -5834,6 +5835,7 @@ installPlotExportMethods(PlotManager);
 installPlotDashboardMethods(PlotManager);
 installPlotStateBandMethods(PlotManager);
 installPlotAudioMethods(PlotManager);
+installPlotAudioLazyMethods(PlotManager);
 installPlotViewHistoryMethods(PlotManager);
 
 export default PlotManager;

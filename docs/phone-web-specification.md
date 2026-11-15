@@ -61,7 +61,10 @@ Built:
 - **Sound** in the Plot sheet (§5.2): a switch that opens the desktop's audio strip
   under the plot and puts the sheet away, offered where the desktop's 🔊 is (a time
   series, FFT, the histogram, the integral) and, where nothing can be heard,
-  disabled with the reason the desktop gives in its tooltip. The strip is the same
+  disabled with the reason the desktop gives in its tooltip. In a time series the
+  section also offers **All | Visible window** (#375), the choice the desktop
+  strip carries itself: the whole record or what the plot shows; on the phone it
+  is here rather than in the strip. The strip is the same
   one (`audio-methods.js`), laid out by `compact.css` in three rows at a finger's
   size: play, stop, loop, the time and mute; the seek bar across the screen; the
   signal and Remove DC. The phone's own buttons set the volume, so the volume

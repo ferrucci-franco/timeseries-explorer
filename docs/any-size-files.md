@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); la escucha (🔊), que lee del archivo cada fila del rango que suena ("Implementado: escuchar un archivo lazy"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -80,6 +80,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Estadísticas del panel (Σ) | ~~calculadas sobre el resumen, sin aviso~~ **exactas sobre todas las filas** (sección "Implementado: estadísticas del panel exactas"); una señal que existe solo en el resumen se nombra debajo de la tabla, sin cifras | `statsLazyOverviewOnly` |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
+| Escuchar (🔊) | ~~deshabilitado: solo el resumen está en memoria~~ **lee del archivo cada fila del rango que suena** (sección "Implementado: escuchar un archivo lazy"); la uniformidad del paso se comprueba en el rango al leerlo, no en el archivo entero, y se rechaza, diciéndolo, una señal que existe solo en el resumen | `audioRangeNotUniform`, `audioReasonLazyNoSource` |
 | Guardar proyecto | rechazado | *"A complete project cannot be saved while these files are using memory-saving mode. Increase their full-load limit in Settings and reload them, or save a view instead"* |
 
 La última cadena merece una nota: para un CSV de 5 GB, "subí el límite y
@@ -1829,6 +1830,64 @@ Pruebas:
 - `scripts/e2e-analysis-cancel.mjs` (Chromium): el análisis de tendencia es uno
   de los nueve que prueba la píldora, el Cancelar, el resultado que queda y los
   ajustes que vuelven.
+
+### Implementado: escuchar un archivo lazy
+
+El reproductor del panel (🔊, `src/plots/methods/audio-methods.js`) no sonaba con
+un archivo en modo de ahorro de memoria: el botón quedaba deshabilitado con el
+motivo, porque en memoria solo está el resumen. Con #375 (*Todo | Ventana
+visible*) suena: el rango que se escucha —todo, la ventana visible o la
+selección del análisis— se lee del archivo, cada fila del rango
+(`_audioLazyRangeSamples` en `src/plots/methods/audio-lazy-methods.js`).
+
+- **Un núcleo, dos conductores.** Las muestras salen de
+  `src/utils/audio-samples.js` en los dos caminos: una pasada que acumula la
+  suma, el mínimo, el máximo, los faltantes y los pasos del eje (para quitar la
+  media, poner el pico a −1 dBFS y comprobar que el paso es uniforme), y otra
+  que escribe cada muestra solo a partir de ese resultado. En memoria recibe
+  los arrays; en lazy, los trozos de un stream del archivo (`streamColumns`,
+  sobre el rango fuente ensanchado un pelo y con el corte exacto lo ≤ t ≤ hi
+  sobre el tiempo transformado, como el histograma; un eje generado del número
+  de fila se lee entero). Mismas filas, mismo orden: las mismas muestras, bit a
+  bit, y donde se corten los trozos no cambia nada.
+- **La compuerta, sin leer el archivo**: una columna que la consulta del
+  archivo puede dar (la salida de una herramienta de datos en SQL cuenta; una
+  fórmula calculada sobre el resumen no, y lo dice: `audioReasonLazyNoSource`),
+  un eje en segundos, y la tasa de las filas con tiempo del archivo
+  (`numTimesteps`, del escaneo de la carga) sobre su lapso dentro de lo que
+  acepta la salida de audio. *Todo* va del primer al último instante del
+  archivo según el escaneo (`metadata.timeStart/timeEnd`), recortado por el
+  *crop*, no del resumen, que es una muestra y puede no llegar a los extremos.
+- **Hueco que queda, dicho en la UI.** El resumen no puede decir si todos los
+  pasos son iguales, así que la uniformidad se comprueba sobre las filas del
+  rango al leerlas: un rango que cruza un hueco se rechaza entonces
+  (`audioRangeNotUniform`). En memoria se rechaza de entrada la señal entera si
+  tiene un hueco en cualquier parte; en lazy suena un tramo que no lo toca.
+  Comprobar el archivo entero antes de la primera nota sería leerlo todo.
+- **El límite es el del búfer, como en memoria**: `MAX_BUFFER_SAMPLES` (32 M
+  muestras, unos doce minutos a 44,1 kHz) en un único `AudioBuffer`; el rango
+  se tiene en memoria mientras se lee (8 B por muestra). Al pasarlo la lectura
+  se detiene y la tira lo dice (`audioRangeTooLong`, o `audioWindowTooLong`
+  con la ventana visible), igual que en memoria. No es un tope nuevo del modo
+  lazy.
+- **Progreso y Cancelar.** Mientras lee, la tira dice cuántas muestras lleva de
+  cuántas, con un botón Cancelar; Stop, Pausa, otro rango u otro panel que se
+  pone a sonar abortan la lectura (el `AbortSignal` llega a la consulta). Una
+  ventana que cambia mientras suena en bucle se lee por adelantado y empieza
+  donde termina la vuelta, sin cortar la que suena.
+
+Pruebas: `scripts/test-lazy-audio.mjs` (DuckDB-WASM real en Node): el mismo CSV
+a 8 kHz cargado en lazy y en memoria da las mismas muestras de 32 bits, byte a
+byte, y la misma tasa, inicio, ganancia, media y faltantes, para todo el
+registro, una selección, una ventana visible y una que se sale del final; con
+y sin quitar la media; con todas las transformaciones (crop, desplazamiento,
+ganancia, offset, signo); en trozos de 1, 777 y 4096 filas. La compuerta lee la
+tasa y el lapso del archivo, rechaza la fórmula sin SQL, un rango que pasa el
+límite detiene la lectura, uno de menos de 50 ms se rechaza, uno que cruza un
+hueco se rechaza como en memoria y uno que no lo toca suena, y cancelar
+detiene la lectura. `scripts/e2e-audio-window.mjs` (Chromium): un CSV de 80 s
+abierto en lazy suena, y la ventana visible que se reproduce es, muestra a
+muestra, la que dan las filas del CSV.
 
 ### Implementado: cancelar un análisis
 

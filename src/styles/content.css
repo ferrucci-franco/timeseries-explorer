@@ -5439,6 +5439,50 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     color: var(--text-secondary);
 }
 
+/* All | Visible window (#375): two joined buttons, in timeseries mode only. */
+.audio-window {
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+
+.audio-window[hidden] { display: none; }
+
+.audio-window-btn {
+    height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.audio-window-btn:first-child { border-radius: 4px 0 0 4px; }
+.audio-window-btn:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
+.audio-window-btn:hover:not(:disabled) { background-color: var(--hover-bg); }
+.audio-window-btn:disabled { opacity: 0.45; cursor: default; }
+/* Lifted over its neighbour, so the shared edge shows the accent. */
+.audio-window-btn.active {
+    position: relative;
+    z-index: 1;
+    border-color: var(--audio-accent);
+    color: var(--audio-accent);
+}
+
+/* A range read from a file in memory-saving mode: how far, and Cancel. */
+.audio-strip-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 3px;
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+.audio-strip-loading[hidden] { display: none; }
+
 .audio-strip-note {
     margin-top: 3px;
     color: var(--text-secondary);

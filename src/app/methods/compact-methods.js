@@ -1815,6 +1815,30 @@ export function installCompactMethods(ViewerClass) {
         });
         row.append(el('span', '', i18n.t('compactSoundSwitch')), input);
         wrap.appendChild(row);
+        // All | Visible window (#375), the strip's own choice: in a time
+        // series only, where no analysis selection says what sounds.
+        if (plot.mode === 'timeseries' && playable) {
+            const choice = el('div', 'compact-menu-choice compact-sound-window');
+            choice.appendChild(el('span', 'compact-menu-choice-label', i18n.t('audioWindowLabel')));
+            const segmented = el('div', 'compact-segmented');
+            segmented.setAttribute('role', 'radiogroup');
+            segmented.setAttribute('aria-label', i18n.t('audioWindowLabel'));
+            const current = pm._audioWindowMode(plot);
+            for (const [value, key, title] of [['all', 'audioWindowAll', 'audioWindowAllTitle'], ['visible', 'audioWindowVisible', 'audioWindowVisibleTitle']]) {
+                const selected = current === value;
+                const btn = button(`compact-segment${selected ? ' is-active' : ''}`, i18n.t(key), () => {
+                    pm._audioSetWindowMode(panelId, value);
+                    this._renderCompactSheetContent();
+                }, { title: i18n.t(title) });
+                btn.dataset.window = value;
+                btn.setAttribute('role', 'radio');
+                btn.setAttribute('aria-checked', String(selected));
+                segmented.appendChild(btn);
+            }
+            choice.appendChild(segmented);
+            wrap.appendChild(choice);
+            wrap.appendChild(el('p', 'compact-note', i18n.t('compactSoundWindowNote')));
+        }
         wrap.appendChild(el('p', 'compact-note compact-sound-note', playable
             ? i18n.t('compactSoundNote')
             : pm._audioButtonTitle(plot)));
