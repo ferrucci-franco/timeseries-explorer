@@ -13,11 +13,17 @@ export const FFT_DB_FLOOR = -200;
 export const FFT_LIVE_MAX_POINTS = 2 ** 22;
 export const FFT_MAX_POINTS_WEB = 2 ** 24;
 export const FFT_MAX_POINTS_DESKTOP = 2 ** 26;
-// Above this NFFT, compute off the main thread (Web Worker) so a heavy
-// zero-padded transform never freezes the tab. Below it, the synchronous cost
-// (~<100ms) is cheaper than spawning + messaging a worker. This is only a
-// "where to run it" switch; the hard/live caps above still bound the size.
-export const FFT_WORKER_THRESHOLD_POINTS = 2 ** 18;
+// Above this NFFT, compute off the main thread (Web Worker) so a transform
+// never holds the tab. Below it, the synchronous cost is cheaper than spawning
+// and messaging a worker. Measured in headless Chromium (4 vCPU Xeon, in-memory
+// file, FFT opened; main-thread computation, sampling analysis included, with
+// the old 2^18 threshold): 60 ms at 10 k samples, 156 ms at 100 k, 356 ms at
+// 262 k — about 1.3 ms per thousand samples. A worker for every size added
+// 50–200 ms to the time to result of the smallest ones (spawn + module load).
+// 2^15 keeps the main thread under ~50 ms and sends everything bigger to the
+// worker. This is only a "where to run it" switch; the hard/live caps above
+// still bound the size.
+export const FFT_WORKER_THRESHOLD_POINTS = 2 ** 15;
 export const FFT_AUTO_TARGET_POINTS = 2 ** 18;
 export const FFT_AUTO_SLOW_MS = 5000;
 

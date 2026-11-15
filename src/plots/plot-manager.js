@@ -76,6 +76,7 @@ import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
 import { SAMPLE_MARKERS_MIN_PX_ON, SAMPLE_MARKERS_MIN_PX_OFF } from '../utils/sample-markers.js';
 import { REPEATED_MARK_MIN_RUN } from '../utils/repeated-marks.js';
+import { createExtentCache } from '../utils/finite-extent.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -4490,10 +4491,19 @@ class PlotManager {
      */
     _finiteExtent(arrays, options = {}) {
         const positive = !!options.positive;
+        // `cache`: for arrays never changed in place (the time axes), each
+        // array's own extent is kept (src/utils/finite-extent.js).
+        const cache = options.cache === true;
         let min = Infinity;
         let max = -Infinity;
         for (const arr of arrays) {
             if (!arr) continue;
+            if (cache) {
+                const own = this._arrayExtent(arr, positive);
+                if (own.min < min) min = own.min;
+                if (own.max > max) max = own.max;
+                continue;
+            }
             for (const value of arr) {
                 if (!Number.isFinite(value)) continue;
                 if (positive && !(value > 0)) continue;
@@ -4502,6 +4512,11 @@ class PlotManager {
             }
         }
         return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+    }
+
+    _arrayExtent(arr, positive) {
+        if (!this._arrayExtentCache) this._arrayExtentCache = createExtentCache();
+        return this._arrayExtentCache(arr, positive);
     }
 
     /**

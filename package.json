@@ -91,6 +91,7 @@
     "test:linked-panel-window": "node scripts/test-linked-panel-window.mjs",
     "test:document-listener-cleanup": "node scripts/test-document-listener-cleanup.mjs",
     "test:xcorr": "node scripts/test-xcorr.mjs",
+    "test:finite-extent-cache": "node scripts/test-finite-extent-cache.mjs",
     "test:data-tools-sampling": "node scripts/test-data-tools-sampling.mjs",
     "test:data-tool-panel-layout": "node scripts/test-data-tool-panel-layout.mjs",
     "test:duckdb-lifecycle": "node scripts/test-duckdb-lifecycle.mjs",
