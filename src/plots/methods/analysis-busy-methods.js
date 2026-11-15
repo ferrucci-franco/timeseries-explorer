@@ -71,14 +71,54 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
     const proto = TargetClass.prototype;
 
     // The signal the queries of this panel's analysis carry. One controller per
-    // panel, shared by consecutive runs (a superseded run is dropped by its
-    // token, not aborted: a newer run may be waiting on the same cached query);
-    // Cancel aborts it, and the next run gets a fresh one.
+    // panel; Cancel aborts it, and the next run gets a fresh one. An analysis
+    // whose runs can supersede each other hands its queries a run signal tied
+    // to it instead (_analysisRunSignal).
     proto._analysisSignal = function(plot) {
         if (!plot) return null;
         if (typeof AbortController !== 'function') return null;
         if (!plot._analysisAbort || plot._analysisAbort.signal.aborted) plot._analysisAbort = new AbortController();
         return plot._analysisAbort.signal;
+    };
+
+    // The signal one run of an analysis hands its queries and streams: its
+    // own, tied to the panel's analysis signal so that Cancel stops it too,
+    // and aborted when a newer run of the same analysis is scheduled
+    // (_abortAnalysisRun), so the query it supersedes stops at once instead of
+    // holding DuckDB while the new one waits behind it (#174, #384). `slot` is
+    // where the plot keeps it, one per analysis. A query shared through the
+    // source's cache with another panel is let go of, not killed: it runs on
+    // while anyone else waits for it (DuckDbSource._sharedQuery).
+    proto._analysisRunSignal = function(plot, slot) {
+        this._abortAnalysisRun(plot, slot);
+        const panelSignal = this._analysisSignal(plot);
+        if (!plot || typeof AbortController !== 'function') return panelSignal;
+        const controller = new AbortController();
+        const forward = () => controller.abort();
+        if (panelSignal?.aborted) controller.abort();
+        else panelSignal?.addEventListener?.('abort', forward, { once: true });
+        plot[slot] = {
+            controller,
+            release: () => panelSignal?.removeEventListener?.('abort', forward),
+        };
+        return controller.signal;
+    };
+
+    // Stop the run of `slot` in flight, if any.
+    proto._abortAnalysisRun = function(plot, slot) {
+        const run = plot?.[slot];
+        if (!run) return;
+        plot[slot] = null;
+        run.release();
+        run.controller.abort();
+    };
+
+    // A run that has finished lets go of the panel's signal.
+    proto._settleAnalysisRun = function(plot, slot, signal) {
+        const run = plot?.[slot];
+        if (!run || run.controller.signal !== signal) return;
+        plot[slot] = null;
+        run.release();
     };
 
     // Where the pill goes: the pane that holds the analysis' result. `anchor`
@@ -218,6 +258,9 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         }
         plot._analysisAbort?.abort();
         plot._analysisAbort = null;
+        for (const slot of ['_fftRunAbort', '_calendarHeatmapRunAbort', '_temporalProfileRunAbort', '_correlationRunAbort']) {
+            this._abortAnalysisRun(plot, slot);
+        }
         plot._histAbort?.abort();
         this._stopLazyFits?.(plot);
         this._stopLazyTrends?.(plot);

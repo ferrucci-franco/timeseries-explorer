@@ -205,6 +205,9 @@ export default class DuckDbSource {
         this._regressionCache = new Map();
         this._regrCapable = null; // cached "does DuckDB expose regr_*()" probe
         this._activeInteractiveQuery = null;
+        // The queries in flight that several callers may wait on (_sharedQuery):
+        // the promise in a cache → who waits on it, and how to stop it.
+        this._sharedQueries = new WeakMap();
         this._connectionQueue = Promise.resolve();
         this._parquetLoaded = false;
         this._parquetPromise = null;
@@ -3085,6 +3088,67 @@ export default class DuckDbSource {
         return err;
     }
 
+    /**
+     * One query that several callers may ask for at once — two panels with
+     * the same analysis of the same file, or a run and the run that
+     * supersedes it with the same settings — is run once: the first ask
+     * starts it (`start`, handed the query's own signal), later asks with the
+     * same `key` wait on it, and its result stays in `cache` under `key`.
+     *
+     * Each caller's `signal` lets go of that caller alone, at once, with an
+     * AbortError. The query itself is interrupted only when every caller that
+     * waits on it has let go, so a panel that moves on to a newer request does
+     * not kill a query another panel still waits for (#384). A caller without
+     * a signal holds the query to its end. With no key, nothing is shared:
+     * the query carries the caller's signal.
+     */
+    _sharedQuery(cache, key, signal, start, { limit = Infinity } = {}) {
+        if (signal?.aborted) return Promise.reject(this._queryAbortError());
+        if (!key) return Promise.resolve().then(() => start(signal));
+        let promise = cache.get(key);
+        if (promise !== undefined && !(promise instanceof Promise)) return Promise.resolve(promise);
+        let shared = promise ? this._sharedQueries.get(promise) : null;
+        if (!shared) {
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            promise = (async () => start(controller?.signal || null))();
+            shared = { controller, waiters: 0 };
+            this._sharedQueries.set(promise, shared);
+            cache.set(key, promise);
+            while (cache.size > limit) cache.delete(cache.keys().next().value);
+            // Kept under its key once it is in; forgotten if it fails. A key
+            // dropped meanwhile (the cache cleared for new data) stays dropped.
+            promise.then(
+                (result) => { if (cache.get(key) === promise) cache.set(key, result); },
+                () => { if (cache.get(key) === promise) cache.delete(key); },
+            );
+        }
+        shared.waiters += 1;
+        return new Promise((resolve, reject) => {
+            let waiting = true;
+            const leave = () => {
+                waiting = false;
+                shared.waiters -= 1;
+                signal?.removeEventListener?.('abort', onAbort);
+            };
+            const onAbort = () => {
+                if (!waiting) return;
+                leave();
+                reject(this._queryAbortError());
+                if (shared.waiters > 0) return;
+                // Nobody waits for it any more: stop it, and let the next ask
+                // with the same key start afresh rather than join a query that
+                // is being interrupted.
+                if (cache.get(key) === promise) cache.delete(key);
+                shared.controller?.abort();
+            };
+            signal?.addEventListener?.('abort', onAbort, { once: true });
+            promise.then(
+                (value) => { if (waiting) { leave(); resolve(value); } },
+                (error) => { if (waiting) { leave(); reject(error); } },
+            );
+        });
+    }
+
     async _interactiveQuery(sql, options = {}) {
         const signal = options?.signal;
         if (signal?.aborted) throw this._queryAbortError();
@@ -3132,6 +3196,14 @@ export default class DuckDbSource {
                 totalMs: this._roundMs(t2 - t0),
             };
             return table;
+        } catch (err) {
+            // DuckDB answers an interrupt with an error of its own ("INTERRUPT
+            // Error: Interrupted!"), and Arrow trips on a reader cancelled under
+            // a pending read. The query was stopped, by its signal or by
+            // cancelActiveQuery: say that, as _streamSql does, so every caller
+            // sees the same AbortError for an abort (#384).
+            if ((active.cancelled || signal?.aborted) && err?.name !== 'AbortError') throw this._queryAbortError();
+            throw err;
         } finally {
             signal?.removeEventListener?.('abort', abort);
             if (this._activeInteractiveQuery === active) {
@@ -3394,28 +3466,14 @@ export default class DuckDbSource {
         const cacheKey = this._calendarHeatmapCacheKey(meta, usable, {
             calendarMode, shiftMs, cropRange, selectionRange, transforms, integral, timeSql,
         });
-        const cached = cacheKey ? this._heatmapCache.get(cacheKey) : null;
-        if (cached) return (cached instanceof Promise) ? cached : cached;
-
-        const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql, signal };
-        const promise = integral
-            ? this._queryCalendarHeatmapIntegral(meta, legacyData, usable, queryOpts)
-            : this._queryCalendarHeatmapAggregates(meta, legacyData, usable, queryOpts);
-        if (cacheKey) {
-            this._heatmapCache.set(cacheKey, promise);
-            while (this._heatmapCache.size > 16) {
-                const first = this._heatmapCache.keys().next().value;
-                this._heatmapCache.delete(first);
-            }
-        }
-        try {
-            const result = await promise;
-            if (cacheKey) this._heatmapCache.set(cacheKey, result);
-            return result;
-        } catch (err) {
-            if (cacheKey) this._heatmapCache.delete(cacheKey);
-            throw err;
-        }
+        // Shared with any other caller asking the same (_sharedQuery): this
+        // caller's signal lets go of it, and stops it if nobody else waits.
+        return this._sharedQuery(this._heatmapCache, cacheKey, signal, (querySignal) => {
+            const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql, signal: querySignal };
+            return integral
+                ? this._queryCalendarHeatmapIntegral(meta, legacyData, usable, queryOpts)
+                : this._queryCalendarHeatmapAggregates(meta, legacyData, usable, queryOpts);
+        }, { limit: 16 });
     }
 
     _normalizeMsRange(range) {
@@ -4022,10 +4080,9 @@ export default class DuckDbSource {
             transforms, dayGrouping: options.dayGrouping, combineWeekends: options.combineWeekends === true,
             discardIncomplete: options.discardIncomplete, timeSql,
         });
-        const cached = cacheKey ? this._temporalProfileCache.get(cacheKey) : null;
-        if (cached) return cached instanceof Promise ? cached : cached;
-
-        const promise = (async () => {
+        // Shared with any other caller asking the same (_sharedQuery): this
+        // caller's signal lets go of it, and stops it if nobody else waits.
+        return this._sharedQuery(this._temporalProfileCache, cacheKey, signal, async (signal) => {
             // The time axis alone, with the windows it may read (a row number).
             const statsArgs = { tableName: this._fromSql(legacyData, [{ _duckdbWindows: timeSql.windows }]), timeExpression: tExpr, whereSql };
             let statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql(statsArgs), { signal }));
@@ -4090,22 +4147,7 @@ export default class DuckDbSource {
                 orderedInput: !ordered,
                 traces: usable.map((item, index) => ({ varName: item.varName, result: reduced.results[index] })),
             };
-        })();
-        if (cacheKey) {
-            this._temporalProfileCache.set(cacheKey, promise);
-            while (this._temporalProfileCache.size > 12) {
-                const first = this._temporalProfileCache.keys().next().value;
-                this._temporalProfileCache.delete(first);
-            }
-        }
-        try {
-            const result = await promise;
-            if (cacheKey) this._temporalProfileCache.set(cacheKey, result);
-            return result;
-        } catch (error) {
-            if (cacheKey) this._temporalProfileCache.delete(cacheKey);
-            throw error;
-        }
+        }, { limit: 12 });
     }
 
     _temporalProfileCacheKey(meta, usable, options) {
@@ -4203,11 +4245,8 @@ export default class DuckDbSource {
         const sourceRange = Array.isArray(options.sourceTimeRange) ? options.sourceTimeRange : null;
 
         const cacheKey = this._pairCorrelationCacheKey(meta, active, sourceRange, gain, yOffset);
-        const cached = cacheKey ? this._correlationCache.get(cacheKey) : null;
-        if (cached) {
-            const activeResults = cached instanceof Promise ? await cached : cached;
-            return this._reindexPairResults(resolved, activeResults);
-        }
+        const cached = cacheKey ? this._correlationCache.get(cacheKey) : undefined;
+        if (cached !== undefined && !(cached instanceof Promise)) return this._reindexPairResults(resolved, cached);
 
         const timeCol = meta.timeColumn;
         const escTime = String(timeCol).replace(/"/g, '""');
@@ -4224,22 +4263,16 @@ export default class DuckDbSource {
         const pairExprs = active.map((r, i) => ({ i, vx: valueExpr(r.vx, r.pair.x), vy: valueExpr(r.vy, r.pair.y) }));
         const sql = buildPairCorrelationSql(tExpr, this._fromSql(legacyData, active.flatMap(r => [r.vx, r.vy])), where, pairExprs);
 
-        const promise = (async () => {
-            const result = await this._interactiveQuery(sql, { signal });
+        // Shared with any other caller asking the same (_sharedQuery): this
+        // caller's signal lets go of it, and stops it if nobody else waits.
+        const activeResults = await this._sharedQuery(this._correlationCache, cacheKey, signal, async (querySignal) => {
+            const result = await this._interactiveQuery(sql, { signal: querySignal });
             return parsePairCorrelations(
                 (name) => { const v = result?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
                 active.length,
             );
-        })();
-        if (cacheKey) this._rememberCorrelationCache(cacheKey, promise);
-        try {
-            const activeResults = await promise;
-            if (cacheKey) this._correlationCache.set(cacheKey, activeResults);
-            return this._reindexPairResults(resolved, activeResults);
-        } catch (err) {
-            if (cacheKey) this._correlationCache.delete(cacheKey);
-            throw err;
-        }
+        }, { limit: 12 });
+        return this._reindexPairResults(resolved, activeResults);
     }
 
 
@@ -4548,14 +4581,6 @@ export default class DuckDbSource {
             : 'full';
         const version = [Number(meta.appendRows) || 0, Number(meta.appendBytes) || 0, Number(meta.totalRows) || ''].join('');
         return [tableName, 'corr', pairsKey, rangeKey, gain, yOffset, version].join('');
-    }
-
-    _rememberCorrelationCache(key, value) {
-        this._correlationCache.set(key, value);
-        while (this._correlationCache.size > 12) {
-            const first = this._correlationCache.keys().next().value;
-            this._correlationCache.delete(first);
-        }
     }
 
     async _supportsCorr() {

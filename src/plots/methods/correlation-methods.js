@@ -640,6 +640,10 @@ export function installPlotCorrelationMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot?.correlationDiv || plot.mode !== 'correlation') return;
         clearTimeout(plot._correlationRecomputeTimer);
+        // A lazy file's query in flight answers settings that have just
+        // changed: stop it now, so the new one does not queue behind it on
+        // DuckDB (#384). The result on screen stays until the new one is in.
+        this._abortAnalysisRun(plot, '_correlationRunAbort');
         const run = () => {
             const state = this._ensureCorrelationState(plot);
             const adjusted = this._autoLimitAnalysisRange(plot, state, 'correlation');
@@ -724,7 +728,8 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (measured.superseded) return;
 
         if (lazyByFile.size) {
-            const signal = this._analysisSignal(plot);
+            // This run's signal: a newer run aborts it, and so does Cancel.
+            const signal = this._analysisRunSignal(plot, '_correlationRunAbort');
             const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
                 const data = this.files.get(fileId)?.data;
                 const source = data?._duckdb?.source;
@@ -755,13 +760,27 @@ export function installPlotCorrelationMethods(TargetClass) {
                     }
                     return { entries, stats };
                 } catch (err) {
-                    // Cancelled from the computing pill: the token is gone.
-                    if (err?.name === 'AbortError') return { entries, error: true };
+                    if (err?.name === 'AbortError') return { entries, error: true, foreign: this._isForeignAbort(err, signal) };
                     console.warn('[correlation] lazy query failed:', err);
                     return { entries, error: true };
                 }
             });
-            const settled = await Promise.all(jobs);
+            let settled;
+            try {
+                settled = await Promise.all(jobs);
+            } finally {
+                this._settleAnalysisRun(plot, '_correlationRunAbort', signal);
+            }
+            // Stopped: Cancel (its token is gone), or a newer run that takes
+            // over. Either way, what is on screen stays.
+            if (signal?.aborted) return;
+            // An abort this run did not ask for (a query stopped by someone
+            // else): it starts again.
+            if (settled.some(job => job.foreign) && plot._correlationToken === token) {
+                plot._correlationToken += 1;
+                this._scheduleCorrelationRecompute(panelId, { immediate: true });
+                return;
+            }
             if (plot._correlationToken !== token) return; // superseded while awaiting
             for (const { entries, stats, error } of settled) {
                 entries.forEach((e, k) => {

@@ -36,6 +36,7 @@ register(new URL('./support/vite-asset-url-hooks.mjs', import.meta.url));
 const DuckDbSource = (await import(new URL('../src/data/duckdb-source.js', import.meta.url))).default;
 const { streamColumns } = await import(new URL('../src/data/column-stream.js', import.meta.url));
 const { installPlotDataMethods } = await import(new URL('../src/plots/methods/data-methods.js', import.meta.url));
+const { installPlotAnalysisBusyMethods } = await import(new URL('../src/plots/methods/analysis-busy-methods.js', import.meta.url));
 const fft = await import(new URL('../src/utils/fft.js', import.meta.url));
 const { computeAmplitudeSpectrum, selectFftRange } = fft;
 
@@ -116,12 +117,10 @@ class Harness {
     _canUseFftWorker() { return true; }
     _fftWorkerThresholdNfft() { return this.workerThreshold; }
     _computeFftSpectrumInWorker(plot, input) { return Promise.resolve(runInWorker(input)); }
-    _analysisSignal(plot) {
-        if (!plot._analysisAbort || plot._analysisAbort.signal.aborted) plot._analysisAbort = new AbortController();
-        return plot._analysisAbort.signal;
-    }
 }
 installPlotDataMethods(Harness);
+// The panel's analysis signal and the run signals tied to it, as the app has them.
+installPlotAnalysisBusyMethods(Harness);
 Object.assign(Harness.prototype, managerMethods, fftProto);
 // Restore the stubs the sliced methods would otherwise replace.
 Harness.prototype._fftWorkerThresholdNfft = function() { return this.workerThreshold; };

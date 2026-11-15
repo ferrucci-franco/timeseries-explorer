@@ -165,7 +165,11 @@ does the same:
 
 - show the shared pill (`_setAnalysisComputing` in
   `src/plots/methods/analysis-busy-methods.js`);
-- pass `_analysisSignal(plot)` to its DuckDB queries and streams;
+- pass `_analysisSignal(plot)` to its DuckDB queries and streams — or, where
+  a newer run supersedes the one in flight, a run signal tied to it
+  (`_analysisRunSignal(plot, slot)`), aborted from the analysis' schedule
+  (`_abortAnalysisRun`), as the FFT, the heatmap, the temporal profile and
+  the pair correlation do;
 - register its pane, its tokens and where its settings live there;
 - extend `scripts/e2e-analysis-cancel.mjs`.
 
