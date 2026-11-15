@@ -12,10 +12,12 @@
 // PLAYER is the sound. A panel that is not sounding keeps its strip and its
 // position, and picks up where it left off.
 //
-// Phase 1 of #86 (issue #89). The range is read-only here: the analysis
-// selection when the panel is in an analysis mode, the whole record otherwise.
-// The Todo | Selección control in timeseries mode is phase 2 (#90), and stereo,
-// reverse and source switching are phase 3 (#91).
+// Phase 1 of #86 (issue #89), and where the feature stops (see the status at
+// the top of docs/audio-playback-design.md). The range is read-only here: the
+// analysis selection when the panel is in an analysis mode, the whole record
+// otherwise. Next: All | Visible window in timeseries mode (#375) and WAV
+// export (#92). The panel-level selection (#90), stereo and reverse (#91) and
+// the extra entry points (#93) were dropped.
 
 import i18n from '../../i18n/index.js';
 import { FFT_UNIFORM_REL_TOLERANCE } from '../../utils/fft.js';
@@ -434,8 +436,8 @@ export function installPlotAudioMethods(TargetClass) {
      * What sounds: the panel's selection, never a range of the audio's own.
      * In an analysis mode that selection already exists and already has its
      * control in the panel's options, so this only reads it. In timeseries mode
-     * there is no selection yet — phase 2 gives the strip the same
-     * Todo | Selección control; until then the whole record plays.
+     * there is no selection, and the whole record plays; #375 will offer the
+     * plot's visible window as the alternative.
      */
     proto._audioRange = function(plot, source) {
         const extent = this._audioSourceExtent(source);
