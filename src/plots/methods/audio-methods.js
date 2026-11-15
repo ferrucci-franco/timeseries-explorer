@@ -1779,6 +1779,7 @@ export function installPlotAudioMethods(TargetClass) {
                 <label class="audio-dc" title="${i18n.t('audioRemoveDC')}"><input type="checkbox" class="audio-dc-input" checked> <span class="audio-dc-text">${i18n.t('audioRemoveDC')}</span></label>
                 <button type="button" class="audio-btn audio-mute" aria-pressed="false" title="${i18n.t('audioMute')}" aria-label="${i18n.t('audioMute')}">${ICONS.volume}</button>
                 <input type="range" class="audio-volume" min="0" max="100" value="70" step="1" title="${i18n.t('audioVolume')}" aria-label="${i18n.t('audioVolume')}">
+                <button type="button" class="audio-btn audio-export" title="${i18n.t('audioExportWav')}" aria-label="${i18n.t('audioExportWav')}">${ICONS.download}</button>
             </div>
             <div class="audio-strip-loading" role="status" hidden>
                 <span class="audio-loading-text"></span>
@@ -1831,6 +1832,11 @@ export function installPlotAudioMethods(TargetClass) {
             button.addEventListener('click', () => this._audioSetWindowMode(panelId, button.dataset.window));
         }
         strip.querySelector('.audio-loading-cancel').addEventListener('click', () => this._audioCancelLoad(panelId));
+        // The second way into the panel's export dialog: on WAV, filled in
+        // from what sounds, the cursor in the name (#92).
+        strip.querySelector('.audio-export').addEventListener('click', () => {
+            this._openExportDialog?.(panelId, { preselect: 'wav' });
+        });
         const seek = strip.querySelector('.audio-seek');
         // Scrubbing is silent: the sound stops when the handle is grabbed and
         // picks up from the new point when it is let go. Seeking on every
@@ -1995,6 +2001,7 @@ export function installPlotAudioMethods(TargetClass) {
             button.setAttribute('aria-checked', String(on));
             button.disabled = !playable;
         }
+        strip.querySelector('.audio-export').disabled = !playable;
         this._audioSyncLoadingNote(panelId, strip);
 
         const note = strip.querySelector('.audio-strip-note');

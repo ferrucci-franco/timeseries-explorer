@@ -67,7 +67,7 @@ Built:
   is here rather than in the strip. The strip is the same
   one (`audio-methods.js`), laid out by `compact.css` in three rows at a finger's
   size: play, stop, loop, the time and mute; the seek bar across the screen; the
-  signal and Remove DC. The phone's own buttons set the volume, so the volume
+  signal, Remove DC and ⬇ (the WAV export, #92). The phone's own buttons set the volume, so the volume
   slider is hidden. A tap on the plot moves the sound there, as a click does on the
   desktop; a tap on the buttons over the plot (Fit, A|B, the legend's) does not.
   The rows wrap rather than sit in a grid: with a grid, a long signal name widened

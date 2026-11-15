@@ -83,7 +83,7 @@ try {
         const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
         const svg = plot.div.querySelector('.main-svg').getBoundingClientRect();
         const s = strip.getBoundingClientRect();
-        const controls = ['.audio-play', '.audio-stop', '.audio-loop', '.audio-readout', '.audio-seek', '.audio-source', '.audio-dc', '.audio-mute'];
+        const controls = ['.audio-play', '.audio-stop', '.audio-loop', '.audio-readout', '.audio-seek', '.audio-source', '.audio-dc', '.audio-mute', '.audio-export'];
         const problems = [];
         for (const selector of controls) {
             const r = strip.querySelector(selector).getBoundingClientRect();

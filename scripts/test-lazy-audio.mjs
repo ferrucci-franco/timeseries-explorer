@@ -20,7 +20,12 @@
 //     column with no source in the file is refused with its reason;
 //   · a range past the buffer limit stops reading and says so; a range whose
 //     steps are not uniform (a gap in the file) is refused; cancel stops the
-//     read.
+//     read;
+//   · the WAV export (#92): the file written from the lazy file — streamed,
+//     two passes, past the buffer limit — is byte for byte the file written
+//     from memory, mono and stereo, 16-bit and float, with and without the
+//     transforms, in chunks of any size; its header carries the signal's own
+//     rate; and cancel stops it.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire, register } from 'node:module';
@@ -33,6 +38,7 @@ const { streamColumns } = await import(new URL('../src/data/column-stream.js', i
 const { installPlotDataMethods } = await import(new URL('../src/plots/methods/data-methods.js', import.meta.url));
 const { installPlotAudioMethods } = await import(new URL('../src/plots/methods/audio-methods.js', import.meta.url));
 const { installPlotAudioLazyMethods } = await import(new URL('../src/plots/methods/audio-lazy-methods.js', import.meta.url));
+const { installPlotAudioWavMethods } = await import(new URL('../src/plots/methods/audio-wav-methods.js', import.meta.url));
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
@@ -70,6 +76,7 @@ class Harness {
 installPlotDataMethods(Harness);
 installPlotAudioMethods(Harness);
 installPlotAudioLazyMethods(Harness);
+installPlotAudioWavMethods(Harness);
 Object.assign(Harness.prototype, managerMethods);
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -277,6 +284,89 @@ assert.equal(eager.variables.a.data.length, ROWS, 'the in-memory copy has every 
     assert.equal(gEager._audioEagerRangeSamples(gESource, [2, 3], gEager._defaultAudioState(), alloc).error, 'nonUniform',
         'the in-memory kernel refuses the same range');
     console.log('lazy audio: a range past the limit, too short, across a gap or cancelled says so');
+}
+
+// ── The WAV export: the same bytes from the file as from memory ─────────────
+{
+    const read = async (blob) => Buffer.from(await blob.arrayBuffer());
+    let checks = 0;
+    for (const [label, transform, inverted] of [
+        ['no transform', {}, []],
+        ['crop, shift, gain, offset, sign', { gain: -1.5, yOffset: 2, timeShift: 3, cropStart: 1, cropEnd: 4 }, ['b']],
+    ]) {
+        const eh = harness(eager, transform, inverted);
+        const lh = harness(lazy, transform, inverted);
+        for (const window of [null, [2.5 + (transform.timeShift || 0), 3.75 + (transform.timeShift || 0)]]) {
+            for (const choice of [
+                { channels: 'mono', source: 'f\u0000a', encoding: 'pcm16' },
+                { channels: 'mono', source: 'f\u0000b', encoding: 'float32' },
+                { channels: 'stereo', left: 'f\u0000a', right: 'f\u0000b', encoding: 'pcm16' },
+                { channels: 'stereo', left: 'f\u0000b', right: 'f\u0000a', encoding: 'float32' },
+            ]) {
+                const make = (h) => {
+                    const plot = { mode: 'timeseries', traces: [{ fileId: 'f', varName: 'a' }, { fileId: 'f', varName: 'b' }] };
+                    plot.audio = { ...h._defaultAudioState(), window: window ? 'visible' : 'all' };
+                    if (window) plot.div = { _fullLayout: { xaxis: { range: window } } };
+                    h.plots.set('p', plot);
+                    return plot;
+                };
+                const ePlot = make(eh);
+                const lPlot = make(lh);
+                const tag = `${label}, ${window ? 'a window' : 'all'}, ${choice.channels} ${choice.encoding}`;
+                assert.equal(lh._wavEstimate(lPlot, choice).blockedReason, '', `${tag}: the lazy file can be written`);
+                const want = await eh._writeWav(ePlot, choice);
+                const got = await lh._writeWav(lPlot, choice, { chunkRows: 3001 });
+                assert.equal(want.error, undefined, `${tag}: written from memory`);
+                assert.equal(got.error, undefined, `${tag}: written from the file`);
+                const wantBytes = await read(want.blob);
+                const gotBytes = await read(got.blob);
+                assert.equal(gotBytes.length, wantBytes.length, `${tag}: the same size`);
+                assert.equal(Buffer.compare(gotBytes, wantBytes), 0, `${tag}: the same bytes`);
+                const view = new DataView(gotBytes.buffer, gotBytes.byteOffset, gotBytes.byteLength);
+                assert.equal(view.getUint32(24, true), RATE, `${tag}: at the signal's own rate`);
+                assert.equal(view.getUint16(22, true), choice.channels === 'stereo' ? 2 : 1, `${tag}: channels`);
+                checks++;
+            }
+        }
+    }
+    // Where the chunks are cut changes nothing.
+    {
+        const lh = harness(lazy);
+        const plot = { mode: 'timeseries', traces: [{ fileId: 'f', varName: 'a' }], audio: lh._defaultAudioState() };
+        lh.plots.set('p', plot);
+        const choice = { channels: 'mono', source: 'f\u0000a', encoding: 'pcm16' };
+        const reference = await read((await lh._writeWav(plot, choice)).blob);
+        for (const chunkRows of [1, 4096]) {
+            assert.equal(Buffer.compare(await read((await lh._writeWav(plot, choice, { chunkRows })).blob), reference), 0, `chunks of ${chunkRows}`);
+            checks++;
+        }
+        // And what is written is what plays: the samples of the strip, as PCM.
+        const source = lh._audioSelectedSource(plot);
+        const played = await lh._audioLazyRangeSamples(source, lh._audioRange(plot, source), plot.audio, alloc);
+        const { pcm16Sample } = await import(new URL('../src/utils/wav-encode.js', import.meta.url));
+        const pcm = new Int16Array(reference.buffer.slice(reference.byteOffset + 44, reference.byteOffset + reference.byteLength));
+        let differ = 0;
+        for (let i = 0; i < pcm.length; i++) if (pcm[i] !== pcm16Sample(played.channel[i])) differ++;
+        assert.equal(pcm.length, played.channel.length, 'every sample that plays is written');
+        assert.equal(differ, 0, 'and the file is what the strip plays');
+
+        // Cancel stops the export.
+        const controller = new AbortController();
+        let calls = 0;
+        await assert.rejects(
+            lh._writeWav(plot, choice, { signal: controller.signal, chunkRows: 2048, onProgress: () => { if (++calls === 3) controller.abort(); } }),
+            error => error?.name === 'AbortError',
+            'a cancelled export stops reading',
+        );
+        // Stereo from two files is refused, with its reason.
+        const other = harness(lazy);
+        other.files.set('g', other.files.get('f'));
+        const twoFiles = { mode: 'timeseries', traces: [{ fileId: 'f', varName: 'a' }, { fileId: 'g', varName: 'b' }], audio: other._defaultAudioState() };
+        other.plots.set('p', twoFiles);
+        const refused = other._wavEstimate(twoFiles, { channels: 'stereo', left: 'f\u0000a', right: 'g\u0000b', encoding: 'pcm16' });
+        assert.ok(refused.blockedReason, 'two channels from two files are refused, with the reason');
+    }
+    console.log(`lazy audio: the WAV written from the file is the WAV written from memory, byte for byte (${checks} files)`);
 }
 
 console.log('lazy audio tests passed');

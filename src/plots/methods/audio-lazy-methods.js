@@ -154,7 +154,9 @@ export function installPlotAudioLazyMethods(TargetClass) {
             const end = Math.min(to, at + step);
             visit(sliceOf(times, at, end), columns.map(column => sliceOf(column, at, end)));
             onRows?.(end - from);
-            if (end < to) await Promise.resolve();
+            // A frame between chunks, so a long export paints its progress
+            // and its Cancel can be pressed.
+            if (end < to) await (this._yieldToPaint ? this._yieldToPaint() : new Promise(resolve => setTimeout(resolve, 0)));
         }
     };
 

@@ -6,8 +6,9 @@ import Modal from './modal.js';
  *
  * One place to leave a panel: the data as CSV (what the old CSV button did),
  * or the plot itself as a pixel image (PNG, with a quality multiplier) or a
- * vector image (SVG). Panels that show two charts — time series + spectrum,
- * histogram, heatmap, profile, correlation — let the user pick which one.
+ * vector image (SVG), or what the audio strip plays as a sound file (WAV,
+ * #92). Panels that show two charts — time series + spectrum, histogram,
+ * heatmap, profile, correlation — let the user pick which one.
  *
  * Pure DOM: the caller passes the charts (already measured) and gets back the
  * chosen options, so nothing here knows about Plotly or the plot state.
@@ -32,7 +33,12 @@ const remembered = {
     timeLayout: 'concat',
     boundaryMode: 'keep',
     sourceColumn: false,
+    // WAV: 16-bit PCM unless 32-bit float was asked for once.
+    wavEncoding: 'pcm16',
 };
+
+const WAV_ENCODINGS = ['pcm16', 'float32'];
+const WAV_CHANNELS = ['mono', 'stereo'];
 
 const TIME_LAYOUTS = ['concat', 'per-trace'];
 const BOUNDARY_MODES = ['keep', 'mean', 'first', 'last'];
@@ -46,6 +52,26 @@ const sanitizeBaseName = (value) => String(value ?? '')
     .replace(/[^\p{L}\p{N}._-]+/gu, '_')
     .replace(/^[._]+/, '')
     .slice(0, 120);
+
+// "About 10.6 MB · 44,100 Hz · 1:00.00" — the size before it is written.
+function formatWavEstimate({ bytes, sampleRate, seconds, channels } = {}) {
+    const parts = [];
+    if (Number.isFinite(bytes)) {
+        const mb = bytes / 1e6;
+        const size = mb >= 1
+            ? `${i18n.formatNumber(Number(mb.toFixed(mb >= 100 ? 0 : 1)))} MB`
+            : `${i18n.formatNumber(Math.max(1, Math.round(bytes / 1e3)))} kB`;
+        parts.push(i18n.t('exportWavSize').replace('{size}', size));
+    }
+    if (Number.isFinite(sampleRate)) parts.push(`${i18n.formatNumber(Math.round(sampleRate))} Hz`);
+    if (channels) parts.push(i18n.t(channels === 2 ? 'exportWavStereo' : 'exportWavMono'));
+    if (Number.isFinite(seconds)) {
+        const minutes = Math.floor(seconds / 60);
+        const rest = seconds - minutes * 60;
+        parts.push(`${minutes}:${rest.toFixed(2).padStart(5, '0')}`);
+    }
+    return parts.join(' · ');
+}
 
 export default class PlotExportDialog {
     /**
@@ -64,9 +90,18 @@ export default class PlotExportDialog {
      * @param {(format: string) => boolean} [options.canShare] whether the
      *   browser can hand a file of this format to the device's share sheet;
      *   where it can, Share is offered beside Download
+     * @param {object|null} [options.wav] the WAV format (#92), offered when
+     *   given: `{ blockedReason, sources: [{key, label, color}], source,
+     *   channels, left, right, pair, rangeLabel, estimate(choice) =>
+     *   {blockedReason, bytes, sampleRate, seconds}, baseName(choice) }`.
+     *   With a blockedReason the format is offered disabled, with it.
+     * @param {string} [options.preselect] a format to open on (the audio
+     *   strip's ⬇ opens on WAV), with the focus in the name field
      * @returns {Promise<null|{format: string, chartId: string, scale: number,
      *   theme: string, baseName: string, fileName: string, timeLayout: string,
-     *   boundaryMode: string, sourceColumn: boolean, delivery: 'download'|'share'}>}
+     *   boundaryMode: string, sourceColumn: boolean, delivery: 'download'|'share',
+     *   wav?: {channels: string, source: string, left: string, right: string,
+     *   encoding: string}}>}
      */
     static open({
         contextLabel = '',
@@ -76,6 +111,8 @@ export default class PlotExportDialog {
         defaultBaseName = () => 'export',
         csvLayout = null,
         canShare = () => false,
+        wav = null,
+        preselect = '',
     } = {}) {
         return new Promise((resolve) => {
             const previousActive = document.activeElement;
@@ -92,6 +129,17 @@ export default class PlotExportDialog {
                 { id: 'png', label: i18n.t('exportFormatPng'), hint: i18n.t('exportFormatPngHint'), ext: 'png', disabled: !charts.length },
                 { id: 'svg', label: i18n.t('exportFormatSvg'), hint: i18n.t('exportFormatSvgHint'), ext: 'svg', disabled: !charts.length },
             ];
+            // What the audio strip plays, as a sound file — disabled with its
+            // reason where nothing in the panel can be heard.
+            if (wav) {
+                formats.push({
+                    id: 'wav',
+                    label: i18n.t('exportFormatWav'),
+                    hint: wav.blockedReason || i18n.t('exportFormatWavHint'),
+                    ext: 'wav',
+                    disabled: !!wav.blockedReason,
+                });
+            }
 
             const state = {
                 format: csvBlockedReason && remembered.format === 'csv' ? 'png' : remembered.format,
@@ -105,6 +153,18 @@ export default class PlotExportDialog {
                 sourceColumn: !!remembered.sourceColumn,
             };
             if (!charts.length) state.format = 'csv';
+            const enabled = (id) => formats.some(format => format.id === id && !format.disabled);
+            if (preselect && enabled(preselect)) state.format = preselect;
+            // A remembered format that is not on offer here gives way to the
+            // first one that is.
+            if (!enabled(state.format)) state.format = (formats.find(format => !format.disabled) || formats[0]).id;
+            state.wav = wav && !wav.blockedReason ? {
+                channels: WAV_CHANNELS.includes(wav.channels) ? wav.channels : 'mono',
+                source: wav.source,
+                left: wav.left,
+                right: wav.right,
+                encoding: WAV_ENCODINGS.includes(remembered.wavEncoding) ? remembered.wavEncoding : 'pcm16',
+            } : null;
 
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
@@ -365,6 +425,74 @@ export default class PlotExportDialog {
             });
             themeSection.appendChild(themeGroup);
 
+            // Sound (WAV only): the signal or the two channels, the encoding,
+            // the range the strip plays and the size it makes.
+            const wavSection = makeSection(i18n.t('exportWavSound'), 'export-wav-section');
+            const wavSelect = (labelKey, key) => {
+                const row = document.createElement('label');
+                row.className = 'export-wav-field';
+                const label = document.createElement('span');
+                label.className = 'export-wav-label';
+                label.textContent = i18n.t(labelKey);
+                const select = document.createElement('select');
+                select.className = `export-wav-select export-wav-${key}`;
+                for (const source of wav?.sources || []) {
+                    const option = document.createElement('option');
+                    option.value = source.key;
+                    option.textContent = source.label;
+                    select.appendChild(option);
+                }
+                select.addEventListener('change', () => {
+                    state.wav[key] = select.value;
+                    sync();
+                });
+                row.append(label, select);
+                return { row, select };
+            };
+            const chipRow = (name, values, labels, onPick) => {
+                const row = document.createElement('div');
+                row.className = 'export-chip-row';
+                row.setAttribute('role', 'radiogroup');
+                const inputs = values.map((value) => {
+                    const chip = document.createElement('label');
+                    chip.className = 'export-chip';
+                    const input = document.createElement('input');
+                    input.type = 'radio';
+                    input.name = `omv-export-${name}`;
+                    input.value = value;
+                    const span = document.createElement('span');
+                    span.textContent = labels[value];
+                    chip.append(input, span);
+                    input.addEventListener('change', () => {
+                        if (!input.checked) return;
+                        onPick(value);
+                        sync();
+                    });
+                    row.appendChild(chip);
+                    return input;
+                });
+                return { row, inputs };
+            };
+            const wavChannels = chipRow('wav-channels', WAV_CHANNELS, {
+                mono: i18n.t('exportWavMono'),
+                stereo: i18n.t('exportWavStereo'),
+            }, (value) => { state.wav.channels = value; });
+            const stereoPossible = (wav?.sources?.length || 0) >= 2;
+            wavChannels.inputs[1].disabled = !stereoPossible;
+            if (!stereoPossible) wavChannels.inputs[1].closest('.export-chip').title = i18n.t('exportWavStereoNeedsTwo');
+            const wavMono = wavSelect('exportWavSignal', 'source');
+            const wavLeft = wavSelect('exportWavLeft', 'left');
+            const wavRight = wavSelect('exportWavRight', 'right');
+            const wavEncoding = chipRow('wav-encoding', WAV_ENCODINGS, {
+                pcm16: i18n.t('exportWavPcm16'),
+                float32: i18n.t('exportWavFloat32'),
+            }, (value) => { state.wav.encoding = value; });
+            const wavRange = document.createElement('div');
+            wavRange.className = 'export-hint-line export-wav-range';
+            const wavSize = document.createElement('div');
+            wavSize.className = 'export-hint-line export-wav-size';
+            wavSection.append(wavChannels.row, wavMono.row, wavLeft.row, wavRight.row, wavEncoding.row, wavRange, wavSize);
+
             // File name
             const nameSection = makeSection(i18n.t('exportFileName'), 'export-name-section');
             const nameRow = document.createElement('div');
@@ -446,12 +574,37 @@ export default class PlotExportDialog {
                         .replace('{h}', String(height));
                 }
 
+                // The WAV block: what it writes, how large, or why not.
+                const isWav = state.format === 'wav' && !!state.wav;
+                wavSection.hidden = !isWav;
+                let wavBlocked = '';
+                if (isWav) {
+                    const stereo = state.wav.channels === 'stereo';
+                    wavChannels.inputs.forEach((input, index) => { input.checked = WAV_CHANNELS[index] === state.wav.channels; });
+                    wavEncoding.inputs.forEach((input, index) => { input.checked = WAV_ENCODINGS[index] === state.wav.encoding; });
+                    wavMono.row.hidden = stereo;
+                    wavLeft.row.hidden = !stereo;
+                    wavRight.row.hidden = !stereo;
+                    wavMono.select.value = state.wav.source;
+                    wavLeft.select.value = state.wav.left;
+                    wavRight.select.value = state.wav.right;
+                    wavRange.textContent = wav.rangeLabel || '';
+                    const estimate = wav.estimate?.(state.wav) || {};
+                    wavBlocked = estimate.blockedReason || '';
+                    wavSize.textContent = wavBlocked || formatWavEstimate(estimate);
+                    wavSize.classList.toggle('export-wav-blocked', !!wavBlocked);
+                }
+
                 nameExt.textContent = `.${currentFormat().ext}`;
-                if (!nameEdited) nameInput.value = defaultBaseName(state.format, isImage ? chart : null);
-                confirmBtn.disabled = !!currentFormat().disabled;
+                if (!nameEdited) {
+                    nameInput.value = isWav && wav.baseName
+                        ? wav.baseName(state.wav)
+                        : defaultBaseName(state.format, isImage ? chart : null);
+                }
+                confirmBtn.disabled = !!currentFormat().disabled || !!wavBlocked;
                 // With Share beside it, the plain button says what it does.
                 let shareable = false;
-                try { shareable = !currentFormat().disabled && !!canShare(state.format); } catch (_) { shareable = false; }
+                try { shareable = !confirmBtn.disabled && !!canShare(state.format); } catch (_) { shareable = false; }
                 shareBtn.hidden = !shareable;
                 confirmBtn.textContent = i18n.t(shareable ? 'exportDownload' : 'exportAction');
                 // Share is the action there; Download stays, in second place.
@@ -474,7 +627,10 @@ export default class PlotExportDialog {
             const accept = (delivery = 'download') => {
                 if (confirmBtn.disabled) return;
                 const format = currentFormat();
-                const baseName = sanitizeBaseName(nameInput.value) || sanitizeBaseName(defaultBaseName(state.format, currentChart())) || 'export';
+                const fallbackName = state.format === 'wav' && wav?.baseName && state.wav
+                    ? wav.baseName(state.wav)
+                    : defaultBaseName(state.format, currentChart());
+                const baseName = sanitizeBaseName(nameInput.value) || sanitizeBaseName(fallbackName) || 'export';
                 remembered.format = state.format;
                 remembered.scale = state.scale;
                 remembered.theme = state.theme;
@@ -482,6 +638,7 @@ export default class PlotExportDialog {
                 if (csvLayout?.available) remembered.timeLayout = state.timeLayout;
                 remembered.boundaryMode = state.boundaryMode;
                 remembered.sourceColumn = state.sourceColumn;
+                if (state.wav) remembered.wavEncoding = state.wav.encoding;
                 finish({
                     format: state.format,
                     chartId: state.chartId,
@@ -493,6 +650,7 @@ export default class PlotExportDialog {
                     boundaryMode: state.boundaryMode,
                     sourceColumn: state.sourceColumn,
                     delivery: delivery === 'share' && !shareBtn.hidden ? 'share' : 'download',
+                    wav: state.format === 'wav' && state.wav ? { ...state.wav } : undefined,
                 });
             };
 
@@ -514,7 +672,16 @@ export default class PlotExportDialog {
             });
             document.addEventListener('keydown', keyHandler);
 
-            setTimeout(() => confirmBtn.focus(), 100);
+            // Opened from the audio strip: the name is the one thing left to
+            // decide, so the cursor is there.
+            setTimeout(() => {
+                if (preselect && state.format === preselect) {
+                    nameInput.focus();
+                    nameInput.select();
+                } else {
+                    confirmBtn.focus();
+                }
+            }, 100);
             requestAnimationFrame(() => overlay.classList.add('show'));
         });
     }

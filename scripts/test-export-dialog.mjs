@@ -493,4 +493,28 @@ for (const [mode, extraKey, chartId] of [
     shareableFormats.clear();
 }
 
+// ── WAV (#92): a fourth format, and the audio strip's door into it ──────
+{
+    assert.ok(dialogSource.includes("id: 'wav',") && dialogSource.includes('disabled: !!wav.blockedReason,'),
+        'the dialog offers WAV, disabled with its reason when nothing can be heard');
+    assert.ok(dialogSource.includes("hint: wav.blockedReason || i18n.t('exportFormatWavHint'),"),
+        'the reason is the hint, as for a CSV that cannot be written');
+    assert.ok(dialogSource.includes('wavSection.hidden = !isWav;'), 'the sound options show only for WAV, as the quality only for PNG');
+    assert.ok(dialogSource.includes('confirmBtn.disabled = !!currentFormat().disabled || !!wavBlocked;'),
+        'a WAV that cannot be written (too short, two files, past 4 GB) cannot be exported');
+    assert.ok(dialogSource.includes('if (preselect && enabled(preselect)) state.format = preselect;')
+        && dialogSource.includes('nameInput.focus();'), 'opened on WAV from the strip, with the cursor in the name');
+    assert.ok(exportMethodsSource.includes("if (result.format === 'wav') {") && exportMethodsSource.includes('await this._exportWav(panelId, plot, result);'),
+        'the export routes WAV to its writer');
+    assert.ok(exportMethodsSource.includes("this.onBusyOverlay?.({ title: i18n.t('exportWavBuilding'), token })"),
+        'a long WAV shows the busy overlay, whose Cancel aborts it');
+    const audioSource = read('src/plots/methods/audio-methods.js');
+    assert.ok(audioSource.includes("this._openExportDialog?.(panelId, { preselect: 'wav' });"), 'the strip\'s ⬇ opens the dialog on WAV');
+    for (const lang of Object.keys(translations)) {
+        for (const key of ['exportFormatWav', 'exportFormatWavHint', 'exportWavPcm16', 'exportWavFloat32', 'audioExportWav']) {
+            assert.ok(translations[lang][key], `${lang}: ${key}`);
+        }
+    }
+}
+
 console.log('Export dialog tests passed');

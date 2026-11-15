@@ -5750,7 +5750,7 @@ html.compact .modal-dialog-stats .stats-table-wrap {
    narrow; at a phone's width everything past the signal list was cut off,
    and its buttons were 22 px. Here it is three rows at a finger's size:
    play, stop, loop, the time and mute; the seek bar across the whole width;
-   the signal and Remove DC. The phone's own buttons set the volume, so the
+   the signal, Remove DC and ⬇ (WAV). The phone's own buttons set the volume, so the
    volume slider goes; mute stays. Opened from the Plot sheet (Sound). */
 html.compact .audio-strip {
     padding: 6px 10px;
@@ -5836,6 +5836,9 @@ html.compact .audio-dc {
     min-height: 40px;
     gap: 6px;
 }
+
+/* And ⬇, the WAV export, at the end of that row. */
+html.compact .audio-export { order: 9; }
 
 html.compact .audio-dc-input {
     width: 20px;
