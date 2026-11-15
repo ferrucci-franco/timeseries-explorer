@@ -151,7 +151,9 @@ More detail, and how to add a demo: [docs/animated-guide.md](docs/animated-guide
 The in-app Feedback command opens a form for text, screenshots pasted with
 Ctrl+V, and optional files, with a single Send button. The report becomes a
 GitHub issue with the screenshots inline — no GitHub account and no email
-program needed. The issue is public, so attach only what is safe to share.
+program needed. With a GitHub account you can open it on GitHub instead,
+prefilled, under your own name (screenshots are then dragged in by hand). The
+issue is public, so attach only what is safe to share.
 
 More detail: [docs/feedback.md](docs/feedback.md)
 

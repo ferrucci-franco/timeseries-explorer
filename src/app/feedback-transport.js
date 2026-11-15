@@ -206,6 +206,70 @@ export function readFeedbackHandoff(search) {
 }
 
 /**
+ * How long a prefilled `issues/new` link may get. GitHub answers a much longer
+ * one with an error page instead of the form (414, or a 400 from its front
+ * end), and the browser and proxies on the way have limits of their own near
+ * 8 KiB; 8000 characters of URL stays under all of them.
+ */
+export const GITHUB_PREFILL_URL_MAX = 8000;
+
+/**
+ * What a cut report says where it was cut. In English, like the rest of the
+ * issue body, which the maintainer reads.
+ */
+export const GITHUB_PREFILL_CUT_NOTE = '[… The report was cut here to fit the length of a GitHub link: '
+    + '{count} characters were left out. The reporter still has the full text in the form.]';
+
+/**
+ * A link to GitHub's new-issue page with the title, body and labels filled in.
+ *
+ * With no `maxLength` the link is exactly what the failed-send fallback has
+ * always opened. With one, a body too long for it is cut and says so: the
+ * beginning of the body is kept, then the note, then the last `keepEnd`
+ * characters, which the caller uses for the build details (version, browser)
+ * and the list of files to drag in, so that those survive a long description.
+ * When even they do not fit, the body is cut from the end instead.
+ *
+ * Returns the URL, whether it was cut, and how many characters were left out.
+ */
+export function buildPrefilledIssueUrl(issuesUrl, { title = '', body = '', labels = '' } = {}, { maxLength = Infinity, keepEnd = 0 } = {}) {
+    const link = (text) => {
+        const params = { title, body: text };
+        if (labels) params.labels = labels;
+        return `${issuesUrl}?${new URLSearchParams(params).toString()}`;
+    };
+    const full = link(body);
+    if (full.length <= maxLength) return { url: full, truncated: false, omitted: 0 };
+
+    const attempt = (tailLength) => {
+        const tail = tailLength > 0 ? body.slice(body.length - tailLength) : '';
+        const head = body.slice(0, body.length - tail.length);
+        const make = (kept) => {
+            const note = GITHUB_PREFILL_CUT_NOTE.replace('{count}', String(head.length - kept));
+            return link(`${head.slice(0, kept)}\n\n${note}\n${tail}`);
+        };
+        // Never split a character that takes two UTF-16 units: half of one
+        // is not text, and URLSearchParams would turn it into U+FFFD.
+        const clean = (kept) => (kept > 0 && /[\uD800-\uDBFF]/.test(head[kept - 1]) ? kept - 1 : kept);
+        // The longest beginning that fits. The URL grows with every character
+        // kept (the count in the note shrinks by a digit at most), so a
+        // binary search finds it in a few dozen tries, not thousands.
+        let lo = 0;
+        let hi = head.length;
+        while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (make(clean(mid)).length <= maxLength) lo = mid;
+            else hi = mid - 1;
+        }
+        const kept = clean(lo);
+        const url = make(kept);
+        return url.length <= maxLength ? { url, truncated: true, omitted: head.length - kept } : null;
+    };
+    const keep = Math.max(0, Math.min(body.length, Math.floor(keepEnd) || 0));
+    return attempt(keep) || attempt(0) || { url: link(''), truncated: true, omitted: body.length };
+}
+
+/**
  * The report, as the endpoint receives it: the metadata, and each attachment
  * already base64-encoded.
  */

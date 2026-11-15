@@ -2056,6 +2056,35 @@ textarea.feedback-control {
     line-height: 1.42;
 }
 
+/* The GitHub link under Send: there for whoever wants it, quieter than Send. */
+.feedback-github {
+    margin: -0.4rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.42;
+}
+
+.feedback-github-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary-color);
+    font: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.feedback-github-link:disabled {
+    color: var(--text-secondary);
+    cursor: default;
+}
+
+.feedback-github-note {
+    display: block;
+    margin-top: 0.2rem;
+}
+
 /* Spans the whole footer so the answer to Send sits above the buttons rather
    than squeezed between them. */
 .feedback-status {
