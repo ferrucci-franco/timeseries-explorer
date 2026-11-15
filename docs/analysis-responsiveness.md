@@ -1,8 +1,9 @@
 # How long each analysis holds the main thread
 
 > Status: **measurements, before any fix** (2026-11-15, on top of the lazy-FFT
-> fix of #174). Nothing in the app was changed to produce them. The fixes, and
-> the same tables measured after them, are added here when they land.
+> fix of #174). Nothing in the app was changed to produce them. The work they
+> call for is split into the issues listed under "The work, by issue"; each
+> fix adds its own after numbers here when it lands.
 
 Issue #174 was a lazy FFT that froze the page: on a 10 M-row file the read of
 its rows was one main-thread task of eight seconds. That is fixed
@@ -26,6 +27,28 @@ The short answer:
   profile, integral, pair correlation, the trend's sums, the 2D trajectory),
   but a newer request does not stop the query it supersedes, so a change made
   while one is running waits for both.
+
+## The work, by issue
+
+One issue per thing to fix; what is best attacked together shares an issue.
+Each issue carries the numbers and the cause from this document, what "done"
+means, and a suggested model and effort for the session that takes it.
+
+| Issue | What | Sections here | Order | Suggested |
+|---|---|---|---|---|
+| #381 | **In-memory analyses on the compute worker**: every kernel but the FFT's runs on the main thread (0.3–44 s). One shared analysis job with a per-run abort; the 2D fit computed once; Cancel working on in-memory files, the 2D fit's typed bound included | "Offenders, ranked" 1–3, 5, 7, 8, 10–12; "Other defects" 4 | first: the base for #382 and #383 | Opus, high |
+| #382 | **Lazy exponential fits** (curve fit, trend, 2D fit): 1–3 s at 1 M rows in range, 10 s at 4 M. Stream to the worker; polish the kept rows there; abort at schedule time | "Offenders, ranked" 4, 6; "Lazy fits over a 4 M-row range" | after #381 | Opus, high |
+| #383 | **Lazy histogram**: quartiles and counting after the read, 0.6–1.7 s. In the worker; skipped when nothing reads them; abort at schedule time | "Offenders, ranked" 9; "Histogram" | after #381 | Opus, medium |
+| #384 | **Lazy SQL analyses: the superseded query is not stopped** (heatmap, temporal profile, pair correlation: the result takes twice as long), and **Trend does not report a Cancel** (DuckDB's interrupt is not an `AbortError`) | "A request in flight when a newer one arrives"; "Other defects" 3 | independent | Opus, high |
+| #385 | **Lazy integral**: out of memory at 10 M rows, refused on a numeric axis, superseded query not stopped | "Other defects" 1, 2; "Integral" | independent | Opus, high |
+| #386 | **Borderline, 200–400 ms** on 10 M rows in memory: FFT of 2¹⁸ samples or fewer, the cross-correlation panel's axis, building a time pane | "Offenders, ranked", the borderline list | independent | Sonnet, medium |
+| #387 | **Temporal profile in memory**: the range block keeps showing the preview after it is widened to the whole file | "Other defects" 5 | with #381 (same code path) | Sonnet, medium |
+| #388 | **Cross-correlation tool on a lazy file past its budget**: 14 s of queries with no cancel signal, then the refusal | "Other defects" 6 | independent | Sonnet, medium |
+| #389 | **A CI check** that no analysis holds the page more than 250 ms, from this harness | "Running it" | last | Sonnet, medium |
+
+Not in this list because it is not a defect: the paint of each result
+(`Plotly.react`, and the WebGL commit that headless Chromium does in
+software), measured apart from the computation throughout.
 
 ## What was measured
 
