@@ -137,7 +137,7 @@ proto._xcorrPlan = function(data) {
         return { ...blank, code: 'dataToolXcorrLengthMismatch', text: i18n.t('dataToolXcorrLengthMismatch') };
     }
     const axis = this._xcorrAxis(data);
-    if (!axis.ok) return { ...blank, code: axis.code, text: i18n.t(axis.code), axis };
+    if (!axis.ok) return { ...blank, code: axis.code, text: i18n.t(axis.code), axis, measuring: !!axis.measuring };
     if (axis.length < 2) return { ...blank, code: 'dataToolXcorrTooShort', text: i18n.t('dataToolXcorrTooShort'), axis };
     const lags = lagSamples(form.maxLag, axis);
     if (!Number.isFinite(lags)) {
@@ -214,7 +214,9 @@ proto._syncXcorrControls = function() {
     }
     const plan = this._xcorrPlan(data);
     info.textContent = plan.text;
-    info.classList.toggle('invalid', !plan.ok);
+    // "Measuring the time axis…" is work in progress, not a refusal.
+    info.classList.toggle('invalid', !plan.ok && !plan.measuring);
+    info.classList.toggle('busy', !!plan.measuring);
 };
 
 // ─── Computing ────────────────────────────────────────────────────────────

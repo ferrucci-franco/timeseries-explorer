@@ -955,7 +955,35 @@ Not landed yet.
 
 ### #388: Cross-correlation tool past its budget
 
-Not landed yet.
+What was done:
+
+- The row budget is checked **before** the axis is measured. `_lazyXcorrAxis`
+  (the panel) and `_lazyXcorrAxisAsync` (the commit) read the file's row count
+  without a query (`_lazyKnownRows`: the loader's `totalRows`, or, for a CSV
+  view that leaves it unset, the scan's count of the rows with a time, which is
+  a floor of the file's rows) and refuse a file past `LAZY_XCORR_MAX_ROWS` at
+  once. A file whose count is only known from the axis pass is still refused
+  as soon as the pass reports it.
+- The panel's axis measurement carries a cancel signal (`{ signal }` through
+  `_lazyRealAxisSteps` to the four aggregate queries). Leaving the tool or
+  switching file aborts it (`_abortXcorrAxis`, called from `_syncDataTools`
+  before the next panel asks for its own measurement). A measurement another
+  tool already has in flight is waited for, not repeated.
+- On a file within the budget the summary line says "Measuring the time axis
+  over the whole file…" and is drawn as work in progress (italic), no longer as
+  a red refusal.
+
+Tested by `scripts/test-lazy-data-tools.mjs` (no axis query past the budget;
+live signals within it, aborted on leaving; staying on the file keeps the
+measurement) and `scripts/e2e-lazy-data-tools.mjs` (the over-budget refusal
+sends no query on the real engine).
+
+Measured (10 M rows, lazy, the tool picked; three runs before, two runs after):
+
+| | Time to the refusal | Axis queries |
+|---|---|---|
+| Before | 14525 ms, 15753 ms, 17309 ms | 4, no signal |
+| After | 17 ms, 16 ms | 0 |
 
 ### #389: The CI check
 

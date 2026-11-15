@@ -404,6 +404,9 @@ proto._syncDataTools = function() {
     this._syncDataToolGallery?.();
 
     const tool = this._getSelectedDataTool();
+    // Leaving the cross-correlation (another tool, another file) stops the
+    // axis measurement it started, before the next panel asks for its own.
+    this._abortXcorrAxis?.(tool === 'xcorr' ? data : null);
     const hasTool = !!tool;
     const allowed = hasTool && this._isDataToolAvailableForData(tool, data);
 

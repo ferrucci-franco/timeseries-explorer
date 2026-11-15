@@ -324,6 +324,31 @@ try {
     assert.equal(correlation.lazy, false, 'the correlation is held in memory');
     assert.equal(correlation.rows, 401, `201 lags each side at 10 ms (${correlation.rows})`);
     assert.ok(Math.abs(correlation.metadata.xcorr.dt - 0.01) < 1e-9, 'the lag axis from the step measured over the whole file');
+    // A file past the cross-correlation's row budget is refused at once: the
+    // axis is not measured first (four aggregate queries, 14 s on 10 M rows).
+    const overBudget = await page.evaluate(async () => {
+        const data = [...window.app.plotManager.files.values()][0].data;
+        const source = data._duckdb.source;
+        const realAggregate = source.aggregateOver;
+        const realOrder = source.exactOrderStatisticsOver;
+        const realRows = data._duckdb.totalRows; const realSteps = data.metadata.numTimesteps;
+        let queries = 0;
+        source.aggregateOver = function(...args) { queries++; return realAggregate.apply(this, args); };
+        source.exactOrderStatisticsOver = function(...args) { queries++; return realOrder.apply(this, args); };
+        data._duckdb.totalRows = 10_000_000; data.metadata.numTimesteps = 10_000_000;
+        window.app._lazyAxisStepCache?.clear();
+        try {
+            const panel = window.app._xcorrAxis(data);
+            const commit = await window.app._lazyXcorrAxisAsync(data);
+            return { panel: panel.code, commit: commit.code, queries };
+        } finally {
+            data._duckdb.totalRows = realRows; data.metadata.numTimesteps = realSteps;
+            source.aggregateOver = realAggregate;
+            source.exactOrderStatisticsOver = realOrder;
+        }
+    });
+    assert.deepEqual(overBudget, { panel: 'dataToolXcorrLazyTooLarge', commit: 'dataToolXcorrLazyTooLarge', queries: 0 },
+        'a lazy file past the row budget is refused with no axis query');
     const datasetZoom = await page.evaluate(async (fileId) => {
         const data = window.app.plotManager.files.get(fileId).data;
         const raw = await data._duckdb.source.getRawColumnsRange(data, ['a'], 1000, 1010, 1e6);
