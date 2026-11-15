@@ -2052,8 +2052,8 @@ issue se cierre:
 | Integral (análisis) con eje de tiempo numérico | se rechaza con aviso (`integralLazyUnsupported`) | #385 |
 | Histograma | lee todas las filas, pero los cuartiles se calculan después en el hilo principal (0,6–1,7 s) | #383 |
 | Ajustes exponenciales (curve fit, trend, ajuste 2D) con hasta 6 M filas en el rango | el ajuste corre en el hilo principal (1–10 s) | #382 |
-| Heatmap, perfil temporal, correlación de pares | un cambio hecho durante una consulta no la cancela: el resultado tarda el doble | #384 |
-| Trend | tras Cancel el estado no dice "cancelado" | #384 |
+| ~~Heatmap, perfil temporal, correlación de pares~~ | **resuelto**: un cambio nuevo aborta la consulta que reemplaza (una señal por corrida, `_analysisRunSignal`); una consulta compartida con otro panel no se corta para ese panel | #384 |
+| ~~Trend~~ | **resuelto**: la interrupción de DuckDB llega como `AbortError` y el estado dice "cancelado" | #384 |
 | Herramienta de correlación cruzada, archivo por encima de 8 M filas | 14 s de consultas sin cancelación antes de rechazar el archivo | #388 |
 
 #### *Full* lee todas las filas del archivo
