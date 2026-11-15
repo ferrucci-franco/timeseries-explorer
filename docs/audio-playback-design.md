@@ -1,10 +1,32 @@
 # Audio Playback Design
 
-Status: phase 1 is built (the player and the panel's transport strip, issue #89).
-Phases 2 to 5 — the panel-level selection, stereo and reverse, WAV export, and the
-entry points — are specified here and not built. Where use has corrected the
-specification, this document says what was changed and why rather than quietly
-reading as if it had always said so.
+Status: phase 1 is built (the player and the panel's transport strip, issue #89),
+and it is where the feature stops, apart from two small follow-ups. Where use has
+corrected the specification, this document says what was changed and why rather than
+quietly reading as if it had always said so.
+
+## What was built, what is next, what was dropped
+
+Decided 2026-11-15. This is a time-series explorer with a player in it, not an audio
+tool, and phase 1 already does what #86 asked for: play a recording, pick the original
+or the filtered trace as the source, loop or once, over the analysis selection.
+
+- **Built — phase 1 (#89):** the player, the panel's transport strip, the phone's Sound
+  section.
+- **Next — #375:** in timeseries mode the strip offers **All | Visible window**, the
+  panel's current x range. See "The range" below for why this replaces the panel-level
+  selection.
+- **Next — #92:** WAV export, as specified under "WAV export", without reverse.
+- **Dropped — phase 2 (#90), the panel-level selection.** Lifting `{ rangeFull, x1, x2 }`
+  out of the analyses touches all nine of them, the restore of old sessions and
+  Cancel's restore of an analysis' settings — all to give the strip a range in
+  timeseries mode, which #375 gives for almost nothing.
+- **Dropped — phase 3 (#91):** stereo routing (`🎧`), reverse, the `C` key.
+- **Dropped — phase 5 (#93):** the tree `▶`, *Create and listen*, the keyboard map,
+  persisting the listening state in views.
+
+The sections below still describe the dropped parts, marked as such, so that the
+reasoning is at hand if one of them is ever wanted after all.
 
 Issue: [#86 — Play audio files (and its filtered versions!) on the browser](https://github.com/ferrucci-franco/timeseries-explorer/issues/86).
 
@@ -118,6 +140,13 @@ would have no home, leaving the controls half a screen away from the curve.
 
 ## The range: one selection per panel
 
+> **Dropped (#90).** What is built: in an analysis mode the analysis selection plays,
+> exactly as described below. In timeseries mode the strip will offer **All | Visible
+> window** (#375) instead of carrying a selection of its own. That is still two states,
+> never three, so the rule that withdrew the cascade at the end of this section holds:
+> the visible window is no longer one level among four, it is the only alternative to
+> everything, and only where no analysis selection exists.
+
 The audio has **no range of its own**. It plays the panel's selection — the same one
 the analysis uses. The user therefore always sees two states, **Todo | Selección**, and
 never three.
@@ -161,7 +190,7 @@ exactly the list the strip needs.
   swatch it has in the legend.
 - **Mono by default**: the source plays through both speakers. Nothing about stereo
   has to be decided in order to listen to a curve.
-- **Stereo is opt-in**: a `🎧` button reveals two small selectors, left and right, each
+- **Stereo is opt-in** *(dropped, #91)*: a `🎧` button reveals two small selectors, left and right, each
   with the same list plus "—" (silence). It fills itself in when the two visible traces
   are `Left` and `Right` of the same file — the parser marks the channel in
   `variable.audio.channelIndex`.
@@ -170,6 +199,8 @@ exactly the list the strip needs.
   help says so; for judging, alternate instead.
 
 ### Comparison is switching the source
+
+*(The `C` key is dropped with #91; switching through the dropdown is what exists.)*
 
 Original and filtered are almost always in the same panel — they are plotted together
 precisely to see the difference — so both are already in the **Fuente** dropdown. If
@@ -228,7 +259,7 @@ five. Reverse stays because it drags in nothing.
   speakers. The consequence is recorded rather than hidden — each signal is
   normalised on its own, so a filter that removes energy is not heard as
   quieter. Level-matched comparison, when it is wanted, belongs with the
-  comparator (phase 3) and has to be a deliberate choice there.
+  comparator (phase 3, dropped) and would have to be a deliberate choice there.
 - Clipping is reported with the number of clipped samples, not applied silently.
 - DC removal before playback (checkbox, on by default) so the speaker does not thump.
 - NaNs and gaps play as silence, and the strip says how many there were.
@@ -265,7 +296,12 @@ What it writes:
   clipping.
 - The range, the source, the channel assignment and the gain are baked in — what you
   hear.
-- Reverse is a checkbox, because reversing sample order is exact.
+- ~~Reverse is a checkbox, because reversing sample order is exact.~~ Dropped with #91.
+- Stereo in the file is only a channel layout: one playable trace per channel,
+  pre-filled with `Left` / `Right` of the same recording.
+- On a file in memory-saving mode (☘) the export writes **every row of the range**,
+  streamed and encoded chunk by chunk, never the overview — CLAUDE.md's rule for
+  anything that reads a signal's values — with progress, Cancel and a parity test.
 - Proposed name `voz__Left_filtered__1.204-3.051s.wav`, through the dialog's existing
   name sanitiser.
 - Estimated size before saving. 16-bit stereo at 44.1 kHz is about 10.6 MB per minute.
@@ -277,6 +313,8 @@ other choice in that dialog behaves, and a second export is more likely to be an
 audio; it is a one-line decision if the opposite is preferred.
 
 ## Entry points
+
+*(Only the `🔊` button is built. The rest of this list was phase 5 and is dropped, #93.)*
 
 - `🔊` in the panel toolbar sends the visible curve to the player with the panel's
   current selection as its range.
@@ -312,6 +350,8 @@ audio; it is a one-line decision if the opposite is preferred.
 - Its own help entry covering range, comparison, normalisation and the sample-rate gate.
 
 ## Keyboard
+
+*(Dropped with #93; the strip is operated with its buttons.)*
 
 Active while the strip is open and focus is not in a text field.
 
