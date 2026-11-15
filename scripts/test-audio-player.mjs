@@ -13,6 +13,14 @@
 // stand-in that carries only the collaborators they call.
 import assert from 'node:assert/strict';
 import { installPlotAudioMethods, positionInRange } from '../src/plots/methods/audio-methods.js';
+import {
+    AUDIO_PEAK,
+    audioSamplesFromArrays,
+    createAudioScan,
+    finishAudioScan,
+    scanAudioChunk,
+    writeAudioChunk,
+} from '../src/utils/audio-samples.js';
 
 // ── A stand-in for PlotManager ────────────────────────────────────
 
@@ -376,6 +384,240 @@ const fakeContext = ({ sampleRate = 48000, accepts = () => true } = {}) => ({
         'reading the same clock without the modulo pins it at the end — what the bug looked like');
     assert.ok(Math.abs(positionInRange(wrapped, 0, duration, false) - wrapped) < 1e-9,
         're-anchored to the wrapped position, switching loop off continues where it was');
+}
+
+// ── All | Visible window, in timeseries mode (#375) ───────────────
+{
+    const manager = new FakeManager();
+    manager.addSignal('f1', 'Left', signal(8000, 3));
+    const plot = manager.addPanel('p1', [{ fileId: 'f1', varName: 'Left', color: '#1f77b4' }]);
+    const source = manager._audioSelectedSource(plot);
+    const whole = manager._audioRange(plot, source);
+    const state = manager._ensureAudioState(plot);
+    assert.equal(state.window, 'all', 'the whole record is the default');
+
+    state.window = 'visible';
+    assert.deepEqual(manager._audioRange(plot, source), whole, 'a plot not drawn yet has no window: the whole record plays');
+    plot.div = { _fullLayout: { xaxis: { range: [0.5, 1.25] } } };
+    assert.deepEqual(manager._audioRange(plot, source), [0.5, 1.25], 'the visible window is what sounds');
+    plot.div._fullLayout.xaxis.range = [1.25, 0.5];
+    assert.deepEqual(manager._audioRange(plot, source), [0.5, 1.25], 'a reversed axis names the same window');
+    plot.div._fullLayout.xaxis.range = [-1, 0.5];
+    assert.deepEqual(manager._audioRange(plot, source), [0, 0.5], 'clamped to the start of the signal');
+    plot.div._fullLayout.xaxis.range = [2.5, 9];
+    assert.deepEqual(manager._audioRange(plot, source), [2.5, whole[1]], 'and to its end');
+    plot.div._fullLayout.xaxis.range = [5, 6];
+    assert.equal(manager._audioRangeDuration(plot), 0,
+        'a window past the end of the signal holds nothing of it — not the whole record in its place');
+
+    state.window = 'all';
+    plot.div._fullLayout.xaxis.range = [0.5, 1.25];
+    assert.deepEqual(manager._audioRange(plot, source), whole, 'All ignores the zoom');
+
+    // In an analysis mode the analysis' selection sounds, whatever the strip
+    // said in timeseries mode.
+    state.window = 'visible';
+    plot.mode = 'fft';
+    plot.fft = { rangeFull: true, x1: 1, x2: 2 };
+    assert.equal(manager._audioWindowMode(plot), 'all', 'no visible window outside timeseries mode');
+    assert.deepEqual(manager._audioRange(plot, source), whole, 'Fourier on Full plays everything');
+    plot.fft.rangeFull = false;
+    assert.deepEqual(manager._audioRange(plot, source), [1, 2], 'and its selection when it has one');
+    plot.mode = 'timeseries';
+    assert.equal(manager._audioWindowMode(plot), 'visible', 'back in timeseries mode, the choice is still there');
+
+    // The ~50 ms floor, for any range.
+    const context = fakeContext();
+    assert.equal(manager._buildAudioBuffer(context, source, [1, 1.04], state).error, 'rangeTooShort', '40 ms is refused');
+    assert.equal(manager._buildAudioBuffer(context, source, [1, 1.06], state).error, undefined, '60 ms plays');
+
+    // The rows of a range are the ones whose time is in it, both ends included:
+    // the rule a lazy file's rows are read by.
+    const built = manager._buildAudioBuffer(context, source, [0.5, 1.25], state);
+    assert.equal(built.buffer.length, 6001, 'from 0.5 s to 1.25 s at 8 kHz, both ends included');
+    const between = manager._buildAudioBuffer(context, source, [0.50001, 1.24999], state);
+    assert.equal(between.buffer.length, 5999, 'bounds between samples keep only the samples inside');
+}
+
+// ── A moved range keeps the instant where it can ──────────────────
+{
+    const manager = new FakeManager();
+    manager.addSignal('f1', 'Left', signal(8000, 3));
+    const plot = manager.addPanel('p1', [{ fileId: 'f1', varName: 'Left', color: '#1f77b4' }]);
+    const state = manager._ensureAudioState(plot);
+    state.buffer = { startTime: 0.5, duration: 0.75 };
+    state.position = 0.25;
+    manager._audioRemapPosition(state, [0.6, 1]);
+    assert.ok(Math.abs(state.position - 0.15) < 1e-12, 'an instant the new range holds is kept');
+    state.position = 0.25;
+    manager._audioRemapPosition(state, [1, 2]);
+    assert.equal(state.position, 0, 'one it leaves out starts the range over');
+    state.position = 0.75;
+    manager._audioRemapPosition(state, [0, 3]);
+    assert.equal(state.position, 0, 'a take that had run to its end starts the next one from the top');
+
+    // Paused, the strip measures against the range it would play now.
+    state.open = true;
+    state.window = 'visible';
+    plot.div = { _fullLayout: { xaxis: { range: [0.5, 1.25] } } };
+    const source = manager._audioSelectedSource(plot);
+    state.buffer = manager._buildAudioBuffer(fakeContext(), source, [0.5, 1.25], state);
+    state.bufferKey = manager._audioBufferKey(source, [0.5, 1.25], state);
+    state.position = 0.3;
+    const keptKey = state.bufferKey;
+    manager._audioSettleIdleRange(plot);
+    assert.equal(state.bufferKey, keptKey, 'nothing moved, nothing changes');
+    plot.div._fullLayout.xaxis.range = [0.7, 2];
+    manager._audioSettleIdleRange(plot);
+    assert.equal(state.buffer, null, 'a zoom while paused retires the old take');
+    assert.equal(state.prepared.key, keptKey, 'kept aside, should the zoom come back');
+    assert.ok(Math.abs(state.position - 0.1) < 1e-9, 'and the instant is where it was in the signal (0.8 s)');
+    assert.ok(Math.abs(manager._audioRangeDuration(plot) - 1.3) < 1e-9, 'the readout gives the new window\'s length');
+}
+
+// ── The kernel: chunks change nothing ─────────────────────────────
+{
+    const rate = 8000;
+    const { times, values } = signal(rate, 0.5, (i) => (i % 97 === 3 ? NaN : 0.3 + Math.sin(i / 9) * (1 + i / 4000)));
+    const whole = audioSamplesFromArrays(times, [values]);
+    assert.equal(whole.info.ok, true);
+    assert.equal(whole.info.fade, 40, '5 ms at 8 kHz is 40 samples, not 39 for a rate read as 7999.999…');
+    assert.equal(whole.info.nanCount, Math.ceil((4000 - 3) / 97), 'the holes are counted');
+    for (const size of [1, 13, 1000]) {
+        const scan = createAudioScan(1);
+        for (let at = 0; at < times.length; at += size) scanAudioChunk(scan, times.subarray(at, at + size), [values.subarray(at, at + size)]);
+        const info = finishAudioScan(scan);
+        const out = new Float32Array(info.frames);
+        for (let at = 0; at < times.length; at += size) writeAudioChunk(info, [values.subarray(at, at + size)], at, [out], at);
+        assert.deepEqual(Buffer.from(out.buffer), Buffer.from(whole.outs[0].buffer), `in chunks of ${size}, the same samples`);
+    }
+    let peak = 0;
+    for (const v of whole.outs[0]) peak = Math.max(peak, Math.abs(v));
+    assert.ok(Math.abs(peak - AUDIO_PEAK) < 1e-6 || peak < AUDIO_PEAK, 'the peak is at −1 dBFS at most (the fades only lower it)');
+
+    // Two channels: each loses its own mean, both share one gain.
+    const left = Float64Array.from({ length: 4000 }, (_, i) => 2 + Math.sin(i / 7));
+    const right = Float64Array.from({ length: 4000 }, (_, i) => -1 + 0.5 * Math.sin(i / 7));
+    const stereo = audioSamplesFromArrays(times, [left, right]);
+    assert.ok(Math.abs(stereo.info.means[0] - 2) < 0.01 && Math.abs(stereo.info.means[1] + 1) < 0.01, 'each channel its own mean');
+    assert.ok(Math.abs(stereo.outs[1][2000] * 2 - stereo.outs[0][2000]) < 1e-6, 'one gain: the balance of the recording stays');
+
+    // Not a recording: a gap, time going back.
+    const gappy = Float64Array.from(times);
+    for (let i = 2000; i < gappy.length; i++) gappy[i] += 0.001;
+    assert.equal(audioSamplesFromArrays(gappy, [values]).info.reason, 'nonUniform', 'a gap is not uniform');
+    const back = Float64Array.from(times);
+    back[100] = back[99];
+    assert.equal(audioSamplesFromArrays(back, [values]).info.reason, 'nonMonotonic', 'a repeated instant is not a recording');
+}
+
+// ── Zoom while playing: heard at the end of the loop, never cut ───
+{
+    // A stand-in for the browser's audio: a clock that moves when told, and
+    // nodes that record when they were asked to start and stop.
+    const nodes = [];
+    class FakeAudioContext {
+        constructor() {
+            this.currentTime = 0;
+            this.sampleRate = 48000;
+            this.state = 'running';
+            this.destination = {};
+        }
+        resume() { return Promise.resolve(); }
+        createGain() {
+            const param = { value: 1, setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {}, setTargetAtTime() {} };
+            return { gain: param, connect() {}, disconnect() {} };
+        }
+        createBuffer(channels, length, rate) {
+            const data = new Float32Array(length);
+            return { numberOfChannels: channels, length, sampleRate: rate, duration: length / rate, getChannelData: () => data };
+        }
+        createBufferSource() {
+            const node = { starts: [], stops: [], loop: false, connect() {}, disconnect() {},
+                start(when, offset) { this.starts.push([when, offset]); }, stop(when) { this.stops.push(when); } };
+            nodes.push(node);
+            return node;
+        }
+    }
+    globalThis.window = { AudioContext: FakeAudioContext };
+    globalThis.requestAnimationFrame = () => 0;
+    globalThis.cancelAnimationFrame = () => {};
+
+    const manager = new FakeManager();
+    manager._syncAudioStrip = () => {};
+    manager._drawAudioPlayhead = () => {};
+    manager._removeAudioPlayhead = () => {};
+    manager.addSignal('f1', 'Left', signal(8000, 3));
+    const plot = manager.addPanel('p1', [{ fileId: 'f1', varName: 'Left', color: '#1f77b4' }]);
+    const state = manager._ensureAudioState(plot);
+    state.open = true;
+    state.window = 'visible';
+    state.loop = true;
+    plot.div = { _fullLayout: { xaxis: { range: [0.5, 1.25] } } };
+
+    manager._audioPlay('p1');
+    const first = nodes.at(-1);
+    const context = first && manager._audioEnsureContext();
+    assert.ok(first && first.loop, 'the window plays, looping');
+    assert.ok(Math.abs(state.buffer.startTime - 0.5) < 1e-9, 'from the start of the window');
+    const duration = state.buffer.duration;
+
+    // A zoom, a third of the way through a turn of the loop.
+    context.currentTime = 0.3;
+    plot.div._fullLayout.xaxis.range = [1.5, 2];
+    const settle = () => {
+        manager._followAudioSourceChange();
+        state.pendingRebuildSince -= 1000;   // the zoom held still
+        manager._followAudioSourceChange();
+    };
+    settle();
+    const next = nodes.at(-1);
+    assert.notEqual(next, first, 'the new window is made ready');
+    assert.equal(next.starts.length, 1);
+    assert.ok(Math.abs(next.starts[0][0] - duration) < 1e-9, `it starts where this turn of the loop ends (${next.starts[0][0]} s)`);
+    assert.equal(next.starts[0][1], 0, 'from its own beginning');
+    assert.ok(Math.abs(first.stops.at(-1) - duration) < 1e-9, 'and the take sounding now stops right there, not before');
+    assert.ok(Math.abs(state.buffer.startTime - 0.5) < 1e-9, 'until then, the old window is what sounds');
+
+    context.currentTime = duration + 0.05;
+    manager._audioPromoteSeam();
+    assert.ok(Math.abs(state.buffer.startTime - 1.5) < 1e-9, 'past the seam, the new window is the take');
+    assert.ok(Math.abs(manager._audioPosition(plot) - 0.05) < 1e-9, 'and the playhead runs from its start');
+
+    // Loop off: a zoom waits for the next play.
+    first.stops.length = 0;
+    nodes.at(-1).loop = false;
+    state.loop = false;
+    const before = nodes.length;
+    // As the loop button does, while playing.
+    manager._audioPlay('p1');
+    const once = nodes.at(-1);
+    plot.div._fullLayout.xaxis.range = [0.2, 0.4];
+    settle();
+    assert.equal(nodes.length, before + 1, 'playing once, nothing is scheduled for a zoom');
+    assert.equal(once.stops.length, 0, 'and the take is not cut');
+    once.onended();
+    assert.equal(manager._audioPanelIsPlaying(plot), false, 'the take ran to its end');
+    manager._audioPlay('p1');
+    assert.ok(Math.abs(state.buffer.startTime - 0.2) < 1e-9, 'the next play is the new window');
+    assert.ok(Math.abs(state.position) < 1e-9, 'from its start');
+
+    // A zoom that comes back before the seam: nothing changes.
+    manager._audioStop('p1');
+    state.loop = true;
+    manager._audioPlay('p1');
+    const looping = nodes.at(-1);
+    plot.div._fullLayout.xaxis.range = [1, 1.5];
+    settle();
+    const pending = nodes.at(-1);
+    assert.notEqual(pending, looping, 'a new window waits for the seam');
+    plot.div._fullLayout.xaxis.range = [0.2, 0.4];
+    manager._followAudioSourceChange();
+    assert.ok(pending.stops.length >= 1, 'zoomed back, the waiting window is dropped');
+    assert.ok(looping.stops.at(-1) > 1e6, 'and the take sounding now is no longer told to stop at the seam');
+    assert.ok(Math.abs(state.buffer.startTime - 0.2) < 1e-9, 'it simply goes on');
+    manager._audioStop('p1');
+    delete globalThis.window;
 }
 
 console.log('audio player tests passed');

@@ -4,6 +4,7 @@ import { tableText } from '../utils/clipboard.js';
 import { formatReadout } from '../utils/readout-format.js';
 import Plotly, { onPlotDrawn } from '../vendor/plotly.js';
 import { installLegendToggle, resetLegendToggles, syncAllLegendToggles } from '../ui/legend-toggle.js';
+import { legendMenuIcon } from '../ui/legend-menu-icons.js';
 import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
 import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
@@ -28,7 +29,10 @@ import { installPlotTemporalProfileMethods } from './methods/temporal-profile-me
 import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
+import { installPlotAudioLazyMethods } from './methods/audio-lazy-methods.js';
+import { installPlotAudioWavMethods } from './methods/audio-wav-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
+import { installPlotTraceStyleMethods } from './methods/trace-style-methods.js';
 import { installPlotDashboardMethods } from './methods/dashboard-methods.js';
 import { installPlotStateBandMethods, STATE_BAND_LEGEND_PX } from './methods/state-band-methods.js';
 import { sceneAspectUpdate, sceneZoomAspect } from '../ui/plot-3d-gestures.js';
@@ -2353,20 +2357,59 @@ class PlotManager {
         return true;
     }
 
+    // The legend's context menu, for every mode: show/hide, only this, remove,
+    // then the caller's own `extraActions` ({ labelKey, action, className?,
+    // icon? }, the icon a name from ui/legend-menu-icons.js), then the trace's
+    // colour and place among the others (trace-style-methods.js).
     _showLegendTraceMenu(event, trace, actions, extraActions = []) {
+        const hidden = trace.visible === 'legendonly' || trace.visible === false;
+        const point = { x: event.clientX, y: event.clientY };
+        this._openTraceMenu(point, [
+            {
+                labelKey: hidden ? 'legendMenuShowTrace' : 'legendMenuHideTrace',
+                action: () => (hidden ? actions.onShow?.() : actions.onHide?.()),
+                icon: hidden ? 'show' : 'hide',
+            },
+            { labelKey: 'legendMenuSelectOnlyTrace', action: () => actions.onOnly?.(), icon: 'only' },
+            { labelKey: 'legendMenuRemoveTrace', action: () => actions.onRemove?.(), className: 'legend-menu-danger', icon: 'remove' },
+            ...extraActions,
+            ...(this._traceStyleMenuItems?.(trace, { point }) || []),
+        ]);
+    }
+
+    // A menu of trace actions at `point` (page pixels): the legend's, and on
+    // the phone the one a trace's row in the Plot sheet opens. Each item is
+    // { labelKey, action, className?, icon?, disabled? }.
+    _openTraceMenu(point, items) {
         document.querySelector('.timeseries-axis-menu')?.remove();
         const menu = document.createElement('div');
         menu.className = 'timeseries-axis-menu';
+        menu.setAttribute('role', 'menu');
         const close = (closeEvent = null) => {
-            if (closeEvent && menu.contains(closeEvent.target)) return;
+            if (closeEvent?.type === 'pointerdown' && menu.contains(closeEvent.target)) return;
+            if (closeEvent?.type === 'keydown' && closeEvent.key !== 'Escape') return;
             menu.remove();
             document.removeEventListener('pointerdown', close, true);
+            document.removeEventListener('keydown', close, true);
         };
-        const addAction = (labelKey, action, className = '') => {
+        // Each action: its icon in a column of its own (so the labels line
+        // up), then its label, which stays the button's accessible name.
+        const addAction = ({ labelKey, action, className = '', icon = '', disabled = false }) => {
             const actionButton = document.createElement('button');
             actionButton.type = 'button';
-            actionButton.textContent = i18n.t(labelKey);
-            if (className) actionButton.className = className;
+            actionButton.setAttribute('role', 'menuitem');
+            actionButton.className = ['legend-menu-item', className].filter(Boolean).join(' ');
+            const iconEl = document.createElement('span');
+            iconEl.className = 'legend-menu-icon';
+            iconEl.setAttribute('aria-hidden', 'true');
+            iconEl.innerHTML = legendMenuIcon(icon);
+            if (icon) actionButton.dataset.icon = icon;
+            const labelEl = document.createElement('span');
+            labelEl.className = 'legend-menu-label';
+            labelEl.textContent = i18n.t(labelKey);
+            actionButton.append(iconEl, labelEl);
+            // A move that would leave the trace where it is: shown, but off.
+            actionButton.disabled = !!disabled;
             actionButton.addEventListener('click', async () => {
                 actionButton.disabled = true;
                 close();
@@ -2379,20 +2422,18 @@ class PlotManager {
             menu.appendChild(actionButton);
             return actionButton;
         };
-        const hidden = trace.visible === 'legendonly' || trace.visible === false;
-        addAction(hidden ? 'legendMenuShowTrace' : 'legendMenuHideTrace', () =>
-            hidden ? actions.onShow?.() : actions.onHide?.());
-        addAction('legendMenuSelectOnlyTrace', () =>
-            actions.onOnly?.());
-        addAction('legendMenuRemoveTrace', () =>
-            actions.onRemove?.());
-        for (const item of extraActions) addAction(item.labelKey, item.action, item.className || '');
+        for (const item of items) addAction(item);
         document.body.appendChild(menu);
-        const x = Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8);
-        const y = Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8);
+        const x = Math.min(point.x, window.innerWidth - menu.offsetWidth - 8);
+        const y = Math.min(point.y, window.innerHeight - menu.offsetHeight - 8);
         menu.style.left = `${Math.max(8, x)}px`;
         menu.style.top = `${Math.max(8, y)}px`;
-        setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
+        setTimeout(() => {
+            if (!menu.isConnected) return;
+            document.addEventListener('pointerdown', close, true);
+            document.addEventListener('keydown', close, true);
+        }, 0);
+        return menu;
     }
 
     _showTimeseriesAxisMenu(panelId, plot, trace, event) {
@@ -2407,10 +2448,12 @@ class PlotManager {
             labelKey: moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft',
             action: () => this._moveTimeseriesTraceToAxis(panelId, plot, trace, moveRight ? 'y2' : 'y'),
             className: 'timeseries-axis-menu-divider',
+            icon: moveRight ? 'axisRight' : 'axisLeft',
         }, {
             // Stairs vs straight line: helps read discrete/sampled variables.
             labelKey: stepped ? 'legendMenuLineLinear' : 'legendMenuLineStairs',
             action: () => this._setTimeseriesTraceLineShape(panelId, plot, trace, stepped ? 'linear' : 'hv'),
+            icon: stepped ? 'linear' : 'stairs',
         }]);
     }
 
@@ -5834,6 +5877,9 @@ installPlotExportMethods(PlotManager);
 installPlotDashboardMethods(PlotManager);
 installPlotStateBandMethods(PlotManager);
 installPlotAudioMethods(PlotManager);
+installPlotAudioLazyMethods(PlotManager);
+installPlotAudioWavMethods(PlotManager);
 installPlotViewHistoryMethods(PlotManager);
+installPlotTraceStyleMethods(PlotManager);
 
 export default PlotManager;

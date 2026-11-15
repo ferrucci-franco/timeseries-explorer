@@ -3041,6 +3041,36 @@
     white-space: nowrap;
 }
 
+/* An action: its icon in a fixed column, so the labels line up. */
+.timeseries-axis-menu .legend-menu-item {
+    display: grid;
+    grid-template-columns: 16px max-content;
+    column-gap: 8px;
+    align-items: center;
+}
+
+.timeseries-axis-menu .legend-menu-icon {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    color: var(--text-secondary);
+}
+
+.timeseries-axis-menu .legend-menu-icon svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+
+.timeseries-axis-menu .legend-menu-item:hover .legend-menu-icon {
+    color: var(--text-primary);
+}
+
+.timeseries-axis-menu .legend-menu-danger .legend-menu-icon,
+.timeseries-axis-menu .legend-menu-danger:hover .legend-menu-icon {
+    color: var(--danger-color);
+}
+
 .timeseries-axis-menu button:hover {
     background-color: var(--hover-bg);
 }
@@ -3054,6 +3084,70 @@
     margin-top: 4px;
     border-top: 1px solid var(--border-color) !important;
     border-radius: 0 0 4px 4px !important;
+}
+
+/* A trace's colour (legend menu → Colour…): the palette, then the browser's
+   own picker for a colour of one's own. */
+.trace-color-popover {
+    position: fixed;
+    z-index: 5200;
+    display: grid;
+    gap: 8px;
+    padding: 8px;
+    max-width: calc(100vw - 16px);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+    font-size: 0.78rem;
+}
+
+.trace-color-title {
+    color: var(--text-secondary);
+}
+
+.trace-color-swatches {
+    display: grid;
+    grid-template-columns: repeat(8, 22px);
+    gap: 6px;
+}
+
+.trace-color-swatch {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.trace-color-swatch:hover,
+.trace-color-swatch:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.trace-color-swatch[aria-pressed="true"] {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+.trace-color-custom {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.trace-color-custom input[type="color"] {
+    width: 32px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
 }
 
 @keyframes pending-pulse {
@@ -5438,6 +5532,50 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     white-space: nowrap;
     color: var(--text-secondary);
 }
+
+/* All | Visible window (#375): two joined buttons, in timeseries mode only. */
+.audio-window {
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+
+.audio-window[hidden] { display: none; }
+
+.audio-window-btn {
+    height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.audio-window-btn:first-child { border-radius: 4px 0 0 4px; }
+.audio-window-btn:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
+.audio-window-btn:hover:not(:disabled) { background-color: var(--hover-bg); }
+.audio-window-btn:disabled { opacity: 0.45; cursor: default; }
+/* Lifted over its neighbour, so the shared edge shows the accent. */
+.audio-window-btn.active {
+    position: relative;
+    z-index: 1;
+    border-color: var(--audio-accent);
+    color: var(--audio-accent);
+}
+
+/* A range read from a file in memory-saving mode: how far, and Cancel. */
+.audio-strip-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 3px;
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+.audio-strip-loading[hidden] { display: none; }
 
 .audio-strip-note {
     margin-top: 3px;

@@ -1758,14 +1758,13 @@ export function installCompactMethods(ViewerClass) {
             const traceList = el('div', 'compact-list');
             for (const trace of [...traces]) {
                 const row = el('div', 'compact-trace-row');
-                const swatch = el('span', 'compact-swatch');
-                swatch.style.background = trace.color || 'currentColor';
                 const label = this._compactTraceLabel(trace);
                 const name = el('span', 'compact-trace-name', label);
                 const remove = button('compact-icon-btn compact-trace-remove', '', () => {
                     this._compactToggleVariable(trace.varName, trace.fileId).then(() => this._renderCompactSheetContent());
                 }, { icon: SVG.close, title: i18n.t('compactRemoveSignal').replace('{name}', label) });
-                row.append(swatch, name, remove);
+                const [swatch, style] = this._compactTraceStyleButtons(trace, label);
+                row.append(swatch, name, ...(style ? [style] : []), remove);
                 traceList.appendChild(row);
             }
             signals.appendChild(traceList);
@@ -1815,6 +1814,30 @@ export function installCompactMethods(ViewerClass) {
         });
         row.append(el('span', '', i18n.t('compactSoundSwitch')), input);
         wrap.appendChild(row);
+        // All | Visible window (#375), the strip's own choice: in a time
+        // series only, where no analysis selection says what sounds.
+        if (plot.mode === 'timeseries' && playable) {
+            const choice = el('div', 'compact-menu-choice compact-sound-window');
+            choice.appendChild(el('span', 'compact-menu-choice-label', i18n.t('audioWindowLabel')));
+            const segmented = el('div', 'compact-segmented');
+            segmented.setAttribute('role', 'radiogroup');
+            segmented.setAttribute('aria-label', i18n.t('audioWindowLabel'));
+            const current = pm._audioWindowMode(plot);
+            for (const [value, key, title] of [['all', 'audioWindowAll', 'audioWindowAllTitle'], ['visible', 'audioWindowVisible', 'audioWindowVisibleTitle']]) {
+                const selected = current === value;
+                const btn = button(`compact-segment${selected ? ' is-active' : ''}`, i18n.t(key), () => {
+                    pm._audioSetWindowMode(panelId, value);
+                    this._renderCompactSheetContent();
+                }, { title: i18n.t(title) });
+                btn.dataset.window = value;
+                btn.setAttribute('role', 'radio');
+                btn.setAttribute('aria-checked', String(selected));
+                segmented.appendChild(btn);
+            }
+            choice.appendChild(segmented);
+            wrap.appendChild(choice);
+            wrap.appendChild(el('p', 'compact-note', i18n.t('compactSoundWindowNote')));
+        }
         wrap.appendChild(el('p', 'compact-note compact-sound-note', playable
             ? i18n.t('compactSoundNote')
             : pm._audioButtonTitle(plot)));
@@ -1975,6 +1998,36 @@ export function installCompactMethods(ViewerClass) {
         }
     };
 
+    // A trace's colour and order on a phone, where there is no right-click
+    // on the legend (trace-style-methods.js): its swatch opens the colour
+    // picker, and the ⋯ beside it the menu of Colour… and the moves. A plot
+    // of one trace has nothing to order, so that one has no ⋯.
+    proto._compactTraceStyleButtons = function(trace, label) {
+        const pm = this.plotManager;
+        const onChange = () => this._compactAfterPlotChange();
+        const owner = pm._traceStyleOwner?.(trace);
+        const canColor = !!owner && pm._traceStyleCanColor(owner, trace);
+        let swatch;
+        if (canColor) {
+            swatch = button('compact-icon-btn compact-trace-color', '', (event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                pm._showTraceColorPopover({ x: rect.left, y: rect.bottom + 4 }, trace, { onChange });
+            }, { title: i18n.t('compactTraceColor').replace('{name}', label) });
+            const mark = el('span', 'compact-swatch');
+            mark.style.background = trace.color || 'currentColor';
+            swatch.appendChild(mark);
+        } else {
+            swatch = el('span', 'compact-swatch');
+            swatch.style.background = trace.color || 'currentColor';
+        }
+        const style = owner && owner.list.length > 1
+            ? button('compact-icon-btn compact-trace-style', '', (event) => {
+                pm._showTraceStyleMenu(event.currentTarget, trace, { onChange });
+            }, { icon: SVG.more, title: i18n.t('compactTraceStyle').replace('{name}', label) })
+            : null;
+        return [swatch, style];
+    };
+
     // A 2D plot's curves are x–y pairs: listed with a way to remove each, the
     // X still waiting for its Y, the 1:1 aspect, and the way to add a pair.
     proto._buildCompactPhasePairs = function(container, panelId, plot) {
@@ -1985,8 +2038,6 @@ export function installCompactMethods(ViewerClass) {
             const list = el('div', 'compact-list');
             for (const pair of [...pairs]) {
                 const row = el('div', 'compact-trace-row');
-                const swatch = el('span', 'compact-swatch');
-                swatch.style.background = pair.color || 'currentColor';
                 const label = [pair.x, pair.y, plot.mode === 'phase3d' ? pair.z : null]
                     .filter(Boolean).map(name => this._compactVarLabel(name, pair.fileId)).join(' / ');
                 const name = el('span', 'compact-trace-name', label);
@@ -1999,7 +2050,8 @@ export function installCompactMethods(ViewerClass) {
                     this._compactUpdateAppBar();
                     this._renderCompactSheetContent();
                 }, { icon: SVG.close, title: i18n.t('compactRemoveSignal').replace('{name}', label) });
-                row.append(swatch, name, remove);
+                const [swatch, style] = this._compactTraceStyleButtons(pair, label);
+                row.append(swatch, name, ...(style ? [style] : []), remove);
                 list.appendChild(row);
             }
             if (pendingX) {

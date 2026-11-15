@@ -4303,6 +4303,43 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     margin-bottom: 0.4rem;
 }
 
+/* WAV (#92): the signal, or the left and right channels, under Mono | Stereo. */
+.export-wav-section .export-chip-row + .export-wav-field,
+.export-wav-field + .export-chip-row {
+    margin-top: 0.5rem;
+}
+
+.export-wav-field {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+}
+
+.export-wav-field[hidden] { display: none; }
+
+.export-wav-label {
+    flex: 0 0 4.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.export-wav-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.export-wav-size.export-wav-blocked {
+    color: var(--warning-color, #b45309);
+}
+
 .export-name-row {
     display: flex;
     align-items: center;

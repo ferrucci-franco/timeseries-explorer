@@ -1,7 +1,8 @@
 # Audio Playback Design
 
 Status: phase 1 is built (the player and the panel's transport strip, issue #89),
-and it is where the feature stops, apart from two small follow-ups. Where use has
+and it is where the feature stops, with its two follow-ups built too: All | Visible
+window (#375) and WAV export (#92). Where use has
 corrected the specification, this document says what was changed and why rather than
 quietly reading as if it had always said so.
 
@@ -13,10 +14,11 @@ or the filtered trace as the source, loop or once, over the analysis selection.
 
 - **Built — phase 1 (#89):** the player, the panel's transport strip, the phone's Sound
   section.
-- **Next — #375:** in timeseries mode the strip offers **All | Visible window**, the
+- **Built — #375:** in timeseries mode the strip offers **All | Visible window**, the
   panel's current x range. See "The range" below for why this replaces the panel-level
-  selection.
-- **Next — #92:** WAV export, as specified under "WAV export", without reverse.
+  selection, and "Visible window" for how it behaves. With it, a file in memory-saving
+  mode (☘) plays: the range is read from the file (see "Performance and limits").
+- **Built — #92:** WAV export, as specified under "WAV export", without reverse.
 - **Dropped — phase 2 (#90), the panel-level selection.** Lifting `{ rangeFull, x1, x2 }`
   out of the analyses touches all nine of them, the restore of old sessions and
   Cancel's restore of an analysis' settings — all to give the strip a range in
@@ -72,7 +74,8 @@ disabled **with the reason written out**, never silently missing.
 | derived / resampled variable | yes | if Δt stayed uniform |
 | series with gaps, non-uniform Δt | no | the time would not be the file's |
 | signal with fs below ~3 kHz | no | outside what the audio path takes (see "Sample-rate gate") |
-| file in memory-saving mode (☘) | no | only the overview exists, not the samples |
+| file in memory-saving mode (☘) | yes, since #375 | the range is read from the file, every row of it, not from the overview (see "Performance and limits") |
+| a formula over a ☘ file with no SQL form | no | it exists only over the overview; there is no column to read |
 
 ## Panel layout
 
@@ -100,7 +103,7 @@ The phone layout (docs/phone-web-specification.md) hides the panel toolbar, so t
 under the plot and puts the sheet away; where nothing can be heard it is disabled
 and the tooltip's reason is written under it. `compact.css` lays the strip out in
 three rows at a finger's size (transport, time and mute; the seek bar across the
-screen; the signal and Remove DC) and hides the volume slider, which the phone's
+screen; the signal, Remove DC and ⬇, the WAV export) and hides the volume slider, which the phone's
 own buttons replace; the rows wrap, so a long signal name cannot push the buttons
 over each other. Tap-to-seek works as the click does, and never from a tap on a
 button over the plot (`AUDIO_SEEK_IGNORED`: the phone's Fit buttons moved the
@@ -141,11 +144,11 @@ would have no home, leaving the controls half a screen away from the curve.
 ## The range: one selection per panel
 
 > **Dropped (#90).** What is built: in an analysis mode the analysis selection plays,
-> exactly as described below. In timeseries mode the strip will offer **All | Visible
-> window** (#375) instead of carrying a selection of its own. That is still two states,
-> never three, so the rule that withdrew the cascade at the end of this section holds:
-> the visible window is no longer one level among four, it is the only alternative to
-> everything, and only where no analysis selection exists.
+> exactly as described below. In timeseries mode the strip offers **All | Visible
+> window** (#375, "Visible window" below) instead of carrying a selection of its own.
+> That is still two states, never three, so the rule that withdrew the cascade at the
+> end of this section holds: the visible window is no longer one level among four, it
+> is the only alternative to everything, and only where no analysis selection exists.
 
 The audio has **no range of its own**. It plays the panel's selection — the same one
 the analysis uses. The user therefore always sees two states, **Todo | Selección**, and
@@ -180,6 +183,45 @@ Rules:
 A four-level cascade (analysis selection → cursors → visible window → everything) was
 specified first and withdrawn: it was too clever, and it immediately produced the
 question "so there are three options?", which is the proof that it was.
+
+### Visible window (#375, built)
+
+In timeseries mode the strip carries two joined buttons, **All | Visible window**
+(`.audio-window`, after Loop), All first. On a phone the same choice is in the Plot
+sheet's Sound section, under the switch, and not in the strip. It belongs to the panel's
+listening state (`plot.audio.window`), like loop and volume. In an analysis mode the
+buttons are hidden and the analysis selection plays; back in timeseries mode the choice
+is as it was left.
+
+- **What sounds:** the plot's x range (`_fullLayout.xaxis.range`) clamped to the signal.
+  The rows are those whose time t has lo ≤ t ≤ hi, both ends included — the rule a lazy
+  file's rows are read by, so a range holds the same samples either way. A window panned
+  off the signal holds nothing of it and says so; it does not fall back to the whole
+  record.
+- **The readout** gives the length of what is playing, as for a selection.
+- **Zoom or pan while it plays** never cuts the sound. Looping, the new window is built
+  (read from the file, on a lazy one) and scheduled on the audio clock to start exactly
+  where the current turn of the loop ends; the old take is told to stop at that same
+  instant, and the edge fades of the two buffers meet there as on any turn of the loop
+  (`_audioPrepareSeam`, `_audioScheduleSeam`). Playing once, the take runs out as it was
+  and the next play is the new window. A zoom back to where it was before the seam drops
+  the waiting window. The change is noticed by the same poll that follows a moved
+  analysis bound (`_followAudioSourceChange`), after the zoom has held still for 250 ms.
+  A moved analysis bound, a recomputed signal, another source or Remove DC still follow
+  at once, keeping the instant, as before.
+- **Paused**, the strip measures against the window it would play now: the readout's
+  length and a click on the plot follow the zoom, and the instant is kept where the new
+  window still holds it (`_audioSettleIdleRange`). The last buffer is kept aside, so
+  zooming back plays without building it again.
+- **Limits**, the same as for any range, said before Play is pressed: shorter than
+  50 ms ("zoom out") or more than `MAX_BUFFER_SAMPLES` samples ("zoom in").
+
+Tested by `scripts/test-audio-player.mjs` (the range, the clamp, the seam scheduled on a
+stand-in audio clock, the next play without loop, a zoom back) and
+`scripts/e2e-audio-window.mjs` (Chromium: the buttons, the window played, a pan while
+looping heard at the seam, without loop at the next play, the 50 ms note, the buttons
+gone in Fourier mode, a lazy file's window read from the file); the phone's sheet by
+`npm run e2e:compact-audio`.
 
 ## Output: what sounds, and where
 
@@ -240,7 +282,8 @@ Pressing ▶ in another panel **stops the previous one** with a 10 ms fade and t
 - Time readout as `m:ss.cc` and in seconds, plus the range duration.
 - Volume and mute, remembered between sessions like the app's other settings.
 - Ranges shorter than ~50 ms are refused with an explanation rather than played as a
-  click — at 44.1 kHz that is 2 200 samples, less than the fade-in itself.
+  click — at 44.1 kHz that is 2 205 samples, ten times the 5 ms fade at each end. (The
+  code first refused below 10 ms; it was brought to this specification with #375.)
 
 Playback speed was specified and then dropped, and the reason is worth keeping: at
 0.5× the pitch drops an octave (it is resampling; preserving pitch needs a
@@ -277,6 +320,9 @@ sonification arrives (see "Not in v1").
 
 ## WAV export
 
+> **Built (#92).** As specified below, without reverse; "As built" at the end of this
+> section records the decisions the specification left open.
+
 A fourth format in the panel's existing export dialog (`src/ui/plot-export-dialog.js`),
 beside Data (CSV), Image (PNG) and Vector (SVG). The dialog already models a format as
 `{ id, label, hint, ext, disabled, blockedReason }` and already knows how to offer one
@@ -310,7 +356,52 @@ Minor open point: the dialog remembers the last format used in a module-level
 `remembered` object. Opening from the strip preselects WAV and therefore makes WAV the
 remembered format for the panel's own `⬇` afterwards. That is consistent with how every
 other choice in that dialog behaves, and a second export is more likely to be another
-audio; it is a one-line decision if the opposite is preferred.
+audio; it is a one-line decision if the opposite is preferred. *(Built that way. Where
+WAV is then disabled — a panel with nothing to hear — the dialog opens on the first
+format it can offer instead.)*
+
+### As built
+
+- **Code:** the format and its options block in `src/ui/plot-export-dialog.js` (the
+  dialog stays pure DOM: it is handed the playable traces, the range in words, and two
+  functions, the estimate and the proposed name); the plan, the estimate, the name and
+  the writer in `src/plots/methods/audio-wav-methods.js`; the routing, the overlay and
+  the save in `src/plots/methods/export-methods.js`; the writer in
+  `src/utils/wav-encode.js`; the strip's `⬇` (`.audio-export`, last in its row; on a
+  phone at the end of the signal's row).
+- **The options:** Mono | Stereo; for mono the signal that sounds, for stereo a signal
+  per channel, pre-filled with `Left` / `Right` of one recording when both are in the
+  panel (`variable.audio.channelIndex`), otherwise with the signal that sounds and the
+  next one of its file. Mono is the default, because it is what the strip plays. Then
+  16-bit PCM | 32-bit float (the last one used is remembered), the range in words
+  (*the whole record*, *the visible window* or *the analysis selection*, with its
+  bounds), and the estimate: size, rate, channels and length.
+- **What it writes** is the strip's own kernel (`src/utils/audio-samples.js`): the
+  range's rows (lo ≤ t ≤ hi), each channel minus its mean when Remove DC is on, one gain
+  for all channels that puts the largest peak at −1 dBFS — a stereo file keeps the
+  balance between its channels, where the strip normalises the one signal it plays —
+  missing samples as silence, and the 5 ms fade at each end that the strip plays. The
+  16-bit samples are those 32-bit samples times 32 767, rounded, so −1 and 1 are
+  symmetric; the float file holds them as they are. The header's rate is the signal's,
+  rounded to a whole hertz (a rate read from a time vector is 44 099.999 999 7).
+  Float files carry the extended `fmt ` chunk and the `fact` chunk a non-PCM WAV is
+  meant to have. The app's own WAV reader reads both back (`scripts/test-wav-encode.mjs`).
+- **Disabled, with why:** in a panel with nothing that can be heard (the strip's own
+  reasons, naming the signal), in a mode with no 🔊, for two channels from two files
+  (they would not share a time axis), for a range under 50 ms and for a file past
+  4 GB (a RIFF size is 32-bit).
+- **How it is written:** two passes over the rows of the range (`_audioVisitRange`):
+  the first counts them and finds each mean and the peak, the second writes each chunk
+  as an `ArrayBuffer` part of a `Blob`, behind a header that already knows the frame
+  count. There is no buffer limit here, unlike playback: a range too long to play can
+  still be written. A long export — a lazy file, or two million samples or more — shows
+  the busy overlay with the samples read and written, and its Cancel aborts the work
+  (and the read of the file); nothing is saved then.
+- **On a file in memory-saving mode** both passes stream the rows from the file, so the
+  file is not bound by memory and is byte for byte the file the same rows give in
+  memory (`scripts/test-lazy-audio.mjs`; `scripts/e2e-wav-export.mjs` checks a lazy
+  window, written from the browser, against the CSV's own rows). If the file changes
+  between the two passes (a live update) the export stops and says so.
 
 ## Entry points
 
@@ -333,9 +424,20 @@ audio; it is a one-line decision if the opposite is preferred.
   million samples, and in chunks when the range is long.
 - Float64 → Float32 conversion happens once per range, when handing over to Web Audio.
 - The audio context is created inside the user's click (browser autoplay policy).
-- **Files in memory-saving mode (☘) do not play.** The button is disabled and explains
-  why: only the ~10 000-point overview is in memory, so what would be played is not the
-  recording. This matches how the exact data tools already behave.
+- **Files in memory-saving mode (☘) play from the file** (since #375; before, the button
+  was disabled, since only the overview is in memory). The range that sounds is read
+  from the file, every row of it (`_audioLazyRangeSamples` in
+  `src/plots/methods/audio-lazy-methods.js`), and goes through the same kernel as a
+  signal in memory (`src/utils/audio-samples.js`: one pass that sums, finds the extremes
+  and checks the steps, one that writes the samples), so it sounds the same, sample for
+  sample (`scripts/test-lazy-audio.mjs`). The strip shows how many samples it has read,
+  with a Cancel; Stop, Pause, another range or another panel playing abort the read. The
+  gate is read without reading the file: a column the file query can give, a time axis
+  in seconds, and the rate of the file's rows over its span. Whether every step is the
+  same cannot be told from the overview, so it is checked on the rows of the range when
+  they are read: a range across a gap is refused then (in memory the whole signal is
+  refused upfront, so a lazy file can play a stretch that does not reach its gap). The
+  limit is the buffer's, as in memory. Recorded in `docs/any-size-files.md`.
 - Identical in Light Web and Full Desktop — Web Audio exists in both, there is no
   desktop-only behaviour here.
 - Closing the file, changing language or resetting the layout stops the sound and
@@ -384,11 +486,17 @@ Active while the strip is open and focus is not in a text field.
 - `src/plots/methods/interaction-methods.js` — the `🔊` toolbar button, beside
   `_injectModeButtons`.
 - A new `src/plots/methods/audio-methods.js` — the player singleton, the strip, the
-  playhead.
+  playhead; the range (All | Visible window in timeseries mode, #375).
+- `src/utils/audio-samples.js` (built) — the kernel that turns the rows of a range into
+  samples, in passes that accumulate chunk by chunk.
+- `src/plots/methods/audio-lazy-methods.js` (built) — the rows of a range wherever the
+  file is held, and a lazy file's range read from the file.
 - `src/plots/methods/fft-methods.js` and friends — reading, and in timeseries mode
   writing, the panel's `{ rangeFull, x1, x2 }`.
-- `src/ui/plot-export-dialog.js` — the WAV format and its options block.
-- A new `src/utils/wav-encode.js` — PCM 16 / float 32 writer.
+- `src/ui/plot-export-dialog.js` — the WAV format and its options block (built, #92).
+- A new `src/utils/wav-encode.js` — PCM 16 / float 32 writer (built, chunked).
+- `src/plots/methods/audio-wav-methods.js` (built) — what the dialog offers for WAV,
+  its estimate and name, and the two-pass writer.
 - `src/app/methods/filter-methods.js` — the *Create and listen* button.
 - `src/app/methods/session-methods.js` — persisting the listening state in views.
 - `src/i18n/translations.js` — all strings.

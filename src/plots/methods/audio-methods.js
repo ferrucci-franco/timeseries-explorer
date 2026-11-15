@@ -14,13 +14,18 @@
 //
 // Phase 1 of #86 (issue #89), and where the feature stops (see the status at
 // the top of docs/audio-playback-design.md). The range is read-only here: the
-// analysis selection when the panel is in an analysis mode, the whole record
-// otherwise. Next: All | Visible window in timeseries mode (#375) and WAV
-// export (#92). The panel-level selection (#90), stereo and reverse (#91) and
-// the extra entry points (#93) were dropped.
+// analysis selection when the panel is in an analysis mode; in timeseries mode
+// the whole record or the plot's visible window, the strip's All | Visible
+// window (#375). The strip's ⬇ opens the export dialog on WAV (#92). The
+// panel-level selection (#90), stereo and reverse (#91) and the extra entry
+// points (#93) were dropped.
+//
+// A file in memory-saving mode plays too: its range is read from the file,
+// every row of it (audio-lazy-methods.js), never from the overview in memory.
 
 import i18n from '../../i18n/index.js';
 import { FFT_UNIFORM_REL_TOLERANCE } from '../../utils/fft.js';
+import { createAudioScan, finishAudioScan, scanAudioChunk, writeAudioChunk } from '../../utils/audio-samples.js';
 
 // The sample rates createBuffer() accepts — a property of the browser's audio
 // output, NOT a statement about what is audible. A signal sampled at 2 kHz can
@@ -41,24 +46,39 @@ const MAX_PLAYABLE_RATE = 384000;
 // minutes of CD-rate audio. Longer than that the strip asks for a narrower
 // selection rather than trying to allocate it. (Chunked streaming would lift
 // this; it is not worth its complexity before anyone has hit the ceiling.)
-const MAX_BUFFER_SAMPLES = 32 * 1024 * 1024;
+// The WAV export has no such bound: it streams the range into the file.
+export const MAX_BUFFER_SAMPLES = 32 * 1024 * 1024;
 
-// Below this a range is a click, not a sound: at 44.1 kHz, 10 ms is 441
-// samples, barely longer than the fades at each end.
-const MIN_RANGE_SECONDS = 0.01;
+// Below this a range is a click, not a sound: the design's ~50 ms, which at
+// 44.1 kHz is 2 205 samples — ten times the fades written into its ends.
+export const MIN_RANGE_SECONDS = 0.05;
 
-// Fades written INTO the buffer edges, so a loop does not click at the seam.
-const EDGE_FADE_SECONDS = 0.005;
 // Fade applied when playback is interrupted (stop, pause, another panel taking
 // over). Shorter than the edge fade would click; longer would feel laggy.
 const INTERRUPT_FADE_SECONDS = 0.01;
+// How far ahead a range waiting for the end of the loop must be scheduled to
+// start on time; closer than this, it waits for the turn after.
+const SEAM_LEAD_SECONDS = 0.04;
 
-// What the strip says when a range cannot be turned into a buffer.
+// What the strip says when a range cannot be turned into a buffer. A visible
+// window is changed by zooming, not by a selection, so it gets its own words.
 const BUILD_ERROR_KEYS = {
     rangeTooLong: 'audioRangeTooLong',
     rangeTooShort: 'audioRangeTooShort',
     rateUnsupported: 'audioRateUnsupported',
+    nonUniform: 'audioRangeNotUniform',
+    nonMonotonic: 'audioRangeNotUniform',
+    tooFewSamples: 'audioRangeTooShort',
+    readFailed: 'audioReadFailed',
 };
+const WINDOW_ERROR_KEYS = {
+    rangeTooLong: 'audioWindowTooLong',
+    rangeTooShort: 'audioWindowTooShort',
+    tooFewSamples: 'audioWindowTooShort',
+};
+
+// The two ranges the strip offers in timeseries mode (#375).
+export const AUDIO_WINDOW_MODES = ['all', 'visible'];
 
 // How far the pointer may travel between press and release and still count as a
 // click rather than a drag. Plotly owns the mouse inside the plot area — a drag
@@ -83,9 +103,6 @@ const AUDIO_START_CHECK_MS = 1200;
 // stutter rather than follow.
 const RANGE_SETTLE_MS = 250;
 
-// Auto scale lands the peak at −1 dBFS rather than at full scale: a hair of
-// headroom costs nothing audible and keeps the last sample off the rail.
-const AUTO_PEAK = 0.891;
 /**
  * Draw the idle (grey) mark when it sits at the very start of the range.
  *
@@ -207,10 +224,10 @@ export function positionInRange(offset, elapsed, duration, loop) {
     return loop ? raw % duration : Math.min(raw, duration);
 }
 
-/** First index whose time is >= value, over an ascending vector. */
+/** First index whose time is >= value (or the length), over an ascending vector. */
 function lowerBound(times, value) {
     let lo = 0;
-    let hi = times.length - 1;
+    let hi = times.length;
     while (lo < hi) {
         const mid = (lo + hi) >> 1;
         if (Number(times[mid]) < value) lo = mid + 1;
@@ -218,6 +235,33 @@ function lowerBound(times, value) {
     }
     return lo;
 }
+
+/** First index whose time is > value (or the length), over an ascending vector. */
+function upperBound(times, value) {
+    let lo = 0;
+    let hi = times.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (Number(times[mid]) <= value) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+/**
+ * The rows of a range: every one whose time t has lo <= t <= hi. The same rule
+ * the rows of a lazy file are read by (_lazyFitPass), so a range holds the
+ * same samples in memory and from the file.
+ */
+export function audioRangeRows(times, range) {
+    const n = times?.length || 0;
+    const from = lowerBound(times, range[0]);
+    const to = Math.max(from, Math.min(n, upperBound(times, range[1])));
+    return { from, to, count: to - from };
+}
+
+export const audioSliceOf = (values, from, to) => (ArrayBuffer.isView(values) ? values.subarray(from, to) : values.slice(from, to));
+const sliceOf = audioSliceOf;
 
 // Transport icons as inline SVG rather than glyphs. Centring a button's
 // content centres the line box, not the ink inside it, and the pause and play
@@ -230,6 +274,7 @@ const ICONS = {
     loop:  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg>',
     volume: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5zm10.5-1.2v7.4a4 4 0 0 0 0-7.4z"/></svg>',
     muted: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5zm15 .1-1.4-1.4-2.1 2.1-2.1-2.1L12 9.6l2.1 2.1-2.1 2.1 1.4 1.4 2.1-2.1 2.1 2.1 1.4-1.4-2.1-2.1z"/></svg>',
+    download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8.2l3.1-3.1 1.4 1.4L12 16l-5.5-5.5 1.4-1.4 3.1 3.1zM5 18h14v2H5z"/></svg>',
 };
 
 function formatClock(seconds) {
@@ -327,6 +372,14 @@ export function installPlotAudioMethods(TargetClass) {
             resumeAfterScrub: false,
             pendingRebuildKey: null,
             pendingRebuildSince: 0,
+            // In timeseries mode: the whole record, or the plot's visible
+            // window (#375). Listening state, like loop and volume.
+            window: 'all',
+            // A range being read from a lazy file: { key, controller, rows, expected }.
+            loading: null,
+            // The last buffer made ready ahead of time (a window waiting for
+            // the end of the loop), kept so a play right after reuses it.
+            prepared: null,
         };
     };
 
@@ -348,7 +401,13 @@ export function installPlotAudioMethods(TargetClass) {
      * to be filed.
      */
     proto._audioSourceStatus = function(fileId, varName) {
-        if (this._isLazyFile?.(fileId)) return { ok: false, reason: 'lazy' };
+        // A file in memory-saving mode: what is in memory is an overview, so
+        // the gate is read from the file's row count and span, and the range
+        // itself from the file when it is played (audio-lazy-methods.js).
+        if (this._isLazyFile?.(fileId)) {
+            if (!this._audioLazySourceStatus) return { ok: false, reason: 'lazy' };
+            return this._audioLazySourceStatus(fileId, varName, { min: MIN_PLAYABLE_RATE, max: MAX_PLAYABLE_RATE });
+        }
 
         const times = this._getTransformedTimeDataForVariable(fileId, varName);
         const values = this._getTransformedVariableData(fileId, varName);
@@ -436,8 +495,9 @@ export function installPlotAudioMethods(TargetClass) {
      * What sounds: the panel's selection, never a range of the audio's own.
      * In an analysis mode that selection already exists and already has its
      * control in the panel's options, so this only reads it. In timeseries mode
-     * there is no selection, and the whole record plays; #375 will offer the
-     * plot's visible window as the alternative.
+     * there is no selection: the strip offers All | Visible window (#375) —
+     * the whole record, or what the plot shows after a zoom or a pan, clamped
+     * to the signal. Two states, never three (docs/audio-playback-design.md).
      */
     proto._audioRange = function(plot, source) {
         const extent = this._audioSourceExtent(source);
@@ -446,6 +506,16 @@ export function installPlotAudioMethods(TargetClass) {
         if (plot?.mode === 'fft') range = this._activeFftRange?.(plot);
         else if (plot?.mode === 'histogram') range = this._activeHistogramRange?.(plot);
         else if (plot?.mode === 'integral') range = this._activeIntegralRange?.(plot);
+        else if (this._audioWindowMode(plot) === 'visible') {
+            // A window that misses the signal altogether (panned off its end)
+            // has nothing of it to play: an empty range, said as too short,
+            // rather than the whole record standing in for it.
+            const visible = this._audioVisibleWindow(plot);
+            if (!visible) return extent;
+            const lo = Math.max(extent[0], visible[0]);
+            const hi = Math.min(extent[1], visible[1]);
+            return hi > lo ? [lo, hi] : [lo, lo];
+        }
         if (!Array.isArray(range) || !Number.isFinite(range[0]) || !Number.isFinite(range[1])) {
             return extent;
         }
@@ -455,7 +525,34 @@ export function installPlotAudioMethods(TargetClass) {
         return [lo, hi];
     };
 
+    /** 'visible' when the strip plays the plot's window, 'all' otherwise. */
+    proto._audioWindowMode = function(plot) {
+        if (plot?.mode !== 'timeseries') return 'all';
+        return plot?.audio?.window === 'visible' ? 'visible' : 'all';
+    };
+
+    proto._audioSetWindowMode = function(panelId, mode) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !AUDIO_WINDOW_MODES.includes(mode)) return;
+        const state = this._ensureAudioState(plot);
+        if (state.window === mode) return;
+        state.window = mode;
+        // Like a moved window: heard from the end of the loop, or the next play.
+        this._syncAudioStrip(panelId);
+    };
+
+    /** The x range the plot shows, in the signal's time, or null. */
+    proto._audioVisibleWindow = function(plot) {
+        const range = plot?.div?._fullLayout?.xaxis?.range;
+        if (!Array.isArray(range) || range.length < 2) return null;
+        const a = this._coerceAxisValue ? this._coerceAxisValue(range[0]) : Number(range[0]);
+        const b = this._coerceAxisValue ? this._coerceAxisValue(range[1]) : Number(range[1]);
+        if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return null;
+        return [Math.min(a, b), Math.max(a, b)];
+    };
+
     proto._audioSourceExtent = function(source) {
+        if (source?.status?.lazy) return source.status.extent || null;
         const times = source?.status?.times;
         if (!times?.length) return null;
         const first = Number(times[0]);
@@ -471,81 +568,70 @@ export function installPlotAudioMethods(TargetClass) {
      * counted, the mean can be removed so the speaker does not thump on the
      * first sample, the scale is stated rather than guessed, and anything the
      * gain pushes past full scale is counted as clipped instead of being
-     * quietly folded over.
+     * quietly folded over. The samples come from src/utils/audio-samples.js,
+     * the kernel a file in memory-saving mode is read through too
+     * (_audioLazyRangeSamples), so both are heard alike.
      */
     proto._buildAudioBuffer = function(context, source, range, state) {
-        const { times, values, sampleRate } = source.status;
-        const lo = lowerBound(times, range[0]);
-        let hi = lowerBound(times, range[1]);
-        if (hi < lo) hi = lo;
-        const count = Math.min(hi - lo + 1, times.length - lo);
+        if (source?.status?.lazy) return { error: 'readFailed' };
+        const result = this._audioEagerRangeSamples(source, range, state, (frames, sampleRate) => {
+            // Within the gate but outside what THIS browser takes — 4 kHz
+            // passes in Chrome and is refused in Firefox. An exception here
+            // would surface as a dead button; a sentence does not.
+            const buffer = context.createBuffer(1, frames, sampleRate);
+            return { buffer, channel: buffer.getChannelData(0) };
+        });
+        return this._audioBuiltFromSamples(result);
+    };
+
+    /**
+     * The samples of a range of a signal held in memory, through the shared
+     * kernel. `alloc(frames, sampleRate)` hands back where they go:
+     * `{ channel }` (a Float32Array), plus whatever the caller wants kept.
+     */
+    proto._audioEagerRangeSamples = function(source, range, state, alloc) {
+        const { times, values } = source.status;
+        const { from, to, count } = audioRangeRows(times, range);
         if (count < 2) return { error: 'rangeTooShort' };
-        if (count / sampleRate < MIN_RANGE_SECONDS) return { error: 'rangeTooShort' };
         if (count > MAX_BUFFER_SAMPLES) return { error: 'rangeTooLong' };
+        const time = sliceOf(times, from, to);
+        const chunk = [sliceOf(values, from, to)];
+        const info = finishAudioScan(scanAudioChunk(createAudioScan(1), time, chunk), { removeDC: !!state.removeDC });
+        return this._audioWriteSamples(info, [chunk], alloc);
+    };
 
-        let sum = 0;
-        let finiteCount = 0;
-        let nanCount = 0;
-        let peak = 0;
-        for (let i = 0; i < count; i++) {
-            const value = Number(values[lo + i]);
-            if (Number.isFinite(value)) {
-                sum += value;
-                finiteCount++;
-            } else {
-                nanCount++;
-            }
-        }
-        const mean = state.removeDC && finiteCount ? sum / finiteCount : 0;
-        for (let i = 0; i < count; i++) {
-            const value = Number(values[lo + i]);
-            if (!Number.isFinite(value)) continue;
-            const centred = Math.abs(value - mean);
-            if (centred > peak) peak = centred;
-        }
-
-        // One amplitude rule, not a choice: the peak goes to −1 dBFS. A signal
-        // is plotted in its own units and heard at a level that works, and the
-        // three-way selector that used to offer fixed and manual gain was read
-        // as "no idea what this does" by the first person to use the strip.
-        const gain = peak > 0 ? AUTO_PEAK / peak : 1;
-
-        let buffer;
+    /**
+     * The second pass, over the chunks the first one read: the checks every
+     * path shares, then the samples into what `alloc` gives.
+     */
+    proto._audioWriteSamples = function(info, chunks, alloc) {
+        if (!info.ok) return { error: info.reason || 'nonUniform', info };
+        if (info.duration < MIN_RANGE_SECONDS) return { error: 'rangeTooShort', info };
+        if (info.frames > MAX_BUFFER_SAMPLES) return { error: 'rangeTooLong', info };
+        let target;
         try {
-            buffer = context.createBuffer(1, count, sampleRate);
+            target = alloc(info.frames, info.sampleRate);
         } catch {
-            // Within the gate above but outside what THIS browser takes —
-            // 4 kHz passes in Chrome and is refused in Firefox. An exception
-            // here would surface as a dead button; a sentence does not.
-            return { error: 'rateUnsupported' };
+            return { error: 'rateUnsupported', info };
         }
-        const channel = buffer.getChannelData(0);
         let clipped = 0;
-        for (let i = 0; i < count; i++) {
-            const value = Number(values[lo + i]);
-            if (!Number.isFinite(value)) { channel[i] = 0; continue; }
-            let scaled = (value - mean) * gain;
-            if (scaled > 1) { scaled = 1; clipped++; }
-            else if (scaled < -1) { scaled = -1; clipped++; }
-            channel[i] = scaled;
+        let at = 0;
+        for (const chunk of chunks) {
+            clipped += writeAudioChunk(info, chunk, at, [target.channel], at);
+            at += chunk[0].length;
         }
+        return { ...target, info, clipped };
+    };
 
-        // Fades written into the edges: without them a loop clicks at the seam
-        // every time round, and so does the very first sample of a range that
-        // starts mid-waveform.
-        const fade = Math.min(Math.floor(EDGE_FADE_SECONDS * sampleRate), count >> 1);
-        for (let i = 0; i < fade; i++) {
-            const factor = i / fade;
-            channel[i] *= factor;
-            channel[count - 1 - i] *= factor;
-        }
-
+    proto._audioBuiltFromSamples = function(result) {
+        if (result.error) return { error: result.error };
         return {
-            buffer,
-            clipped,
-            nanCount,
-            duration: count / sampleRate,
-            startTime: Number(times[lo]),
+            buffer: result.buffer,
+            clipped: result.clipped,
+            nanCount: result.info.nanCount,
+            duration: result.info.duration,
+            startTime: result.info.startTime,
+            sampleRate: result.info.sampleRate,
         };
     };
 
@@ -561,15 +647,57 @@ export function installPlotAudioMethods(TargetClass) {
      * its contents.
      */
     proto._audioBufferKey = function(source, range, state) {
+        return [this._audioSamplesKey(source, state), range[0], range[1]].join('|');
+    };
+
+    /**
+     * The part of the key that is not the range: which samples, and how they
+     * are treated. When only the range differs — a zoom, a pan, All ↔ Visible
+     * window — the take is not cut: the new range waits for the end of the
+     * loop (_followAudioSourceChange).
+     */
+    proto._audioSamplesKey = function(source, state) {
         const values = source.status?.values;
         return [
             source.key,
             sampleStamp(values),
             values?.length || 0,
-            range[0],
-            range[1],
             state.removeDC ? 1 : 0,
         ].join('|');
+    };
+
+    /**
+     * The range moved since the buffer was built (a zoom, a moved bound). The
+     * instant stays where the new range still holds it; a take that had run
+     * to its end, or an instant the new range leaves out, starts it over.
+     */
+    proto._audioRemapPosition = function(state, range) {
+        const old = state.buffer;
+        if (!old || !Number.isFinite(old.startTime)) return;
+        const atEnd = state.position >= old.duration - 0.001;
+        const absolute = old.startTime + state.position;
+        state.position = (!atEnd && absolute >= range[0] && absolute < range[1]) ? absolute - range[0] : 0;
+    };
+
+    /**
+     * While nothing sounds, the strip measures against the range it would play
+     * now, not the buffer of the last take: a zoom while paused moves where a
+     * click seeks and how long the readout says. The buffer is kept aside, so
+     * zooming back plays it without building it again.
+     */
+    proto._audioSettleIdleRange = function(plot) {
+        const state = plot?.audio;
+        if (!state?.buffer || state.loading || this._audioPanelIsPlaying(plot)) return;
+        const source = this._audioSelectedSource(plot);
+        if (!source?.status?.ok) return;
+        const range = this._audioRange(plot, source);
+        if (!range) return;
+        const key = this._audioBufferKey(source, range, state);
+        if (key === state.bufferKey) return;
+        this._audioRemapPosition(state, range);
+        state.prepared = { key: state.bufferKey, built: state.buffer };
+        state.buffer = null;
+        state.bufferKey = '';
     };
 
     // ─── Transport ──────────────────────────────────────────────────
@@ -677,6 +805,7 @@ export function installPlotAudioMethods(TargetClass) {
         player.nodeGain = null;
         player.playing = false;
         keepIosMediaSession(false);
+        this._audioDropSeam?.();
         if (!node) return;
         node.onended = null;
         try {
@@ -738,29 +867,76 @@ export function installPlotAudioMethods(TargetClass) {
         const wasSounding = player.playing;
         this._audioYieldPlayer();
         state.position = requestedPosition;
+        // A range still being read for another panel would start over this one.
+        this._audioCancelOtherLoads(panelId);
 
         const key = this._audioBufferKey(source, range, state);
         if (state.bufferKey !== key || !state.buffer) {
-            const built = this._buildAudioBuffer(context, source, range, state);
-            if (built.error) {
-                const errorKey = BUILD_ERROR_KEYS[built.error] || 'audioReasonUnavailable';
-                state.notice = () => i18n.t(errorKey);
+            this._audioRemapPosition(state, range);
+            if (state.prepared?.key === key) {
+                this._audioAdoptBuffer(state, source, state.prepared.built, key);
+            } else if (source.status.lazy) {
+                // Read from the file, every row of the range. The take starts
+                // when it lands; the strip says how far the read has got.
                 state.buffer = null;
                 state.bufferKey = '';
-                this._syncAudioStrip(panelId);
+                this._audioLoadLazy(panelId, source, range, key, {
+                    onReady: (built) => this._audioStartTake(panelId, built, { crossfade: false }),
+                });
                 return;
+            } else {
+                const built = this._buildAudioBuffer(context, source, range, state);
+                if (built.error) {
+                    this._audioBuildFailed(panelId, built.error);
+                    return;
+                }
+                this._audioAdoptBuffer(state, source, built, key);
             }
-            state.buffer = built;
-            state.bufferKey = key;
-            state.notice = this._audioBufferNotice(source, built);
         }
+        this._audioStartTake(panelId, state.buffer, { crossfade: wasSounding });
+    };
 
-        const built = state.buffer;
+    /** A built buffer becomes the panel's take. */
+    proto._audioAdoptBuffer = function(state, source, built, key) {
+        built.samplesKey = this._audioSamplesKey(source, state);
+        state.buffer = built;
+        state.bufferKey = key;
+        state.prepared = null;
+        state.seamFailedKey = null;
+        state.notice = this._audioBufferNotice(source, built);
+    };
+
+    /** The sentence for a range that cannot be turned into a buffer. */
+    proto._audioBuildErrorText = function(plot, error) {
+        const windowed = this._audioWindowMode(plot) === 'visible';
+        const key = (windowed && WINDOW_ERROR_KEYS[error]) || BUILD_ERROR_KEYS[error] || 'audioReasonUnavailable';
+        return i18n.t(key)
+            .replace('{ms}', i18n.formatNumber(Math.round(MIN_RANGE_SECONDS * 1000)))
+            .replace('{samples}', i18n.formatNumber(MAX_BUFFER_SAMPLES));
+    };
+
+    /** Why a range could not be turned into a buffer, in the strip. */
+    proto._audioBuildFailed = function(panelId, error) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const state = this._ensureAudioState(plot);
+        state.notice = () => this._audioBuildErrorText(plot, error);
+        state.buffer = null;
+        state.bufferKey = '';
+        this._syncAudioStrip(panelId);
+    };
+
+    /** Start a built buffer sounding from the panel's position. */
+    proto._audioStartTake = function(panelId, built, { crossfade = false } = {}) {
+        const plot = this.plots.get(panelId);
+        const context = player.context;
+        if (!plot || !context || !built?.buffer) return;
+        const state = this._ensureAudioState(plot);
         if (state.position >= built.duration - 0.001) state.position = 0;
 
         const nodeGain = context.createGain();
         nodeGain.connect(player.master);
-        if (wasSounding) {
+        if (crossfade) {
             // Crossfade: the take being left is already ramping down over the
             // same 10 ms inside _audioReleaseNode, so fading this one up over
             // that window closes the gap instead of leaving the click that a
@@ -785,7 +961,17 @@ export function installPlotAudioMethods(TargetClass) {
         player.playing = true;
         player.playStartedAtMs = Date.now();
         this._applyAudioVolume(state, panelId);
+        this._audioWireEnded(node, panelId, built);
 
+        // Inside the tap, as iOS wants it: see keepIosMediaSession.
+        keepIosMediaSession(true);
+        node.start(0, state.position);
+        this._startAudioTick();
+        this._syncAudioStrip(panelId);
+        this._audioCheckStarted(panelId);
+    };
+
+    proto._audioWireEnded = function(node, panelId, built) {
         node.onended = () => {
             if (player.node !== node) return;
             player.playing = false;
@@ -806,13 +992,232 @@ export function installPlotAudioMethods(TargetClass) {
             this._renderAudioPlayheads();
             this._syncAudioStrip(panelId);
         };
+    };
 
-        // Inside the tap, as iOS wants it: see keepIosMediaSession.
-        keepIosMediaSession(true);
-        node.start(0, state.position);
-        this._startAudioTick();
+    // ─── A range read from a lazy file ──────────────────────────────
+
+    /**
+     * Read a range of a lazy file into a buffer, then hand it to `onReady`.
+     * Every row of the range comes from the file (_audioLazyRangeSamples);
+     * the strip shows how far the read has got, with a Cancel, and a newer
+     * request — another range, Stop, another panel playing — replaces it.
+     * `startsTake` is false for a range read ahead of the end of a loop: the
+     * take sounding then is left alone whatever happens to the read.
+     */
+    proto._audioLoadLazy = function(panelId, source, range, key, { onReady = null, startsTake = true } = {}) {
+        const plot = this.plots.get(panelId);
+        const context = player.context;
+        if (!plot || !context) return;
+        const state = this._ensureAudioState(plot);
+        if (state.loading?.key === key) {
+            if (onReady) state.loading.onReady = onReady;
+            return;
+        }
+        state.loading?.controller.abort();
+        const controller = new AbortController();
+        const rate = Number(source.status.sampleRate);
+        const loading = {
+            key,
+            controller,
+            rows: 0,
+            expected: Number.isFinite(rate) ? Math.max(0, Math.round((range[1] - range[0]) * rate) + 1) : NaN,
+            onReady,
+            startsTake,
+            lastPaint: 0,
+        };
+        state.loading = loading;
+        // Inside the tap that asked to play, as iOS wants it.
+        if (startsTake) keepIosMediaSession(true);
         this._syncAudioStrip(panelId);
-        this._audioCheckStarted(panelId);
+
+        const alloc = (frames, sampleRate) => {
+            const buffer = context.createBuffer(1, frames, sampleRate);
+            return { buffer, channel: buffer.getChannelData(0) };
+        };
+        const onRows = (rows) => {
+            loading.rows = rows;
+            const now = Date.now();
+            if (now - loading.lastPaint < 120) return;
+            loading.lastPaint = now;
+            this._audioSyncLoadingNote(panelId);
+        };
+        Promise.resolve()
+            .then(() => this._audioLazyRangeSamples(source, range, state, alloc, {
+                signal: controller.signal,
+                onRows,
+                maxFrames: MAX_BUFFER_SAMPLES,
+            }))
+            .then((result) => {
+                if (state.loading !== loading || controller.signal.aborted) return;
+                state.loading = null;
+                const built = this._audioBuiltFromSamples(result);
+                if (built.error) {
+                    if (startsTake) {
+                        keepIosMediaSession(false);
+                        this._audioBuildFailed(panelId, built.error);
+                    } else {
+                        // The take that is sounding carries on; the strip says
+                        // why the new range will not follow it.
+                        state.seamFailedKey = key;
+                        state.notice = () => this._audioBuildErrorText(plot, built.error);
+                        this._syncAudioStrip(panelId);
+                    }
+                    return;
+                }
+                if (startsTake) this._audioAdoptBuffer(state, source, built, key);
+                if (this.plots.get(panelId) === plot) loading.onReady?.(built);
+                this._syncAudioStrip(panelId);
+            })
+            .catch((error) => {
+                if (state.loading !== loading) return;
+                state.loading = null;
+                if (startsTake) keepIosMediaSession(false);
+                if (error?.name === 'AbortError') { this._syncAudioStrip(panelId); return; }
+                if (!startsTake) state.seamFailedKey = key;
+                state.notice = () => i18n.t('audioReadFailed');
+                this._syncAudioStrip(panelId);
+            });
+    };
+
+    /** Stop reading a range, leaving whatever was sounding as it was. */
+    proto._audioCancelLoad = function(panelId, { quiet = false } = {}) {
+        const plot = this.plots.get(panelId);
+        const loading = plot?.audio?.loading;
+        if (!loading) return false;
+        plot.audio.loading = null;
+        loading.controller.abort();
+        if (loading.startsTake) keepIosMediaSession(false);
+        // A range read ahead of the loop's end is not asked for again until
+        // the range changes once more.
+        if (!loading.startsTake) plot.audio.seamFailedKey = loading.key;
+        if (!quiet) plot.audio.notice = () => i18n.t('audioReadCancelled');
+        this._syncAudioStrip(panelId);
+        return true;
+    };
+
+    proto._audioCancelOtherLoads = function(panelId) {
+        for (const [id, plot] of this.plots) {
+            if (id !== panelId && plot.audio?.loading?.startsTake) this._audioCancelLoad(id, { quiet: true });
+        }
+    };
+
+    // ─── A new range at the end of the loop ─────────────────────────
+
+    /**
+     * The range changed under a take that loops (a zoom or a pan, All ↔
+     * Visible window): the new one is built — read from the file, on a lazy
+     * one — and starts exactly where the current loop ends, scheduled on the
+     * audio clock, so the sound is never cut mid-way. The buffers' own edge
+     * fades meet at that seam, as they do on every turn of the loop.
+     */
+    proto._audioPrepareSeam = function(panelId, source, range, key) {
+        const plot = this.plots.get(panelId);
+        const state = this._ensureAudioState(plot);
+        if (state.prepared?.key === key) {
+            this._audioScheduleSeam(panelId, state.prepared.built, key);
+            return;
+        }
+        if (source.status.lazy) {
+            this._audioLoadLazy(panelId, source, range, key, {
+                startsTake: false,
+                onReady: (built) => {
+                    built.samplesKey = this._audioSamplesKey(source, state);
+                    state.prepared = { key, built };
+                    this._audioScheduleSeam(panelId, built, key);
+                },
+            });
+            return;
+        }
+        const built = this._buildAudioBuffer(player.context, source, range, state);
+        if (built.error) {
+            state.seamFailedKey = key;
+            state.notice = () => this._audioBuildErrorText(plot, built.error);
+            this._syncAudioStrip(panelId);
+            return;
+        }
+        built.samplesKey = this._audioSamplesKey(source, state);
+        state.prepared = { key, built };
+        this._audioScheduleSeam(panelId, built, key);
+    };
+
+    proto._audioScheduleSeam = function(panelId, built, key) {
+        if (!this._audioPanelOwnsPlayer(panelId) || !player.playing || !player.loop || !player.node) return false;
+        const context = player.context;
+        const now = context.currentTime;
+        const position = positionInRange(player.offset, now - player.startedAt, player.duration, true);
+        let at = now + (player.duration - position);
+        // Too close to start on time: the turn after.
+        while (at - now < SEAM_LEAD_SECONDS) at += player.duration;
+        this._audioDropSeam();
+        const nodeGain = context.createGain();
+        nodeGain.gain.setValueAtTime(1, now);
+        nodeGain.connect(player.master);
+        const node = context.createBufferSource();
+        node.buffer = built.buffer;
+        node.loop = true;
+        node.connect(nodeGain);
+        node.start(at, 0);
+        // The take sounding now ends at the seam by design: its end there is
+        // not the end of listening.
+        player.node.onended = null;
+        player.node.stop(at);
+        player.pending = { manager: this, panelId, node, nodeGain, at, built, key };
+        return true;
+    };
+
+    /** The seam reached: the new range is the take (called from the tick). */
+    proto._audioPromoteSeam = function() {
+        const pending = player.pending;
+        if (!pending || pending.manager !== this || !player.context) return;
+        if (player.context.currentTime < pending.at) return;
+        const plot = this.plots.get(pending.panelId);
+        const oldNode = player.node;
+        const oldGain = player.nodeGain;
+        player.pending = null;
+        player.node = pending.node;
+        player.nodeGain = pending.nodeGain;
+        player.duration = pending.built.duration;
+        player.offset = 0;
+        player.startedAt = pending.at;
+        if (plot) {
+            const state = this._ensureAudioState(plot);
+            const source = this._audioSelectedSource(plot);
+            state.buffer = pending.built;
+            state.bufferKey = pending.key;
+            state.prepared = null;
+            state.pendingRebuildKey = null;
+            if (source) state.notice = this._audioBufferNotice(source, pending.built);
+        }
+        this._audioWireEnded(pending.node, pending.panelId, pending.built);
+        setTimeout(() => {
+            try { oldNode?.disconnect(); oldGain?.disconnect(); } catch { /* gone */ }
+        }, 50);
+        this._syncAudioStrip(pending.panelId);
+    };
+
+    /**
+     * Forget a seam that has not been reached: the range came back, loop went
+     * off, the take was stopped. The take sounding now carries on, and ends
+     * where it ends if it no longer loops.
+     */
+    proto._audioDropSeam = function() {
+        const pending = player.pending;
+        if (!pending) return;
+        player.pending = null;
+        try { pending.node.onended = null; pending.node.stop(); } catch { /* not started */ }
+        setTimeout(() => {
+            try { pending.node.disconnect(); pending.nodeGain.disconnect(); } catch { /* gone */ }
+        }, 50);
+        if (player.node && player.playing) {
+            // Its stop at the seam is withdrawn (the last stop() called is the
+            // one a source node keeps), and its end is listened for again.
+            try {
+                if (player.context.currentTime < pending.at) player.node.stop(player.context.currentTime + 1e7);
+            } catch { /* already ending */ }
+            const plot = pending.manager.plots?.get(pending.panelId);
+            const built = plot?.audio?.buffer;
+            if (built) pending.manager._audioWireEnded(player.node, pending.panelId, built);
+        }
     };
 
     /**
@@ -851,6 +1256,8 @@ export function installPlotAudioMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
         const state = this._ensureAudioState(plot);
+        // Still reading the range from the file: pausing is not wanting it.
+        if (state.loading?.startsTake) this._audioCancelLoad(panelId, { quiet: true });
         state.position = this._audioPosition(plot);
         // Only the panel holding the player may silence it. Pressing pause on
         // a strip that is not sounding parks its own cursor and leaves the
@@ -870,6 +1277,7 @@ export function installPlotAudioMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
         const state = this._ensureAudioState(plot);
+        if (state.loading) this._audioCancelLoad(panelId, { quiet: true });
         // The bug this guard is here for: stop released whatever node was
         // sounding, so pressing it on an idle strip cut the panel that was
         // actually playing. A strip stops its own panel and no other.
@@ -892,7 +1300,7 @@ export function installPlotAudioMethods(TargetClass) {
             this._audioPlay(panelId);
             return;
         }
-        if (this._audioPanelIsPlaying(plot)) this._audioPause(panelId);
+        if (this._audioPanelIsPlaying(plot) || plot.audio?.loading?.startsTake) this._audioPause(panelId);
         else this._audioPlay(panelId);
     };
 
@@ -900,6 +1308,7 @@ export function installPlotAudioMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
         const state = this._ensureAudioState(plot);
+        this._audioSettleIdleRange(plot);
         const duration = state.buffer?.duration || this._audioRangeDuration(plot);
         const target = Math.max(0, Math.min(Number(seconds) || 0, duration || 0));
         const wasPlaying = this._audioPanelIsPlaying(plot);
@@ -935,6 +1344,7 @@ export function installPlotAudioMethods(TargetClass) {
         const step = () => {
             player.raf = null;
             if (!player.playing || player.owner?.manager !== this) return;
+            this._audioPromoteSeam();
             this._followAudioSourceChange();
             this._renderAudioPlayheads();
             this._syncAudioReadout();
@@ -968,7 +1378,13 @@ export function installPlotAudioMethods(TargetClass) {
         if (!range) return;
 
         const key = this._audioBufferKey(source, range, state);
-        if (key === state.bufferKey) { state.pendingRebuildKey = null; return; }
+        if (key === state.bufferKey) {
+            state.pendingRebuildKey = null;
+            // Back where it was before the loop's end: nothing to change.
+            if (player.pending?.manager === this) this._audioDropSeam();
+            if (state.loading && !state.loading.startsTake) this._audioCancelLoad(panelId, { quiet: true });
+            return;
+        }
         const now = performance.now();
         if (state.pendingRebuildKey !== key) {
             state.pendingRebuildKey = key;
@@ -976,6 +1392,38 @@ export function installPlotAudioMethods(TargetClass) {
             return;
         }
         if (now - state.pendingRebuildSince < RANGE_SETTLE_MS) return;
+
+        // In timeseries mode only the range moved — a zoom, a pan, All ↔
+        // Visible window: the take is not cut. Looping, the new range starts
+        // where this turn of the loop ends; playing once, at the next play
+        // (#375, and the design's rule for a moved bound). A recomputed
+        // signal, another signal or Remove DC change what is heard, and
+        // follow at once, keeping the instant, as below.
+        if (plot.mode === 'timeseries' && state.buffer.samplesKey === this._audioSamplesKey(source, state)) {
+            if (!player.loop) return;
+            if (player.pending?.key === key || state.loading?.key === key || state.seamFailedKey === key) return;
+            this._audioPrepareSeam(panelId, source, range, key);
+            return;
+        }
+        // A recomputed lazy range is read from the file before it is heard.
+        if (source.status.lazy) {
+            if (state.loading?.key === key || state.seamFailedKey === key) return;
+            this._audioLoadLazy(panelId, source, range, key, {
+                startsTake: false,
+                onReady: (built) => {
+                    if (!this._audioPanelIsPlaying(plot)) {
+                        built.samplesKey = this._audioSamplesKey(source, state);
+                        state.prepared = { key, built };
+                        return;
+                    }
+                    const absolute = state.buffer.startTime + this._audioPosition(plot);
+                    this._audioAdoptBuffer(state, source, built, key);
+                    state.position = (absolute >= range[0] && absolute <= range[1]) ? absolute - range[0] : 0;
+                    this._audioPlay(panelId);
+                },
+            });
+            return;
+        }
 
         // Keep the instant when the new range still contains it; otherwise
         // start at the beginning of what was just selected. A recompute keeps
@@ -1023,6 +1471,7 @@ export function installPlotAudioMethods(TargetClass) {
         const source = this._audioSelectedSource(plot);
         if (!source?.status?.ok) return null;
         const state = this._ensureAudioState(plot);
+        this._audioSettleIdleRange(plot);
         // Before the first play there is no buffer, and the range's own start
         // is what the seek slider is measured against.
         const start = Number.isFinite(state.buffer?.startTime)
@@ -1052,6 +1501,9 @@ export function installPlotAudioMethods(TargetClass) {
         for (const [panelId, candidate] of this.plots) {
             if (candidate !== plot) continue;
             this._applyAudioMark(plot, this._audioPanelMark(panelId, plot));
+            // Playing the visible window, the zoom is the range: the readout
+            // and the note follow it (the sound does at the loop's end).
+            if (plot.audio?.open && this._audioWindowMode(plot) === 'visible') this._syncAudioStrip(panelId);
             return;
         }
     };
@@ -1222,6 +1674,7 @@ export function installPlotAudioMethods(TargetClass) {
         const state = this._ensureAudioState(plot);
         const source = this._audioSelectedSource(plot);
         if (!source?.status?.ok) return;
+        this._audioSettleIdleRange(plot);
         const start = Number.isFinite(state.buffer?.startTime)
             ? state.buffer.startTime
             : this._audioRange(plot, source)?.[0];
@@ -1237,6 +1690,7 @@ export function installPlotAudioMethods(TargetClass) {
         const state = this._ensureAudioState(plot);
         state.open = !state.open;
         if (!state.open) {
+            if (state.loading) this._audioCancelLoad(panelId, { quiet: true });
             const owned = player.owner?.manager === this && player.owner.panelId === panelId;
             if (this._audioPanelIsPlaying(plot)) this._audioStop(panelId);
             // Closing takes this panel's mark with it — a strip closed while
@@ -1312,6 +1766,10 @@ export function installPlotAudioMethods(TargetClass) {
                 <button type="button" class="audio-btn audio-play" title="${i18n.t('audioPlay')}" aria-label="${i18n.t('audioPlay')}">${ICONS.play}</button>
                 <button type="button" class="audio-btn audio-stop" title="${i18n.t('audioStop')}" aria-label="${i18n.t('audioStop')}">${ICONS.stop}</button>
                 <button type="button" class="audio-btn audio-loop audio-btn-wide" aria-pressed="false" title="${i18n.t('audioLoop')}" aria-label="${i18n.t('audioLoop')}">${ICONS.loop}<span>${i18n.t('audioLoopLabel')}</span></button>
+                <div class="audio-window" role="radiogroup" aria-label="${i18n.t('audioWindowLabel')}" hidden>
+                    <button type="button" class="audio-window-btn" data-window="all" role="radio" aria-checked="true" title="${i18n.t('audioWindowAllTitle')}">${i18n.t('audioWindowAll')}</button>
+                    <button type="button" class="audio-window-btn" data-window="visible" role="radio" aria-checked="false" title="${i18n.t('audioWindowVisibleTitle')}">${i18n.t('audioWindowVisible')}</button>
+                </div>
                 <span class="audio-readout" role="status"></span>
                 <input type="range" class="audio-seek" min="0" max="1000" value="0" step="1" aria-label="${i18n.t('audioSeek')}">
                 <label class="audio-field">
@@ -1321,6 +1779,11 @@ export function installPlotAudioMethods(TargetClass) {
                 <label class="audio-dc" title="${i18n.t('audioRemoveDC')}"><input type="checkbox" class="audio-dc-input" checked> <span class="audio-dc-text">${i18n.t('audioRemoveDC')}</span></label>
                 <button type="button" class="audio-btn audio-mute" aria-pressed="false" title="${i18n.t('audioMute')}" aria-label="${i18n.t('audioMute')}">${ICONS.volume}</button>
                 <input type="range" class="audio-volume" min="0" max="100" value="70" step="1" title="${i18n.t('audioVolume')}" aria-label="${i18n.t('audioVolume')}">
+                <button type="button" class="audio-btn audio-export" title="${i18n.t('audioExportWav')}" aria-label="${i18n.t('audioExportWav')}">${ICONS.download}</button>
+            </div>
+            <div class="audio-strip-loading" role="status" hidden>
+                <span class="audio-loading-text"></span>
+                <button type="button" class="audio-btn audio-loading-cancel">${i18n.t('cancel')}</button>
             </div>
             <div class="audio-strip-note" role="status"></div>
         `;
@@ -1356,8 +1819,23 @@ export function installPlotAudioMethods(TargetClass) {
                 player.loop = state.loop;
                 player.offset = position;
                 player.startedAt = player.context.currentTime;
+                // A new range waiting for the end of the loop: with no loop
+                // there is no end to wait for, and it is heard at the next play.
+                if (!state.loop) {
+                    this._audioDropSeam();
+                    if (state.loading && !state.loading.startsTake) this._audioCancelLoad(panelId, { quiet: true });
+                }
             }
             this._syncAudioStrip(panelId);
+        });
+        for (const button of strip.querySelectorAll('.audio-window-btn')) {
+            button.addEventListener('click', () => this._audioSetWindowMode(panelId, button.dataset.window));
+        }
+        strip.querySelector('.audio-loading-cancel').addEventListener('click', () => this._audioCancelLoad(panelId));
+        // The second way into the panel's export dialog: on WAV, filled in
+        // from what sounds, the cursor in the name (#92).
+        strip.querySelector('.audio-export').addEventListener('click', () => {
+            this._openExportDialog?.(panelId, { preselect: 'wav' });
         });
         const seek = strip.querySelector('.audio-seek');
         // Scrubbing is silent: the sound stops when the handle is grabbed and
@@ -1495,7 +1973,9 @@ export function installPlotAudioMethods(TargetClass) {
         playBtn.innerHTML = playing ? ICONS.pause : ICONS.play;
         // The icon is a path now, so the state has to be readable some other
         // way — by a stylesheet, by a test, by anyone inspecting the strip.
-        playBtn.dataset.state = playing ? 'playing' : 'paused';
+        const reading = !!state.loading?.startsTake;
+        if (reading) playBtn.innerHTML = ICONS.pause;
+        playBtn.dataset.state = playing ? 'playing' : (reading ? 'loading' : 'paused');
         strip.querySelector('.audio-play').disabled = !playable;
         strip.querySelector('.audio-stop').disabled = !playable;
         const loopBtn = strip.querySelector('.audio-loop');
@@ -1508,6 +1988,21 @@ export function installPlotAudioMethods(TargetClass) {
         muteBtn.innerHTML = state.muted ? ICONS.muted : ICONS.volume;
         muteBtn.setAttribute('aria-pressed', String(!!state.muted));
         strip.querySelector('.audio-volume').value = String(Math.round(state.volume * 100));
+
+        // All | Visible window, in timeseries mode only: in an analysis mode
+        // the analysis' selection is what sounds, and its control is in the
+        // panel's options.
+        const windowGroup = strip.querySelector('.audio-window');
+        const windowMode = this._audioWindowMode(plot);
+        windowGroup.hidden = plot.mode !== 'timeseries';
+        for (const button of windowGroup.querySelectorAll('.audio-window-btn')) {
+            const on = button.dataset.window === windowMode;
+            button.classList.toggle('active', on);
+            button.setAttribute('aria-checked', String(on));
+            button.disabled = !playable;
+        }
+        strip.querySelector('.audio-export').disabled = !playable;
+        this._audioSyncLoadingNote(panelId, strip);
 
         const note = strip.querySelector('.audio-strip-note');
         const reason = playable
@@ -1523,11 +2018,48 @@ export function installPlotAudioMethods(TargetClass) {
         const heldBack = this._audioHeldBack(plot) && Date.now() - (player.playStartedAtMs || 0) >= AUDIO_START_CHECK_MS
             ? i18n.t('audioHeldBack')
             : '';
-        const text = [reason, heldBack, notice].filter(Boolean).join(' · ');
+        // A visible window that cannot be played says so before Play is
+        // pressed, as the zoom makes it: too short to be a sound, or too long
+        // for one buffer.
+        const windowLimit = playable && !playing && !reading && windowMode === 'visible'
+            ? this._audioWindowLimitText(plot, selected)
+            : '';
+        const text = [reason, heldBack, windowLimit || notice].filter(Boolean).join(' · ');
         note.textContent = text;
         note.hidden = !text;
 
         this._syncAudioReadout();
+    };
+
+    /** The read of a lazy range, in the strip: how far, and its Cancel. */
+    proto._audioSyncLoadingNote = function(panelId, strip = null) {
+        const plot = this.plots.get(panelId);
+        const box = (strip || document.querySelector(`.layout-panel[data-id="${panelId}"] .audio-strip`))
+            ?.querySelector('.audio-strip-loading');
+        if (!plot || !box) return;
+        const loading = plot.audio?.loading;
+        box.hidden = !loading;
+        if (!loading) return;
+        const done = i18n.formatNumber(loading.rows || 0);
+        box.querySelector('.audio-loading-text').textContent = Number.isFinite(loading.expected) && loading.expected > 0
+            ? i18n.t('audioReading').replace('{done}', done).replace('{total}', i18n.formatNumber(loading.expected))
+            : i18n.t('audioReadingRows').replace('{done}', done);
+    };
+
+    /**
+     * Why the visible window would not play, from its length and the signal's
+     * rate alone, or ''. The same limits the buffer is held to.
+     */
+    proto._audioWindowLimitText = function(plot, source) {
+        const range = this._audioRange(plot, source);
+        if (!range) return '';
+        const seconds = range[1] - range[0];
+        const rate = Number(source?.status?.sampleRate);
+        if (seconds < MIN_RANGE_SECONDS) return this._audioBuildErrorText(plot, 'rangeTooShort');
+        if (Number.isFinite(rate) && seconds * rate + 1 > MAX_BUFFER_SAMPLES) {
+            return this._audioBuildErrorText(plot, 'rangeTooLong');
+        }
+        return '';
     };
 
     proto._syncAudioReadout = function() {
@@ -1536,6 +2068,7 @@ export function installPlotAudioMethods(TargetClass) {
             if (!state?.open) continue;
             const strip = document.querySelector(`.layout-panel[data-id="${panelId}"] .audio-strip`);
             if (!strip) continue;
+            this._audioSettleIdleRange(plot);
             const duration = state.buffer?.duration || this._audioRangeDuration(plot);
             const position = this._audioPosition(plot);
             strip.querySelector('.audio-readout').textContent =
@@ -1551,6 +2084,7 @@ export function installPlotAudioMethods(TargetClass) {
         if (!status || status.ok) return '';
         switch (status.reason) {
             case 'lazy':        return i18n.t('audioReasonLazy');
+            case 'lazyNoSource':return i18n.t('audioReasonLazyNoSource');
             case 'nonUniform':  return i18n.t('audioReasonNonUniform');
             case 'nonMonotonic':return i18n.t('audioReasonNonUniform');
             case 'tooFewSamples': return i18n.t('audioReasonTooFewSamples');
@@ -1602,6 +2136,7 @@ export function installPlotAudioMethods(TargetClass) {
      * redrawn, which _teardownAudioForPanel now survives.
      */
     proto._stopAudioIfOwner = function(panelId) {
+        if (this.plots.get(panelId)?.audio?.loading) this._audioCancelLoad(panelId, { quiet: true });
         if (player.owner?.manager !== this || player.owner.panelId !== panelId) return;
         this._audioReleaseNode();
         this._stopAudioTick();
@@ -1613,6 +2148,9 @@ export function installPlotAudioMethods(TargetClass) {
 
     /** Called when a file closes, the language changes, or the layout resets. */
     proto.stopAudioPlayback = function() {
+        for (const [panelId, plot] of this.plots) {
+            if (plot.audio?.loading) this._audioCancelLoad(panelId, { quiet: true });
+        }
         if (player.owner?.manager !== this) return;
         const panelId = player.owner.panelId;
         this._audioReleaseNode();

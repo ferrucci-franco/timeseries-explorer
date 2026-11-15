@@ -83,7 +83,7 @@ try {
         const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
         const svg = plot.div.querySelector('.main-svg').getBoundingClientRect();
         const s = strip.getBoundingClientRect();
-        const controls = ['.audio-play', '.audio-stop', '.audio-loop', '.audio-readout', '.audio-seek', '.audio-source', '.audio-dc', '.audio-mute'];
+        const controls = ['.audio-play', '.audio-stop', '.audio-loop', '.audio-readout', '.audio-seek', '.audio-source', '.audio-dc', '.audio-mute', '.audio-export'];
         const problems = [];
         for (const selector of controls) {
             const r = strip.querySelector(selector).getBoundingClientRect();
@@ -154,9 +154,22 @@ try {
     const soundSwitch = page.locator('.compact-sound-switch input');
     assert.equal(await soundSwitch.isDisabled(), false, 'an 8 kHz tone can be heard');
     assert.equal(await soundSwitch.isChecked(), false);
+    // All | Visible window (#375), the strip's choice, in the sheet.
+    const windowChoice = page.locator('.compact-sound-window .compact-segment');
+    assert.deepEqual(await windowChoice.allInnerTexts(), ['All', 'Visible window'], 'the Sound section offers All | Visible window');
+    assert.equal(await page.locator('.compact-sound-window .compact-segment.is-active').innerText(), 'All', 'All first');
+    await page.locator('.compact-sound-window .compact-segment[data-window="visible"]').click();
+    assert.equal(await page.evaluate(() => {
+        const pm = window.app.plotManager;
+        return pm._audioWindowMode(pm.plots.get(window.app._compactActivePanelId()));
+    }), 'visible', 'a tap chooses the visible window');
+    assert.equal(await page.locator('.compact-sound-window .compact-segment.is-active').innerText(), 'Visible window', 'and the sheet says so');
+    await page.locator('.compact-sound-window .compact-segment[data-window="all"]').click();
     await soundSwitch.click();
     await page.waitForFunction(() => window.app._compact.sheet === null && !!document.querySelector('.compact-active-panel .audio-strip'));
     assert.equal((await audio()).open, true, 'the switch opens the strip, and the sheet makes way for it');
+    assert.equal(await page.locator('.compact-active-panel .audio-strip .audio-window').isVisible(), false,
+        'on a phone the choice lives in the sheet, not in the strip');
     await settled('upright');
     await shot(page, 'strip');
 

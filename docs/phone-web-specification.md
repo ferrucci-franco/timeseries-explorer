@@ -61,10 +61,13 @@ Built:
 - **Sound** in the Plot sheet (§5.2): a switch that opens the desktop's audio strip
   under the plot and puts the sheet away, offered where the desktop's 🔊 is (a time
   series, FFT, the histogram, the integral) and, where nothing can be heard,
-  disabled with the reason the desktop gives in its tooltip. The strip is the same
+  disabled with the reason the desktop gives in its tooltip. In a time series the
+  section also offers **All | Visible window** (#375), the choice the desktop
+  strip carries itself: the whole record or what the plot shows; on the phone it
+  is here rather than in the strip. The strip is the same
   one (`audio-methods.js`), laid out by `compact.css` in three rows at a finger's
   size: play, stop, loop, the time and mute; the seek bar across the screen; the
-  signal and Remove DC. The phone's own buttons set the volume, so the volume
+  signal, Remove DC and ⬇ (the WAV export, #92). The phone's own buttons set the volume, so the volume
   slider is hidden. A tap on the plot moves the sound there, as a click does on the
   desktop; a tap on the buttons over the plot (Fit, A|B, the legend's) does not.
   The rows wrap rather than sit in a grid: with a grid, a long signal name widened
@@ -289,6 +292,12 @@ compact mode hides the panel toolbar.
 - **Statistics and export**: statistics (Σ) and **Export** (§8.3), built.
   Export closes the sheet before the dialog opens: the image is the plot at the
   size it has on the screen.
+- **Signals on this plot**: each signal (or 2D/3D pair) with its colour and a way
+  off. There is no right-click on the legend, so the row carries the legend menu's
+  colour and order actions: its swatch opens the colour picker (the palette and a
+  colour of one's own), and **⋯** opens **Colour…** and **Move up / down / to first
+  / to last**, the moves that would do nothing disabled (no ⋯ on a plot of one
+  signal). Built (`src/plots/methods/trace-style-methods.js`).
 
 Autoscale and the cursor toggle may also appear as a small floating button cluster
 on the plot. That cluster must avoid axes, legend and data, and must stay at most two

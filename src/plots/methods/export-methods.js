@@ -16,7 +16,9 @@ import { canShareFiles, downloadFile, exportFile, shareFile } from '../../utils/
  * legitimate — the pie).
  *
  * The CSV writing itself stays in plot-manager (_exportCSV) and in the 2D fit
- * methods; this file only routes to them.
+ * methods; this file only routes to them. So does the WAV (#92): what the
+ * audio strip plays, written by audio-wav-methods.js; the audio strip's ⬇
+ * opens this same dialog on it.
  */
 
 // Node.DOCUMENT_POSITION_FOLLOWING — "b comes after a in the document".
@@ -157,13 +159,21 @@ export function installPlotExportMethods(TargetClass) {
         return chartCount > 1 && chart ? `${mode}_${chart.id}` : mode;
     };
 
-    proto._openExportDialog = async function(panelId) {
+    proto._openExportDialog = async function(panelId, { preselect = '' } = {}) {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
 
         const charts = this._exportableCharts(plot);
         const csvBlockedReason = this._csvExportBlockedReason(plot);
-        if (!charts.length && csvBlockedReason) {
+        // WAV: what the audio strip plays, offered disabled with its reason
+        // where nothing in the panel can be heard.
+        const wavPlan = this._wavExportPlan?.(plot) || null;
+        const wav = wavPlan ? {
+            ...wavPlan,
+            estimate: choice => this._wavEstimate(plot, choice),
+            baseName: choice => this._wavBaseName(plot, choice),
+        } : null;
+        if (!charts.length && csvBlockedReason && (!wav || wav.blockedReason)) {
             Modal.alert(i18n.t('exportDialogTitle'), csvBlockedReason, { icon: false });
             return;
         }
@@ -191,6 +201,8 @@ export function installPlotExportMethods(TargetClass) {
                 fileCount: concat.fileCount,
                 boundaryInstants: concat.boundaryInstants,
             } : null,
+            wav,
+            preselect,
         });
         if (!result) return;
 
@@ -205,6 +217,10 @@ export function installPlotExportMethods(TargetClass) {
     };
 
     proto._runExport = async function(panelId, plot, charts, result) {
+        if (result.format === 'wav') {
+            await this._exportWav(panelId, plot, result);
+            return;
+        }
         if (result.format === 'csv') {
             // Awaited: a large table is now written in chunks, and the caller
             // going on while it does would leave the dialog's own teardown
@@ -221,6 +237,54 @@ export function installPlotExportMethods(TargetClass) {
         const chart = charts.find(entry => entry.id === result.chartId) || charts[0];
         if (!chart) return;
         await this._exportPlotImage(panelId, plot, chart, result);
+    };
+
+    /**
+     * Write the WAV the dialog asked for, then save it. A long one — a file in
+     * memory-saving mode, or a long range — shows the busy overlay with its
+     * progress and a Cancel that aborts the read of the file.
+     */
+    proto._exportWav = async function(panelId, plot, result) {
+        const choice = result.wav;
+        if (!choice) return null;
+        const estimate = this._wavEstimate(plot, choice);
+        const lazy = this._wavChosenSources(plot, choice).some(source => source?.status?.lazy);
+        const controller = new AbortController();
+        const token = {
+            get cancelled() { return controller.signal.aborted; },
+            set cancelled(value) { if (value) controller.abort(); },
+        };
+        const big = lazy || !(estimate.frames * (estimate.channels || 1) < 2000000);
+        const overlay = big ? this.onBusyOverlay?.({ title: i18n.t('exportWavBuilding'), token }) : null;
+        let written = null;
+        try {
+            written = await this._writeWav(plot, choice, {
+                signal: controller.signal,
+                onProgress: ({ pass, rows, frames }) => {
+                    if (!overlay) return;
+                    overlay.progress(pass === 1
+                        ? i18n.t('exportWavProgressRead').replace('{done}', i18n.formatNumber(rows))
+                        : i18n.t('exportWavProgressWrite')
+                            .replace('{done}', i18n.formatNumber(rows))
+                            .replace('{total}', i18n.formatNumber(frames)));
+                },
+            });
+        } catch (error) {
+            if (controller.signal.aborted || error?.name === 'AbortError') return null;
+            Modal.alert(i18n.t('exportWavFailedTitle'), i18n.t('audioReadFailed'), {
+                details: error?.message || String(error),
+                detailsLabel: i18n.t('exportFailedDetails'),
+            });
+            return null;
+        } finally {
+            overlay?.close();
+        }
+        if (written?.error) {
+            Modal.alert(i18n.t('exportWavFailedTitle'), this._wavErrorText(plot, written.error), { icon: '⚠️' });
+            return null;
+        }
+        await this._saveExportBlob(written.blob, result.fileName);
+        return result.fileName;
     };
 
     proto._exportPlotImage = async function(panelId, plot, chart, { format, scale, theme, fileName }) {
