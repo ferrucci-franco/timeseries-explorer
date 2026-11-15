@@ -38,6 +38,9 @@ Owns top-level app orchestration and browser-facing workflows.
   - tabs (web and Full Desktop): only the tab on screen has panels; the others are kept
     as a saved view keeps them (layout tree + plot sessions) and put back
     through the same restore code
+- `version-check.js`, `methods/version-check-methods.js`
+  - the web app moving itself onto a newer deploy (#374): see
+    [Web updates](#web-updates) below
 
 ### `src/plots`
 
@@ -106,6 +109,34 @@ Split CSS source by concern:
 - `content.css`
 - `overlays.css`
 - `index.css`
+
+## Web updates
+
+GitHub Pages serves every file, `index.html` included, with
+`Cache-Control: max-age=600`, so after a deploy a browser can keep starting
+the old build for a while. The build therefore writes its commit to
+`dist/version.json` (`{ "sha", "date" }`, a small plugin in `vite.config.js`;
+the dev server answers the same path with its own build). On start, and when
+the tab comes back into view (at most once every 15 minutes), the app fetches
+it with `cache: 'no-store'` and a throwaway query, and compares it with its
+own `__GIT_SHA__`:
+
+- same build, or no answer (offline, a 404): nothing happens;
+- a different build and nothing open: the page loads again at its own address
+  plus `?build=<sha>`. That address is in no cache, the browser's or the CDN's,
+  so the new `index.html` comes back for certain, where a plain
+  `location.reload()` could get the cached old one. The new page removes the
+  query from the address bar;
+- a different build with files open (or a dialog, or a load in progress): a
+  notice offers the reload, and says it closes the open files.
+
+A reload is recorded in `sessionStorage` before it starts. If the page that
+comes back is still the old build, the server is still handing it out, and the
+app does not reload again for that build for 30 minutes: never a loop. The
+check is off in Full Desktop (it updates through its releases), in the guide's
+frame, on `file://` and in a build without a commit. The decisions are in
+`src/app/version-check.js` (`npm run test:version-check`); the browser side is
+`npm run e2e:version-check`.
 
 ## Design intent
 

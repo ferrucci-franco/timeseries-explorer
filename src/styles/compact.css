@@ -951,6 +951,24 @@ html.compact.compact-landscape .compact-toast {
     left: calc(50% + var(--compact-chrome-left) / 2);
 }
 
+/* "A new version is available" (version-check-methods.js): under the app bar
+   whatever the notch, the width of the screen less its margins, and clear of
+   the rail when the phone is sideways. */
+html.compact .version-update-notice {
+    top: calc(var(--compact-chrome-top) + 12px);
+    left: calc(var(--compact-chrome-left) + 16px);
+    right: calc(var(--compact-chrome-right) + 16px);
+    width: auto;
+    max-width: 520px;
+    margin-left: auto;
+    box-sizing: border-box;
+}
+
+html.compact .version-update-notice .dismissible-notice-action {
+    min-height: 2.5rem;
+    padding-inline: 1rem;
+}
+
 .compact-phase-banner {
     display: flex;
     align-items: center;
@@ -1508,7 +1526,9 @@ html.compact .plots-area .js-plotly-plot {
 
 html.compact .plots-area .compact-fit-group {
     position: absolute;
-    z-index: 5;
+    /* Above the hover and cursor lines and the cursors' tabs: the order is
+       written out above .cursor-plot-overlay in content.css (#370). */
+    z-index: 7;
     display: flex;
     gap: 6px;
     pointer-events: none;

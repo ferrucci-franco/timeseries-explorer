@@ -9,7 +9,9 @@
 import assert from 'node:assert/strict';
 
 import {
+    GITHUB_PREFILL_URL_MAX,
     buildFeedbackHandoffUrl,
+    buildPrefilledIssueUrl,
     readFeedbackHandoff,
     FEEDBACK_MAX_ATTACHMENTS,
     FEEDBACK_MAX_ATTACHMENT_BYTES,
@@ -228,5 +230,54 @@ assert.equal(
     huge,
     'a failed re-encoding falls back to the original',
 );
+
+// ─── The prefilled GitHub link ─────────────────────────────────────
+// The link under Send, for a reporter with a GitHub account, and the
+// failed-send fallback share it. The fallback asks for no limit and gets the
+// very link it always opened; the link under Send fits GitHub's length.
+const ISSUES = 'https://github.com/ferrucci-franco/timeseries-explorer/issues/new';
+{
+    const params = { title: '[Time Series Explorer] Cursor', body: 'Short body\n\nBuild:\nVersion: 1\n', labels: 'feedback' };
+    const unlimited = buildPrefilledIssueUrl(ISSUES, params);
+    assert.equal(unlimited.url, `${ISSUES}?${new URLSearchParams(params).toString()}`, 'the fallback link is unchanged');
+    assert.equal(unlimited.truncated, false);
+    const fitted = buildPrefilledIssueUrl(ISSUES, params, { maxLength: GITHUB_PREFILL_URL_MAX });
+    assert.equal(fitted.url, unlimited.url, 'a short report is not touched by the limit');
+    const read = new URL(fitted.url).searchParams;
+    assert.equal(read.get('title'), params.title, 'the title is prefilled');
+    assert.equal(read.get('body'), params.body, 'and the body');
+    assert.equal(read.get('labels'), 'feedback');
+    assert.equal(new URL(buildPrefilledIssueUrl(ISSUES, { title: 't', body: 'b' }).url).searchParams.has('labels'), false,
+        'no labels, no empty labels parameter');
+}
+{
+    // A long description, with accents, an emoji (two UTF-16 units) and
+    // characters that encode to several bytes each, before the build block.
+    const tail = '\nBuild:\nVersion: 0.7.0\nCommit: abc1234\nUser agent: TestAgent/1.0\n\nDrag these downloaded screenshots into the GitHub issue if they are safe to share:\nscreenshot-1.png\n';
+    const typed = 'Le curseur saute — 😀 & 50% "quoted" ' .repeat(600);
+    const body = `Time Series Explorer feedback\n\nDetails:\n${typed}\n${tail}`;
+    const params = { title: '[Time Series Explorer] Long one', body, labels: 'feedback' };
+    assert.ok(buildPrefilledIssueUrl(ISSUES, params).url.length > GITHUB_PREFILL_URL_MAX, 'the test body is too long for a link');
+    const cut = buildPrefilledIssueUrl(ISSUES, params, { maxLength: GITHUB_PREFILL_URL_MAX, keepEnd: tail.length });
+    assert.equal(cut.truncated, true, 'a long report is cut');
+    assert.ok(cut.url.length <= GITHUB_PREFILL_URL_MAX, `to fit the link (${cut.url.length} characters)`);
+    assert.ok(cut.url.length > GITHUB_PREFILL_URL_MAX - 200, `and not much shorter than it needs to be (${cut.url.length})`);
+    const got = new URL(cut.url).searchParams.get('body');
+    assert.ok(got.startsWith('Time Series Explorer feedback\n\nDetails:\nLe curseur saute'), 'the beginning is kept');
+    assert.ok(got.endsWith(tail), 'the build details and the files to drag in survive the cut');
+    assert.match(got, /\[… The report was cut here to fit the length of a GitHub link: \d+ characters were left out\./,
+        'and the body says where it was cut');
+    const count = Number(/: (\d+) characters were left out/.exec(got)[1]);
+    assert.equal(count, cut.omitted, 'the note gives the count');
+    assert.equal(got.indexOf('[…'), body.length - tail.length - count + 2, 'which is how much is missing before the note');
+    assert.ok(!got.includes('�'), 'no character is split in half');
+    assert.equal(new URL(cut.url).searchParams.get('title'), params.title, 'the title is never cut');
+
+    // A tail that cannot fit on its own: the body is cut from the end instead.
+    const hugeTail = buildPrefilledIssueUrl(ISSUES, params, { maxLength: 2000, keepEnd: body.length });
+    assert.equal(hugeTail.truncated, true);
+    assert.ok(hugeTail.url.length <= 2000, 'it still fits');
+    assert.match(new URL(hugeTail.url).searchParams.get('body'), /characters were left out/);
+}
 
 console.log('Feedback transport checks passed.');

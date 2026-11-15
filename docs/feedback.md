@@ -5,6 +5,10 @@ its screenshots, becomes a GitHub issue in this repository. The person
 reporting the problem needs no GitHub account, no email program, and has
 nothing to drag anywhere.
 
+Under Send, a quieter link offers a second way to whoever has a GitHub account:
+*Have a GitHub account? Open it on GitHub instead* (see
+[Filing it on GitHub yourself](#filing-it-on-github-yourself)).
+
 ## Why it works this way
 
 A static page cannot open an issue for someone who is not signed in to GitHub,
@@ -72,12 +76,42 @@ its own. With line framing the worker parses only the short head and hands each
 attachment to GitHub as an untouched substring. Base64 contains no newline, so
 the framing is unambiguous.
 
+## Filing it on GitHub yourself
+
+Send files the issue under the endpoint's account, so the reporter gets no
+notification when someone answers. A reporter with a GitHub account can file it
+under their own instead, with the link under Send. It opens GitHub's new-issue
+form in a new tab, prefilled with the title, the body and the build details the
+form gathers, and the `feedback` label (which GitHub applies only for someone
+who may label issues). It is the same prefilled link the failed-send fallback
+opens (`buildPrefilledIssueUrl` in `src/app/feedback-transport.js`), with two
+limits that the form states beside the link:
+
+- **Files are dragged in by hand.** A link cannot carry attachments, so the
+  attachments go to Downloads as the fallback's *Save the report* saves them —
+  screenshots as themselves, anything else in one zip — and the body names the
+  files to drag into the issue.
+- **A long body is cut.** A prefilled link is kept under 8000 characters
+  (`GITHUB_PREFILL_URL_MAX`); GitHub answers a much longer one with an error
+  instead of the form. The cut falls inside what the reporter typed: the
+  beginning is kept, then a note saying the report was cut there and how many
+  characters were left out, then the build details and the list of files,
+  whole. The form says the report was cut, and still holds the full text.
+
+The issue is opened before the downloads finish, while the click still counts
+as the reporter's own, so a pop-up blocker lets it through. Nothing is filed
+until the reporter submits it on GitHub: the draft stays in the form, Send
+still works, and nothing reaches the endpoint. Once Send has
+filed the report the link goes away with the Send button.
+
 ## When the send fails
 
 Nothing is lost. The form keeps everything it holds, says what went wrong —
 offline, too slow, refused with the endpoint's own words, or "this build has no
 endpoint" — and offers the old manual paths as a way out: save the report (and
-its screenshots) to Downloads, or open a prefilled GitHub issue. Closing the
+its screenshots) to Downloads, or open a prefilled GitHub issue. That prefilled
+issue is the full report, uncut, as it always was; the link under Send is the
+one that fits a long report to GitHub's limit. Closing the
 form keeps the draft for the rest of the browser session either way.
 
 A refusal from the endpoint carries a short code (`too-large`, `rate-limited`,
@@ -146,10 +180,10 @@ repository variable of the same name. Deployment is in
 
 | | |
 | --- | --- |
-| `npm run test:feedback-transport` | the request the page builds, every limit, every failure kind, the shrinking |
+| `npm run test:feedback-transport` | the request the page builds, every limit, every failure kind, the shrinking, the prefilled GitHub link and its cut |
 | `npm run test:feedback-worker` | the whole endpoint against a stubbed GitHub: limits, sanitising, issue text, rate limit |
-| `npm run test:feedback-form` | the form's one button, the paste wiring, the translations |
+| `npm run test:feedback-form` | the form's one button, the GitHub link under it, the paste wiring, the translations |
 | `npm run test:feedback-attachments` | a dropped file is visibly received and does not reach the data loader |
 | `npm run test:feedback-screenshots` | the download fallback, for when a send fails |
-| `npm run e2e:feedback-send` | in a real browser: Ctrl+V with the caret in a text field, Send, the shrinking, and the desktop handover |
+| `npm run e2e:feedback-send` | in a real browser: Ctrl+V with the caret in a text field, the GitHub link (its URL, prefill, download and cut), Send, the shrinking, and the desktop handover |
 | `npm run test:electron-navigation` | the handover URL opens externally and stays unfetchable from inside the app |

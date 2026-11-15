@@ -27,6 +27,7 @@ import { installCompactMethods } from './methods/compact-methods.js';
 import { installCompactCursorMethods } from './methods/compact-cursor-methods.js';
 import { installCompactDerivedMethods } from './methods/compact-derived-methods.js';
 import { installCompactToolsMethods } from './methods/compact-tools-methods.js';
+import { installVersionCheckMethods } from './methods/version-check-methods.js';
 import { initialCapabilities, resolveCapabilities } from './capabilities.js';
 import { ADVANCED_SETTINGS_VERSION, migrateAdvancedSettings } from './advanced-settings-migration.js';
 import {
@@ -128,6 +129,9 @@ class OpenModelicaViewer {
         // transmits nothing itself, so the browser files the report for it.
         if (!DEMO_MODE) this.openFeedbackFromUrl?.();
         this._syncGuideNewMark?.();
+        // A newer build deployed since this page was cached: switch to it, or
+        // offer to when files are open (methods/version-check-methods.js).
+        this.initVersionCheck();
     }
 
     // ─── File management ───────────────────────────────────────────
@@ -471,5 +475,6 @@ installCompactMethods(OpenModelicaViewer);
 installCompactCursorMethods(OpenModelicaViewer);
 installCompactDerivedMethods(OpenModelicaViewer);
 installCompactToolsMethods(OpenModelicaViewer);
+installVersionCheckMethods(OpenModelicaViewer);
 
 export default OpenModelicaViewer;

@@ -35,8 +35,10 @@ import {
     FEEDBACK_MAX_ATTACHMENTS,
     FEEDBACK_MAX_TOTAL_BYTES,
     FeedbackSendError,
+    GITHUB_PREFILL_URL_MAX,
     buildFeedbackHandoffUrl,
     buildFeedbackReport,
+    buildPrefilledIssueUrl,
     checkFeedbackAttachments,
     readFeedbackHandoff,
     sendFeedbackReport,
@@ -2203,9 +2205,25 @@ proto.showFeedbackForm = function() {
     sendNote.className = 'feedback-send-note';
     sendNote.textContent = i18n.t('feedbackSendNote');
 
+    // A second way, for a reporter who would rather own the issue: GitHub's
+    // own form, prefilled, under their account. Send stays the main path and
+    // this is only a link under it, with its limits said beside it.
+    const githubOption = document.createElement('p');
+    githubOption.className = 'feedback-github';
+    const githubAsk = document.createElement('span');
+    githubAsk.textContent = `${i18n.t('feedbackGithubAsk')} `;
+    const githubLink = document.createElement('button');
+    githubLink.type = 'button';
+    githubLink.className = 'feedback-github-link';
+    githubLink.textContent = i18n.t('feedbackGithubOpen');
+    const githubNote = document.createElement('span');
+    githubNote.className = 'feedback-github-note';
+    githubNote.textContent = i18n.t('feedbackGithubNote');
+    githubOption.append(githubAsk, githubLink, githubNote);
+
     const body = document.createElement('div');
     body.className = 'feedback-body';
-    body.append(fields, attachmentSection, sendNote);
+    body.append(fields, attachmentSection, sendNote, githubOption);
 
     const actions = document.createElement('div');
     actions.className = 'modal-buttons feedback-actions';
@@ -2465,15 +2483,45 @@ proto.showFeedbackForm = function() {
             ? await downloadScreenshots(feedback)
             : await downloadPackage(feedback);
     };
-    const openIssue = (feedback, filename, screenshotNames = []) => {
+    // `fit`: cut a long body to what a GitHub link can carry. The failed-send
+    // fallback opens the link it always has; the GitHub link under Send fits.
+    const openIssue = (feedback, filename, screenshotNames = [], { fit = false } = {}) => {
         const subject = `[Time Series Explorer] ${feedback.summary || i18n.t('extraFeedback')}`;
         const body = this._formatFeedbackIssueBody(feedback, false, filename, screenshotNames);
-        const params = new URLSearchParams({
+        // What a cut keeps whole: the build details and the files to drag in,
+        // which are at the end of the body, after everything typed.
+        const buildAt = body.lastIndexOf('\nBuild:\n');
+        const link = buildPrefilledIssueUrl(FEEDBACK_ISSUES_URL, {
             title: subject,
             body,
             labels: 'feedback',
-        });
-        window.open(`${FEEDBACK_ISSUES_URL}?${params.toString()}`, '_blank', 'noopener');
+        }, fit ? { maxLength: GITHUB_PREFILL_URL_MAX, keepEnd: buildAt >= 0 ? body.length - buildAt : 0 } : {});
+        window.open(link.url, '_blank', 'noopener');
+        return link;
+    };
+    // The link under Send. The downloads start (the first one in this very
+    // tick) and the issue opens right after, still inside the click: a window
+    // opened after the pauses between downloads is a pop-up to block.
+    // The attachments go to Downloads as the fallback's Save does: screenshots
+    // as themselves, anything else in one zip. The draft is kept: nothing is
+    // filed until the reporter submits it on GitHub, and Send still works.
+    const openOnGitHub = async () => {
+        if (sent || !form.reportValidity()) return;
+        const feedback = collectFeedback();
+        const mode = this._feedbackDeliveryMode(attachedFiles);
+        const downloads = mode === 'images' ? downloadScreenshots(feedback)
+            : mode === 'package' ? downloadPackage(feedback)
+                : null;
+        const link = openIssue(
+            feedback,
+            mode === 'package' ? this._feedbackPackageFileName(feedback) : '',
+            mode === 'images' ? attachedFiles.map(attachment => attachment.file.name) : [],
+            { fit: true },
+        );
+        const lines = [i18n.t(downloads ? 'feedbackGithubOpenedFiles' : 'feedbackGithubOpened')];
+        if (link.truncated) lines.push(i18n.t('feedbackGithubCut'));
+        setStatus('info', { text: lines.join(' ') });
+        await downloads;
     };
 
     // ── Sending ────────────────────────────────────────────────────────────
@@ -2524,6 +2572,7 @@ proto.showFeedbackForm = function() {
         clearButton.disabled = busy;
         fileButton.disabled = busy;
         pasteButton.disabled = busy;
+        githubLink.disabled = busy;
         sendButton.textContent = busy ? i18n.t('feedbackSending') : i18n.t('feedbackSend');
         form.classList.toggle('is-sending', busy);
     };
@@ -2539,6 +2588,8 @@ proto.showFeedbackForm = function() {
         pasteButton.disabled = true;
         sendButton.hidden = true;
         clearButton.hidden = true;
+        // Filed already: a second copy on GitHub is not what it offers.
+        githubOption.hidden = true;
         minimizeButton.textContent = i18n.t('feedbackClose');
         minimizeButton.classList.add('modal-btn-confirm');
         setStatus('sent', {
@@ -2668,6 +2719,9 @@ proto.showFeedbackForm = function() {
     closeButton.addEventListener('click', finish);
     minimizeButton.addEventListener('click', finish);
     clearButton.addEventListener('click', clearForm);
+    githubLink.addEventListener('click', () => {
+        openOnGitHub().catch(err => console.error('Feedback download failed:', err));
+    });
     renderFiles();
 
     requestAnimationFrame(() => overlay.classList.add('show'));

@@ -13,7 +13,7 @@ const finishBody = feedbackForm.match(/const finish = \(\) => \{([\s\S]*?)\n    
 assert.match(feedbackForm, /feedbackDraftNote/, 'Feedback form should explain that closing preserves the in-session draft');
 assert.match(feedbackForm, /const body = document\.createElement\('div'\)/, 'Feedback form should create a dedicated scroll body');
 assert.match(feedbackForm, /body\.className = 'feedback-body'/, 'Feedback form body should use its layout class');
-assert.match(feedbackForm, /body\.append\(fields, attachmentSection, sendNote\)/, 'Feedback body should contain fields, attachments, and what Send does');
+assert.match(feedbackForm, /body\.append\(fields, attachmentSection, sendNote, githubOption\)/, 'Feedback body should contain fields, attachments, what Send does, and the GitHub link under it');
 assert.match(feedbackForm, /form\.append\(header, body, actions\)/, 'Feedback actions should stay outside the scroll body');
 assert.match(feedbackForm, /const clearButton = document\.createElement\('button'\)/, 'Feedback form should create a Clear form button');
 assert.match(feedbackForm, /clearButton\.textContent = i18n\.t\('feedbackClearForm'\)/, 'Feedback clear button should use a dedicated translation');
@@ -41,6 +41,23 @@ assert.match(feedbackForm, /setStatus\('error', \{ text: `\$\{text\}\$\{detail\}
 // did not keeps the endpoint's English rather than becoming a shrug.
 assert.match(feedbackForm, /FEEDBACK_REFUSAL_KEYS\[error\?\.code\]/, 'a coded refusal is translated');
 assert.match(feedbackForm, /!translatedRefusal && error\?\.detail/, 'an uncoded one still says what happened');
+
+// ── The GitHub link: optional, under Send, and Send unchanged (#373) ────────
+// For a reporter who would rather own the issue. It reuses the fallback's
+// prefilled link, fitted to GitHub's length, and the fallback's downloads.
+assert.match(feedbackForm, /githubLink\.textContent = i18n\.t\('feedbackGithubOpen'\)/, 'the link says what it does');
+assert.match(feedbackForm, /githubNote\.textContent = i18n\.t\('feedbackGithubNote'\)/, 'and its limits are said beside it');
+assert.match(feedbackForm, /buildPrefilledIssueUrl\(FEEDBACK_ISSUES_URL, \{\s*title: subject,\s*body,\s*labels: 'feedback',\s*\}, fit \? \{ maxLength: GITHUB_PREFILL_URL_MAX/,
+    'one prefilled link for both, fitted only when asked');
+assert.match(feedbackForm, /issueLink\.addEventListener\('click', \(\) => openIssue\(collectFeedback\(\), '', \[\]\)\)/,
+    'the fallback opens the link it always did, unfitted and with no downloads');
+const githubPath = feedbackForm.slice(feedbackForm.indexOf('const openOnGitHub = async'), feedbackForm.indexOf('// ── Sending'));
+assert.match(githubPath, /downloadScreenshots\(feedback\)[\s\S]*?downloadPackage\(feedback\)/, 'the attachments go to Downloads as the fallback saves them');
+assert.ok(githubPath.indexOf('downloadScreenshots(feedback)') < githubPath.indexOf('openIssue('),
+    'the first download starts before the tab opens');
+assert.match(githubPath, /\{ fit: true \}/, 'and the link is fitted to GitHub');
+assert.doesNotMatch(githubPath, /sendFeedbackReport|_feedbackDraft = null|sent = true/, 'it neither sends nor drops the draft');
+assert.match(feedbackForm, /githubOption\.hidden = true;/, 'a filed report does not offer a second copy on GitHub');
 
 // ── Full Desktop keeps its promise not to transmit ──────────────────────────
 // It cancels every external request the renderer makes (electron/navigation-
@@ -82,7 +99,9 @@ for (const key of ['feedbackSend', 'feedbackSending', 'feedbackSentBody', 'feedb
     'feedbackSendNote', 'feedbackPasteButton', 'feedbackErrorOffline', 'feedbackErrorRejected',
     'feedbackErrorServer', 'feedbackErrorTimeout', 'feedbackErrorNotConfigured', 'feedbackFallbackIntro',
     'feedbackErrorRateLimited', 'feedbackErrorTooLarge', 'feedbackErrorInvalid', 'feedbackErrorTypeRejected',
-    'feedbackDesktopTitle', 'feedbackDesktopBody', 'feedbackDesktopOpen', 'feedbackDesktopOpened']) {
+    'feedbackDesktopTitle', 'feedbackDesktopBody', 'feedbackDesktopOpen', 'feedbackDesktopOpened',
+    'feedbackGithubAsk', 'feedbackGithubOpen', 'feedbackGithubNote', 'feedbackGithubOpened', 'feedbackGithubOpenedFiles',
+    'feedbackGithubCut']) {
     assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 5, `${key} should exist in all five languages`);
 }
 // The keys of the paths that are gone must be gone too, or the next reader

@@ -170,6 +170,54 @@ try {
     const stillOne = await page.$$eval('.feedback-file-list li', nodes => nodes.length);
     assert.equal(stillOne, 1, 'a paste with no file attaches nothing');
 
+    // ── Or open it on GitHub, under one's own account (#373) ────────────────
+    // An optional link under Send: GitHub's form, prefilled, with the
+    // screenshot saved to Downloads to be dragged in. It files nothing itself,
+    // so the stub must hear nothing and the form must stay as it was.
+    await page.evaluate(() => {
+        window.__openedUrls = [];
+        window.open = (target) => { window.__openedUrls.push(target); return null; };
+    });
+    assert.equal(await page.isVisible('.feedback-github-link'), true, 'the GitHub link is there before anything is sent');
+    assert.match(await page.textContent('.feedback-github-note'), /Downloads.*cut/s, 'saying the files are downloaded and a long report is cut');
+    const githubDownload = page.waitForEvent('download');
+    await page.click('.feedback-github-link');
+    assert.equal((await githubDownload).suggestedFilename(), attached[0], 'the screenshot is saved, to be dragged into the issue');
+    const githubUrl = new URL(await page.evaluate(() => window.__openedUrls.at(-1)));
+    assert.equal(`${githubUrl.origin}${githubUrl.pathname}`, 'https://github.com/ferrucci-franco/timeseries-explorer/issues/new',
+        'the link is GitHub’s new-issue form');
+    assert.equal(githubUrl.searchParams.get('title'), '[Time Series Explorer] The cursor jumps one sample', 'with the title filled in');
+    const githubBody = githubUrl.searchParams.get('body');
+    assert.match(githubBody, /Details:\nOpened a csv, dragged the cursor across the plot\./, 'and the body');
+    assert.match(githubBody, /Version: .+\nCommit: /, 'with the build');
+    assert.match(githubBody, new RegExp(`Drag these downloaded screenshots into the GitHub issue[^\\n]*\\n${attached[0].replace('.', '\\.')}`),
+        'and the screenshot to drag in');
+    assert.doesNotMatch(githubBody, /was cut here/, 'a short report is not cut');
+    assert.equal(githubUrl.searchParams.get('labels'), 'feedback');
+    assert.match(await page.textContent('.feedback-status'), /new tab.*Downloads/s, 'the form says what to do next');
+    assert.equal(received.length, 0, 'nothing was sent to the endpoint');
+    assert.equal(await page.$eval('.feedback-send-btn', node => node.hidden || node.disabled), false, 'and Send is still there');
+
+    // A report longer than a link can carry is cut, and says so in the issue
+    // and in the form; what is typed stays in the form.
+    const detailsField = '.feedback-field:nth-child(4) .feedback-control';
+    const longDetails = 'The cursor jumps — één sample, 😀. '.repeat(700);
+    await page.fill(detailsField, longDetails);
+    const longDownload = page.waitForEvent('download');
+    await page.click('.feedback-github-link');
+    await longDownload;
+    const longUrl = await page.evaluate(() => window.__openedUrls.at(-1));
+    assert.ok(longUrl.length <= 8000, `the link fits GitHub's limit (${longUrl.length} characters)`);
+    const longBody = new URL(longUrl).searchParams.get('body');
+    assert.match(longBody, /^Time Series Explorer feedback[\s\S]*Details:\nThe cursor jumps/, 'it keeps the beginning');
+    assert.match(longBody, /\[… The report was cut here to fit the length of a GitHub link: \d+ characters were left out\./, 'says where it was cut');
+    assert.match(longBody, new RegExp(`Commit: [\\s\\S]*${attached[0].replace('.', '\\.')}\\n$`), 'and keeps the build and the screenshot’s name');
+    assert.ok(!longBody.includes('�'), 'no character is cut in half');
+    assert.match(await page.textContent('.feedback-status'), /too long for a GitHub link/, 'the form says it was cut');
+    assert.equal(await page.inputValue(detailsField), longDetails, 'and still holds the whole text');
+    await page.fill(detailsField, 'Opened a csv, dragged the cursor across the plot.');
+    assert.equal(received.length, 0, 'still nothing sent');
+
     // ── Send ────────────────────────────────────────────────────────────────
     await sendAndAwaitAnswer(page, 'first report', pageErrors);
 
@@ -178,6 +226,7 @@ try {
     assert.equal(link.href, 'https://github.com/ferrucci-franco/timeseries-explorer/issues/4242');
     assert.match(link.text, /4242/, 'the reporter is shown where the report landed');
     assert.equal(await page.$eval('.feedback-send-btn', node => node.hidden), true, 'Send is gone once it is filed');
+    assert.equal(await page.isVisible('.feedback-github-link'), false, 'and so is the GitHub link: it would file it twice');
     assert.equal(await page.$eval('.feedback-field:nth-child(3) .feedback-control', node => node.disabled), true,
         'and the form is frozen, so the same report cannot be filed twice');
 

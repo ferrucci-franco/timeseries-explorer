@@ -26,11 +26,39 @@ function resolveCommitDate() {
   }
 }
 
+const GIT_SHA = resolveGitSha();
+const BUILD_DATE = resolveCommitDate();
+
+// The build publishes its own commit as `version.json`, beside index.html. A
+// page that the browser or the CDN kept from an older deploy reads it on start
+// and switches to the newer build (src/app/version-check.js, #374). The dev
+// server answers with the same file, so a dev page finds itself current. The
+// values are the ones `define` bakes into the bundle below, read once, so the
+// two can never disagree.
+function versionJsonPlugin() {
+  const source = () => `${JSON.stringify({ sha: GIT_SHA, date: BUILD_DATE })}\n`;
+  return {
+    name: 'omv-version-json',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (!/\/version\.json(\?|$)/.test(req.url || '')) return next();
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(source());
+      });
+    },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: source() });
+    },
+  };
+}
+
 export default defineConfig({
   base: './',
+  plugins: [versionJsonPlugin()],
   define: {
-    __GIT_SHA__: JSON.stringify(resolveGitSha()),
-    __BUILD_DATE__: JSON.stringify(resolveCommitDate()),
+    __GIT_SHA__: JSON.stringify(GIT_SHA),
+    __BUILD_DATE__: JSON.stringify(BUILD_DATE),
     // The endpoint the Feedback form sends reports to (server/feedback-worker).
     // A build without it still shows the form; the send then fails with a
     // message saying so, rather than silently going nowhere.
