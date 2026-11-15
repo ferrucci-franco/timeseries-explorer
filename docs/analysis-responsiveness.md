@@ -1141,7 +1141,43 @@ is the paint (no JavaScript running), as before.
 
 ### #387: Temporal profile's range block
 
-Not landed yet.
+What was wrong: an expensive range is first computed over a preview of
+262 144 samples, the first pass is timed, and when the whole range proves
+affordable `_reconsiderAutoLimitedRange` puts the range back and recomputes.
+It put the state back and nothing else: the range block went on showing
+*Selection* with the bounds of the preview, and the green band stayed on the
+time pane, under a result computed from the whole file.
+
+What was done:
+
+- `_reconsiderAutoLimitedRange` now calls `_syncAnalysisRangeUi(panelId,
+  plot, mode)` (`src/plots/methods/data-methods.js`) before it reschedules:
+  the analysis' range block and its selection band are put back in step with
+  the restored range.
+- **The other analyses with the preview had the same defect**, through the
+  same function, and are fixed by the same call: the histogram, the heatmap,
+  the integral, the pair correlation and the 2D curve fit. (The FFT bounds
+  its range on its own path, `_prepareFftAutoRange`, and is not concerned.)
+- The correlation's range block showed `1970-01-01` in both fields while its
+  range was *Full* and had never been selected (its state holds no bounds
+  then). It now shows the file's bounds, as the other analyses do
+  (`_correlationShownRange`).
+- **Tests.** `scripts/test-analysis-measured-range.mjs`: the reconsider asks
+  for the sync with the restored range, before the recompute.
+  `scripts/e2e-analysis-preview-range.mjs` (`e2e:analysis-preview-range`, in
+  the `e2e` chain): for the six analyses, on a file in memory, the preview
+  state is written as `_autoLimitAnalysisRange` writes it, the timed pass
+  runs, and the block must say *Full*, with the file's bounds, exactly as it
+  did when the analysis opened on the whole file. With the sync taken out it
+  fails on the first analysis (*"histogram: the range block says Full"*:
+  `selection`).
+
+The bench reads the range from the analysis' state, not from the block, so
+its numbers do not change. Checked on the 10 M-row file in memory, with
+nothing forced: the temporal profile opens on the preview (*"Only 262,144 of
+10,000,000 samples were analysed"*), the timed pass proves the whole file
+affordable (in a warm worker: see #381, "The automatic preview"), and the
+block then shows *Full*, `2023-01-01T00:00` … `2023-12-14T05:19:57`.
 
 ### #388: Cross-correlation tool past its budget
 

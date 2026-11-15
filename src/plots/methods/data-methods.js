@@ -3076,8 +3076,54 @@ proto._reconsiderAutoLimitedRange = function(panelId, plot, elapsedMs) {
     // the view has to open back up with it.
     state.autoRangeFocusPending = true;
     if (Array.isArray(state.warnings)) state.warnings = [];
+    // And the panel has to say so: the range block was showing "Selection"
+    // with the bounds of the cut, and the green band was drawn over it. Left
+    // alone, the block went on showing the 262 144-sample preview under a
+    // result computed from the whole file (#387).
+    this._syncAnalysisRangeUi?.(panelId, plot, mode);
     this._rescheduleAnalysisRecompute(panelId, mode);
     return true;
+};
+
+// The range block of an analysis (Full / Selection, its two bounds) and the
+// selection drawn on its time pane, put back in step with its state — after
+// something other than those controls changed the range.
+proto._syncAnalysisRangeUi = function(panelId, plot, mode = plot?.mode) {
+    const call = (name, ...rest) => {
+        try {
+            this[name]?.(...rest);
+        } catch (error) {
+            console.warn(`[analysis] ${name} after a range change:`, error);
+        }
+    };
+    switch (mode) {
+        case 'histogram':
+            call('_syncHistogramOptionsPanel', plot);
+            call('_updateHistogramSelectionShapes', panelId, plot);
+            break;
+        case 'heatmap':
+            call('_syncCalendarHeatmapOptionsPanel', plot);
+            call('_updateCalendarHeatmapSelectionShapes', panelId, plot);
+            break;
+        case 'temporal-profile':
+            call('_syncTemporalProfileOptionsPanel', plot);
+            call('_updateTemporalProfileSelectionShapes', panelId, plot);
+            break;
+        case 'integral':
+            call('_syncIntegralOptionsPanel', plot);
+            call('_updateIntegralSelectionShapes', panelId, plot);
+            break;
+        case 'correlation':
+            call('_syncCorrelationRangeInputs', plot);
+            call('_updateCorrelationSelectionShapes', panelId, plot);
+            break;
+        case 'phase2d':
+            call('_syncPhase2dFitRangeInputs', plot);
+            call('_updatePhase2dFitSelectionShapes', panelId, plot);
+            break;
+        default:
+            break;
+    }
 };
 
 // ─── State Animation mode ────────────────────────────────────────

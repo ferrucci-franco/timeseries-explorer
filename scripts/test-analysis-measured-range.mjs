@@ -63,22 +63,31 @@ function makeApp(stateOverrides = {}) {
         warnings: ['only some samples'],
         ...stateOverrides,
     };
+    const synced = [];
     const app = {
         _analysisStateForMode: () => state,
+        // What the range block is told when the range is put back (#387): the
+        // state as it stands at that moment, before the recompute is asked for.
+        _syncAnalysisRangeUi: (panelId, plot, mode) => synced.push({ panelId, mode, rangeFull: state.rangeFull, rescheduledBefore: rescheduled.length }),
         _rescheduleAnalysisRecompute: (panelId, mode) => rescheduled.push({ panelId, mode }),
         _reconsiderAutoLimitedRange: reconsider,
         _measureAnalysisKernel: measureKernel,
     };
-    return { app, state, rescheduled, plot: { mode: 'histogram' } };
+    return { app, state, rescheduled, synced, plot: { mode: 'histogram' } };
 }
 
 // ── The projection decides, and it decides conservatively ──────────────────
 
 // A kernel fast enough that even the pessimistic projection fits: re-open.
 {
-    const { app, state, rescheduled, plot } = makeApp();
+    const { app, state, rescheduled, synced, plot } = makeApp();
     // 10 ms over the sample projects to ~1 s over the full range.
     const widened = reconsider.call(app, 'p1', plot, 10);
+    // The range block is put back in step with the restored range, before
+    // the recompute: it used to go on showing the cut under a result computed
+    // from the whole file (#387).
+    assert.deepEqual(synced, [{ panelId: 'p1', mode: 'histogram', rangeFull: true, rescheduledBefore: 0 }],
+        'the range block is synced with the restored range, then the analysis recomputes');
     assert.equal(widened, true, 'an affordable full range must be restored');
     assert.equal(state.autoRangeLimited, false, 'the limit is lifted');
     assert.equal(state.rangeFull, true, 'the previous range comes back');

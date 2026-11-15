@@ -1073,11 +1073,12 @@ export function installPlotCorrelationMethods(TargetClass) {
             this._updateCorrelationSelectionShapes(panelId, plot);
             if (recompute) this._scheduleCorrelationRecompute(panelId, { immediate: true });
         };
+        const [shownLo, shownHi] = this._correlationShownRange(plot);
         panel.appendChild(this._buildAnalysisRangeSection({
             prefix: 'corr',
             rangeFull: state.rangeFull,
-            lo: state.x1,
-            hi: state.x2,
+            lo: shownLo,
+            hi: shownHi,
             domain,
             calendar: usesCalendar,
             onMode: (isFull) => {
@@ -1240,16 +1241,25 @@ export function installPlotCorrelationMethods(TargetClass) {
         });
     };
 
+    // The two bounds the range block shows. Full: the file's bounds, as in
+    // every other analysis — a range that was never selected holds none, and
+    // a calendar file then showed 1970-01-01 in both fields (#387).
+    proto._correlationShownRange = function(plot) {
+        const state = this._ensureCorrelationState(plot);
+        return state.rangeFull ? this._activeCorrelationRange(plot) : [state.x1, state.x2];
+    };
+
     proto._syncCorrelationRangeInputs = function(plot, options = {}) {
         const panel = this._correlationOptionsPanel(plot);
         if (!panel) return;
         const state = this._ensureCorrelationState(plot);
+        const [shownLo, shownHi] = this._correlationShownRange(plot);
         // `skipSliders`: a slider being dragged is what wrote these numbers.
         this._syncAnalysisRangeSection(panel, {
             prefix: 'corr',
             rangeFull: state.rangeFull,
-            lo: state.x1,
-            hi: state.x2,
+            lo: shownLo,
+            hi: shownHi,
             domain: this._correlationDomain(plot),
             calendar: this._correlationUsesCalendarTime(plot),
             skipRole: options.skipSliders ? 'slider' : null,
