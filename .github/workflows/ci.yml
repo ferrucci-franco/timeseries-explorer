@@ -68,7 +68,10 @@ jobs:
     # under the end-to-end checks; the runner the suite has been passing on is
     # the smaller change. Lift the pin when Playwright supports 26.04.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The chain took 29 of its 30 minutes on 2026-11-15 (PR #377), before the
+    # audio-window, WAV-export and legend-style checks joined it. A job cut off
+    # by the clock reports nothing about the checks it did not reach.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
