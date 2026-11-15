@@ -75,6 +75,9 @@ proto._xcorrAxis = function(data) {
         return { ok: true, code: '', kind: 'index', unit: i18n.t('dataToolResampleUnitSamples'), dt: 1, length };
     }
     const info = this._xcorrAxisStep(time.values);
+    // Measured in the worker: the panel says so until it is in, and is synced
+    // again then.
+    if (!info) return { ...blank, code: 'dataToolLazyMeasuringAxis', measuring: true };
     if (!info.hasNominalStep || !(info.medianDt > 0)) {
         return {
             ...blank,
@@ -84,9 +87,62 @@ proto._xcorrAxis = function(data) {
     return { ok: true, code: '', kind: time.kind, unit, dt: info.medianDt / this._resampleAxisScale(time.kind), length };
 };
 
-/** The step measurement behind `_xcorrAxis`: the panel-wide one, per array. */
+/**
+ * The step measurement behind `_xcorrAxis`, per array: `{ medianDt,
+ * hasNominalStep, reason }`, or null while the worker is still measuring it
+ * (on 10 M samples `detectSamplingGaps` held the main thread for 230–300 ms).
+ * With no worker it is measured here, as before.
+ */
 proto._xcorrAxisStep = function(values) {
-    return this._axisStepInfo(values);
+    const done = this._xcorrStepMemo?.get(values);
+    if (done) return done;
+    // Another tool may already have measured this axis on the main thread.
+    const shared = this._arrayMemos?.get('axisStep')?.get(values);
+    if (shared) return shared;
+    if (!getComputePool()?.available) return this._axisStepInfo(values);
+    if (this._xcorrStepRuns?.has(values)) return null;
+    this._xcorrStepPromise(values).then(() => {
+        this._syncDataTools?.();
+        // The default lag range needed the axis; seed it now it is known.
+        const input = typeof document === 'undefined' ? null : document.getElementById('xcorr-max-lag');
+        if (input && input.value === '' && this._getSelectedDataTool?.() === 'xcorr') this._seedXcorrDefaults?.();
+        this._syncXcorrControls?.();
+    });
+    return null;
+};
+
+/** The measurement, in the compute worker, shared by every asker of an array. */
+proto._xcorrStepPromise = function(values) {
+    if (!this._xcorrStepMemo) this._xcorrStepMemo = new WeakMap();
+    if (!this._xcorrStepRuns) this._xcorrStepRuns = new WeakMap();
+    const done = this._xcorrStepMemo.get(values);
+    if (done) return Promise.resolve(done);
+    let run = this._xcorrStepRuns.get(values);
+    if (run) return run;
+    const keep = (info) => {
+        const trimmed = { medianDt: info.medianDt, hasNominalStep: info.hasNominalStep, reason: info.reason };
+        this._xcorrStepMemo.set(values, trimmed);
+        return trimmed;
+    };
+    const pool = getComputePool();
+    const onMainThread = () => keep(this._axisStepInfo(values));
+    run = (pool?.available
+        ? pool.run('axis:step', { values: kernelShared.copyFloat64(values) }).then(keep)
+        : Promise.resolve().then(onMainThread))
+        .catch((err) => {
+            if (err?.cancelled) throw err;
+            return onMainThread();
+        })
+        .finally(() => this._xcorrStepRuns.delete(values));
+    this._xcorrStepRuns.set(values, run);
+    return run;
+};
+
+/** Waits for the axis measurement a commit is about to read (the panel's own). */
+proto._xcorrMeasureAxis = async function(data) {
+    const time = this._resampleTimeContext?.(data);
+    if (!time || time.kind === 'index' || !time.values) return;
+    await this._xcorrStepPromise(time.values);
 };
 
 // ─── Reading the form ─────────────────────────────────────────────────────
@@ -137,7 +193,7 @@ proto._xcorrPlan = function(data) {
         return { ...blank, code: 'dataToolXcorrLengthMismatch', text: i18n.t('dataToolXcorrLengthMismatch') };
     }
     const axis = this._xcorrAxis(data);
-    if (!axis.ok) return { ...blank, code: axis.code, text: i18n.t(axis.code), axis };
+    if (!axis.ok) return { ...blank, code: axis.code, text: i18n.t(axis.code), axis, measuring: !!axis.measuring };
     if (axis.length < 2) return { ...blank, code: 'dataToolXcorrTooShort', text: i18n.t('dataToolXcorrTooShort'), axis };
     const lags = lagSamples(form.maxLag, axis);
     if (!Number.isFinite(lags)) {
@@ -214,7 +270,9 @@ proto._syncXcorrControls = function() {
     }
     const plan = this._xcorrPlan(data);
     info.textContent = plan.text;
-    info.classList.toggle('invalid', !plan.ok);
+    // "Measuring the time axis…" is work in progress, not a refusal.
+    info.classList.toggle('invalid', !plan.ok && !plan.measuring);
+    info.classList.toggle('busy', !!plan.measuring);
 };
 
 // ─── Computing ────────────────────────────────────────────────────────────
@@ -253,6 +311,7 @@ proto._computeXcorrDataset = async function(sourceFileId, sourceData, recipe) {
     if (!xVar || !yVar || (!lazy && (!xVar.data || !yVar.data))) throw new kernelShared.DataToolError('dataToolChooseVariable');
     // On a lazy file the two columns are read whole, up to a budget: the
     // cross-correlation is a transform of both series, not a chunked tool.
+    if (!lazy) await this._xcorrMeasureAxis(sourceData);
     const axis = lazy ? await this._lazyXcorrAxisAsync(sourceData) : this._xcorrAxis(sourceData);
     if (!axis.ok) throw new kernelShared.DataToolError(axis.code);
     const lags = lagSamples(Number(recipe.params?.maxLag), axis);

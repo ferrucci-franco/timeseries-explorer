@@ -2904,3 +2904,7 @@
         animation: none;
     }
 }
+
+.data-tool-resample-info.busy {
+    font-style: italic;
+}

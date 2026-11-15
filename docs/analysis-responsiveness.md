@@ -947,7 +947,49 @@ Not landed yet.
 
 ### #386: Borderline tasks
 
-Not landed yet.
+What was done:
+
+- **FFT of 2¹⁸ samples or fewer.** `FFT_WORKER_THRESHOLD_POINTS` goes from
+  2¹⁸ to 2¹⁵ (`src/utils/fft.js`); the main-thread fallback where there is no
+  worker is unchanged. The threshold was chosen from a measurement (headless
+  Chromium, in-memory CSV of 10 k, 100 k and 262 144 rows, FFT opened, the
+  main-thread task of the computation): with the old threshold 60, 156 and
+  356 ms; with the worker for every size 28–67, 49–52 and 76–84 ms. A worker
+  for every size, though, added 50–200 ms to the time to result of the
+  smallest FFTs (the worker is spawned per job): 516 → 571–734 ms at 10 k. The
+  synchronous cost is about 1.3 ms per thousand samples, so 2¹⁵ (about 40 ms)
+  stays on the main thread and everything bigger goes to the worker.
+- **Cross-correlation panel's axis.** The step of the time axis is measured in
+  the compute worker (new op `axis:step`, which returns only the median step,
+  whether it is nominal and the reason, not the list of gaps). The panel says
+  "Measuring the time axis over the whole file…" until it is in and syncs again
+  (and seeds the default lag range); the commit awaits the same measurement.
+  Where there is no worker it is measured on the main thread as before. The
+  copy of the axis made for the worker (80 MB at 10 M rows) is what is left on
+  the main thread.
+- **Building a time pane.** `_buildTimeLayout` asks `_finiteExtent` for the
+  extent of each visible time axis with `{ cache: true }`: the extent is kept
+  per array (`src/utils/finite-extent.js`, a `WeakMap` keyed by the array and
+  checked against its length). A transform, a reload or a live append hands out
+  a new axis array (the transform cache is dropped), so the extent is read
+  again then and only then. `decimateRangeIndexes` is not cached.
+
+Tested by `test:finite-extent-cache` (new), the FFT tests and `test:xcorr`.
+
+Measured, 10 M rows in memory, the longest task's computation (ms), two runs
+after:
+
+| What | Before (doc, two runs) | After |
+|---|---|---|
+| FFT open | 191–266 | 31, 51 |
+| Cross-correlation open | 230–376 | 165, 138 |
+| Curve fit open (builds a time pane) | 377 | 44, 50 |
+| 2D curve fit open (builds a time pane) | 403 | 151, 147 |
+
+What stays above the line is not this issue's: the first build of the time
+series pane (364 ms: the extent is read once per array), and the curve fit's
+recompute (the kernel, #381). The FFT's "longest task overall" of about 500 ms
+is the paint (no JavaScript running), as before.
 
 ### #387: Temporal profile's range block
 
@@ -955,7 +997,35 @@ Not landed yet.
 
 ### #388: Cross-correlation tool past its budget
 
-Not landed yet.
+What was done:
+
+- The row budget is checked **before** the axis is measured. `_lazyXcorrAxis`
+  (the panel) and `_lazyXcorrAxisAsync` (the commit) read the file's row count
+  without a query (`_lazyKnownRows`: the loader's `totalRows`, or, for a CSV
+  view that leaves it unset, the scan's count of the rows with a time, which is
+  a floor of the file's rows) and refuse a file past `LAZY_XCORR_MAX_ROWS` at
+  once. A file whose count is only known from the axis pass is still refused
+  as soon as the pass reports it.
+- The panel's axis measurement carries a cancel signal (`{ signal }` through
+  `_lazyRealAxisSteps` to the four aggregate queries). Leaving the tool or
+  switching file aborts it (`_abortXcorrAxis`, called from `_syncDataTools`
+  before the next panel asks for its own measurement). A measurement another
+  tool already has in flight is waited for, not repeated.
+- On a file within the budget the summary line says "Measuring the time axis
+  over the whole file…" and is drawn as work in progress (italic), no longer as
+  a red refusal.
+
+Tested by `scripts/test-lazy-data-tools.mjs` (no axis query past the budget;
+live signals within it, aborted on leaving; staying on the file keeps the
+measurement) and `scripts/e2e-lazy-data-tools.mjs` (the over-budget refusal
+sends no query on the real engine).
+
+Measured (10 M rows, lazy, the tool picked; three runs before, two runs after):
+
+| | Time to the refusal | Axis queries |
+|---|---|---|
+| Before | 14525 ms, 15753 ms, 17309 ms | 4, no signal |
+| After | 17 ms, 16 ms | 0 |
 
 ### #389: The CI check
 

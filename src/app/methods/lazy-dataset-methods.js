@@ -550,21 +550,82 @@ proto._lazyDatasetCsvBytes = async function(data) {
 
 // ─── The cross-correlation ──────────────────────────────────────────────────
 
+// The rows of a lazy file when the loader already knows them (no query), else
+// 0: what the cross-correlation's budget is checked against before the axis is
+// measured at all.
+proto._lazyKnownRows = function(data) {
+    const meta = data?._duckdb;
+    if (!meta) return 0;
+    // `totalRows` is exact (a view over a CSV leaves it unset); the scan's
+    // count of the rows with a time, in the metadata, is a floor of the file's
+    // rows — enough to know a file is past a budget.
+    const total = Number(meta.totalRows);
+    const scanned = Number(data.metadata?.numTimesteps);
+    const exact = !meta.appendRows && Number.isFinite(total) && total > 0 ? total : 0;
+    return Math.max(exact, Number.isFinite(scanned) && scanned > 0 ? scanned : 0);
+};
+
+const lazyXcorrTooLarge = (length) => ({
+    ok: false, code: 'dataToolXcorrLazyTooLarge', kind: 'numeric', unit: '', dt: NaN, length, tooLarge: true,
+});
+
 // _xcorrAxis for a lazy file, from the axis measured over the whole file: the
-// panel's version returns a "measuring" refusal until that is in.
+// panel's version returns a "measuring" refusal until that is in. A file past
+// the row budget is refused at once, before the axis is measured: the four
+// queries that measure it (14 s on 10 M rows) would only end in that refusal.
 proto._lazyXcorrAxis = function(data) {
-    const steps = this._lazyRealAxisStepsNow(data);
+    const known = this._lazyKnownRows(data);
+    if (known > LAZY_XCORR_MAX_ROWS) return lazyXcorrTooLarge(known);
+    const steps = this._lazyXcorrAxisStepsNow(data);
     if (!steps) return { ok: false, code: 'dataToolLazyMeasuringAxis', kind: 'numeric', unit: '', dt: NaN, length: 0, measuring: true };
     return this._lazyXcorrAxisFrom(data, steps);
 };
 
-proto._lazyXcorrAxisAsync = async function(data) {
-    return this._lazyXcorrAxisFrom(data, await this._lazyRealAxisSteps(data));
+// The axis measurement for the panel, started in the background and stopped
+// when the tool is left (_abortXcorrAxis): its queries carry the signal. A
+// measurement another tool already has in flight is waited for, not repeated.
+proto._lazyXcorrAxisStepsNow = function(data) {
+    const key = this._lazyRealAxisKey(data, 'axis');
+    const cached = this._lazyAxisStepCache?.get(key);
+    if (cached) return cached;
+    if (!this._lazyAxisStepRuns) this._lazyAxisStepRuns = new Map();
+    if (this._lazyAxisStepRuns.has(key)) return null;
+    const controller = new AbortController();
+    const run = this._lazyRealAxisSteps(data, { signal: controller.signal })
+        .then(() => this._syncDataTools?.())
+        .catch(err => {
+            if (controller.signal.aborted || err?.name === 'AbortError') return;
+            console.warn('[duckdb] could not measure the time axis:', err?.message || err);
+        })
+        .finally(() => {
+            if (this._lazyAxisStepRuns.get(key) === run) this._lazyAxisStepRuns.delete(key);
+            if (this._xcorrAxisRun?.controller === controller) this._xcorrAxisRun = null;
+        });
+    this._lazyAxisStepRuns.set(key, run);
+    this._xcorrAxisRun = { key, data, controller };
+    return null;
+};
+
+// Leaving the tool (another tool picked, another file active) stops the
+// measurement it started. `keep` is the file whose measurement stays wanted.
+proto._abortXcorrAxis = function(keep = null) {
+    const run = this._xcorrAxisRun;
+    if (!run || (keep && run.data === keep)) return;
+    this._xcorrAxisRun = null;
+    this._lazyAxisStepRuns?.delete(run.key);
+    run.controller.abort();
+};
+
+proto._lazyXcorrAxisAsync = async function(data, { signal } = {}) {
+    const known = this._lazyKnownRows(data);
+    if (known > LAZY_XCORR_MAX_ROWS) return lazyXcorrTooLarge(known);
+    return this._lazyXcorrAxisFrom(data, await this._lazyRealAxisSteps(data, { signal }));
 };
 
 proto._lazyXcorrAxisFrom = function(data, steps) {
     const time = this._resampleTimeContext(data);
     const length = Number(steps.rows) || 0;
+    if (length > LAZY_XCORR_MAX_ROWS) return lazyXcorrTooLarge(length);
     if (time.kind === 'index' || !steps.timed) {
         return { ok: true, code: '', kind: 'index', unit: i18n.t('dataToolResampleUnitSamples'), dt: 1, length };
     }

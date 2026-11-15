@@ -512,3 +512,81 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
     console.log('lazy data tools: hard bounds on a lazy file are created and counted over the whole file');
 }
 console.log('lazy data tools: derivative, integral, IQR and detrend run over every row of a lazy file');
+
+// ── The cross-correlation's axis: the row budget first, and a cancel signal ──
+// Picking the tool on a file past LAZY_XCORR_MAX_ROWS used to spend ~14 s on
+// four uncancellable aggregate queries (10 M rows) and only then refuse it.
+{
+    const { installLazyDatasetMethods, LAZY_XCORR_MAX_ROWS } = await import(new URL('../src/app/methods/lazy-dataset-methods.js', import.meta.url));
+    const { installResampleMethods } = await import(new URL('../src/app/methods/resample-methods.js', import.meta.url));
+    const { installXcorrMethods } = await import(new URL('../src/app/methods/xcorr-methods.js', import.meta.url));
+    class XcorrApp extends Harness {}
+    installLazyDatasetMethods(XcorrApp);
+    installResampleMethods(XcorrApp);
+    installXcorrMethods(XcorrApp);
+    const source = lazy._duckdb.source;
+    const realAggregate = source.aggregateOver.bind(source);
+    const realOrder = source.exactOrderStatisticsOver.bind(source);
+    // Queries that hang until their signal aborts, and a record of every call.
+    const calls = [];
+    const hang = (name) => (...args) => {
+        const signal = args[args.length - 1]?.signal || null;
+        calls.push({ name, signal });
+        return new Promise((resolve, reject) => {
+            if (signal?.aborted) return reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        });
+    };
+    const fresh = (rows) => {
+        const data = { ...lazy, metadata: { ...lazy.metadata, numTimesteps: rows }, _duckdb: { ...lazy._duckdb, totalRows: rows } };
+        const a = new XcorrApp();
+        a.files.set('f', { data });
+        return { a, data };
+    };
+    try {
+        source.aggregateOver = hang('aggregate');
+        source.exactOrderStatisticsOver = hang('order');
+
+        // Past the budget: refused at once, no axis query, nothing in flight.
+        {
+            const { a, data } = fresh(LAZY_XCORR_MAX_ROWS + 2_000_000);
+            const axis = a._xcorrAxis(data);
+            assert.equal(axis.ok, false);
+            assert.equal(axis.code, 'dataToolXcorrLazyTooLarge', 'a file past the budget is refused at once');
+            assert.equal(calls.length, 0, 'and no axis query was sent for it');
+            assert.equal(a._xcorrAxisRun || null, null, 'no measurement is in flight');
+            const asyncAxis = await a._lazyXcorrAxisAsync(data);
+            assert.equal(asyncAxis.code, 'dataToolXcorrLazyTooLarge', 'the commit path refuses it before measuring too');
+            assert.equal(calls.length, 0, 'still no axis query');
+        }
+
+        // Within the budget: measured behind a signal, "measuring" meanwhile,
+        // and leaving the tool aborts the queries.
+        {
+            const { a, data } = fresh(LAZY_XCORR_MAX_ROWS - 1_000_000);
+            const axis = a._xcorrAxis(data);
+            assert.equal(axis.code, 'dataToolLazyMeasuringAxis', 'a file within the budget is being measured');
+            assert.equal(axis.measuring, true, 'and says so');
+            await new Promise(resolve => setTimeout(resolve, 20));
+            assert.ok(calls.length >= 1, 'the axis queries were sent');
+            assert.ok(calls.every(call => call.signal && !call.signal.aborted), 'each carries a live cancel signal');
+            const signals = calls.map(call => call.signal);
+            a._xcorrAxis(data);
+            assert.equal(calls.length, signals.length, 'asking again does not send the queries again');
+            a._abortXcorrAxis(null);
+            assert.ok(signals.every(signal => signal.aborted), 'leaving the tool aborts the axis queries');
+            assert.equal(a._lazyAxisStepRuns.size, 0, 'and nothing is left in flight');
+            // Another tool's measurement of the same file is not stopped by it.
+            calls.length = 0;
+            a._xcorrAxis(data);
+            a._abortXcorrAxis(data);
+            await new Promise(resolve => setTimeout(resolve, 20));
+            assert.ok(calls.every(call => !call.signal.aborted), 'staying on the same file keeps the measurement');
+            a._abortXcorrAxis(null);
+        }
+    } finally {
+        source.aggregateOver = realAggregate;
+        source.exactOrderStatisticsOver = realOrder;
+    }
+    console.log('lazy data tools: the cross-correlation refuses a file past its budget before measuring, and leaving it aborts the axis queries');
+}

@@ -11,6 +11,7 @@
 import { runDataToolPipeline, runResample, runCrossCorrelation } from '../compute/kernels/index.js';
 import { detectSpikeWindow } from '../compute/kernels/outliers.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
+import { detectSamplingGaps } from '../utils/sampling-gaps.js';
 
 const HANDLERS = {
     'dataTool:pipeline': ({ values, time, steps }) => {
@@ -43,6 +44,13 @@ const HANDLERS = {
             result,
             transfer: collectBuffers([result.lags, result.values, result.counts]),
         };
+    },
+    // The step of a time axis (the cross-correlation panel's lag unit): the
+    // measurement is a few hundred ms on 10 M samples. Only what the panel
+    // reads comes back, not the list of gaps.
+    'axis:step': ({ values }) => {
+        const info = detectSamplingGaps(values);
+        return { result: { medianDt: info.medianDt, hasNominalStep: info.hasNominalStep, reason: info.reason } };
     },
     'fft:spectrum': (input) => {
         const spectrum = computeAmplitudeSpectrum(input || {});

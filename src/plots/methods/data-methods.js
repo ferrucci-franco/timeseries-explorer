@@ -2450,7 +2450,7 @@ proto._buildTimeLayout = function(plot, options = {}) {
         ? this._finiteExtent([boundedTimeRange])
         : this._finiteExtent(plot.traces
             .filter(t => this._isVisible(t))
-            .map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)));
+            .map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)), { cache: true });
     const xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : null;
     const xRangeConfig = xRange
         ? {
