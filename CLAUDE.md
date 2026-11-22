@@ -88,6 +88,19 @@ user keeps exploring what is on screen. So **every analysis, existing or new**:
 In the Analysis menu, picking the analysis that is already on changes
 nothing; only None turns it off.
 
+## Not the `plot-interactions` skill
+
+The owner's other apps (ferrucci-lab.com, repo `ferrucci-franco/electronics`) follow a skill named
+`plot-interactions` (plugin `ferrucci-lab@ferrucci-skills`, or a copy in a repo's `.claude/skills/`). It was
+derived from this app, but this repo keeps **its own** implementation: `src/ui/plot-touch-gestures.js`,
+`src/ui/legend-toggle.js`, `src/ui/plot-3d-gestures.js` and the code around them. So:
+
+- Do not apply that skill or its conventions here, and do not replace or "align" this code with its modules
+  (`plot-interactions.js`, `fullscreen.js`, `share-export.js`), even when a request about gestures, legends,
+  full screen or exports looks like what it covers — unless the owner names the skill in the request.
+- If the owner asks for one named piece of it, port only that piece, into this repo's architecture
+  (translations in `src/i18n/translations.js`, tests, docs), and leave everything else as it is.
+
 ## Other standing rules
 
 - Every piece of work ends with a pull request merged to `main`, with CI green
