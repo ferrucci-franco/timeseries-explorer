@@ -8,7 +8,7 @@ watching step by step.
 | --- | ---: | --- | ---: | --- |
 | `public/examples/era5-argentina-august-2024.nc` | 9.7 MB | 71 × 45 at 0.5° | 248 three-hourly, 2024-08-01 00 UTC → 2024-08-31 21 UTC | `t2m`, `d2m`, `u10`, `v10`, `msl`, `tcc` |
 | `public/examples/era5-argentina-cold-front.nc` | 3.3 MB | 141 × 89 at 0.25° | 24 hourly, 2024-08-02 12 UTC → 2024-08-03 11 UTC | `t2m`, `d2m`, `u10`, `v10`, `msl`, `tcc` |
-| `public/examples/guide/era5_argentina.nc` | 0.47 MB | 71 × 45 at 0.5° | 16 three-hourly, 2024-08-02 12 UTC → 2024-08-04 09 UTC | `t2m`, `u10`, `v10`, `msl` |
+| `public/examples/guide/era5_argentina.nc` | 1.6 MB | 71 × 45 at 0.5° | 56 three-hourly, 2024-08-01 00 UTC → 2024-08-07 21 UTC | `t2m`, `u10`, `v10`, `msl` |
 
 They are three cuts of one dataset, so they can be told apart by what they are
 for, not by what they say:
@@ -19,8 +19,10 @@ for, not by what they say:
   26.1 °C on the afternoon of 2 August to 4.7 °C on the morning of the 12th.
 - **the day** is the one to look at. Full 0.25° resolution and one map an hour
   through the sharpest hours of the front.
-- **the demo** is the one that travels inside the animated guide, small enough
-  not to weigh on it.
+- **the demo** is the one the animated guide fetches: the first week of August,
+  which holds the front and gives its last step — a temporal profile — seven
+  samples per hour of the day. Two days, what it held at first, folded into a
+  profile of three periods, and the ±1σ band swallowed the daily cycle.
 
 Size matters here beyond the repository: `public/examples/` is copied into the
 desktop package and into the portable build, so every megabyte is downloaded by

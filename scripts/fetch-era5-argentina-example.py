@@ -67,7 +67,10 @@ VARIABLES = [
 
 # The three files. `hour0` is an hour of the month, 0 = the 1st at 00 UTC.
 #
-# FULL and DEMO are the event at its sharpest; MONTH is the whole of August, so
+# FULL is the event at its sharpest. DEMO is the first week of August, which
+# holds the event and gives the animated guide's demo enough days for a
+# temporal profile to mean something (seven samples per hour of the day).
+# MONTH is the whole of August, so
 # a point extracted from it is a month-long hourly-enough series (several
 # fronts, and a clean daily cycle at 8 samples a day), at half the resolution
 # so that it stays about 9 MB: these files are copied into the desktop and
@@ -77,9 +80,9 @@ FULL = dict(path=os.path.join(ROOT, 'public', 'examples', 'era5-argentina-cold-f
             variables=['t2m', 'd2m', 'u10', 'v10', 'msl', 'tcc'], complevel=4,
             title=f'ERA5 surface analysis over Argentina, {EVENT}')
 DEMO = dict(path=os.path.join(ROOT, 'public', 'examples', 'guide', 'era5_argentina.nc'),
-            hour0=HOUR0, time_stride=3, space_stride=2, nsteps=16,
+            hour0=0, time_stride=3, space_stride=2, nsteps=56,
             variables=['t2m', 'u10', 'v10', 'msl'], complevel=9,
-            title=f'ERA5 surface analysis over Argentina, {EVENT}')
+            title='ERA5 surface analysis over Argentina, 1-7 August 2024')
 MONTH_FILE = dict(path=os.path.join(ROOT, 'public', 'examples', 'era5-argentina-august-2024.nc'),
                   hour0=0, time_stride=3, space_stride=2, nsteps=MONTH_HOURS // 3,
                   variables=['t2m', 'd2m', 'u10', 'v10', 'msl', 'tcc'], complevel=4,

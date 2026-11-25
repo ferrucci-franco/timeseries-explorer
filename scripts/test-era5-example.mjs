@@ -45,14 +45,19 @@ const expected = {
         },
     },
     [DEMO]: {
-        cap: 0.6e6,
-        steps: 16, ny: 71, nx: 45,
-        first: '2024-08-02 12:00', last: '2024-08-04 09:00',
+        // A week, so that the animated guide's demo can end on a temporal
+        // profile with seven samples per hour of the day.
+        cap: 1.8e6,
+        steps: 56, ny: 71, nx: 45,
+        first: '2024-08-01 00:00', last: '2024-08-07 21:00',
         variables: ['/msl', '/t2m', '/u10', '/v10'],
-        buenosAires: [294.7047, 284.1471],
-        meanDrop: 4.8,
+        buenosAires: [289.2844, 286.0861],
     },
 };
+
+// 2024-08-02 12 UTC, the hour the front reaches Buenos Aires: the first step
+// of the day file, and step 13 of the other two.
+const SHARED = { [FULL]: 0, [MONTH]: 12, [DEMO]: 12 };
 
 const open = async (name) => {
     const bytes = readFileSync(name);
@@ -126,7 +131,9 @@ for (const name of [FULL, MONTH, DEMO]) {
         close(series[coldest] - 273.15, want.extremes.coldest.celsius, `${name}: the coldest value`, 0.01);
     }
 
-    maps[name] = { first, dataset, axis };
+    const step = SHARED[name];
+    assert.equal(axis.labels[step], '2024-08-02 12:00', `${name}: step ${step} is the hour the three files share`);
+    maps[name] = step === 0 ? first : dataset.readMap('/t2m', { valid_time: step });
 }
 
 // The three files are cuts of one dataset, not three readings of it: where two
@@ -150,11 +157,7 @@ const sameCells = (a, b, labelA, labelB) => {
     return compared;
 };
 
-// 2024-08-02 12:00 is the first step of the day-long file and of the demo, and
-// step 13 of the month.
-const monthAtEvent = maps[MONTH].dataset.readMap('/t2m', { valid_time: 12 });
-assert.equal(maps[MONTH].axis.labels[12], '2024-08-02 12:00');
-console.log(`  the day file and the demo agree on ${sameCells(maps[FULL].first, maps[DEMO].first, 'the day file', 'the demo')} cells`);
-console.log(`  the month and the day file agree on ${sameCells(maps[FULL].first, monthAtEvent, 'the day file', 'the month')} cells`);
+console.log(`  the day file and the demo agree on ${sameCells(maps[FULL], maps[DEMO], 'the day file', 'the demo')} cells`);
+console.log(`  the month and the day file agree on ${sameCells(maps[FULL], maps[MONTH], 'the day file', 'the month')} cells`);
 
 console.log('ERA5 Argentina examples: OK');

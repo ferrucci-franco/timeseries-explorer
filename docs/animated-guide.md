@@ -15,7 +15,9 @@ That choice has three consequences worth knowing:
 - Nothing is downloaded but the app itself. The data is generated in the browser
   (seeded, so every run shows the same curves); the exceptions are the two
   files under `public/examples/guide/`, fetched by the demo that needs them: a
-  175 KB PyPSA network and 0.47 MB of real ERA5 over Argentina.
+  175 KB PyPSA network and 1.6 MB of real ERA5 over Argentina — a week of it,
+  because the ERA5 demo ends on a temporal profile, and two days fold into a
+  profile that shows nothing.
 
 Until the guide has been opened once, a small dot on the menu button (and on the
 entry) points at it; the only thing remembered is that it was opened
@@ -39,7 +41,14 @@ entry) points at it; the only thing remembered is that it was opened
 The frame loads `index.html?demo&lang=…&theme=…`, afresh for every run, so each
 loop starts from a clean app. In that mode the app:
 
-- reads and writes nothing in the browser's storage (settings, layout choice);
+- reads and writes nothing in the browser's storage (settings, layout choice).
+  The frame shares its origin with the app around it, so a write would be a
+  trace left in that app's storage, and a read would make a demo depend on what
+  the person did before. A per-viewer convenience — a collapsed section, a
+  panel's height, a hint already seen — goes through `readLocal`, `writeLocal`
+  and `removeLocal` of `src/app/demo-mode.js`, which do nothing in demo mode;
+  `scripts/e2e-guide.mjs` compares the storage before and after every demo, and
+  that is how the gridded view's own `localStorage` calls were caught;
 - does not count a page view and shows no first-visit hint;
 - uses the desktop layout whatever the screen;
 - reads CSV with the in-memory parser, because the query engine keeps a database
