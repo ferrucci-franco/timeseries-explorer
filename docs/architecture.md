@@ -131,6 +131,13 @@ Normalizes input files into a common structure:
 
 This lets the rest of the app treat MAT and CSV similarly.
 
+A simulation result (`.mat`, MAT v4 trajectory) past its full-load limit is not
+parsed whole: `mat-v4-stream.js` reads it by parts — a "columnar reader" — and
+`src/data/columnar-ingest.js` copies it into tables of the DuckDB engine, adopted
+as a memory-saving (lazy) dataset with the same three members plus `_duckdb`. A
+reader of another format that gives the same shape is opened lazily by the same
+ingest (`docs/any-size-files.md`, "resultados `.mat` en lazy").
+
 ### `src/ui`
 
 Reusable UI building blocks outside the main app class.

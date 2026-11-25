@@ -258,6 +258,23 @@ proto.loadFile = async function(file, options = {}) {
                 // the request: the pickle and netCDF readers enforce the same
                 // ceiling internally, so overriding here without telling them
                 // would just fail again a moment later with a worse message.
+                // A simulation result (.mat) past its limit opens in
+                // memory-saving mode, copied by parts into the engine; one
+                // that cannot be (not a trajectory, no room for the copy)
+                // goes on to the question below, as every MAT file used to.
+                if (extension === '.mat' && !options.matBuffer && !options.allowOversized) {
+                    const lazyMat = await this._openLazyMat(currentFile, options);
+                    if (isCancelled()) {
+                        await lazyMat?._duckdb?.source?.release?.(lazyMat);
+                        return null;
+                    }
+                    if (lazyMat) {
+                        data = lazyMat;
+                        buffer = null;
+                        contentHash = this._fileFingerprint(currentFile);
+                        break;
+                    }
+                }
                 const overLimit = this._checkFullLoadLimit(currentFile, extension);
                 if (overLimit && !options.allowOversized) {
                     if (!(await this._confirmOversizedFile(overLimit))) return null;
@@ -640,6 +657,13 @@ proto._expandMatEntries = async function(entries) {
         try {
             if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
             if (!file) continue;
+            // A simulation result past its limit is opened by parts, in
+            // memory-saving mode (loadFile): it is neither asked about nor
+            // read whole here.
+            if (await this._lazyMatReader(file)) {
+                expanded.push({ ...(item?.file || item?.fileHandle ? item : {}), file, fileHandle });
+                continue;
+            }
             if (!(await this._confirmOversizedFile(this._checkFullLoadLimit(file, '.mat')))) continue;
             this._showFileLoadingOverlay(1);
             this._updateFileLoadingOverlay(1, 1, file.name || '', file.size);
@@ -1239,7 +1263,7 @@ proto.reloadActiveFile = async function() {
     const datasetFailures = [];
     try {
         await this._waitForNextPaint();
-        const streamable = this._canParseFromFile(entry.file, entry.extension);
+        const streamable = this._canParseFromFile(entry.file, entry.extension) || this._isLazyMatFile(id);
         const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
         const buffer = streamable ? null : await this._readLatestBuffer(entry);
         const contentHash = streamable ? this._fileFingerprint(latestFile || entry.file) : await this._hashBuffer(buffer);
@@ -1381,7 +1405,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
         loading = true;
         this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(source), source.file?.size || source.buffer?.byteLength);
         await this._waitForNextPaint();
-        const streamable = this._canParseFromFile(source.file, source.extension);
+        const streamable = this._canParseFromFile(source.file, source.extension) || this._isLazyMatFile(sourceId);
         const latestFile = streamable ? await this._readLatestFileForStreamableReload(source) : null;
         const buffer = streamable ? null : await this._readLatestBuffer(source);
         const contentHash = streamable ? this._fileFingerprint(latestFile || source.file) : await this._hashBuffer(buffer);
@@ -2147,7 +2171,16 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
     if (isAudioExtension(extension)) return this._parseAudioResultBuffer(filename, buffer, options);
-    if (extension === '.mat') return this._parseMatlabResultBuffer(filename, buffer, options);
+    if (extension === '.mat') {
+        // No bytes: a result open in memory-saving mode, being reloaded. It is
+        // read by parts again; if it no longer opens that way, whole.
+        if (!buffer && file) {
+            const lazyMat = await this._openLazyMat(file, options);
+            if (lazyMat) return lazyMat;
+            buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+        }
+        return this._parseMatlabResultBuffer(filename, buffer, options);
+    }
     if (isMicroCapExtension(extension)) return this._parseMicroCapResultBuffer(filename, buffer, options);
     // Micro-Cap output renamed to a text extension: when the bytes are here
     // (loadFile sniffs the head of streamable text files and reads them whole
@@ -2162,6 +2195,102 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     if (this._looksLikePickleBuffer(buffer)) throw new Error(i18n.t('pickleLooksLikeUnsupportedExtension'));
     if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     throw new Error(i18n.t('invalidFile'));
+};
+
+// ─── A simulation result in memory-saving mode ──────────────────────────────
+//
+// An OpenModelica / Dymola result (.mat, MAT v4 trajectory) larger than the
+// MAT full-load limit is not held in memory: its time steps are read a block
+// at a time (parsers/mat-v4-stream.js) and copied into the engine
+// (data/columnar-ingest.js), and it opens as any file in memory-saving mode.
+// Other MAT files (MATLAB's own, issue #396) are still loaded whole.
+
+// The reader for a file that opens that way, or null: under the limit, no
+// engine, or not a trajectory this reader takes.
+proto._lazyMatReader = async function(file) {
+    if (!file || typeof file.slice !== 'function') return null;
+    if (!this._checkFullLoadLimit(file, '.mat')) return null;
+    if (!this._canUseDuckDb()) return null;
+    // Asked twice for one file (before the batch, and when it is loaded): the
+    // headers are read once.
+    this._lazyMatReaders ||= new WeakMap();
+    if (!this._lazyMatReaders.has(file)) {
+        this._lazyMatReaders.set(file, (async () => {
+            try {
+                const { openMatV4Trajectory } = await import('../../parsers/mat-v4-stream.js');
+                return await openMatV4Trajectory(file, { parser: this.parser });
+            } catch (err) {
+                // A file this reader cannot make sense of (cut short, say) is
+                // left to the in-memory path, which reports what is wrong with it.
+                console.warn('[mat] not read by parts:', err?.message || err);
+                return null;
+            }
+        })());
+    }
+    return this._lazyMatReaders.get(file);
+};
+
+// Whether a loaded file is such a result, open in memory-saving mode.
+proto._isLazyMatFile = function(fileId) {
+    const data = this.plotManager?.files?.get(fileId)?.data;
+    return !!data?._duckdb && data?.metadata?.ingest?.format === 'mat-v4';
+};
+
+proto._openLazyMat = async function(file, options = {}) {
+    const reader = await this._lazyMatReader(file);
+    if (!reader) return null;
+    const signal = options.loadToken?.signal || options.signal || null;
+    try {
+        const source = await this._getDuckDbSource();
+        await source.init();
+        await source.refreshDiskBudget?.();
+        // No room for the copy: said by the question the in-memory path asks.
+        const needed = source.sinkBytesFor(reader.rows, reader.columns);
+        if (needed > source.sinkBudget().available) {
+            console.warn('[mat] no room to open in memory-saving mode:', file.name);
+            return null;
+        }
+        const { ingestColumnarReader } = await import('../../data/columnar-ingest.js');
+        let shown = -1;
+        const data = await ingestColumnarReader(source, reader, {
+            signal,
+            parser: this.parser,
+            onProgress: (done, total) => {
+                const percent = total > 0 ? Math.floor((100 * done) / total) : 100;
+                if (percent === shown) return;
+                shown = percent;
+                this._updateFileLoadingOverlayProgress(i18n.t('lazyMatCopying').replace('{percent}', String(percent)));
+            },
+        });
+        this._updateFileLoadingOverlayProgress('');
+        return data;
+    } catch (err) {
+        this._updateFileLoadingOverlayProgress('');
+        if (err?.name === 'AbortError' || signal?.aborted) return null;
+        // The engine ran out of room on the way, or failed: the file can
+        // still be loaded whole, if the user says so.
+        console.warn('[mat] could not open in memory-saving mode:', err?.message || err);
+        return null;
+    }
+};
+
+// A line under the loading overlay's file name, for work that has a measure.
+proto._updateFileLoadingOverlayProgress = function(text = '') {
+    if (this._fileLoadingToken?.cancelled) return;
+    const hint = document.getElementById('file-loading-hint');
+    if (!hint) return;
+    let line = document.getElementById('file-loading-progress');
+    if (!text) {
+        line?.remove();
+        return;
+    }
+    if (!line) {
+        line = document.createElement('div');
+        line.className = 'example-loading-hint';
+        line.id = 'file-loading-progress';
+        hint.after(line);
+    }
+    line.textContent = text;
 };
 
 proto._matlabEagerLimitBytes = function() {

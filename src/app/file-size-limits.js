@@ -8,6 +8,9 @@
 //   * MAT / Excel / pickle / netCDF: there is no lazy path. Crossing the limit
 //     used to REFUSE the file outright. It now produces a warning the user can
 //     override, which is what this module describes.
+//     (One kind of MAT file does have one: a simulation result past the limit
+//     is opened by parts, in memory-saving mode, before this question is ever
+//     asked — file-methods.js, _openLazyMat. Every other MAT file gets it.)
 //
 // Kept free of DOM and i18n so it can be unit-tested directly: it returns a
 // verdict plus the keys the UI needs, never a rendered message.

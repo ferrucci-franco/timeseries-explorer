@@ -120,7 +120,7 @@ output path.
 - `public`: files copied as-is into the final build
 - `src/app`: top-level application orchestration
 - `src/plots`: plot lifecycle, modes, interactions, Plotly integration
-- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, series netCDF (stations, PyPSA), pandas pickle, Micro-Cap numeric output, and audio inputs
+- `src/parsers`: file parsers — eager for MATLAB/OpenModelica/Dymola `.mat` (and by parts, for a simulation result opened in memory-saving mode: `mat-v4-stream.js`), `.csv`, series netCDF (stations, PyPSA), pandas pickle, Micro-Cap numeric output, and audio inputs
 - `src/ui`: layout engine and modal helpers
 - `src/i18n`: translations and DOM localization
 - `src/styles`: split CSS source files
