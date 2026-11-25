@@ -33,9 +33,11 @@
 // numbers as if they were the file's.
 
 import { fitPair, buildFitCurve, predict } from '../../utils/regression.js';
-import { runPassesOnArrays, runPassesOnChunks } from '../../utils/fit-passes.js';
+import { runPassesOnChunks } from '../../utils/fit-passes.js';
 import { maskTrendValues, trendDelta, trendSteps } from '../../utils/trend-fit.js';
 import { CURVE_FIT_TIME_UNITS, rangeIndices, shiftedTime } from '../curve-fit-state.js';
+import { trendExpRows, trendRows } from '../../compute/analysis/trend.js';
+import { ANALYSIS_INLINE_ROWS } from '../../core/analysis-pool.js';
 import {
     defaultTrendSegment,
     defaultTrendState,
@@ -249,27 +251,56 @@ export function installPlotTrendLazyMethods(TargetClass) {
     // ── In memory ─────────────────────────────────────────────────
     // The rows of a stretch: every sample whose time falls inside [lo, hi],
     // with the panel's transforms applied.
-    proto._trendEagerRows = function(trace, range) {
+    // Where they are, without copying them: the arrays and the index range.
+    proto._trendEagerSpan = function(trace, range) {
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
         const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
         const n = Math.min(times.length || 0, values.length || 0);
         const [start, end] = rangeIndices(n === times.length ? times : times.slice(0, n), range[0], range[1]);
+        return { times, values, start, end };
+    };
+
+    proto._trendEagerRows = function(trace, range) {
+        const { times, values, start, end } = this._trendEagerSpan(trace, range);
         return { times: times.slice(start, end), values: values.slice(start, end) };
     };
 
     proto._trendFromRows = function(segment, trace, range, info, band, times, values) {
-        const tPrime = shiftedTime(times, range[0], info.scale);
-        const trend = runPassesOnArrays(trendSteps({ band }), tPrime, values);
-        const exp = this._trendExpFromRows(segment, band, tPrime, values);
+        const { trend, exp } = trendRows({
+            times, values, t0: range[0], scale: info.scale, band, expModel: segment?.expModel || 'none',
+        });
         return this._trendResult(trace, range, info, band, trend, exp);
     };
 
     // The exponential of a segment that asked for one, over the rows the band
     // keeps. Null when none was asked for.
     proto._trendExpFromRows = function(segment, band, tPrime, values) {
-        const model = segment?.expModel;
-        if (!model || model === 'none') return null;
-        return fitPair(model, tPrime, maskTrendValues(values, band));
+        return trendExpRows(segment?.expModel, band, tPrime, values);
+    };
+
+    // An in-memory segment on the compute worker: the same kernel, off the
+    // main thread, stopped when `signal` fires (its worker is terminated).
+    // The rows of the stretch are copied once, a block at a time, and handed
+    // over. Resolves to null where there is no worker: the caller computes on
+    // the main thread.
+    proto._trendOnWorker = async function(r, signal) {
+        const pool = this._analysisPool?.() || null;
+        if (!pool) return null;
+        const span = this._trendEagerSpan(r.trace, r.range);
+        const [times, values] = await this._analysisRowsForWorker([span.times, span.values], span.start, span.end, signal);
+        const payload = {
+            times, values, t0: r.range[0], scale: r.info.scale,
+            band: r.band || null, expModel: r.segment?.expModel || 'none',
+        };
+        const transfer = [times.buffer, values.buffer];
+        let computed;
+        try {
+            computed = await pool.run('analysis:trend', payload, { transfer, signal });
+        } catch (error) {
+            if (error?.workerUnavailable) return null;
+            throw error;
+        }
+        return this._trendResult(r.trace, r.range, r.info, r.band, computed.trend, computed.exp);
     };
 
     /**
@@ -353,8 +384,20 @@ export function installPlotTrendLazyMethods(TargetClass) {
                 results.push({ ...base, lazy: true, lazyStatus, key, range, info, band, staleResult });
                 return;
             }
-            const rows = this._trendEagerRows(trace, range);
-            const result = this._trendFromRows(segment, trace, range, info, band, rows.times, rows.values);
+            // In memory. A stretch of many rows is computed on the compute
+            // worker and arrives like a lazy segment does (`inMemory` tells
+            // them apart): the previous numbers stay on screen and the page
+            // stays free, Cancel included. A short one is computed here.
+            const span = this._trendEagerSpan(trace, range);
+            if (span.end - span.start > ANALYSIS_INLINE_ROWS && this._analysisPool?.()) {
+                const sameKey = cached?.key === key;
+                const lazyStatus = sameKey ? cached.status : 'pending';
+                const staleResult = sameKey ? (cached.previous || null) : (cached?.result || cached?.previous || null);
+                results.push({ ...base, lazy: true, inMemory: true, lazyStatus, key, range, info, band, staleResult });
+                return;
+            }
+            const result = this._trendFromRows(segment, trace, range, info, band,
+                span.times.slice(span.start, span.end), span.values.slice(span.start, span.end));
             plot._trendCache.set(segment.id, { key, result, status: 'ok' });
             results.push({ ...base, result });
         });
@@ -395,8 +438,22 @@ export function installPlotTrendLazyMethods(TargetClass) {
             job.controller?.abort();
             jobs.delete(id);
         }
-        const fresh = pending.filter(r => !jobs.has(r.segment.id));
-        if (!fresh.length) return;
+        const unstarted = pending.filter(r => !jobs.has(r.segment.id));
+        if (!unstarted.length) return;
+
+        // The segments of files in memory: one worker job each.
+        const memory = unstarted.filter(r => r.inMemory);
+        const memoryBatches = memory.map(r => ({ kind: 'memory', items: [r] }));
+        for (const batch of memoryBatches) {
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            for (const r of batch.items) jobs.set(r.segment.id, { key: r.key, controller });
+        }
+        const memoryRuns = Promise.all(memoryBatches.map(batch => this._runTrendLazyBatch(panelId, plot, batch)));
+        const fresh = unstarted.filter(r => !r.inMemory);
+        if (!fresh.length) {
+            await memoryRuns;
+            return;
+        }
 
         // A lazy file whose axis is the row number must be counted before its
         // domain can be told — a CSV opened as a view is not counted when it
@@ -466,6 +523,7 @@ export function installPlotTrendLazyMethods(TargetClass) {
         };
         try {
             if (batch.kind === 'sql') await this._runTrendSqlBatch(plot, batch, signal, settle);
+            else if (batch.kind === 'memory') await this._runTrendMemoryBatch(plot, batch, signal, settle);
             else await this._runTrendStreamBatch(plot, batch, signal, settle);
         } catch (err) {
             if (err?.name === 'AbortError') {
@@ -532,6 +590,18 @@ export function installPlotTrendLazyMethods(TargetClass) {
             }
             settle(r, { key: r.key, result: this._trendResult(r.trace, r.range, r.info, r.band, stat.trend, exp), status: 'ok' });
         }
+    };
+
+    // A segment of a file in memory: on the compute worker, or here where
+    // there is none.
+    proto._runTrendMemoryBatch = async function(plot, batch, signal, settle) {
+        const r = batch.items[0];
+        let result = await this._trendOnWorker(r, signal);
+        if (!result) {
+            const rows = this._trendEagerRows(r.trace, r.range);
+            result = this._trendFromRows(r.segment, r.trace, r.range, r.info, r.band, rows.times, rows.values);
+        }
+        settle(r, { key: r.key, result, status: 'ok' });
     };
 
     // The streamed path (a generated time axis): the kernel itself over the

@@ -17,6 +17,7 @@
 
 import { fitPair, fitSteps, buildFitCurve, predict } from '../../utils/regression.js';
 import { runPassesOnChunks } from '../../utils/fit-passes.js';
+import { curveFitRows } from '../../compute/analysis/curve-fit.js';
 import { createMinMaxDecimator, decimateMinMax, shiftedTime } from '../curve-fit-state.js';
 
 // The most rows of a lazy file a fit computed outside SQL (the exponential
@@ -135,19 +136,10 @@ export function installPlotFitLazyMethods(TargetClass) {
     };
 
     proto._curveFitFromRows = function(plot, entry, trace, range, info, times, values) {
-        const t0 = range[0];
-        const tPrime = shiftedTime(times, t0, info.scale);
-        const fit = fitPair(entry.model, tPrime, values);
-        let residual = { x: [], y: [] };
-        if (fit?.status === 'ok') {
-            const r = new Float64Array(tPrime.length);
-            for (let i = 0; i < tPrime.length; i++) {
-                const y = Number(values[i]);
-                r[i] = Number.isFinite(y) && Number.isFinite(tPrime[i]) ? y - predict(fit, tPrime[i]) : NaN;
-            }
-            residual = decimateMinMax(times, r, RESIDUAL_BUCKETS);
-        }
-        return this._curveFitResult(trace, range, info, fit, residual, times.length);
+        const { fit, residual, nScope } = curveFitRows({
+            model: entry.model, times, values, t0: range[0], scale: info.scale, buckets: RESIDUAL_BUCKETS,
+        });
+        return this._curveFitResult(trace, range, info, fit, residual, nScope);
     };
 
     // What the panes and the drawer draw from, once the fit and its residuals

@@ -862,7 +862,89 @@ done, and the same measurements after it.
 
 ### #381: In-memory analyses on the compute worker
 
-Not landed yet.
+Landing in parts; each part adds its analyses here.
+
+**What was done (the base, and the three fits: Curve fit, Trend, 2D Curve
+fit).** The analyses of a file in memory get a pool of workers whose tasks can
+be stopped (`ExclusiveWorkerPool`, `src/core/analysis-pool.js`): the Data
+Tools' worker script, one task per worker, and a task whose signal fires has
+its worker terminated. Each analysis' kernel is one function of plain data
+(`src/compute/analysis/`), called by the worker op and by the main thread, so
+the bits are the same (`scripts/test-analysis-jobs.mjs`). In the panel an
+in-memory fit over more than 20 000 rows arrives the way a lazy fit does: the
+previous result stays drawn, the pill shows, the run's signal stops the job,
+Cancel puts the settings back (`scripts/e2e-analysis-cancel-memory.mjs`). See
+`docs/architecture.md`, "Analysis jobs".
+
+Two things the first measurement of this change showed, both fixed in it:
+
+- **The copy handed to the worker was a task of its own.** One `slice` of a
+  10 M-row range took up to 544 ms (the Trend's exponential). The rows are now
+  copied a block at a time, the page getting a turn between blocks
+  (`_analysisRowsForWorker`), and the copy stops if the run is aborted.
+- **The 2D fit fitted twice** (once to measure the kernel, once when the plot
+  was rebuilt). A deferred pair's fit is kept (`plot._phase2dLazyFits`), so a
+  change of model is one job. Its settings are also noted for Cancel when the
+  fit arrives, not before it runs: the "typed bound stays" defect of "Other
+  defects found on the way", item 4.
+
+**The three fits, in memory, after** (same harness, `--analyses=curve-fit,trend,phase2d-fit
+--modes=eager`; the "before" tables are under "Full results"):
+
+| Analysis | Rows | Mode | Action | Longest task: computation | in Plotly | no JS (render) | Longest task overall | Frame gap | Time to result | A newer request stops the one in flight | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Curve fit | 1.2 M | eager | open | 21 | 133 | 0 | 154 | 153 | 168 |  | range: 33 % of the file |
+| Curve fit | 1.2 M | eager | type | 17 | 60 | 1 | 78 | 64 | 175 |  |  |
+| Curve fit | 1.2 M | eager | param: linear → quadratic | 21 | 113 | 1 | 125 | 110 | 213 |  |  |
+| Curve fit | 1.2 M | eager | param: quadratic → exponential | 14 | 77 | 0 | 87 | 74 | 1286 |  |  |
+| Curve fit | 1.2 M | eager | drag | 17 | 83 | 1 | 100 | 85 | 287 | nothing in flight | slider events waited ≤ 52 ms |
+| Curve fit | 1.2 M | eager | cancel | 15 | 61 | 3 | 68 | 55 | 4 |  | cancelled; the range is back |
+| Trend | 1.2 M | eager | open | 16 | 94 | 1 | 110 | 98 | 272 |  | range: 33 % of the file |
+| Trend | 1.2 M | eager | type | 14 | 39 | 0 | 53 | 40 | 171 |  |  |
+| Trend | 1.2 M | eager | param: value band on | 16 | 60 | 1 | 76 | 64 | 183 |  |  |
+| Trend | 1.2 M | eager | param: exponential on | 22 | 42 | 0 | 64 | 51 | 1065 |  |  |
+| Trend | 1.2 M | eager | drag | 12 | 53 | 0 | 65 | 54 | 242 | nothing in flight | slider events waited ≤ 51 ms |
+| Trend | 1.2 M | eager | cancel | 13 | 82 | 2 | 90 | 78 | 5 |  | cancelled; the range is back |
+| 2D curve fit | 1.2 M | eager | open | 45 | 84 | 1 | 129 | 121 | 197 |  |  |
+| 2D curve fit | 1.2 M | eager | type | 0 | 0 | 0 | 0 | 35 | 107 |  |  |
+| 2D curve fit | 1.2 M | eager | param: linear → quadratic | 22 | 30 | 0 | 52 | 60 | 143 |  |  |
+| 2D curve fit | 1.2 M | eager | param: quadratic → exponential | 0 | 0 | 0 | 0 | 49 | 2298 |  |  |
+| 2D curve fit | 1.2 M | eager | drag | 0 | 0 | 0 | 0 | 50 | 238 | nothing in flight | slider events waited ≤ 47 ms |
+| 2D curve fit | 1.2 M | eager | cancel | 0 | 0 | 0 | 0 | 68 | 39 |  | cancelled; the range is back |
+| Curve fit | 10.0 M | eager | open | 57 | 182 | 1 | 240 | 227 | 256 |  | range: 33 % of the file |
+| Curve fit | 10.0 M | eager | type | 21 | 101 | 2 | 107 | 91 | 918 |  |  |
+| Curve fit | 10.0 M | eager | param: linear → quadratic | 18 | 105 | 0 | 123 | 110 | 919 |  |  |
+| Curve fit | 10.0 M | eager | param: quadratic → exponential | 23 | 94 | 0 | 108 | 105 | 17613 |  |  |
+| Curve fit | 10.0 M | eager | drag | 19 | 50 | 1 | 69 | 55 | 692 | nothing in flight | slider events waited ≤ 99 ms |
+| Curve fit | 10.0 M | eager | cancel | 16 | 64 | 4 | 77 | 63 | 5 |  | cancelled; the range is back |
+| Trend | 10.0 M | eager | open | 63 | 161 | 2 | 226 | 213 | 613 |  | range: 33 % of the file |
+| Trend | 10.0 M | eager | type | 17 | 55 | 1 | 72 | 61 | 840 |  |  |
+| Trend | 10.0 M | eager | param: value band on | 17 | 56 | 0 | 65 | 52 | 1212 |  |  |
+| Trend | 10.0 M | eager | param: exponential on | 18 | 66 | 0 | 80 | 78 | 16896 |  |  |
+| Trend | 10.0 M | eager | drag | 17 | 88 | 1 | 94 | 85 | 769 | nothing in flight | slider events waited ≤ 90 ms |
+| Trend | 10.0 M | eager | cancel | 18 | 63 | 6 | 74 | 61 | 4 |  | cancelled; the range is back |
+| 2D curve fit | 10.0 M | eager | open | 206 | 52 | 1 | **258** | 257 | 441 |  |  |
+| 2D curve fit | 10.0 M | eager | type | 103 | 23 | 1 | 126 | 117 | 544 |  |  |
+| 2D curve fit | 10.0 M | eager | param: linear → quadratic | 109 | 28 | 1 | 137 | 126 | 654 |  |  |
+| 2D curve fit | 10.0 M | eager | param: quadratic → exponential | 119 | 24 | 0 | 143 | 142 | 17860 |  |  |
+| 2D curve fit | 10.0 M | eager | drag | 64 | 22 | 1 | 86 | 93 | 535 | no: on the main thread, which it held 159 ms | slider events waited ≤ 159 ms |
+| 2D curve fit | 10.0 M | eager | cancel | 137 | 41 | 13 | 170 | 286 | 166 |  | cancelled; the range is back |
+
+- Longest computation task for the exponential, before → after: Curve fit
+  1 199 → 14 ms at 1.2 M rows and 18 576 → 23 ms at 10 M; Trend 1 228 → 22 ms
+  and 18 851 → 18 ms; 2D fit 5 676 → 0 ms and 44 167 → 119 ms.
+- The time to result is the fit's own time, now spent on the worker (17–18 s
+  for an exponential over 10 M rows), during which the page responds. The 2D
+  fit's went from 44 s to 18 s because it is computed once.
+- **Cancel** can be pressed in all three, and the range or model is back
+  within 5–170 ms.
+- One task is still over 250 ms: opening the 2D fit on the 10 M file, 258 ms,
+  206 of them computation. That is building the 2D plot's own trajectory, not
+  a fit — #386's subject ("a time pane" of the borderline list), left as it
+  is here.
+
+Still on the main thread, in memory: Histogram, Heatmap, Temporal profile,
+Integral and the pair Correlation.
 
 ### #382: Lazy exponential fits
 

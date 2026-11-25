@@ -12,6 +12,9 @@ import { runDataToolPipeline, runResample, runCrossCorrelation } from '../comput
 import { detectSpikeWindow } from '../compute/kernels/outliers.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
 import { detectSamplingGaps } from '../utils/sampling-gaps.js';
+import { curveFitRows } from '../compute/analysis/curve-fit.js';
+import { trendRows } from '../compute/analysis/trend.js';
+import { pairFitRows } from '../compute/analysis/pair-fit.js';
 
 const HANDLERS = {
     'dataTool:pipeline': ({ values, time, steps }) => {
@@ -52,6 +55,14 @@ const HANDLERS = {
         const info = detectSamplingGaps(values);
         return { result: { medianDt: info.medianDt, hasNominalStep: info.hasNominalStep, reason: info.reason } };
     },
+    // The analyses of an in-memory file (src/core/analysis-pool.js): each op
+    // runs the very function the main thread runs where there is no worker.
+    'analysis:curveFit': (payload) => {
+        const result = curveFitRows(payload || {});
+        return { result, transfer: collectBuffers([result.residual?.x, result.residual?.y]) };
+    },
+    'analysis:trend': (payload) => ({ result: trendRows(payload || {}) }),
+    'analysis:pairFit': (payload) => ({ result: pairFitRows(payload || {}) }),
     'fft:spectrum': (input) => {
         const spectrum = computeAmplitudeSpectrum(input || {});
         return {

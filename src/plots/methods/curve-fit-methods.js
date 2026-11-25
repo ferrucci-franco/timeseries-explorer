@@ -6,7 +6,8 @@ import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import Modal from '../../ui/modal.js';
 import { createCopyButton } from '../../ui/copy-button.js';
 import { buildFitCurve } from '../../utils/regression.js';
-import { FIT_MAX_LAZY_ROWS } from './fit-lazy-methods.js';
+import { FIT_MAX_LAZY_ROWS, RESIDUAL_BUCKETS } from './fit-lazy-methods.js';
+import { ANALYSIS_INLINE_ROWS } from '../../core/analysis-pool.js';
 import {
     FIT_MODEL_OPTIONS,
     FIT_MODEL_SHORT_KEYS,
@@ -225,12 +226,44 @@ export function installPlotCurveFitMethods(TargetClass) {
     // Fit one stretch: rows inside [lo, hi], time shifted to t₀ = lo and
     // scaled to the chosen unit. Returns everything the panes and the drawer
     // draw from, so they never refit.
-    proto._curveFitEagerRows = function(trace, range) {
+    // Where the rows of [lo, hi] are in an in-memory trace, without copying
+    // them: the arrays and the index range.
+    proto._curveFitEagerSpan = function(trace, range) {
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
         const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
         const n = Math.min(times.length || 0, values.length || 0);
         const [start, end] = rangeIndices(n === times.length ? times : times.slice(0, n), range[0], range[1]);
+        return { times, values, start, end };
+    };
+
+    proto._curveFitEagerRows = function(trace, range) {
+        const { times, values, start, end } = this._curveFitEagerSpan(trace, range);
         return { times: times.slice(start, end), values: values.slice(start, end) };
+    };
+
+    // An in-memory fit on the compute worker: the same kernel, off the main
+    // thread, stopped when `signal` fires (its worker is terminated). The rows
+    // of the range are copied once and handed over, not copied again.
+    // Resolves to null where there is no worker to run it: the caller then
+    // fits on the main thread, as it always did.
+    proto._curveFitOnWorker = async function(plot, r, signal) {
+        const pool = this._analysisPool?.() || null;
+        if (!pool) return null;
+        const span = this._curveFitEagerSpan(r.trace, r.range);
+        const [times, values] = await this._analysisRowsForWorker([span.times, span.values], span.start, span.end, signal);
+        const payload = {
+            model: r.entry.model, times, values,
+            t0: r.range[0], scale: r.info.scale, buckets: RESIDUAL_BUCKETS,
+        };
+        const transfer = [times.buffer, values.buffer];
+        let computed;
+        try {
+            computed = await pool.run('analysis:curveFit', payload, { transfer, signal });
+        } catch (error) {
+            if (error?.workerUnavailable) return null;
+            throw error;
+        }
+        return this._curveFitResult(r.trace, r.range, r.info, computed.fit, computed.residual, computed.nScope);
     };
 
     // One result per fit, in fit order. Eager fits are computed here (and
@@ -267,8 +300,20 @@ export function installPlotCurveFitMethods(TargetClass) {
                 results.push({ ...base, lazy: true, lazyStatus, key, range, info, staleResult });
                 return;
             }
-            const rows = this._curveFitEagerRows(trace, range);
-            const result = this._curveFitFromRows(plot, entry, trace, range, info, rows.times, rows.values);
+            // In memory. A range of many rows is fitted on the compute worker,
+            // and arrives like a lazy fit does (`inMemory` tells them apart):
+            // meanwhile the previous fit stays drawn and the page stays free,
+            // Cancel included. A short one is fitted here and now.
+            const span = this._curveFitEagerSpan(trace, range);
+            if (span.end - span.start > ANALYSIS_INLINE_ROWS && this._analysisPool?.()) {
+                const sameKey = cached?.key === key;
+                const lazyStatus = sameKey ? cached.status : 'pending';
+                const staleResult = sameKey ? (cached.previous || null) : (cached?.result || cached?.previous || null);
+                results.push({ ...base, lazy: true, inMemory: true, lazyStatus, key, range, info, staleResult });
+                return;
+            }
+            const result = this._curveFitFromRows(plot, entry, trace, range, info,
+                span.times.slice(span.start, span.end), span.values.slice(span.start, span.end));
             plot._curveFitCache.set(entry.id, { key, result, status: 'ok' });
             results.push({ ...base, result });
         });
@@ -305,6 +350,21 @@ export function installPlotCurveFitMethods(TargetClass) {
             const current = () => jobs.get(r.entry.id) === job;
             let entry;
             try {
+                if (r.inMemory) {
+                    let result = await this._curveFitOnWorker(plot, r, signal);
+                    if (!current()) continue;
+                    if (!result) {
+                        // No worker after all: on the main thread.
+                        const rows = this._curveFitEagerRows(r.trace, r.range);
+                        result = this._curveFitFromRows(plot, r.entry, r.trace, r.range, r.info, rows.times, rows.values);
+                    }
+                    entry = { key: r.key, result, status: 'ok' };
+                    jobs.delete(r.entry.id);
+                    plot._curveFitCache.set(r.entry.id, entry);
+                    if (this.plots.get(panelId) !== plot || plot.mode !== 'curve-fit') return;
+                    this._paintCurveFits(panelId, plot, this._computeCurveFits(plot));
+                    continue;
+                }
                 const rows = await this._fetchLazyFitRows(r.trace.fileId, [r.trace.varName], r.range, FIT_MAX_LAZY_ROWS, signal);
                 if (!current()) continue;
                 if (rows.ok) {
@@ -328,7 +388,7 @@ export function installPlotCurveFitMethods(TargetClass) {
                 }
             } catch (err) {
                 if (err?.name === 'AbortError') continue;
-                console.warn('[curve-fit] lazy query failed:', err);
+                console.warn(r.inMemory ? '[curve-fit] fit on the worker failed:' : '[curve-fit] lazy query failed:', err);
                 entry = { key: r.key, result: null, status: 'error' };
             }
             if (!current()) continue;
@@ -399,7 +459,10 @@ export function installPlotCurveFitMethods(TargetClass) {
         const fitted = results.filter(r => r.result?.fit?.status === 'ok').length;
         const pending = results.some(r => r.lazy && !r.result && r.lazyStatus === 'pending');
         const cancelled = results.some(r => r.lazy && !r.result && r.lazyStatus === 'cancelled');
-        if (pending) this._setCurveFitStatus(plot, i18n.t('phase2dFitLazyPending'), 'loading');
+        // "Fitting the large file…" is for a file being read; a fit of rows in
+        // memory is simply calculating.
+        const reading = results.some(r => r.lazy && !r.inMemory && !r.result && r.lazyStatus === 'pending');
+        if (pending) this._setCurveFitStatus(plot, i18n.t(reading ? 'phase2dFitLazyPending' : 'curveFitCalculating'), 'loading');
         else if (cancelled) this._setCurveFitStatus(plot, i18n.t(results.some(r => r.staleResult) ? 'analysisCancelledKept' : 'analysisCancelled'), 'muted');
         else this._setCurveFitStatus(plot, fitted ? i18n.t('curveFitStatus').replace('{count}', String(fitted)) : '', 'muted');
     };
@@ -1156,7 +1219,7 @@ export function installPlotCurveFitMethods(TargetClass) {
             if (r.lazy && r.lazyStatus === 'cancelled') return i18n.t(r.staleResult ? 'analysisCancelledKept' : 'analysisCancelled');
             if (r.lazy) {
                 if (r.lazyStatus === 'error') return i18n.t('phase2dFitLazyError');
-                return i18n.t('phase2dFitLazyPending');
+                return i18n.t(r.inMemory ? 'curveFitCalculating' : 'phase2dFitLazyPending');
             }
             return '';
         }

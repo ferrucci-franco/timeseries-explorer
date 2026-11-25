@@ -70,6 +70,9 @@ Owns plot state and every Plotly-driven behavior.
     context menu (built once, in `_showLegendTraceMenu`, for every mode) and
     from a trace's row on the phone; both live in the trace state, so every
     analysis drawn from the series, a saved view and an export follow
+- `methods/analysis-busy-methods.js`
+  - the computing pill every analysis shows, its Cancel, and the settings
+    Cancel puts back; `_analysisPool()` is where an analysis asks for workers
 - `analysis-side.js`
   - an analysis' side panel: its own buttons (V/H, hide the time series,
     Reset, Options, status) as the header of its options drawer, rather than
@@ -78,6 +81,36 @@ Owns plot state and every Plotly-driven behavior.
   - Dashboard mode: the panel's traces as cards with their value (the last
     one read, or the one at the instant of a time slider); a card's unit is
     written into the variable's description and saved with the file
+
+### Analysis jobs
+
+An analysis of a file held in memory computes off the main thread, so the page
+— and the Cancel button — stay usable while it does.
+
+- `src/core/analysis-pool.js` — the workers: the Data Tools' worker script
+  (`src/workers/compute-worker.js`) in a pool of its own, an
+  `ExclusiveWorkerPool` (`src/core/worker-pool.js`). One task per worker; a
+  task whose `AbortSignal` fires while it runs has its worker terminated,
+  which is the only way to stop synchronous work, and the next task starts a
+  fresh one. The Data Tools' `WorkerPool` instead lets a stale task finish and
+  drops its result, which suits kernels that take milliseconds.
+- `src/compute/analysis/*.js` — each analysis' kernel as one function of plain
+  data. The worker's `analysis:*` op and the main thread call the same
+  function, so the results are the same bits
+  (`scripts/test-analysis-jobs.mjs`).
+- In the panel, an in-memory result that is computed on the worker arrives the
+  way a lazy file's does: the previous result stays drawn, the pill shows, the
+  run's signal stops it, Cancel puts the settings back. A range of few rows
+  (`ANALYSIS_INLINE_ROWS`) is computed where it is, and so is everything where
+  workers cannot start (Node, a page opened from `file://` without the
+  portable build's bundled workers): `_analysisPool()` returns null and the
+  same function runs on the main thread.
+- The rows a job needs are copied once for it, a block at a time
+  (`_analysisRowsForWorker`), and their buffers handed over.
+- Moved so far: the Curve fit and the Trend of a time series and the Curve fit
+  of a 2D plot (`analysis:curveFit`, `analysis:trend`, `analysis:pairFit`).
+  The others follow the same shape (#381);
+  `scripts/e2e-analysis-cancel-memory.mjs` is where each is added.
 
 ### `src/parsers`
 

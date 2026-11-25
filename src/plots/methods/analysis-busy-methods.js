@@ -13,16 +13,18 @@
 // the options panel and the range selection, so what the panel says is what
 // it shows.
 //
-// Work already running synchronously on the main thread (an in-memory kernel)
-// cannot be interrupted; the pill shows before it starts, and a run cancelled
-// then never starts. Once it has started, the page cannot take the click
-// until it ends.
+// An in-memory kernel that runs on the compute worker (src/core/analysis-pool.js)
+// is stopped by terminating its worker: the run's signal does it. One that
+// still runs synchronously on the main thread cannot be interrupted; the pill
+// shows before it starts, and a run cancelled then never starts. Once it has
+// started, the page cannot take the click until it ends.
 //
 // Every analysis goes through here (_setAnalysisComputing while it computes,
 // _analysisSignal for the queries it makes), so a new analysis gets the pill
 // and its Cancel by doing the same — see CLAUDE.md.
 
 import i18n from '../../i18n/index.js';
+import { getAnalysisPool } from '../../core/analysis-pool.js';
 
 const PILL_CLASS = 'analysis-computing-indicator';
 
@@ -69,6 +71,52 @@ const RESULT_DIV = {
 
 export function installPlotAnalysisBusyMethods(TargetClass) {
     const proto = TargetClass.prototype;
+
+    // The workers an in-memory analysis computes on, or null where there are
+    // none (then the kernel runs on the main thread). Through the manager so
+    // every analysis asks in one place — and a test can stand in for it.
+    proto._analysisPool = function() {
+        return getAnalysisPool();
+    };
+
+    /**
+     * The rows [start, end) of in-memory arrays, copied for a worker job: one
+     * new array per source, whose buffer the job then takes (transfer), so the
+     * rows are copied once and never cloned. Copied a block at a time, letting
+     * the page breathe between blocks: one `slice` of a 10 M-row range is a
+     * task of hundreds of milliseconds on its own. Rejects with an AbortError
+     * if `signal` fires meanwhile.
+     */
+    proto._analysisRowsForWorker = async function(arrays, start, end, signal = null) {
+        const n = Math.max(0, end - start);
+        const BLOCK = 1 << 19;          // rows per copy
+        const BUDGET_MS = 12;           // of copying before the page gets a turn
+        const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        const aborted = () => {
+            if (!signal?.aborted) return;
+            throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
+        };
+        let since = now();
+        const out = [];
+        for (const source of arrays) {
+            const typed = ArrayBuffer.isView(source) && !(source instanceof DataView)
+                && !(typeof BigInt64Array !== 'undefined' && (source instanceof BigInt64Array || source instanceof BigUint64Array));
+            const copy = typed ? new source.constructor(n) : new Float64Array(n);
+            for (let at = 0; at < n; at += BLOCK) {
+                const stop = Math.min(n, at + BLOCK);
+                if (typed) copy.set(source.subarray(start + at, start + stop), at);
+                else for (let i = at; i < stop; i++) copy[i] = Number(source[start + i]);
+                if (now() - since >= BUDGET_MS) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    aborted();
+                    since = now();
+                }
+            }
+            out.push(copy);
+        }
+        aborted();
+        return out;
+    };
 
     // The signal the queries of this panel's analysis carry. One controller per
     // panel; Cancel aborts it, and the next run gets a fresh one. An analysis
@@ -295,7 +343,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         if (mode === 'phase2d') {
             if (plot._phase2dLazyJob) return false;
             return !(plot.phaseTraces || []).some((pair) => {
-                if (pair.visible === false || this._phase2dPairModel?.(pair) === 'none' || !this._isLazyFile?.(pair.fileId)) return false;
+                if (pair.visible === false || this._phase2dPairModel?.(pair) === 'none' || !this._phase2dPairDeferred?.(plot, pair)) return false;
                 const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
                 return !(cached && cached.status === 'ok' && cached.key === this._phase2dLazyFitKey(plot, pair));
             });
