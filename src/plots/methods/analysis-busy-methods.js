@@ -79,6 +79,45 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         return getAnalysisPool();
     };
 
+    /**
+     * The rows [start, end) of in-memory arrays, copied for a worker job: one
+     * new array per source, whose buffer the job then takes (transfer), so the
+     * rows are copied once and never cloned. Copied a block at a time, letting
+     * the page breathe between blocks: one `slice` of a 10 M-row range is a
+     * task of hundreds of milliseconds on its own. Rejects with an AbortError
+     * if `signal` fires meanwhile.
+     */
+    proto._analysisRowsForWorker = async function(arrays, start, end, signal = null) {
+        const n = Math.max(0, end - start);
+        const BLOCK = 1 << 19;          // rows per copy
+        const BUDGET_MS = 12;           // of copying before the page gets a turn
+        const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        const aborted = () => {
+            if (!signal?.aborted) return;
+            throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
+        };
+        let since = now();
+        const out = [];
+        for (const source of arrays) {
+            const typed = ArrayBuffer.isView(source) && !(source instanceof DataView)
+                && !(typeof BigInt64Array !== 'undefined' && (source instanceof BigInt64Array || source instanceof BigUint64Array));
+            const copy = typed ? new source.constructor(n) : new Float64Array(n);
+            for (let at = 0; at < n; at += BLOCK) {
+                const stop = Math.min(n, at + BLOCK);
+                if (typed) copy.set(source.subarray(start + at, start + stop), at);
+                else for (let i = at; i < stop; i++) copy[i] = Number(source[start + i]);
+                if (now() - since >= BUDGET_MS) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    aborted();
+                    since = now();
+                }
+            }
+            out.push(copy);
+        }
+        aborted();
+        return out;
+    };
+
     // The signal the queries of this panel's analysis carry. One controller per
     // panel; Cancel aborts it, and the next run gets a fresh one. An analysis
     // whose runs can supersede each other hands its queries a run signal tied

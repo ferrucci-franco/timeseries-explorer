@@ -280,17 +280,19 @@ export function installPlotTrendLazyMethods(TargetClass) {
 
     // An in-memory segment on the compute worker: the same kernel, off the
     // main thread, stopped when `signal` fires (its worker is terminated).
-    // The rows of the stretch are copied once and handed over. Resolves to
-    // null where there is no worker: the caller computes on the main thread.
+    // The rows of the stretch are copied once, a block at a time, and handed
+    // over. Resolves to null where there is no worker: the caller computes on
+    // the main thread.
     proto._trendOnWorker = async function(r, signal) {
         const pool = this._analysisPool?.() || null;
         if (!pool) return null;
-        const rows = this._trendEagerRows(r.trace, r.range);
+        const span = this._trendEagerSpan(r.trace, r.range);
+        const [times, values] = await this._analysisRowsForWorker([span.times, span.values], span.start, span.end, signal);
         const payload = {
-            times: rows.times, values: rows.values, t0: r.range[0], scale: r.info.scale,
+            times, values, t0: r.range[0], scale: r.info.scale,
             band: r.band || null, expModel: r.segment?.expModel || 'none',
         };
-        const transfer = [...new Set([rows.times?.buffer, rows.values?.buffer].filter(buffer => buffer instanceof ArrayBuffer))];
+        const transfer = [times.buffer, values.buffer];
         let computed;
         try {
             computed = await pool.run('analysis:trend', payload, { transfer, signal });

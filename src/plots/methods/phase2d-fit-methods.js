@@ -215,10 +215,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._phase2dFitOnWorker = async function(plot, pair, model, signal) {
         const pool = this._analysisPool?.() || null;
         if (!pool) return null;
-        const series = this._phase2dPairSeries(plot, pair);
-        const transfer = [...new Set([series.x?.buffer, series.y?.buffer].filter(buffer => buffer instanceof ArrayBuffer))];
+        const span = this._phase2dPairSpan(plot, pair);
+        const [x, y] = await this._analysisRowsForWorker([span.xVals, span.yVals], span.start, span.end, signal);
         try {
-            return await pool.run('analysis:pairFit', { model, x: series.x, y: series.y }, { transfer, signal });
+            return await pool.run('analysis:pairFit', { model, x, y }, { transfer: [x.buffer, y.buffer], signal });
         } catch (error) {
             if (error?.workerUnavailable) return null;
             throw error;

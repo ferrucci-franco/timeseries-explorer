@@ -249,12 +249,13 @@ export function installPlotCurveFitMethods(TargetClass) {
     proto._curveFitOnWorker = async function(plot, r, signal) {
         const pool = this._analysisPool?.() || null;
         if (!pool) return null;
-        const rows = this._curveFitEagerRows(r.trace, r.range);
+        const span = this._curveFitEagerSpan(r.trace, r.range);
+        const [times, values] = await this._analysisRowsForWorker([span.times, span.values], span.start, span.end, signal);
         const payload = {
-            model: r.entry.model, times: rows.times, values: rows.values,
+            model: r.entry.model, times, values,
             t0: r.range[0], scale: r.info.scale, buckets: RESIDUAL_BUCKETS,
         };
-        const transfer = [...new Set([rows.times?.buffer, rows.values?.buffer].filter(buffer => buffer instanceof ArrayBuffer))];
+        const transfer = [times.buffer, values.buffer];
         let computed;
         try {
             computed = await pool.run('analysis:curveFit', payload, { transfer, signal });
