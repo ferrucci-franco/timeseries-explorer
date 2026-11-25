@@ -13,16 +13,18 @@
 // the options panel and the range selection, so what the panel says is what
 // it shows.
 //
-// Work already running synchronously on the main thread (an in-memory kernel)
-// cannot be interrupted; the pill shows before it starts, and a run cancelled
-// then never starts. Once it has started, the page cannot take the click
-// until it ends.
+// An in-memory kernel that runs on the compute worker (src/core/analysis-pool.js)
+// is stopped by terminating its worker: the run's signal does it. One that
+// still runs synchronously on the main thread cannot be interrupted; the pill
+// shows before it starts, and a run cancelled then never starts. Once it has
+// started, the page cannot take the click until it ends.
 //
 // Every analysis goes through here (_setAnalysisComputing while it computes,
 // _analysisSignal for the queries it makes), so a new analysis gets the pill
 // and its Cancel by doing the same — see CLAUDE.md.
 
 import i18n from '../../i18n/index.js';
+import { getAnalysisPool } from '../../core/analysis-pool.js';
 
 const PILL_CLASS = 'analysis-computing-indicator';
 
@@ -69,6 +71,13 @@ const RESULT_DIV = {
 
 export function installPlotAnalysisBusyMethods(TargetClass) {
     const proto = TargetClass.prototype;
+
+    // The workers an in-memory analysis computes on, or null where there are
+    // none (then the kernel runs on the main thread). Through the manager so
+    // every analysis asks in one place — and a test can stand in for it.
+    proto._analysisPool = function() {
+        return getAnalysisPool();
+    };
 
     // The signal the queries of this panel's analysis carry. One controller per
     // panel; Cancel aborts it, and the next run gets a fresh one. An analysis

@@ -234,6 +234,161 @@ export default class WorkerPool {
     }
 }
 
+/**
+ * A pool whose tasks can really be stopped: each worker runs one task at a
+ * time, and aborting a task that is running terminates its worker.
+ *
+ * WorkerPool drops the result of an aborted task and lets the worker finish,
+ * which is right for kernels that take milliseconds. An analysis of a large
+ * file can hold a worker for tens of seconds: left running after Cancel, or
+ * after the settings it was computed for changed, it would keep a core busy
+ * for a result nobody reads and make the next run wait behind it. Here the
+ * work stops when the signal fires, and the next task gets a fresh worker.
+ *
+ * Same envelope as WorkerPool. `run` rejects with an AbortError when its
+ * signal fires (before or while the task runs), with WorkerUnavailableError
+ * where workers cannot be started, and with WorkerDiedError when the worker
+ * stops on its own. Tasks past `size` wait their turn, in order.
+ */
+export class ExclusiveWorkerPool {
+    constructor(spawn, { size = 2, name = 'pool' } = {}) {
+        this._spawn = spawn;
+        this._name = name;
+        this._size = Math.max(1, size);
+        this._idle = [];
+        this._running = new Map();   // id -> task
+        this._queue = [];
+        this._seq = 0;
+        this._disabled = false;
+    }
+
+    get available() {
+        return !this._disabled && canUseWorkers(this._name);
+    }
+
+    /** How many tasks are running or waiting (for tests and diagnostics). */
+    get pending() {
+        return this._running.size + this._queue.length;
+    }
+
+    run(op, payload, { transfer = [], signal = null } = {}) {
+        if (!this.available) return Promise.reject(new WorkerUnavailableError());
+        if (signal?.aborted) return Promise.reject(abortError());
+        return new Promise((resolve, reject) => {
+            const task = { id: `${this._name}-x${++this._seq}`, op, payload, transfer, signal, resolve, reject, worker: null, onAbort: null };
+            if (signal) {
+                task.onAbort = () => this._abort(task);
+                signal.addEventListener('abort', task.onAbort, { once: true });
+            }
+            this._queue.push(task);
+            this._pump();
+        });
+    }
+
+    terminate() {
+        for (const task of [...this._running.values(), ...this._queue]) this._abort(task);
+        for (const worker of this._idle) {
+            try { worker.terminate(); } catch { /* already gone */ }
+        }
+        this._idle = [];
+    }
+
+    _pump() {
+        while (this._queue.length && this._running.size < this._size) {
+            const task = this._queue.shift();
+            let worker = this._idle.pop();
+            if (!worker) {
+                try {
+                    worker = this._spawn();
+                } catch (err) {
+                    this._disabled = true;
+                    this._finish(task, 'reject', new WorkerUnavailableError(err?.message));
+                    for (const waiting of this._queue.splice(0)) this._finish(waiting, 'reject', new WorkerUnavailableError(err?.message));
+                    return;
+                }
+            }
+            task.worker = worker;
+            this._running.set(task.id, task);
+            worker.onmessage = event => this._onMessage(task, event);
+            worker.onerror = event => this._onWorkerError(task, event);
+            worker.onmessageerror = event => this._onWorkerError(task, event);
+            try {
+                worker.postMessage({ id: task.id, op: task.op, payload: task.payload }, task.transfer);
+            } catch (err) {
+                this._release(task, { keep: true });
+                this._finish(task, 'reject', err);
+            }
+            // The payload has been handed over (or refused): do not hold it.
+            task.payload = null;
+            task.transfer = null;
+        }
+    }
+
+    _onMessage(task, event) {
+        const { id, ok, result, error } = event.data || {};
+        if (id !== task.id || !this._running.has(task.id)) return;
+        this._release(task, { keep: true });
+        if (ok) {
+            this._finish(task, 'resolve', result);
+        } else {
+            const err = new Error(error?.message || 'Worker task failed');
+            err.name = error?.name || 'Error';
+            if (error?.code) err.code = error.code;
+            if (error?.stack) err.stack = error.stack;
+            if (error?.details) Object.assign(err, error.details);
+            this._finish(task, 'reject', err);
+        }
+        this._pump();
+    }
+
+    _onWorkerError(task, event) {
+        if (!this._running.has(task.id)) return;
+        this._release(task, { keep: false });
+        this._finish(task, 'reject', new WorkerDiedError({ op: task.op, poolName: this._name, detail: event?.message || '' }));
+        this._pump();
+    }
+
+    _abort(task) {
+        if (this._running.has(task.id)) {
+            // Running: the only way to stop a worker's synchronous work.
+            this._release(task, { keep: false });
+        } else {
+            const at = this._queue.indexOf(task);
+            if (at < 0) return;
+            this._queue.splice(at, 1);
+        }
+        this._finish(task, 'reject', abortError());
+        this._pump();
+    }
+
+    // The task's worker goes back to the idle list, or is terminated.
+    _release(task, { keep }) {
+        this._running.delete(task.id);
+        const worker = task.worker;
+        task.worker = null;
+        if (!worker) return;
+        worker.onmessage = null;
+        worker.onerror = null;
+        worker.onmessageerror = null;
+        if (keep) this._idle.push(worker);
+        else {
+            try { worker.terminate(); } catch { /* already gone */ }
+        }
+    }
+
+    _finish(task, kind, value) {
+        if (task.signal && task.onAbort) task.signal.removeEventListener('abort', task.onAbort);
+        task.onAbort = null;
+        task[kind](value);
+    }
+}
+
+function abortError() {
+    const error = new Error('Aborted');
+    error.name = 'AbortError';
+    return error;
+}
+
 function defaultPoolSize() {
     const cores = Number(globalThis.navigator?.hardwareConcurrency) || 4;
     // Leave a core for the UI thread and one for DuckDB's own worker.
