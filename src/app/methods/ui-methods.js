@@ -1390,6 +1390,9 @@ proto.showDisplaySettings = function() {
         [['disk', 'lazyResultsStorageDisk'], ['memory', 'lazyResultsStorageMemory']],
     );
     storageControl.select.value = this.advancedSettings?.lazyResultsStorage === 'memory' ? 'memory' : 'disk';
+    // It sits in the grid of the file limits, whose cards are framed by this
+    // class: without it the field was the one setting outside every box.
+    storageControl.field.classList.add('file-limit-field');
     const storageNow = document.createElement('span');
     storageNow.className = 'plot-settings-help lazy-results-storage-now';
     storageControl.field.append(storageNow);
