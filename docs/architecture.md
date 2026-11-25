@@ -105,9 +105,12 @@ An analysis of a file held in memory computes off the main thread, so the page
   workers cannot start (Node, a page opened from `file://` without the
   portable build's bundled workers): `_analysisPool()` returns null and the
   same function runs on the main thread.
-- Moved so far: the Curve fit of a time series (`analysis:curveFit`). The
-  others follow the same shape (#381); `scripts/e2e-analysis-cancel-memory.mjs`
-  is where each is added.
+- The rows a job needs are copied once for it, a block at a time
+  (`_analysisRowsForWorker`), and their buffers handed over.
+- Moved so far: the Curve fit and the Trend of a time series and the Curve fit
+  of a 2D plot (`analysis:curveFit`, `analysis:trend`, `analysis:pairFit`).
+  The others follow the same shape (#381);
+  `scripts/e2e-analysis-cancel-memory.mjs` is where each is added.
 
 ### `src/parsers`
 
