@@ -65,6 +65,7 @@ import {
 import { linearFromMoments, quadraticFromMoments, powerFromMoments } from '../utils/regression.js';
 import { assembleTrend, trendBand } from '../utils/trend-fit.js';
 import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } from './missing-buckets-sql.js';
+import { buildRepeatedColumnsSql, repeatedColumnsFromRows } from './repeated-buckets-sql.js';
 import { buildStateChangesSql, buildStateColumnsSql, buildStateValuesSql } from './state-runs-sql.js';
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
@@ -1096,9 +1097,19 @@ export default class DuckDbSource {
      * in one DuckDB scan. This is critical for overlaid traces: four traces
      * should not trigger four independent Parquet/CSV range scans.
      */
-    async getColumnsRange(legacyData, varNames, t0, t1, maxPoints = 4000) {
+    /**
+     * `options.rows`: when the window holds few enough rows to be drawn one by
+     * one (at most ~1.2 × `maxPoints`), return the rows themselves instead of
+     * min/max buckets, and say so with `exactRows: true`. The Samples marks
+     * need it: a dot is a row of the file, and a bucket is not. Without it the
+     * rows are only returned when the row count of the window can be
+     * estimated beforehand — which a CSV read as a view never allows (its
+     * rows are not counted).
+     */
+    async getColumnsRange(legacyData, varNames, t0, t1, maxPoints = 4000, options = {}) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getColumnsRange: data is not DuckDB-backed (eager mode)');
+        const wantRows = !!options?.rows;
         const requested = [...new Set(varNames || [])]
             .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
             .filter(item => item.variable)
@@ -1106,14 +1117,15 @@ export default class DuckDbSource {
         if (!requested.length) {
             return { x: new Float64Array(0), yByVar: new Map() };
         }
-        const cacheKey = this._rangeCacheKey(meta, requested, t0, t1, maxPoints);
+        const baseKey = this._rangeCacheKey(meta, requested, t0, t1, maxPoints);
+        const cacheKey = baseKey && wantRows ? `${baseKey}\u001erows` : baseKey;
         const cached = cacheKey ? this._rangeCache.get(cacheKey) : null;
         if (cached) {
             if (cached instanceof Promise) return cached;
             return { ...cached, _perf: { ...(cached._perf || {}), cacheHit: true } };
         }
 
-        const promise = this._queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints);
+        const promise = this._queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints, { rows: wantRows });
         if (cacheKey) this._rememberRangeCache(cacheKey, promise);
         try {
             const result = await promise;
@@ -2083,6 +2095,34 @@ export default class DuckDbSource {
     }
 
     /**
+     * The Repeated marks of a lazy file for a window: per screen column of
+     * [t0, t1] that holds a repeated instant (consecutive rows at one time),
+     * how many it holds, the longest run and its instant; and how many
+     * repeated instants the whole file has. One streamed pass over the file,
+     * an O(columns) result. A time axis generated from the row number repeats
+     * nothing, and is not read. See repeated-buckets-sql.js.
+     */
+    async getRepeatedColumns(legacyData, t0, t1, columns, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getRepeatedColumns: data is not DuckDB-backed (eager mode)');
+        if (meta.generatedTime) return { marks: [], total: 0 };
+        let lo = Number(t0);
+        let hi = Number(t1);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { marks: [], total: NaN };
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const sql = buildRepeatedColumnsSql(
+            this._timeExpressionSql(legacyData, meta), meta.tableName,
+            (v) => this._numericLiteral(v), lo, hi, columns, options?.minRun);
+        const result = await this._interactiveQuery(sql, { signal: options?.signal });
+        return repeatedColumnsFromRows(
+            this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+            this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
+            this._extractColumnAsFloat64(result, 2, 'DOUBLE'),
+            this._extractColumnAsFloat64(result, 3, 'DOUBLE'),
+        );
+    }
+
+    /**
      * Truthful Missing/NaN detection for a lazy file over a visible range.
      * Buckets the range into `nBuckets` (~one per pixel) and returns, per bucket
      * that held rows, how many rows fell in it, how many had a non-finite value
@@ -2291,7 +2331,7 @@ export default class DuckDbSource {
         };
     }
 
-    async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000) {
+    async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000, { rows: wantRows = false } = {}) {
         const queryStartedAt = this._now();
         const timeCol = meta.timeColumn;
         const escTime = timeCol.replace(/"/g, '""');
@@ -2318,12 +2358,76 @@ export default class DuckDbSource {
         const valueSelect = requested
             .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
             .join(',\n                       ');
+        // The rows of the window, as they are. `exactRows` unless the LIMIT
+        // may have cut them (the estimate that chose this path was too low).
+        const rowsResult = (result, mode) => {
+            const extractStartedAt = this._now();
+            const yByVar = new Map();
+            requested.forEach(({ varName }, index) => {
+                yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
+            });
+            const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+            return {
+                x,
+                yByVar,
+                exactRows: x.length < rawLimit,
+                _perf: this._rangePerf({
+                    mode, startedAt: queryStartedAt, extractStartedAt, result,
+                    rows: x.length, requested, t0, t1, maxPoints, estimatedRows,
+                }),
+            };
+        };
+        // Min/max buckets, each with its row count (the last column). With
+        // `rows` asked for, the counts say what no estimate can on a file whose
+        // rows were never counted: how many rows the window really holds. Few
+        // enough, and the rows are returned instead — straight from the
+        // buckets when each holds one row (its min is that row), otherwise by
+        // reading them (`readRows`, one more scan of the window).
+        const bucketsResult = async (result, mode, readRows) => {
+            const extractStartedAt = this._now();
+            if (wantRows) {
+                const counts = this._extractColumnAsFloat64(result, 2 + requested.length * 2, 'DOUBLE');
+                let total = 0;
+                let single = true;
+                for (let b = 0; b < counts.length; b++) {
+                    total += counts[b];
+                    if (counts[b] !== 1) single = false;
+                }
+                if (total > 0 && total < rawLimit) {
+                    if (!single) return readRows(`${mode}+rows`);
+                    const yByVar = new Map();
+                    requested.forEach(({ varName }, index) => {
+                        yByVar.set(varName, this._extractColumnAsFloat64(result, 2 + index * 2, 'DOUBLE'));
+                    });
+                    const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+                    return {
+                        x,
+                        yByVar,
+                        exactRows: true,
+                        _perf: this._rangePerf({
+                            mode: `${mode}-rows`, startedAt: queryStartedAt, extractStartedAt, result,
+                            rows: x.length, requested, t0, t1, maxPoints, estimatedRows,
+                        }),
+                    };
+                }
+            }
+            const { x, yByVar } = this._expandMinMaxBucketResult(result, requested);
+            return {
+                x,
+                yByVar,
+                exactRows: false,
+                _perf: this._rangePerf({
+                    mode, startedAt: queryStartedAt, extractStartedAt, result,
+                    rows: x.length, requested, t0, t1, maxPoints, estimatedRows,
+                }),
+            };
+        };
         if (meta.generatedTime) {
             const generatedValueSelect = requested
                 .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
                 .join(',\n                           ');
             const generatedValueNames = requested.map((_, index) => `v${index}`).join(', ');
-            if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
+            const readRows = async (mode) => {
                 const sql = `
                     WITH numbered AS (
                         SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
@@ -2337,29 +2441,10 @@ export default class DuckDbSource {
                     ORDER BY t
                     LIMIT ${rawLimit};
                 `;
-                const result = await this._interactiveQuery(sql);
-                const extractStartedAt = this._now();
-                const yByVar = new Map();
-                requested.forEach(({ varName }, index) => {
-                    yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
-                });
-                const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
-                return {
-                    x,
-                    yByVar,
-                    _perf: this._rangePerf({
-                        mode: 'raw-index',
-                        startedAt: queryStartedAt,
-                        extractStartedAt,
-                        result,
-                        rows: x.length,
-                        requested,
-                        t0,
-                        t1,
-                        maxPoints,
-                        estimatedRows,
-                    }),
-                };
+                return rowsResult(await this._interactiveQuery(sql), mode);
+            };
+            if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
+                return readRows('raw-index');
             }
             const maxBuckets = Math.max(1, Math.floor(maxPoints / 2));
             const aggregateSelect = this._minMaxBucketAggregateSql(requested);
@@ -2384,32 +2469,15 @@ export default class DuckDbSource {
                 )
                 SELECT MIN(t) AS t_lo,
                        MAX(t) AS t_hi,
-                       ${aggregateSelect}
+                       ${aggregateSelect},
+                       COUNT(*)::DOUBLE AS n
                 FROM bucketed
                 GROUP BY bucket
                 ORDER BY bucket;
             `;
-            const result = await this._interactiveQuery(sql);
-            const extractStartedAt = this._now();
-            const { x, yByVar } = this._expandMinMaxBucketResult(result, requested);
-            return {
-                x,
-                yByVar,
-                _perf: this._rangePerf({
-                    mode: 'bucket-index',
-                    startedAt: queryStartedAt,
-                    extractStartedAt,
-                    result,
-                    rows: x.length,
-                    requested,
-                    t0,
-                    t1,
-                    maxPoints,
-                    estimatedRows,
-                }),
-            };
+            return bucketsResult(await this._interactiveQuery(sql), 'bucket-index', readRows);
         }
-        if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
+        const readRows = async (mode) => {
             const sql = `
                 SELECT ${tExpr} AS t,
                        ${valueSelect}
@@ -2418,29 +2486,10 @@ export default class DuckDbSource {
                 ORDER BY t
                 LIMIT ${rawLimit};
             `;
-            const result = await this._interactiveQuery(sql);
-            const extractStartedAt = this._now();
-            const yByVar = new Map();
-            requested.forEach(({ varName }, index) => {
-                yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
-            });
-            const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
-            return {
-                x,
-                yByVar,
-                _perf: this._rangePerf({
-                    mode: 'raw',
-                    startedAt: queryStartedAt,
-                    extractStartedAt,
-                    result,
-                    rows: x.length,
-                    requested,
-                    t0,
-                    t1,
-                    maxPoints,
-                    estimatedRows,
-                }),
-            };
+            return rowsResult(await this._interactiveQuery(sql), mode);
+        };
+        if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
+            return readRows('raw');
         }
         const maxBuckets = Math.max(1, Math.floor(maxPoints / 2));
         const aggregateSelect = this._minMaxBucketAggregateSql(requested);
@@ -2463,30 +2512,13 @@ export default class DuckDbSource {
             )
             SELECT MIN(t) AS t_lo,
                    MAX(t) AS t_hi,
-                   ${aggregateSelect}
+                   ${aggregateSelect},
+                   COUNT(*)::DOUBLE AS n
             FROM bucketed
             GROUP BY bucket
             ORDER BY bucket;
         `;
-        const result = await this._interactiveQuery(sql);
-        const extractStartedAt = this._now();
-        const { x, yByVar } = this._expandMinMaxBucketResult(result, requested);
-        return {
-            x,
-            yByVar,
-            _perf: this._rangePerf({
-                mode: 'aggregate',
-                startedAt: queryStartedAt,
-                extractStartedAt,
-                result,
-                rows: x.length,
-                requested,
-                t0,
-                t1,
-                maxPoints,
-                estimatedRows,
-            }),
-        };
+        return bucketsResult(await this._interactiveQuery(sql), 'aggregate', readRows);
     }
 
     _rangePerf({ mode, startedAt, extractStartedAt, result, rows, requested, t0, t1, maxPoints, estimatedRows }) {

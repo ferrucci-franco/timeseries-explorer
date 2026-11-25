@@ -82,6 +82,8 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
 | Escuchar (🔊) | ~~deshabilitado: solo el resumen está en memoria~~ **lee del archivo cada fila del rango que suena** (sección "Implementado: escuchar un archivo lazy"); la uniformidad del paso se comprueba en el rango al leerlo, no en el archivo entero, y se rechaza, diciéndolo, una señal que existe solo en el resumen | `audioRangeNotUniform`, `audioReasonLazyNoSource` |
 | Exportar WAV (#92) | nació en lazy: **cada fila del rango, en dos pasadas por trozos hacia un `Blob` hecho de partes**, sin el tope del búfer de la escucha; los mismos bytes que en memoria | — |
+| Marcas de muestras (Marks → Samples) | ~~no se mostraban: "not shown yet for files loaded in memory-saving mode"~~ **los mismos puntos, sobre las mismas filas, que en memoria** (sección "Implementado: marcas de muestras en lazy"); solo queda fuera, dicho, una señal que existe únicamente en el resumen | `timeseriesSamplesLazy` |
+| Marcas de timestamps repetidos (Marks → Repeated) | ~~no se marcaban: "not marked yet for files loaded in memory-saving mode"~~ **las mismas barras, el mismo texto y los mismos anillos que en memoria** (sección "Implementado: timestamps repetidos en lazy") | — |
 | Guardar proyecto | ~~rechazado, con el consejo de subir el límite~~ **el diálogo ofrece guardar la vista**, que es lo que conserva el trabajo sobre un archivo grande (sección "Decidido (fase 5)") | `sessionProjectLazyFilesBody`, `sessionProjectLazyFilesViewHint` |
 
 La última cadena merece una nota: para un CSV de 5 GB, "subí el límite y
@@ -2256,6 +2258,99 @@ hoy es exportar a Parquet desde MATLAB (`parquetwrite`). Se difiere a
 propósito: primero van los resultados de OpenModelica / Dymola (v4), escritos
 contra una interfaz de lector por trozos a la que los dos lectores de MATLAB se
 agregan después (el diseño está en el issue).
+
+### Implementado: marcas de muestras en lazy
+
+*Marks → Samples* dibuja un punto por fila cuando el zoom les da lugar. En
+memoria las filas están ahí. Un archivo lazy se dibuja desde el resumen y, con
+zoom, desde cubetas de mínimo y máximo: ninguna de las dos cosas son sus filas,
+y por eso el ítem respondía "todavía no".
+
+Al mirarlo apareció por qué ni siquiera con mucho zoom llegaban las filas: la
+consulta de ventana (`_queryColumnsRange`) solo devuelve filas crudas cuando
+puede **estimar** que la ventana tiene pocas, y la estimación sale de
+`totalRows`, que en un CSV abierto como `VIEW` es `null` a propósito (contar es
+un escaneo). Así que un CSV lazy siempre recibía cubetas — dos puntos por
+cubeta, que emparejan el instante más temprano con el valor mínimo, no una
+fila.
+
+- `getColumnsRange(…, { rows: true })`: la consulta de cubetas cuenta las filas
+  de cada cubeta (`COUNT(*)`, en el mismo escaneo). Con eso sabe cuántas filas
+  tiene la ventana de verdad. Hasta ~1,2 × el presupuesto visual devuelve las
+  filas (`exactRows`): directamente de las cubetas si cada una tiene una fila
+  (su mínimo es esa fila; sin segundo escaneo), y si alguna tiene varias —
+  timestamps repetidos— leyéndolas, un escaneo más de la ventana.
+- Solo se pide con *Samples* activo: sin él la consulta y su respuesta son las
+  de antes, y se guardan en caché aparte.
+- Las filas quedan en la traza con la ventana que cubren (tres veces la
+  visible); mover o acercar la vista dentro de ellas no consulta el archivo.
+- La decisión de dibujar puntos es la misma función que en memoria
+  (`sampleMarkersVisible`, con su histéresis), alimentada con el gemelo lazy de
+  `sampleWindow`: exacta, leída del archivo, e instantes distintos a la vista.
+
+**Hueco que queda, dicho en la UI**: una señal que existe solo en el resumen (sin
+columna ni expresión en el archivo) no tiene filas que marcar; si es todo lo
+que hay en el panel, el ítem lo dice (`timeseriesSamplesLazy`).
+
+Costo: con *Samples* activo y la ventana ya chica, un CSV con timestamps
+repetidos en la ventana paga un segundo escaneo por zoom nuevo (en Parquet, con
+*pushdown*, es despreciable). Sin repetidos, ninguno.
+
+Pruebas: `scripts/test-lazy-sample-rows.mjs` (DuckDB-WASM real: las filas de una
+ventana chica, bit a bit contra el archivo en memoria — una fila por cubeta,
+filas que comparten instante, huecos e ±inf, dos señales, eje generado, el
+límite y la caché) y `scripts/e2e-lazy-sample-markers.mjs` (Chromium: el mismo
+CSV de 12 MB entero y en lazy, los mismos puntos sobre las mismas filas con los
+mismos zooms, y ninguna consulta nueva al moverse dentro de las filas leídas).
+
+### Implementado: timestamps repetidos en lazy
+
+*Marks → Repeated* marca dónde el eje de tiempo tiene un mismo instante en
+varias filas seguidas: barras rojas arriba con el zoom alejado, y un anillo en
+cada punto repetido cuando se ven las muestras. En memoria sale de las rachas
+de la columna de tiempo; un archivo lazy no la tiene.
+
+- **Las rachas las encuentra DuckDB** (`src/data/repeated-buckets-sql.js`), con
+  la definición del núcleo: filas *consecutivas* con el mismo instante finito.
+  Con ventanas en streaming sobre todo el archivo (`LAG`, `LEAD`, `ROW_NUMBER`
+  y un `MAX` corrido de la fila donde empezó la racha): sin ordenar y sin
+  agrupar las filas, memoria plana. El plan lo confirma
+  (`STREAMING_WINDOW`, y el único sort es el de la respuesta).
+- **La respuesta es una fila por columna de pantalla** con algún instante
+  repetido: cuántos, la racha más larga y su instante. Es exactamente a lo que
+  `repeatedMarksForView` reduce las rachas de un archivo en memoria, y esa
+  misma función las mezcla (`columnMarks`), así que un panel con un archivo
+  lazy y otro en memoria da un solo juego de marcas.
+- La misma pasada cuenta los instantes repetidos de **todo** el archivo, que es
+  lo que le dice al ítem del menú si hay algo que marcar.
+- Con zoom, los anillos se cuentan en las filas leídas para los puntos (sección
+  anterior).
+- Una petición por panel y archivo, con `AbortSignal`; una vista nueva reemplaza
+  a la que supera y las barras de la vista anterior quedan hasta que llega la
+  respuesta.
+
+**El ítem del menú**: hasta leer el archivo no se sabe si repite algún
+instante, así que se ofrece; activado, espera con "Leyendo los timestamps
+repetidos del archivo…" y después muestra las marcas o dice que no hay (y se
+puede desactivar). El texto `timeseriesRepeatedLazy` cambió de "todavía no" a
+ese.
+
+**Tolerancia declarada**: la columna de un instante se calcula sobre los
+valores de tiempo del archivo. Con un desplazamiento de tiempo o una unidad de
+visualización aplicados, un instante que cae justo en el borde de una columna
+puede dibujarse una columna (3 px) al lado de donde lo pone el camino en
+memoria; sin transformación las marcas son idénticas.
+
+Costo: cada vista nueva con *Repeated* activo y sin puntos es una pasada por el
+archivo (en CSV, un re-escaneo, como cada zoom).
+
+Pruebas: `scripts/test-lazy-repeated-marks.mjs` (DuckDB-WASM real: marcas y
+barras iguales a las del núcleo en memoria — archivo entero y ventanas, varios
+anchos, rachas de 2 a 7 filas, empates, filas sin tiempo, columna desordenada,
+racha mínima más larga, panel mixto, eje generado, plan en streaming y
+cancelación) y `scripts/e2e-lazy-repeated-marks.mjs` (Chromium: el mismo CSV de
+12 MB entero y en lazy, las mismas barras, textos y anillos con los mismos
+zooms; un archivo lazy sin repetidos).
 
 ### Regla: lo nuevo nace funcionando en lazy
 

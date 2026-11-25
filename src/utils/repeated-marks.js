@@ -32,7 +32,20 @@ export const REPEATED_MARK_COLUMN_PX = 3;
  *   instant, the one with the longest run in its column. `regions`: the bars —
  *   runs of adjacent marked columns, as time spans.
  */
-export function repeatedMarksForView(sources, lo, hi, widthPx, columnPx = REPEATED_MARK_COLUMN_PX) {
+/** How many screen columns a plot area of `widthPx` is cut into. */
+export function repeatedMarkColumns(widthPx, columnPx = REPEATED_MARK_COLUMN_PX) {
+    const step = Math.max(1, Number(columnPx) || REPEATED_MARK_COLUMN_PX);
+    return Math.max(1, Math.floor(Number(widthPx) / step));
+}
+
+/**
+ * `columnMarks`: runs already grouped by column, for a file whose time column
+ * is not in memory (a lazy file: DuckDB groups them, src/data/repeated-buckets-sql.js).
+ * Each `{ column, t, instants, longest, key }` is what this function reduces a
+ * source's runs to for that column, over the same window and the same number
+ * of columns (repeatedMarkColumns); it is merged like a source's.
+ */
+export function repeatedMarksForView(sources, lo, hi, widthPx, columnPx = REPEATED_MARK_COLUMN_PX, columnMarks = null) {
     const none = { marks: [], regions: [] };
     let a = Number(lo);
     let b = Number(hi);
@@ -40,8 +53,7 @@ export function repeatedMarksForView(sources, lo, hi, widthPx, columnPx = REPEAT
     if (!Number.isFinite(a) || !Number.isFinite(b) || !(width > 0)) return none;
     if (a > b) [a, b] = [b, a];
     const span = b - a;
-    const step = Math.max(1, Number(columnPx) || REPEATED_MARK_COLUMN_PX);
-    const columns = Math.max(1, Math.floor(width / step));
+    const columns = repeatedMarkColumns(width, columnPx);
 
     const byColumn = new Map();
     for (const source of sources || []) {
@@ -72,6 +84,21 @@ export function repeatedMarksForView(sources, lo, hi, widthPx, columnPx = REPEAT
             }
             mark.keys.add(key);
         }
+    }
+    for (const entry of columnMarks || []) {
+        const column = Number(entry?.column);
+        if (!(column >= 0 && column < columns) || !(entry.instants > 0)) continue;
+        let mark = byColumn.get(column);
+        if (!mark) {
+            mark = { column, t: entry.t, instants: 0, longest: 0, keys: new Set() };
+            byColumn.set(column, mark);
+        }
+        mark.instants += entry.instants;
+        if (entry.longest > mark.longest) {
+            mark.longest = entry.longest;
+            mark.t = entry.t;
+        }
+        mark.keys.add(entry.key);
     }
     if (!byColumn.size) return none;
 

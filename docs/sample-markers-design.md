@@ -152,7 +152,7 @@ builder hands Repeated the exact window the dots were drawn from.
 In:
 
 - time-series panels (`plot.mode === 'timeseries'`), Y and Y2 axes;
-- eager (in-memory) files.
+- in-memory files, and files in memory-saving mode ("Lazy files" below).
 
 Out, v1:
 
@@ -161,20 +161,42 @@ Out, v1:
 - time panes of FFT, Histogram, Heatmap, Temporal profile, Integral;
 - the data-tool preview trace (`markersOnly`), which already draws its own markers.
 
-Lazy (DuckDB, "memory-saving mode") files — checked, and left out of v1:
+### Lazy files
 
-- Zoomed out, the time-series panel draws a lazy trace from the in-memory overview,
-  a sample of the file that is not its rows, so condition 1 can never hold there.
-- Zoomed in, `DuckDbSource._queryColumnsRange` does have a `raw` mode: when the
-  estimated rows in the window are ≤ ~1.2 × the budget it returns the rows
-  themselves rather than min/max buckets (`_perf.mode === 'raw'`). Dots on lazy
-  files are therefore possible as a follow-up: carry that mode to
-  `_applyBatchedTimeseriesRestyle` as the `exact` flag, with the visible count from
-  the returned rows.
-- Until then a lazy trace never gets dots. If every candidate trace on the panel is
-  lazy, the button's tooltip (and the one-off pill) say so (*Samples are not shown yet
-  for files loaded in memory-saving mode*) instead of asking the user to zoom in,
-  which would not help.
+Built: a file read in memory-saving (DuckDB) mode gets the same dots, on the
+same rows, as the file held in memory.
+
+- Zoomed out, a lazy trace is drawn from the in-memory overview, a sample of the
+  file that is not its rows, and further in from min/max buckets. Neither is a
+  sample window: condition 1 cannot hold, whatever their length
+  (`sampleWindow.fromFile` is what a lazy trace is judged on).
+- With Samples on, the window query is asked for the rows
+  (`DuckDbSource.getColumnsRange(…, { rows: true })`). The bucket query counts
+  the rows of each bucket in the scan it already makes, so it knows how many
+  rows the window really holds — which no estimate can say on a CSV read as a
+  view, whose rows are never counted. Up to ~1.2 × the visual budget, the rows
+  are returned instead of the buckets (`exactRows`): straight from the buckets
+  when each holds one row, otherwise by reading them, one more scan of the
+  window.
+- Those rows are kept on the trace with the window they cover (three times the
+  visible span). `_lazyCacheResult` hands the restyle the lazy twin of
+  `sampleWindow` — exact, from the file, distinct instants in view — and
+  `_applyBatchedTimeseriesRestyle` makes the same decision, with the same
+  hysteresis, as the in-memory path. Panning or zooming inside the rows already
+  read asks the file nothing.
+- Left out, and said: a signal that exists only over the overview (no column or
+  expression in the file to read it from) has no rows to mark. If such signals
+  are all the panel shows, the item waits with *Samples are not shown for a
+  signal that exists only in the overview of a file in memory-saving mode*.
+- The rings of the Repeated toggle are drawn on these dots too, counted in the
+  rows read (`docs/repeated-timestamps-indicator-design.md`, "Lazy files").
+
+Tests: `scripts/test-lazy-sample-rows.mjs` (real DuckDB-WASM engine: the rows of
+a small window, bit for bit against the file in memory — one row per bucket,
+rows sharing an instant, holes and ±inf, two signals, a generated axis, the
+limit, the cache) and `scripts/e2e-lazy-sample-markers.mjs` (Chromium: the same
+12 MB CSV whole and lazy, the same dots on the same rows through the same
+zooms, and no new query when panning inside the rows already read).
 
 ## Performance
 

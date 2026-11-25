@@ -17,7 +17,7 @@
 // when it settles.
 import i18n from '../../i18n/index.js';
 import { repeatedTimestampRuns } from '../../utils/repeated-timestamps.js';
-import { REPEATED_MARK_MIN_RUN, repeatedMarksForView } from '../../utils/repeated-marks.js';
+import { REPEATED_MARK_MIN_RUN, repeatedMarkColumns, repeatedMarksForView } from '../../utils/repeated-marks.js';
 
 export function installPlotRepeatedMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -37,12 +37,13 @@ export function installPlotRepeatedMethods(TargetClass) {
         return runs;
     };
 
-    // One source per file on the panel. A memory-saving (DuckDB) file holds an
-    // overview sample in memory, not its rows, so its repeats cannot be read
-    // there; it is reported instead of scanned.
+    // One source per file on the panel. A file in memory gives its time
+    // column and the runs in it. A memory-saving (DuckDB) file holds an
+    // overview sample in memory, not its rows, so its runs are found in the
+    // file, by DuckDB (`lazyFiles`, see _repeatedLazyMarks).
     proto._repeatedSources = function(plot, { visibleOnly = true } = {}) {
         const sources = [];
-        let lazy = false;
+        const lazyFiles = [];
         const seen = new Set();
         for (const t of plot?.traces || []) {
             if (visibleOnly && (t.visible === false || t.visible === 'legendonly')) continue;
@@ -51,24 +52,117 @@ export function installPlotRepeatedMethods(TargetClass) {
             const data = this.files.get(t.fileId)?.data;
             if (!data) continue;
             if (data._duckdb) {
-                lazy = true;
+                lazyFiles.push({ key: t.fileId, data, color: t.color });
                 continue;
             }
             const times = this._getTransformedTimeData(t.fileId);
             const runs = this._repeatedRunsForTimes(times);
             sources.push({ key: t.fileId, times, runs, color: t.color });
         }
-        return { sources, lazy };
+        return { sources, lazyFiles };
+    };
+
+    // How many repeated instants a lazy file holds in all: a number once a
+    // pass over it has said (any window's pass counts the whole file), and
+    // undefined until then. A time axis generated from the row number repeats
+    // nothing. Forgotten when Live Update appends rows.
+    proto._repeatedLazyTotal = function(data) {
+        const meta = data?._duckdb;
+        if (!meta) return undefined;
+        if (meta.generatedTime) return 0;
+        const known = this._repeatedLazyTotals?.get(data);
+        return known && known.rows === (Number(meta.appendRows) || 0) ? known.total : undefined;
     };
 
     // 'some' — at least one file on the panel repeats an instant; 'none' —
-    // none does (the button is disabled, and saying so is the answer); 'lazy' —
-    // nothing found, but a memory-saving file could not be read.
+    // none does (the item says so); 'lazy' — none found yet, and a
+    // memory-saving file has not been read to know.
     proto._repeatedAvailability = function(plot) {
         if (!plot?.traces?.length) return 'none';
-        const { sources, lazy } = this._repeatedSources(plot, { visibleOnly: false });
+        const { sources, lazyFiles } = this._repeatedSources(plot, { visibleOnly: false });
         if (sources.some(source => source.runs.count > 0)) return 'some';
-        return lazy ? 'lazy' : 'none';
+        const totals = lazyFiles.map(file => this._repeatedLazyTotal(file.data));
+        if (totals.some(total => total > 0)) return 'some';
+        return totals.some(total => total === undefined) ? 'lazy' : 'none';
+    };
+
+    // The column marks of a lazy file for the view [lo, hi] (display units)
+    // cut into `columns`: what repeatedMarksForView reduces a file's runs to,
+    // computed by DuckDB over the file (DuckDbSource.getRepeatedColumns).
+    // Returns them when they are in hand for exactly this view. Otherwise it
+    // asks for them — one request per plot and file, a newer view replacing
+    // the one it supersedes — and returns `pending` with what the previous
+    // view drew (`stale`), which stays on screen until the answer redraws.
+    proto._repeatedLazyMarks = function(plot, file, lo, hi, columns, widthPx) {
+        const none = { marks: [], stale: null, pending: false };
+        const { key: fileId, data } = file;
+        const meta = data._duckdb;
+        const source = meta?.source;
+        if (!source?.getRepeatedColumns || meta.generatedTime) return none;
+        const timeVar = this._getTimeVar(fileId);
+        const sourceRange = this._sourceRangeForDisplayRange(fileId, [lo, hi], timeVar);
+        if (!sourceRange || !sourceRange.every(Number.isFinite)) return none;
+        const minRun = PlotManager.REPEATED_MARK_MIN_RUN ?? REPEATED_MARK_MIN_RUN;
+        const rows = Number(meta.appendRows) || 0;
+        const key = [sourceRange[0], sourceRange[1], lo, hi, columns, minRun, rows].join('\u0001');
+        if (!plot._repeatedLazy) {
+            // Not enumerable: working state, never part of a saved view.
+            Object.defineProperty(plot, '_repeatedLazy', { value: new Map(), configurable: true, writable: true });
+        }
+        let entry = plot._repeatedLazy.get(fileId);
+        if (!entry) {
+            entry = { key: null, marks: null, view: null, pendingKey: null, failedKey: null, controller: null };
+            plot._repeatedLazy.set(fileId, entry);
+        }
+        if (entry.data !== data) {
+            entry.controller?.abort();
+            Object.assign(entry, { data, key: null, marks: null, view: null, pendingKey: null, failedKey: null, controller: null });
+        }
+        if (entry.key === key && entry.marks) return { marks: entry.marks, stale: null, pending: false };
+        if (entry.failedKey === key) return none;
+        if (entry.pendingKey !== key) {
+            entry.controller?.abort();
+            const controller = new AbortController();
+            entry.controller = controller;
+            entry.pendingKey = key;
+            new Promise(resolve => resolve(
+                source.getRepeatedColumns(data, sourceRange[0], sourceRange[1], columns, { minRun, signal: controller.signal })))
+                .then((result) => {
+                    if (Number.isFinite(result?.total)) {
+                        if (!this._repeatedLazyTotals) this._repeatedLazyTotals = new WeakMap();
+                        this._repeatedLazyTotals.set(data, { rows, total: result.total });
+                    }
+                    if (entry.pendingKey !== key || entry.controller !== controller) return;
+                    entry.pendingKey = null;
+                    entry.controller = null;
+                    entry.key = key;
+                    entry.marks = (result?.marks || []).map(mark => ({
+                        ...mark,
+                        t: this._displayTimeForFetchedSourceTime(fileId, mark.t, null, timeVar),
+                        key: fileId,
+                    }));
+                    entry.view = repeatedMarksForView([], lo, hi, widthPx, undefined, entry.marks);
+                    this._repeatedLazyArrived(plot);
+                })
+                .catch((error) => {
+                    if (entry.controller === controller) {
+                        entry.controller = null;
+                        entry.pendingKey = null;
+                        if (error?.name !== 'AbortError') entry.failedKey = key;
+                    }
+                    if (error?.name !== 'AbortError') console.warn('[repeated] lazy marks failed:', error?.message || error);
+                });
+        }
+        return { marks: [], stale: entry.view, pending: true };
+    };
+
+    // Stop reading a plot's lazy marks (the toggle went off, the panel is gone).
+    proto._cancelRepeatedLazy = function(plot) {
+        for (const entry of plot?._repeatedLazy?.values() || []) {
+            entry.controller?.abort();
+            entry.controller = null;
+            entry.pendingKey = null;
+        }
     };
 
     // Red: apart from the amber of Gaps and the violet of NaN/Inf, and readable
@@ -91,8 +185,8 @@ export function installPlotRepeatedMethods(TargetClass) {
 
     // What to draw for the current view: the bars, and what their hover says.
     // A file whose trace shows its dots right now is left off the strip — its
-    // repeats are ringed on the curve instead. `state` is 'lazy' when only
-    // memory-saving files on the panel could hold repeats, else null.
+    // repeats are ringed on the curve instead. `state` is 'lazy' while a
+    // memory-saving file is being read and there is nothing to draw yet.
     proto._repeatedOverlay = function(plot) {
         const empty = { shapes: [], hoverMarks: [], state: null };
         if (plot?.mode !== 'timeseries' || !plot.showRepeated || !plot.div) return empty;
@@ -100,19 +194,38 @@ export function installPlotRepeatedMethods(TargetClass) {
         if (!xa || !Array.isArray(xa.range) || !(xa._length > 0)) return empty;
         const lo = this._coerceAxisValue(xa.range[0]);
         const hi = this._coerceAxisValue(xa.range[1]);
-        const { sources, lazy } = this._repeatedSources(plot);
+        const { sources, lazyFiles } = this._repeatedSources(plot);
         const dotted = new Set(plot.traces
             .filter(t => plot._sampleMarkerState?.get(t) === true)
             .map(t => t.fileId));
         const undotted = sources.filter(source => !dotted.has(source.key));
-        const view = repeatedMarksForView(undotted, lo, hi, xa._length);
+        // Lazy files: their column marks, read from the file. One still being
+        // read keeps what it drew for the previous view.
+        const columns = repeatedMarkColumns(xa._length);
+        const columnMarks = [];
+        const stale = [];
+        let pending = false;
+        for (const file of lazyFiles) {
+            // Ringed on its dots — unless the file has never been read, which
+            // is what says whether it repeats an instant at all.
+            if (dotted.has(file.key) && this._repeatedLazyTotal(file.data) !== undefined) continue;
+            const lazy = this._repeatedLazyMarks(plot, file, lo, hi, columns, xa._length);
+            if (dotted.has(file.key)) continue;
+            if (lazy.pending) pending = true;
+            if (lazy.stale) stale.push(lazy.stale);
+            columnMarks.push(...lazy.marks);
+        }
+        const view = repeatedMarksForView(undotted, lo, hi, xa._length, undefined, columnMarks);
+        const regions = [...view.regions, ...stale.flatMap(old => old.regions)];
+        const marks = [...view.marks, ...stale.flatMap(old => old.marks)];
 
-        const names = sources.length > 1
-            ? new Map(sources.map(source => [source.key, this.files.get(source.key)?.name || source.key]))
+        const fileCount = sources.length + lazyFiles.length;
+        const names = fileCount > 1
+            ? new Map([...sources, ...lazyFiles].map(source => [source.key, this.files.get(source.key)?.name || source.key]))
             : null;
-        const key = undotted.find(source => source.runs.count)?.key;
+        const key = marks[0]?.keys?.[0] ?? null;
         const timeVar = key ? this._getTimeVar(key) : null;
-        const shapes = view.regions.map(region => ({
+        const shapes = regions.map(region => ({
             type: 'rect', xref: 'x', yref: 'paper',
             x0: this._plotlyTimeValue(key, region.t0, timeVar),
             x1: this._plotlyTimeValue(key, region.t1, timeVar),
@@ -121,12 +234,12 @@ export function installPlotRepeatedMethods(TargetClass) {
             line: { width: 0 },
             layer: 'above',
         }));
-        const hoverMarks = view.marks.map(mark => ({
+        const hoverMarks = marks.map(mark => ({
             x: this._plotlyTimeValue(mark.keys[0], mark.t, this._getTimeVar(mark.keys[0])),
             color: this._repeatedColor(1),
             text: this._repeatedHoverText(mark, names),
         }));
-        const state = !view.marks.length && lazy && !sources.some(source => source.runs.count) ? 'lazy' : null;
+        const state = pending && !marks.length ? 'lazy' : null;
         return { shapes, hoverMarks, state };
     };
 

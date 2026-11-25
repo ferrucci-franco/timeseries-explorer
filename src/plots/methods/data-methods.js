@@ -2330,15 +2330,23 @@ proto._timeseriesSamplesEnabled = function(plot) {
     return plot?.mode === 'timeseries' && !!plot.showSamples && !plot.timeseriesStacked;
 };
 
-// Whether trace `t` can ever carry dots. A lazy (DuckDB) file draws from an
-// overview sample or from server-side buckets, neither of which are the file's
-// samples, so it never does — yet. A markers-only preview has its own markers,
+// Whether trace `t` can ever carry dots. A lazy (DuckDB) file does when its
+// signal can be read from the file: zoomed in, the window comes back as its
+// rows (see _lazyCacheResult). One that exists only over the overview in
+// memory has no rows to mark. A markers-only preview has its own markers,
 // and a parameter is a constant drawn as two points, not samples.
 proto._timeseriesSampleMarkersEligible = function(plot, t) {
     if (!this._timeseriesSamplesEnabled(plot) || !t || t.markersOnly) return false;
     const data = this.files.get(t.fileId)?.data;
-    if (!data || data._duckdb) return false;
+    if (!data) return false;
     const variable = data.variables?.[t.varName];
+    if (data._duckdb) {
+        const source = data._duckdb.source;
+        const readable = source?.hasSqlValue
+            ? source.hasSqlValue(variable)
+            : !!(variable?._duckdbCol || variable?._duckdbExpr);
+        if (!readable) return false;
+    }
     if (this._isStateBandVariable?.(variable)) return false;
     // A series of events is drawn as dots already.
     if (variable?.eventSamples) return false;
@@ -2354,8 +2362,12 @@ proto._timeseriesSampleMarkersShown = function(plot, t, visual) {
         return false;
     }
     if (!plot._sampleMarkerState) plot._sampleMarkerState = new WeakMap();
+    // A lazy trace is first drawn from the overview in memory, a sample of
+    // the file that can look "exact" over a narrow window: only rows read
+    // from the file count.
+    const lazy = !!this.files.get(t.fileId)?.data?._duckdb;
     const shown = sampleMarkersVisible({
-        exact: !!visual?.sampleWindow?.exact,
+        exact: !!visual?.sampleWindow?.exact && (!lazy || !!visual.sampleWindow.fromFile),
         visiblePositions: visual?.sampleWindow?.visiblePositions,
         plotWidthPx: plot.div?._fullLayout?.xaxis?._length,
         wasShown: plot._sampleMarkerState.get(t) === true,
