@@ -1563,8 +1563,15 @@ proto._applyIntegralPieVisibility = function(plot, visible) {
     if (plot._integralPieVisible === next) return;
     plot._integralPieVisible = next;
     container.classList.toggle('integral-pie-visible', next);
-    Plotly.Plots.resize(plot.integralDiv);
-    if (next && plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
+    // A pane that is not laid out yet (the panel is being mounted, as when
+    // the layout is split with the Integral open) has nothing to resize, and
+    // Plotly rejects the call: it is sized when it is drawn.
+    const resize = (div) => {
+        if (!div?.isConnected || !div.offsetWidth || !div.offsetHeight) return;
+        Promise.resolve(Plotly.Plots.resize(div)).catch(() => { /* not displayed after all */ });
+    };
+    resize(plot.integralDiv);
+    if (next) resize(plot.integralPieDiv);
 };
 
 proto._buildIntegralPieLayout = function(plot) {

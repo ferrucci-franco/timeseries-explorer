@@ -4,9 +4,10 @@
 // A kernel that runs on the main thread cannot be stopped: the pill is drawn,
 // but the page takes no click until the result is there. On the worker
 // (src/core/analysis-pool.js) the page stays free, and the run's signal
-// terminates the worker. For each analysis moved there so far — the Curve fit
-// and the Trend of a time series, and the Curve fit of a 2D plot — over a CSV
-// of 150 000 rows open in memory:
+// terminates the worker. For every analysis but the FFT (which has had its own
+// worker all along) — Curve fit, Trend, Histogram, Heatmap, Temporal profile
+// and Integral on a time series; Curve fit and Correlation on a 2D plot — over
+// a CSV of 150 000 rows open in memory:
 //
 //   1. the first result comes from a worker job, and is the result the kernel
 //      gives on the main thread, bit for bit;
@@ -28,10 +29,15 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 
 const ROWS = 150000;
+// A calendar axis, one row a minute (104 days): the heatmap, the temporal
+// profile and the integral by day need one.
+const START = Date.UTC(2023, 4, 1, 0, 0, 0);
 const lines = ['time,a,b'];
 for (let i = 0; i < ROWS; i++) {
     const a = 5 * Math.exp(-i / 40000) + Math.sin(i / 700) * 0.2 + 1;
-    lines.push(`${(i * 0.01).toFixed(2)},${a.toFixed(6)},${(1 + i / 1000).toFixed(6)}`);
+    // A hole now and then, for the integral's policies.
+    const cell = i % 9973 === 17 ? '' : a.toFixed(6);
+    lines.push(`${new Date(START + i * 60000).toISOString()},${cell},${(1 + i / 1000).toFixed(6)}`);
 }
 const file = { name: 'memory-cancel.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
 
@@ -318,6 +324,86 @@ try {
     });
     assert.ok((await jobs()).ran.includes('analysis:histogramCounts'), 'Histogram: counted by a worker job too');
 
+    // The analyses that redraw a pane of their own: each recompute replaces
+    // the array of results the pane is drawn from, which is how "the new
+    // result is in" is told here.
+    const paneCheck = ({ name, mode, op, stateKey, resultsKey, schedule, recompute, values, patch, pick }) => {
+        const id = JSON.stringify(panelId);
+        const read = `() => { const p = window.app.plotManager.plots.get(${id}); return (${pick})(p.${resultsKey}); }`;
+        return check({
+            name, id: panelId, op,
+            open: async () => {
+                await page.locator('.timeseries-analysis-menu-btn').first().click();
+                await page.locator(`.panel-analysis-menu .analysis-card[data-mark="${mode}"]`).click();
+                await page.waitForFunction(({ id, mode }) => window.app.plotManager.plots.get(id)?.mode === mode, { id: panelId, mode }, { timeout: 30000 });
+                await page.waitForTimeout(600);
+            },
+            values,
+            change: (value) => page.evaluate(({ id, stateKey, resultsKey, schedule, patch, value }) => {
+                const pm = window.app.plotManager;
+                const plot = pm.plots.get(id);
+                plot.__before = plot[resultsKey];
+                plot.__asked = JSON.stringify(value);
+                Object.assign(plot[stateKey], { rangeFull: true }, (0, eval)(`(${patch})`)(value));
+                pm[schedule](id, { immediate: true });
+            }, { id: panelId, stateKey, resultsKey, schedule, patch, value }),
+            setting: () => page.evaluate(({ id, stateKey, patch, values }) => {
+                const state = window.app.plotManager.plots.get(id)[stateKey];
+                return Object.keys((0, eval)(`(${patch})`)(values[0])).map(key => state[key]).concat(state.rangeFull);
+            }, { id: panelId, stateKey, patch, values }),
+            result: {
+                ready: `(value) => { const p = window.app.plotManager.plots.get(${id});
+                    return p.__asked === JSON.stringify(value) && p.${resultsKey} !== p.__before && (p.${resultsKey} || []).length > 0 && !p._analysisPill; }`,
+                read,
+            },
+            mainThread: `async () => { const pm = window.app.plotManager; const p = pm.plots.get(${id});
+                const before = p.${resultsKey};
+                pm.${recompute}(${id}, p);
+                for (let i = 0; i < 400 && (p.${resultsKey} === before || p._analysisPill); i++) await new Promise(resolve => setTimeout(resolve, 50));
+                return (${read})(); }`,
+        });
+    };
+
+    // Heatmap: every row aggregated into calendar cells; the aggregation is
+    // what a recompute changes.
+    await paneCheck({
+        name: 'Heatmap', mode: 'heatmap', op: 'analysis:heatmap',
+        stateKey: 'heatmap', resultsKey: '_calendarHeatmapModels',
+        schedule: '_scheduleCalendarHeatmapRecompute', recompute: '_recomputeCalendarHeatmap',
+        values: ['mean', 'max', 'min'],
+        patch: `(aggregation) => ({ aggregation })`,
+        pick: `(models) => models.map(model => model.grid)`,
+    });
+
+    // Temporal profile: every row binned over the period; the period is what
+    // a recompute changes.
+    await paneCheck({
+        name: 'Temporal profile', mode: 'temporal-profile', op: 'analysis:temporalProfile',
+        stateKey: 'temporalProfile', resultsKey: '_temporalProfileModels',
+        schedule: '_scheduleTemporalProfileRecompute', recompute: '_recomputeTemporalProfile',
+        values: ['day', 'week', 'month'],
+        patch: `(period) => ({ period })`,
+        pick: `(models) => models.map(model => model.result)`,
+    });
+
+    // Integral: the total and one integral per day, with the days that have
+    // a hole discarded for every signal (which is its own pass); the method
+    // is what a recompute changes.
+    await paneCheck({
+        name: 'Integral', mode: 'integral', op: 'analysis:integral',
+        stateKey: 'integral', resultsKey: '_integralModels',
+        schedule: '_scheduleIntegralRecompute', recompute: '_recomputeIntegral',
+        values: ['trapezoidal', 'rectangular', 'trapezoidal'],
+        patch: `(method) => ({ method, groupBy: 'day', missingPolicy: 'discard-day-all' })`,
+        pick: `(models) => models.map(model => ({ result: model.result, groups: model.groups }))`,
+    });
+    {
+        const ran = (await jobs()).ran;
+        assert.ok(ran.includes('analysis:integralMissingDays'), 'Integral: the days with holes are found by a worker job too');
+        const groups = await page.evaluate(id => window.app.plotManager.plots.get(id)._integralModels[0].groups?.length || 0, panelId);
+        assert.ok(groups > 100, `Integral: one integral per day (${groups})`);
+    }
+
     // The 2D curve fit: a against b, in a second panel; the model is what a
     // recompute changes.
     const twoDId = await page.evaluate((first) => {
@@ -371,8 +457,53 @@ try {
     }, twoDId);
     assert.equal(fitsComputed, 1, 'a change of model fits the pair once');
 
+    // The pair Correlation, on the same 2D panel: the range is what a
+    // recompute changes.
+    {
+        const id = JSON.stringify(twoDId);
+        const ranges = await page.evaluate((id) => {
+            const pm = window.app.plotManager;
+            const pair = pm.plots.get(id).phaseTraces[0];
+            const times = pm._getTransformedTimeDataForVariable(pair.fileId, pair.x);
+            const lo = Number(times[0]);
+            const hi = Number(times[times.length - 1]);
+            const cut = (a, b) => ({ rangeFull: false, x1: lo + (hi - lo) * a, x2: lo + (hi - lo) * b });
+            return [{ rangeFull: true }, cut(0.1, 0.9), cut(0.2, 0.8)];
+        }, twoDId);
+        const read = `() => window.app.plotManager.plots.get(${id})._correlationResults.map(r => ({ ...r, pair: null }))`;
+        await check({
+            name: 'Correlation', id: twoDId, op: 'analysis:correlation',
+            open: async () => {
+                await page.locator(`.layout-panel[data-id="${twoDId}"] .timeseries-analysis-menu-btn`).click();
+                await page.locator('.panel-analysis-menu .analysis-card[data-mark="correlation"]').click();
+                await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.mode === 'correlation', twoDId, { timeout: 30000 });
+                await page.waitForTimeout(600);
+            },
+            values: ranges,
+            change: (value) => page.evaluate(({ id, value }) => {
+                const pm = window.app.plotManager;
+                const plot = pm.plots.get(id);
+                plot.__before = plot._correlationResults;
+                plot.__asked = JSON.stringify(value);
+                Object.assign(plot.correlation, value);
+                pm._scheduleCorrelationRecompute(id, { immediate: true });
+            }, { id: twoDId, value }),
+            setting: () => page.evaluate(id => { const state = window.app.plotManager.plots.get(id).correlation; return [state.rangeFull, state.x1, state.x2]; }, twoDId),
+            result: {
+                ready: `(value) => { const p = window.app.plotManager.plots.get(${id});
+                    return p.__asked === JSON.stringify(value) && p._correlationResults !== p.__before && (p._correlationResults || []).length > 0 && Number.isFinite(p._correlationResults[0].r) && !p._analysisPill; }`,
+                read,
+            },
+            mainThread: `async () => { const pm = window.app.plotManager; const p = pm.plots.get(${id});
+                const before = p._correlationResults;
+                pm._refreshCorrelationResults(${id}, p);
+                for (let i = 0; i < 400 && (p._correlationResults === before || p._analysisPill); i++) await new Promise(resolve => setTimeout(resolve, 50));
+                return (${read})(); }`,
+        });
+    }
+
     assert.deepEqual(errors, [], 'no page error');
-    console.log('In-memory analyses: computed on the worker, the main thread\'s bits, and Cancel stops them (curve fit, trend, histogram, 2D fit).');
+    console.log('In-memory analyses: computed on the worker, the main thread\'s bits, and Cancel stops them (curve fit, trend, histogram, heatmap, temporal profile, integral; 2D fit, correlation).');
 } finally {
     await browser.close();
     await server.close();
