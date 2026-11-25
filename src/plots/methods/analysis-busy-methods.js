@@ -135,6 +135,40 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         }
     };
 
+    // The transformed time and values of an in-memory trace, and where the
+    // rows of `range` (display time, or null for all) are in them — without
+    // copying anything.
+    proto._analysisSpan = function(trace, range = null) {
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
+        const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
+        const length = Math.min(times.length || 0, values.length || 0);
+        if (!length || !range) return { times, values, start: 0, end: length, whole: true };
+        let [lower, upper] = range;
+        if (lower > upper) [lower, upper] = [upper, lower];
+        const start = Math.max(0, Math.min(length, this._lowerBound(times, lower)));
+        const end = Math.max(start, Math.min(length, this._upperBound(times, upper)));
+        return { times, values, start, end, whole: false };
+    };
+
+    /**
+     * A kernel over the rows [start, end) of in-memory arrays: `kernel` is a
+     * function of plain data and `op` the worker op that runs that same
+     * function; `payload(rows)` builds what both are given from the rows (one
+     * array per source, in order). Many rows: copied a block at a time and
+     * computed on a worker, stopped by `signal`. Few, or no worker: computed
+     * here. The result is the same either way.
+     */
+    proto._analysisKernelOnRows = async function({ op, kernel, sources, start, end, payload, signal = null }) {
+        if (this._analysisUsesWorker(end - start)) {
+            const rows = await this._analysisRowsForWorker(sources, start, end, signal);
+            const done = await this._analysisJob(op, payload(rows), { transfer: rows.map(row => row.buffer), signal });
+            if (done) return done;
+            return kernel(payload(rows));
+        }
+        const rows = sources.map(source => (start === 0 && end === (source?.length || 0) ? source : source.slice(start, end)));
+        return kernel(payload(rows));
+    };
+
     // Whether `rows` values are worth handing to a worker.
     proto._analysisUsesWorker = function(rows) {
         return rows > ANALYSIS_INLINE_ROWS && !!this._analysisPool?.();
@@ -328,7 +362,9 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         }
         plot._analysisAbort?.abort();
         plot._analysisAbort = null;
-        for (const slot of ['_fftRunAbort', '_calendarHeatmapRunAbort', '_temporalProfileRunAbort', '_correlationRunAbort', '_integralRunAbort']) {
+        for (const slot of ['_fftRunAbort', '_calendarHeatmapRunAbort', '_temporalProfileRunAbort', '_correlationRunAbort', '_integralRunAbort',
+            // The in-memory kernels on the compute worker.
+            '_calendarHeatmapEagerAbort', '_temporalProfileEagerAbort', '_correlationEagerAbort', '_integralEagerAbort']) {
             this._abortAnalysisRun(plot, slot);
         }
         plot._histAbort?.abort();

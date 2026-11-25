@@ -670,6 +670,7 @@ proto._scheduleTemporalProfileRecompute = function(panelId, options = {}) {
     // stop it now, so the new one does not queue behind it on DuckDB (#384).
     // What it drew stays on screen until the new result replaces it.
     this._abortAnalysisRun(plot, '_temporalProfileRunAbort');
+    this._abortAnalysisRun(plot, '_temporalProfileEagerAbort');
     const run = () => {
         const state = this._ensureTemporalProfileState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'temporal-profile');
@@ -742,7 +743,13 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
 
     // The eager binning is the range-dependent cost the auto-limit reconsider
     // measures; nothing around it scales with the sample count.
-    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+    // A trace of many rows is binned on the compute worker (the same kernel),
+    // so the page and the Cancel button stay free; this run's signal stops it,
+    // and so does a newer run.
+    const eagerSignal = this._analysisRunSignal(plot, '_temporalProfileEagerAbort');
+    let measured;
+    try {
+      measured = await this._measureAnalysisKernelAsync(panelId, plot, async () => {
         for (let traceIndex = 0; traceIndex < (plot.traces || []).length; traceIndex++) {
             const trace = plot.traces[traceIndex];
             const name = this._traceName(trace.varName, trace.fileId);
@@ -755,20 +762,28 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
                 lazyByFile.get(trace.fileId).push({ trace, traceIndex, name });
                 continue;
             }
-            const { times, values } = this._temporalProfileSeriesForTrace(trace, range);
-            const result = buildTemporalProfile({
-                times,
-                values,
-                ...profileGeometryArgs(state),
-                dayGrouping: state.dayGrouping,
-                combineWeekends: state.combineWeekends,
-                // The arrays are already cut to the selection (binary bounds),
-                // so the kernel drops nothing; the bounds tell it which periods
-                // the selection cuts, as the lazy query is told — a day the
-                // selection enters at 07:30 is partial in both modes.
-                rangeStart: range ? range[0] : null,
-                rangeEnd: range ? range[1] : null,
-                discardIncomplete: state.discardIncomplete,
+            const span = this._analysisSpan(trace, range);
+            const result = await this._analysisKernelOnRows({
+                op: 'analysis:temporalProfile',
+                kernel: buildTemporalProfile,
+                sources: [span.times, span.values],
+                start: span.start,
+                end: span.end,
+                signal: eagerSignal,
+                payload: ([times, values]) => ({
+                    times,
+                    values,
+                    ...profileGeometryArgs(state),
+                    dayGrouping: state.dayGrouping,
+                    combineWeekends: state.combineWeekends,
+                    // The arrays are already cut to the selection (binary bounds),
+                    // so the kernel drops nothing; the bounds tell it which periods
+                    // the selection cuts, as the lazy query is told — a day the
+                    // selection enters at 07:30 is partial in both modes.
+                    rangeStart: range ? range[0] : null,
+                    rangeEnd: range ? range[1] : null,
+                    discardIncomplete: state.discardIncomplete,
+                }),
             });
             if (!result.ok) {
                 const message = result.reason === 'tooManyBins' ? text('temporalProfileTooManyBins') : result.reason;
@@ -778,7 +793,15 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
             if (!result.stats.nFinite && this._isVisible(trace)) warnings.push(`${name}: ${text('temporalProfileNoFinite')}`);
             models.push({ trace, traceIndex, name, unit: this._temporalProfileUnit(trace), result });
         }
-    }, warnings);
+      }, warnings);
+    } catch (error) {
+        // Stopped: Cancel, or a newer run that takes over.
+        if (error?.name === 'AbortError') return;
+        throw error;
+    } finally {
+        this._settleAnalysisRun(plot, '_temporalProfileEagerAbort', eagerSignal);
+    }
+    if (plot._temporalProfileToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'temporal-profile') return;
     // The measurement widened the range and rescheduled; this pass is stale.
     if (measured.superseded) return;
     if (lazyByFile.size) {
