@@ -17,7 +17,9 @@ cosas distintas, y hoy la app cumple una y media:
 
 1. **Abrir** un archivo de cualquier tamaño. Para CSV y Parquet ya es cierto: el
    camino lazy los abre sin materializarlos, y lo único que crece con el tamaño
-   es el tiempo de cada consulta. Para MAT, Excel, pickle, netCDF y audio no es
+   es el tiempo de cada consulta. Para los resultados de simulación `.mat`
+   (OpenModelica / Dymola) también, desde "Implementado: resultados `.mat` en
+   lazy". Para los `.mat` de MATLAB, Excel, pickle, netCDF y audio no es
    cierto, y no puede serlo por la vía eager (sección 3).
 2. **Que todas las funciones trabajen sobre el archivo completo** aunque esté
    abierto en lazy. Hoy no: en lazy, las herramientas de datos están
@@ -297,7 +299,7 @@ En orden de valor visible por esfuerzo:
 | 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
 | 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital), **4b-3 hecha** (picos, relleno, reemplazo por interpolación, integral con *interpolar*), **4b-4 hecha** (remuestreo y colapsar como datasets lazy, correlación cruzada con presupuesto), **4b-5 hecha** (los resultados en disco — la base en OPFS — y conservados entre sesiones, la continuación en vivo) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
 | 5 | ~~Proyecto por definición para archivos lazy~~ — **cerrada sin hacerla**: eso ya es la vista (.json); el diálogo ahora la ofrece ("Decidido (fase 5)") | — | — |
-| 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). **MAT es lo que sigue**: los resultados de OpenModelica / Dymola (v4) primero; los `.mat` de MATLAB (v5/v7 y v7.3) quedan como hueco conocido, #396. MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
+| 6 | Formatos eager-only en lazy (Excel ya, vía Parquet; pickle, netCDF no). **Resultados de OpenModelica / Dymola (`.mat` v4): hecho** ("Implementado: resultados `.mat` en lazy"), leídos por trozos y copiados al motor, contra una interfaz de lector por columnas; los `.mat` de MATLAB (v5/v7 y v7.3) quedan como hueco conocido, #396, y se agregan como lectores de esa interfaz | por formato | — |
 
 Las fases 1–3 son autónomas y baratas, y dejan la app con exportación exacta y
 tres herramientas más en lazy sin materializar un solo array. La 4 es la
@@ -2254,10 +2256,118 @@ mismos valores del detrend leídos del archivo).
 **Hueco conocido, abierto: `.mat` de MATLAB en lazy (#396).** Un `.mat`
 guardado desde MATLAB (v5/v7 o v7.3) se carga siempre entero: abre hasta el
 límite de carga completa y nunca por encima de 1536 MB inflados. La salida de
-hoy es exportar a Parquet desde MATLAB (`parquetwrite`). Se difiere a
-propósito: primero van los resultados de OpenModelica / Dymola (v4), escritos
-contra una interfaz de lector por trozos a la que los dos lectores de MATLAB se
-agregan después (el diseño está en el issue).
+hoy es exportar a Parquet desde MATLAB (`parquetwrite`). Se difirió a
+propósito: primero fueron los resultados de OpenModelica / Dymola (v4, la
+sección que sigue), escritos contra una interfaz de lector por columnas
+(`src/parsers/mat-v4-stream.js` la describe) a la que los dos lectores de
+MATLAB se agregan después: un lector que entregue esa forma se abre en lazy
+con la misma ingesta, sin tocar nada más (el diseño está en el issue).
+
+### Implementado: resultados `.mat` en lazy (OpenModelica / Dymola)
+
+Un `.mat` por encima de su límite de carga completa era una pregunta: cargarlo
+entero igual, o no abrirlo. Un resultado de simulación (MAT v4, *trajectory*,
+escrito `binTrans`: lo que escriben OpenModelica y Dymola) ahora abre en modo
+de ahorro de memoria, sin preguntar, como un CSV grande.
+
+**Por qué no como un CSV.** Un CSV o un Parquet se quedan donde están y DuckDB
+los lee. DuckDB no tiene lector de MAT, así que las muestras se **copian una
+vez** al motor, por trozos, y esas tablas se adoptan como dataset lazy: el
+mismo `{ metadata, variables, tree, _duckdb }` que leen todas las consultas,
+análisis, herramientas y exportaciones. Nada aguas abajo sabe que las filas
+vinieron de un `.mat`. La copia vive donde viven los resultados de las
+herramientas (la base en OPFS cuando el navegador da disco; si no, la memoria
+con su presupuesto) y se va al cerrar el archivo.
+
+**Las piezas.**
+
+- `src/parsers/mat-v4-stream.js` — el lector por trozos. Recorre las cabeceras
+  de las matrices con `File.slice` (nunca lee `data_2` entera), lee enteras las
+  matrices chicas que describen las variables (`name`, `description`,
+  `dataInfo`, `data_1`) y entrega los pasos de tiempo de `data_2` en bloques
+  de 8 MB: en un archivo `binTrans` cada paso de tiempo es contiguo, así que un
+  tramo del archivo es un tramo de tiempo. Qué es cada variable (nombre, tipo,
+  fila, signo) lo decide `MatParser.describeTrajectory`, **el mismo código** que
+  corre el camino en memoria. Doble y simple precisión, los dos órdenes de bytes.
+- `src/data/columnar-ingest.js` — la ingesta. Copia los bloques a tablas del
+  motor (`createDatasetTable` / `openDatasetWriter`) y adopta la primera como
+  dataset (`adoptDatasetTable`).
+- `src/app/methods/file-methods.js` — `_lazyMatReader` (¿este archivo abre
+  así?) y `_openLazyMat` (la copia, con su progreso en el cartel de carga y su
+  Cancelar).
+
+**El ancho.** Un resultado de simulación suele ser *ancho*: miles de series.
+Una sola tabla de miles de columnas es lo que peor hace DuckDB-WASM. Medido en
+Chromium, con la base en OPFS:
+
+| Series (columnas) | Una tabla | Tablas de 250 |
+| --- | --- | --- |
+| 200 | 320 MB en 8,5 s | — |
+| 1 000 | 400 MB en 9–26 s | — |
+| 2 000 – 5 000 | **falla al confirmar** (1,4 GiB de memoria del motor agotados) | 5 000 series, 400 MB en 17 s |
+
+Por eso las series se reparten en tablas de `INGEST_GROUP_COLUMNS` (250)
+columnas. La primera lleva el tiempo y es la tabla del dataset: sus series son
+columnas llanas (`_duckdbCol`). Las series de las demás se leen como **columnas
+de sumidero**: unidas a la primera por posición (`_fromSql`, `POSITIONAL
+JOIN`), el mecanismo que ya usa la salida de una herramienta de datos sobre un
+archivo lazy — así una fórmula o una herramienta sobre ellas no necesita nada
+nuevo, y cada consulta paga solo las tablas que lee (12–60 ms la unión de dos
+tablas sobre el archivo de 5 000 series).
+
+**Alias, signo y parámetros.** Dos nombres que apuntan a la misma fila de
+`data_2` leen la misma columna; un alias con el signo cambiado es la expresión
+`(-columna)`. Los parámetros (`data_1`) son constantes: quedan en memoria, como
+en el camino eager, y se dibujan desde ahí (no van a la consulta del zoom).
+Para los análisis, que en memoria leen un parámetro como su valor en cada fila,
+llevan además ese valor como constante SQL sobre las filas del archivo: el
+histograma de un parámetro cuenta las mismas filas en los dos modos.
+
+**El overview.** Un archivo lazy tiene en memoria un resumen decimado de cada
+serie. Con 10 000 puntos por serie, el de un archivo ancho sería otra vez el
+archivo; por eso los puntos son menos cuantas más series hay
+(`ingestOverviewPoints`: 20 M de valores en total, nunca menos de 1 000 por
+serie). Se toma de los bloques a medida que pasan — una fila cada tantas, y la
+última — sin releer nada.
+
+**Lo que decide que un `.mat` abra así** (`_lazyMatReader`): supera el *límite
+de carga completa de MATLAB MAT* de los ajustes, hay motor, y es un resultado
+que este lector toma. Si no — un `.mat` general de MATLAB, uno escrito
+`binNormal`, uno con muestras en una tercera matriz, uno cortado — o si la
+copia no entra en el presupuesto de resultados o falla, el archivo sigue el
+camino de siempre: la pregunta "¿cargarlo entero igual?". Nunca se pierde la
+posibilidad de abrirlo.
+
+**Medido** (Chromium, base en OPFS): un resultado de 288 MB con 3 000 series y
+12 000 pasos abre en ~20 s, en 12 tablas, y deja ~260 MB de heap (144 MB son el
+overview: 6 001 puntos por serie). Cargado entero, el mismo archivo pasa por
+arreglos de JavaScript de varias veces su tamaño.
+
+**Pruebas.** `scripts/test-lazy-mat.mjs` (el mismo archivo leído entero por
+`MatParser` y por trozos a un DuckDB-WASM real: variables, orden, tipos,
+árbol, parámetros, y **cada fila de cada serie** idéntica — alias, alias
+negados, NaN e ±∞ incluidos —; tres tablas, bloques chicos, simple precisión,
+big endian, un resultado escrito por OpenModelica; cancelar no deja tablas;
+lo que no es un resultado `binTrans` devuelve `null`) y
+`scripts/e2e-lazy-mat.mjs` (en el navegador: abre lazy sin preguntar, las
+mismas filas dibujadas que en memoria, el mismo histograma, una herramienta de
+datos sobre una serie de la segunda tabla, la recarga (🔄, tras simular de
+nuevo) vuelve a leerlo por trozos y conserva las trazas y la herramienta, un
+archivo chico sigue en memoria, Cancelar durante la copia no deja archivo ni
+tabla).
+
+**Huecos conocidos.**
+
+- La copia ocupa disco (o memoria del motor) del orden del tamaño de `data_2`;
+  sin lugar, el archivo cae a la pregunta de carga completa. No es un límite
+  silencioso: la pregunta lo dice.
+- Un archivo corto y muy ancho (menos filas que puntos de overview) tiene en
+  memoria, como overview, todas sus filas: el modo lazy no le ahorra memoria
+  frente a un lector eager que usara arreglos tipados. No se pierde nada
+  respecto de antes, pero el ahorro grande es para archivos con muchos pasos.
+- Recargar (🔄) copia el archivo de nuevo, entero: no hay continuación de
+  las filas agregadas, como la hay en CSV. Mientras dura, las tablas de la
+  copia anterior siguen ocupando su lugar; se sueltan al terminar.
 
 ### Implementado: marcas de muestras en lazy
 

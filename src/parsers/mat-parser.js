@@ -32,52 +32,14 @@ export default class MatParser {
     async parse(buffer) {
         const matrices = this._readMatrices(buffer);
 
-        // Validate required matrices
-        const required = ['Aclass', 'name', 'dataInfo'];
-        for (const key of required) {
-            if (!matrices[key]) {
-                throw new Error(`Missing '${key}' matrix. Found: ${Object.keys(matrices).join(', ')}`);
-            }
-        }
-
-        // Detect binTrans format
-        const needsTranspose = this._detectBinTrans(matrices);
-
-        // Helper functions
-        const getMeta = (name) => {
-            const data = matrices[name].data;
-            return needsTranspose ? this._transpose(data) : data;
-        };
-
-        const getData = (name) => {
-            return matrices[name].data;  // Data matrices are never transposed
-        };
-
-        // Parse variable names and descriptions
-        const varNames = this._charsToStrings(getMeta('name'));
-        let descriptions = new Array(varNames.length).fill('');
-        if (matrices['description']) {
-            descriptions = this._charsToStrings(getMeta('description'));
-            while (descriptions.length < varNames.length) {
-                descriptions.push('');
-            }
-        }
-
-        // Parse dataInfo
-        const dataInfo = getMeta('dataInfo');
-        if (dataInfo.length !== varNames.length) {
-            throw new Error(
-                `dataInfo rows (${dataInfo.length}) != names (${varNames.length}). ` +
-                `binTrans=${needsTranspose}`
-            );
-        }
+        const { needsTranspose, entries } = this.describeTrajectory(matrices);
 
         // Collect data matrices
         const dataMats = {};
         for (const [key] of Object.entries(matrices)) {
             if (key.startsWith('data_') && !isNaN(parseInt(key.substring(5)))) {
                 const idx = parseInt(key.substring(5));
-                dataMats[idx] = getData(key);
+                dataMats[idx] = matrices[key].data;  // Data matrices are never transposed
             }
         }
 
@@ -92,16 +54,8 @@ export default class MatParser {
         let timeVar = null;
 
         // Process each variable
-        for (let i = 0; i < varNames.length; i++) {
-            const varName = varNames[i];
-            const matIdx = dataInfo[i][0];     // 0=abscissa, 1=parameter, 2+=variable
-            const colIdx = dataInfo[i][1];     // 1-based row, negative=negate
-            const interp = dataInfo[i][2];     // interpolation type
-
-            // Resolve data matrix
-            const actualMat = matIdx > 0 ? matIdx : 2;
-            const negate = colIdx < 0;
-            const row = Math.abs(colIdx) - 1;
+        for (const entry of entries) {
+            const { name: varName, actualMat, negate, row, kind, interpolation: interpStr } = entry;
 
             if (!dataMats[actualMat]) {
                 continue;
@@ -117,17 +71,6 @@ export default class MatParser {
                 values = values.map(v => -v);
             }
 
-            const kind = {
-                0: 'abscissa',
-                1: 'parameter',
-                2: 'variable'
-            }[matIdx] || 'variable';
-
-            const interpStr = {
-                0: 'discrete',
-                1: 'linear'
-            }[Math.abs(interp)] || String(interp);
-
             // Detect data type and shape hints from numeric values
             const dataType = this._detectDataType(values, kind);
             const isConstant = this._isConstantValues(values);
@@ -135,7 +78,7 @@ export default class MatParser {
             const variable = {
                 name: varName,
                 data: values,
-                description: descriptions[i],
+                description: entry.description,
                 kind: kind,
                 dataType: dataType,
                 isConstant: isConstant,
@@ -168,6 +111,80 @@ export default class MatParser {
         result.tree = this._buildTree(result.variables);
 
         return result;
+    }
+
+    /**
+     * What a trajectory file says about its variables, before any value is
+     * read: for each name its description, the matrix and the row its values
+     * are in, whether they are negated, its kind and its interpolation. Shared
+     * by `parse` (the whole file in memory) and by the reader that goes through
+     * the file by parts (mat-v4-stream.js), so both name, sort and negate the
+     * variables the same way.
+     *
+     * @param {Object} matrices from _readMatrices; the data matrices may be absent
+     * @returns {{ needsTranspose: boolean, entries: Array }}
+     */
+    describeTrajectory(matrices) {
+        // Validate required matrices
+        const required = ['Aclass', 'name', 'dataInfo'];
+        for (const key of required) {
+            if (!matrices[key]) {
+                throw new Error(`Missing '${key}' matrix. Found: ${Object.keys(matrices).join(', ')}`);
+            }
+        }
+
+        // Detect binTrans format
+        const needsTranspose = this._detectBinTrans(matrices);
+
+        const getMeta = (name) => {
+            const data = matrices[name].data;
+            return needsTranspose ? this._transpose(data) : data;
+        };
+
+        // Parse variable names and descriptions
+        const varNames = this._charsToStrings(getMeta('name'));
+        let descriptions = new Array(varNames.length).fill('');
+        if (matrices['description']) {
+            descriptions = this._charsToStrings(getMeta('description'));
+            while (descriptions.length < varNames.length) {
+                descriptions.push('');
+            }
+        }
+
+        // Parse dataInfo
+        const dataInfo = getMeta('dataInfo');
+        if (dataInfo.length !== varNames.length) {
+            throw new Error(
+                `dataInfo rows (${dataInfo.length}) != names (${varNames.length}). ` +
+                `binTrans=${needsTranspose}`
+            );
+        }
+
+        const entries = [];
+        for (let i = 0; i < varNames.length; i++) {
+            const matIdx = dataInfo[i][0];     // 0=abscissa, 1=parameter, 2+=variable
+            const colIdx = dataInfo[i][1];     // 1-based row, negative=negate
+            const interp = dataInfo[i][2];     // interpolation type
+            entries.push({
+                name: varNames[i],
+                description: descriptions[i],
+                matIdx,
+                // Resolve data matrix
+                actualMat: matIdx > 0 ? matIdx : 2,
+                negate: colIdx < 0,
+                row: Math.abs(colIdx) - 1,
+                kind: {
+                    0: 'abscissa',
+                    1: 'parameter',
+                    2: 'variable'
+                }[matIdx] || 'variable',
+                interpolation: {
+                    0: 'discrete',
+                    1: 'linear'
+                }[Math.abs(interp)] || String(interp),
+            });
+        }
+        return { needsTranspose, entries };
     }
 
     /**

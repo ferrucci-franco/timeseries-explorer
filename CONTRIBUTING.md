@@ -111,6 +111,8 @@ Start in:
 Start in:
 
 - `src/parsers/mat-parser.js`
+- `src/parsers/mat-v4-stream.js` and `src/data/columnar-ingest.js` (a
+  simulation result past its limit, read by parts into a memory-saving dataset)
 - `src/parsers/csv-parser.js`
 
 ### Translations

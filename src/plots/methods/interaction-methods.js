@@ -495,7 +495,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
         const readable = lazyMeta.source?.hasSqlValue
             ? lazyMeta.source.hasSqlValue(droppedVar)
             : !!(droppedVar?._duckdbCol || droppedVar?._duckdbExpr);
-        if (droppedVar?.derived && !readable) {
+        // A parameter of a simulation result opened lazily is a constant held
+        // in memory: drawn from there, as in a file in memory.
+        if (droppedVar?.kind === 'parameter' || (droppedVar?.derived && !readable)) {
             const built = this._buildTimeTrace(t, range, plot, idx);
             if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, mode: built.mode, marker: built.marker, prepared: true });
             if (perf) perf.eagerTraces++;

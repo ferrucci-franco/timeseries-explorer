@@ -479,8 +479,11 @@ assert.match(plotManagerSrc, /kind === 'abscissa'[\s\S]{0,120}onTimeAxisVariable
 const interactionSrc = readSrc('plots/methods/interaction-methods.js');
 // A derived series is queried only when it has SQL of its own (the source's
 // hasSqlValue: a column, a lazy tool's output, a translated formula).
-assert.match(interactionSrc, /readable = lazyMeta\.source\?\.hasSqlValue[\s\S]{0,200}droppedVar\?\.derived && !readable/,
+assert.match(interactionSrc, /readable = lazyMeta\.source\?\.hasSqlValue[\s\S]{0,500}droppedVar\?\.derived && !readable/,
     'lazy path renders eager derived series without a DuckDB query');
+// And a parameter of a lazy simulation result is drawn from memory too.
+assert.match(interactionSrc, /droppedVar\?\.kind === 'parameter' \|\| \(droppedVar\?\.derived && !readable\)/,
+    'a parameter of a lazy file is drawn from memory');
 
 const viewerSrc = readSrc('app/viewer-app.js');
 assert.match(viewerSrc, /onTimeAxisVariableDrop\s*=\s*\(timeVarName\)\s*=>\s*this\._handleTimeAxisDrop/, 'the viewer wires the hook to the handler');
