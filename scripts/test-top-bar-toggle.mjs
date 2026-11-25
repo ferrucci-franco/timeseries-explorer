@@ -18,7 +18,7 @@ assert.match(ui, /toggleAttribute\('inert', hidden\)/, 'hidden top bar controls 
 assert.match(edge, /side === 'top'/, 'the edge toggle knows a horizontal rail');
 assert.match(session, /topBarHidden:/, 'the top bar state is saved with the session');
 assert.match(session, /_sessionTopBarHidden/, 'the top bar state is restored with the session');
-assert.match(css, /\.top-bar\.hidden\s*\{[^}]*margin-top:\s*-60px/, 'the hidden top bar slides out of the window');
+assert.match(css, /\.top-bar\.hidden\s*\{[^}]*margin-top:\s*calc\(-1 \* var\(--top-bar-height\)\)/, 'the hidden top bar slides out of the window, by its own height');
 assert.match(css, /\.edge-toggle-rail-top\s*\{[^}]*z-index:\s*1310/, 'the pill sits above the top bar layer');
 for (const key of ['edgeHideTopBar', 'edgeShowTopBar']) {
     assert.equal(translations.match(new RegExp(`\\b${key}:`, 'g'))?.length, 5, `${key} exists in all five languages`);

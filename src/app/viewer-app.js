@@ -189,6 +189,8 @@ class OpenModelicaViewer {
         this._syncTopBarEdgeToggle?.();
         this._syncSpellcheckLanguage();
         this._updateLiveUpdateTopBar?.();
+        this._appFullscreen?.refresh();
+        this._syncOptionHelpButtons?.();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
         if (typeof this._syncDataTools === 'function') this._syncDataTools();

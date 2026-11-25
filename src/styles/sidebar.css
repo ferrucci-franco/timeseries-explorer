@@ -1830,6 +1830,22 @@
     cursor: pointer;
 }
 
+/* A switch of the Options with a "?" beside it, and the box it opens. */
+.option-help-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.option-help-row .checkbox-label {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.option-help-popover {
+    margin: 0 0 0.4rem;
+}
+
 /* A checkbox inside a tool's form sits with the tool's own labels, not with the
    sidebar's option rows: smaller, and no extra vertical padding. */
 .data-tool-checkbox {
