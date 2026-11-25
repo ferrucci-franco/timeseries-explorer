@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { countDistinctPositions, SAMPLE_POSITION_SCAN_LIMIT } from '../../utils/sample-markers.js';
 import Plotly from '../../vendor/plotly.js';
 import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/fft.js';
 import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
@@ -469,6 +470,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
     const previewResults = [];
     const immediateResults = [];
     const queryGroups = new Map();
+    // Samples on: a window with few rows is asked for as its rows, which is
+    // what a dot marks (docs/sample-markers-design.md, "Lazy files").
+    const wantRows = !!this._timeseriesSamplesEnabled?.(plot);
     plot.traces.forEach((t, idx) => {
         if (plot.mode === 'timeseries' && this._isStateBandTrace?.(t)) return;
         const fileEntry = this.files.get(t.fileId);
@@ -534,7 +538,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
             }
         }
 
-        const cached = this._lazyCacheResult(t, idx, sourceT0, sourceT1, target);
+        const cached = this._lazyCacheResult(t, idx, sourceT0, sourceT1, target, { rows: wantRows });
         if (cached) {
             immediateResults.push(cached);
             if (perf) perf.traceCacheHits++;
@@ -560,7 +564,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
         ].join('\u0001');
         let group = queryGroups.get(groupKey);
         if (!group) {
-            group = { source, data, queryRange, queryTarget, sourceViewportRange, displayViewportRange: [t0, t1], items: [] };
+            group = { source, data, queryRange, queryTarget, sourceViewportRange, displayViewportRange: [t0, t1], rows: wantRows, items: [] };
             queryGroups.set(groupKey, group);
         }
         group.items.push({ trace: t, idx });
@@ -626,6 +630,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
         }
         const restyleStartedAt = this._perfNow();
         await this._applyBatchedTimeseriesRestyle(plot, flat);
+        // Whether a trace has dots was decided by that restyle, on the rows
+        // that just arrived: the Samples notice follows it.
+        if (plot.mode === 'timeseries' && plot.div && this.plots.get(panelId) === plot) this._refreshSamplesNotice(plot);
         if (perf) {
             perf.restyleMs = this._roundPerfMs(this._perfNow() - restyleStartedAt);
             this._finishLazyPerf(perf, { status: 'loaded', results: flat });
@@ -914,7 +921,7 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, target) {
     const varNames = group.items.map(item => item.trace.varName);
     const startedAt = this._perfNow();
     const fetch = group.source?.getColumnsRange
-        ? group.source.getColumnsRange(group.data, varNames, group.queryRange[0], group.queryRange[1], group.queryTarget)
+        ? group.source.getColumnsRange(group.data, varNames, group.queryRange[0], group.queryRange[1], group.queryTarget, { rows: !!group.rows })
         : Promise.all(varNames.map(varName =>
             group.source.getColumnRange(group.data, varName, group.queryRange[0], group.queryRange[1], group.queryTarget)
         )).then(series => ({
@@ -922,7 +929,7 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, target) {
             yByVar: new Map(series.map((entry, index) => [varNames[index], entry?.y || new Float64Array(0)])),
         }));
 
-    return fetch.then(({ x, yByVar, _perf }) => {
+    return fetch.then(({ x, yByVar, _perf, exactRows }) => {
         if (this._zoomTokens.get(panelId) !== token) return [];
         if (!plot?.div) return [];
         const mapped = group.items.map(({ trace, idx }) => {
@@ -937,9 +944,13 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, target) {
                 target: group.queryTarget,
                 x,
                 y,
+                // Whether the rows were asked for, and whether these are they
+                // (every row of [start, end], not min/max buckets).
+                rowsAsked: !!group.rows,
+                exactRows: !!exactRows,
             };
             const [sourceT0, sourceT1] = group.sourceViewportRange || group.queryRange;
-            return this._lazyCacheResult(trace, idx, sourceT0, sourceT1, target) || { idx, trace, x, y };
+            return this._lazyCacheResult(trace, idx, sourceT0, sourceT1, target, { rows: !!group.rows }) || { idx, trace, x, y };
         });
         mapped._omvPerf = {
             ...(_perf || {}),
@@ -984,7 +995,7 @@ proto._renderedTracePreview = function(plot, idx, t0, t1, target) {
     return this._downsampleTimeseries(xs, ys, target);
 };
 
-proto._lazyCacheResult = function(trace, idx, t0, t1, target) {
+proto._lazyCacheResult = function(trace, idx, t0, t1, target, { rows = false } = {}) {
     const cache = trace?._lazyDetailCache;
     if (!cache || cache.fileId !== trace.fileId || cache.varName !== trace.varName) return null;
     if (!cache.x?.length || !cache.y?.length) return null;
@@ -992,14 +1003,38 @@ proto._lazyCacheResult = function(trace, idx, t0, t1, target) {
     const minX = Math.min(t0, t1);
     const maxX = Math.max(t0, t1);
     if (minX < cache.start || maxX > cache.end) return null;
-    if (!this._lazyCacheHasViewportDetail(cache, minX, maxX, target)) return null;
+    // Samples was turned on since this was read: the rows were not asked for.
+    if (rows && !cache.rowsAsked) return null;
+    // The rows themselves hold all the detail there is: no query can add any.
+    if (!cache.exactRows && !this._lazyCacheHasViewportDetail(cache, minX, maxX, target)) return null;
     const visual = this._visualFromSeriesRange(cache.x, cache.y, minX, maxX, target);
+    // What the Samples toggle needs to know about this window (the lazy twin
+    // of _buildTimeseriesVisualData's): drawn row for row, and at how many
+    // distinct instants. `fromFile` says the rows were read from the file —
+    // the overview a lazy trace is first drawn from never is.
+    let sampleWindow = null;
+    if (visual && cache.exactRows) {
+        const n = Math.min(cache.x.length, cache.y.length);
+        const visibleStart = this._lowerBound(cache.x, minX);
+        const visibleEnd = this._upperBound(cache.x, maxX);
+        const windowLength = Math.min(n, visibleEnd + 1) - Math.max(0, visibleStart - 1);
+        const exact = Math.max(visual.x?.length || 0, visual.y?.length || 0) === windowLength;
+        const visibleCount = Math.max(0, visibleEnd - visibleStart);
+        sampleWindow = {
+            exact,
+            fromFile: true,
+            visibleCount,
+            visiblePositions: exact && visibleCount <= SAMPLE_POSITION_SCAN_LIMIT
+                ? countDistinctPositions(cache.x, visibleStart, visibleEnd)
+                : visibleCount,
+        };
+    }
     if (visual && this.isVariableSignInverted?.(trace.fileId, trace.varName)) {
         visual.y = ArrayBuffer.isView(visual.y)
             ? visual.y.map(value => Number.isFinite(value) ? -value : value)
             : visual.y.map(value => Number.isFinite(value) ? -value : value);
     }
-    return visual ? { idx, trace, x: visual.x, y: visual.y } : null;
+    return visual ? { idx, trace, x: visual.x, y: visual.y, sampleWindow } : null;
 };
 
 proto._lazyCacheHasViewportDetail = function(cache, minX, maxX, target) {
@@ -1107,12 +1142,17 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
         ys.push(prepared.y);
         cds.push(prepared.customdata ?? null);
         if (prepared.customdata) anyCustomdata = true;
-        // Lazy detail is never raw samples to dot; an eager trace sharing the
-        // panel brings its own decision along with its data.
+        // An eager trace sharing the panel brings its own decision along with
+        // its data. A lazy one has dots when what arrived is the rows of its
+        // window (result.sampleWindow) and they have room — the same rule,
+        // with the same hysteresis; a preview drawn while the rows are read
+        // (`prepared`, no mode) decides nothing and leaves that memory alone.
         // A markers-only preview keeps what it is drawn with.
         const current = plot.div.data?.[result.idx];
         const keepMarkers = current?.mode === 'markers';
-        modes.push(result.prepared && result.mode ? result.mode : (keepMarkers ? 'markers' : 'lines'));
+        const lazyDots = !result.prepared && !keepMarkers && samplesEnabled
+            && this._timeseriesSampleMarkersShown(plot, trace, { sampleWindow: result.sampleWindow });
+        modes.push(result.prepared && result.mode ? result.mode : (keepMarkers ? 'markers' : (lazyDots ? 'lines+markers' : 'lines')));
         markers.push(result.marker || (keepMarkers && current?.marker)
             || (samplesEnabled ? this._timeseriesSampleMarker(trace) : null));
     }
