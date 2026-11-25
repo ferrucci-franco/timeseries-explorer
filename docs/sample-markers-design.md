@@ -188,8 +188,8 @@ same rows, as the file held in memory.
   expression in the file to read it from) has no rows to mark. If such signals
   are all the panel shows, the item waits with *Samples are not shown for a
   signal that exists only in the overview of a file in memory-saving mode*.
-- The rings of the Repeated toggle on these dots, and its bars zoomed out, are
-  the next step (`docs/repeated-timestamps-indicator-design.md`).
+- The rings of the Repeated toggle are drawn on these dots too, counted in the
+  rows read (`docs/repeated-timestamps-indicator-design.md`, "Lazy files").
 
 Tests: `scripts/test-lazy-sample-rows.mjs` (real DuckDB-WASM engine: the rows of
 a small window, bit for bit against the file in memory — one row per bucket,

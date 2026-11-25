@@ -65,6 +65,7 @@ import {
 import { linearFromMoments, quadraticFromMoments, powerFromMoments } from '../utils/regression.js';
 import { assembleTrend, trendBand } from '../utils/trend-fit.js';
 import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } from './missing-buckets-sql.js';
+import { buildRepeatedColumnsSql, repeatedColumnsFromRows } from './repeated-buckets-sql.js';
 import { buildStateChangesSql, buildStateColumnsSql, buildStateValuesSql } from './state-runs-sql.js';
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
@@ -2091,6 +2092,34 @@ export default class DuckDbSource {
         if (!conn) return;
         this._streamConns?.delete(conn);
         try { await conn.close(); } catch (_) { /* already gone */ }
+    }
+
+    /**
+     * The Repeated marks of a lazy file for a window: per screen column of
+     * [t0, t1] that holds a repeated instant (consecutive rows at one time),
+     * how many it holds, the longest run and its instant; and how many
+     * repeated instants the whole file has. One streamed pass over the file,
+     * an O(columns) result. A time axis generated from the row number repeats
+     * nothing, and is not read. See repeated-buckets-sql.js.
+     */
+    async getRepeatedColumns(legacyData, t0, t1, columns, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getRepeatedColumns: data is not DuckDB-backed (eager mode)');
+        if (meta.generatedTime) return { marks: [], total: 0 };
+        let lo = Number(t0);
+        let hi = Number(t1);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { marks: [], total: NaN };
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const sql = buildRepeatedColumnsSql(
+            this._timeExpressionSql(legacyData, meta), meta.tableName,
+            (v) => this._numericLiteral(v), lo, hi, columns, options?.minRun);
+        const result = await this._interactiveQuery(sql, { signal: options?.signal });
+        return repeatedColumnsFromRows(
+            this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+            this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
+            this._extractColumnAsFloat64(result, 2, 'DOUBLE'),
+            this._extractColumnAsFloat64(result, 3, 'DOUBLE'),
+        );
     }
 
     /**

@@ -632,7 +632,15 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
         await this._applyBatchedTimeseriesRestyle(plot, flat);
         // Whether a trace has dots was decided by that restyle, on the rows
         // that just arrived: the Samples notice follows it.
-        if (plot.mode === 'timeseries' && plot.div && this.plots.get(panelId) === plot) this._refreshSamplesNotice(plot);
+        if (plot.mode === 'timeseries' && plot.div && this.plots.get(panelId) === plot) {
+            this._refreshSamplesNotice(plot);
+            // A file whose dots just came or went moves between the rings
+            // and the strip of bars.
+            if (!options.live && this._repeatedOverlayUpdate(plot)) {
+                Plotly.relayout(plot.div, { shapes: this._timeseriesOverlayShapes(plot) });
+                this._refreshRepeatedNotice(plot);
+            }
+        }
         if (perf) {
             perf.restyleMs = this._roundPerfMs(this._perfNow() - restyleStartedAt);
             this._finishLazyPerf(perf, { status: 'loaded', results: flat });
@@ -893,6 +901,7 @@ proto._cleanupLazyDetailForPanel = function(panelId, plot = this.plots?.get(pane
     this._cancelPendingLazyDetail(panelId);
     this._cancelActiveLazySources(panelId);
     this._cancelLazyMissingRequest(panelId);
+    this._cancelRepeatedLazy?.(plot);
     if (this._zoomTokens) {
         this._zoomTokens.set(panelId, (this._zoomTokens.get(panelId) || 0) + 1);
     }
@@ -1127,6 +1136,9 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     const cds = [];
     const modes = [];
     const markers = [];
+    const texts = [];
+    const hovers = [];
+    let anyRepeatedHover = false;
     let anyCustomdata = false;
     const samplesEnabled = this._timeseriesSamplesEnabled?.(plot);
     // Cut the min/max envelope across real time gaps (empty buckets) so it never
@@ -1153,7 +1165,36 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
         const lazyDots = !result.prepared && !keepMarkers && samplesEnabled
             && this._timeseriesSampleMarkersShown(plot, trace, { sampleWindow: result.sampleWindow });
         modes.push(result.prepared && result.mode ? result.mode : (keepMarkers ? 'markers' : (lazyDots ? 'lines+markers' : 'lines')));
-        markers.push(result.marker || (keepMarkers && current?.marker)
+        // Repeated on top of Samples, as on an in-memory trace: a red ring on
+        // each dot whose instant is shared, counted in the rows read around
+        // the view (a run cut by their edge is outside it).
+        let decoration = null;
+        if (lazyDots && plot.showRepeated && this._repeatedSampleDecoration) {
+            const rows = trace._lazyDetailCache?.x;
+            const lengths = this._repeatedRunLengthsForPoints(rows || result.x, result.x);
+            // Line breaks put a point of their own after some rows.
+            const drawn = prepared.breakAfter?.length ? [] : lengths;
+            if (prepared.breakAfter?.length) {
+                const breaks = new Set(prepared.breakAfter);
+                lengths.forEach((length, i) => {
+                    drawn.push(length);
+                    if (breaks.has(i)) drawn.push(0);
+                });
+            }
+            decoration = this._repeatedSampleDecoration(trace, drawn);
+        }
+        if (!result.prepared && !keepMarkers && plot.showRepeated && samplesEnabled) {
+            anyRepeatedHover = true;
+            const template = String(current?.hovertemplate ?? '').split('%{text}').join('');
+            texts.push(decoration ? decoration.text : null);
+            hovers.push(decoration && template.includes('<extra>')
+                ? template.replace('<extra>', '%{text}<extra>')
+                : (template || null));
+        } else {
+            texts.push(current?.text ?? null);
+            hovers.push(current?.hovertemplate ?? null);
+        }
+        markers.push(decoration?.marker || result.marker || (keepMarkers && current?.marker)
             || (samplesEnabled ? this._timeseriesSampleMarker(trace) : null));
     }
     const update = { x: xs, y: ys };
@@ -1161,6 +1202,10 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     if (samplesEnabled) {
         update.mode = modes;
         update.marker = markers;
+        if (anyRepeatedHover) {
+            update.text = texts;
+            update.hovertemplate = hovers;
+        }
     }
     return Plotly.restyle(plot.div, update, valid.map(result => result.idx));
 };
@@ -1189,7 +1234,7 @@ proto._prepareLazyTimeseriesRestyle = function(trace, x, y, plot = null, breakGa
         : durationAxis
         ? visualX.map(value => this._formatElapsedDateTime(value, this._durationFractionDigits(fileId)))
         : undefined;
-    if (breaks && breaks.length) return this._insertTraceGapBreaks(plotX, visualY, customdata, breaks);
+    if (breaks && breaks.length) return { ...this._insertTraceGapBreaks(plotX, visualY, customdata, breaks), breakAfter: breaks };
     return { x: plotX, y: visualY, customdata };
 };
 
@@ -5550,6 +5595,7 @@ proto._repeatedOverlayUpdate = function(plot) {
         if (plot) {
             plot._repeatedShapes = [];
             plot._repeatedHoverMarks = [];
+            this._cancelRepeatedLazy?.(plot);
         }
         return null;
     }

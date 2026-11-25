@@ -1,7 +1,7 @@
 # Repeated Timestamps Indicator Design ("Repeated" toggle)
 
-Status: v1 built for in-memory files. Memory-saving (DuckDB) files are not marked
-yet (see "Lazy (DuckDB) files"). Turns the **Samples** toggle
+Status: built, for in-memory files and for memory-saving (DuckDB) files (see
+"Lazy (DuckDB) files"). Turns the **Samples** toggle
 ([sample-markers-design.md](sample-markers-design.md)) on with it, for the rings when
 zoomed in.
 
@@ -138,40 +138,58 @@ top of the plot area (`y0: 0.985` to `1` in paper coordinates):
 
 ### Lazy (DuckDB) files
 
-**Not built in v1.** A memory-saving file keeps an overview sample in memory, not its
-rows, so its repeats cannot be read there. Such a file is skipped: if it is the only
-reason the button could have something to show, the button waits with *Repeated
-timestamps are not marked yet for files loaded in memory-saving mode*.
+Built: a file in memory-saving mode shows the same bars, the same hover and the
+same rings as the file held in memory.
 
-The plan for it stands:
+A lazy file keeps an overview sample in memory, not its time column, so DuckDB
+finds the runs in the file and reduces them the way `repeatedMarksForView`
+does.
 
-- Same idea as `missing-buckets-sql.js`: one aggregate query over the visible range,
-  bucketed at ~one bucket per pixel, returning per bucket the number of repeated
-  instants and the longest run:
+- `src/data/repeated-buckets-sql.js` (pure, unit-testable in Node): the runs are
+  *consecutive* rows at one finite instant, as `repeatedTimestampRuns` defines
+  them — not `GROUP BY t`, which the first plan had and which would also count
+  an instant a column out of order comes back to. Found with window functions
+  DuckDB evaluates as a stream (`LAG`, `LEAD`, `ROW_NUMBER`, and a running
+  `MAX` of the row number of the last run start): no sort and no hash of the
+  rows, flat memory. Rows with no time are left out first, as the in-memory
+  loader leaves them out.
+- The answer is one row per screen column of the window that holds a repeated
+  instant: how many instants, the longest run and its instant (the earliest on
+  a tie, as the kernel picks). The column is computed with the kernel's own
+  arithmetic. Runs outside the window are counted under column −1: the pass
+  reads the whole file either way, and that total says whether the file
+  repeats an instant at all.
+- `repeatedMarksForView` takes those column marks next to its sources and
+  merges them the same way, so a panel with a lazy file and an in-memory one
+  gets one set of marks.
+- One request per plot and file (`_repeatedLazyMarks`), with an `AbortSignal`;
+  a newer view replaces the one it supersedes, and the bars of the previous
+  view stay until the answer redraws. Each new view is one pass over the file
+  — on a CSV that is a rescan, as for every lazy zoom.
+- Zoomed in, where the Samples dots are the rows of the file
+  (`docs/sample-markers-design.md`, "Lazy files"), the rings are counted in
+  those rows.
+- The item of the Marks menu: until a file has been read nobody knows whether it
+  repeats an instant, so the item is offered; turned on, it waits with *Reading
+  the repeated timestamps from the file…* and then shows the marks, or says
+  there are none (and can still be turned off). A time axis generated from the
+  row number repeats nothing and is not read.
+- Stated tolerance: the column of an instant is computed on the file's own time
+  values. With a time shift or a display unit applied, an instant that falls
+  exactly on a column edge may be drawn one column (3 px) aside from where the
+  in-memory path puts it; with no transform the marks are identical.
 
-  ```sql
-  WITH r AS (
-      SELECT t, COUNT(*) AS c FROM <table>
-      WHERE t BETWEEN lo AND hi
-      GROUP BY t HAVING COUNT(*) >= <min run>
-  )
-  SELECT <bucket(t)> AS b, COUNT(*) AS instants, MAX(c) AS longest
-  FROM r GROUP BY b
-  ```
-
-  Put the builder in a pure module (e.g. `src/data/repeated-buckets-sql.js`) so it is
-  unit-testable in Node, as the Missing/NaN one is. Note: `GROUP BY t` counts rows at an
-  instant anywhere in the file, not only consecutive ones — identical for a sorted time
-  column; for an unsorted one, state it in the hover.
-- Zoomed in far enough that the window holds few runs, return the runs themselves
-  (`t`, `c`) instead of buckets.
-- Cancel/refresh on relayout with a token, like `_refreshLazyMissingBands`.
-- The buckets map straight onto `repeatedMarksForView`'s output (one mark per column),
-  so the drawing code does not change.
+Tests: `scripts/test-lazy-repeated-marks.mjs` (real DuckDB-WASM engine: marks
+and bars equal to the in-memory kernel's — whole file and windows, several
+widths, runs of 2 to 7 rows, ties, rows with no time, a column out of order, a
+longer shortest run, a mixed panel, a generated axis, the streamed plan,
+cancel) and `scripts/e2e-lazy-repeated-marks.mjs` (Chromium: the same 12 MB CSV
+whole and lazy, the same bars, hover and rings through the same zooms; a lazy
+file with none).
 
 ## Scope
 
-In: time-series panels, Y and Y2, in-memory files. Memory-saving files: see above.
+In: time-series panels, Y and Y2, in-memory files and memory-saving files.
 
 Out, v1: stacked mode (marks are fine, but rings are not — they follow *Samples*, which
 is off in stacked mode); time panes of FFT / Histogram / Heatmap / Temporal profile /
