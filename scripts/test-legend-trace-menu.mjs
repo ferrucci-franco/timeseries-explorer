@@ -172,8 +172,10 @@ const translationsSource = read('src/i18n/translations.js');
     assert.match(traceStyleMethodsSource, /setPointerCapture\(down\.pointerId\)/, 'pressed or slid, the slide kept past the box');
     assert.match(traceStyleMethodsSource, /owner\.list\.length > 1/, 'one trace has nothing to order');
     assert.match(traceStyleMethodsSource, /activePairIndex = index/, 'the 2D fit drawer keeps the pair it showed');
-    assert.match(sessionSource, /traces: plot\.traces\.map\(t => this\._cloneSerializable\(t\)\)/,
-        'a saved view keeps every trace state as it is, colour and order included');
+    assert.match(sessionSource, /traces: plot\.traces\.map\(t => this\._sessionTrace\(t\)\)/,
+        'a saved view keeps every trace state the user chose, colour and order included');
+    assert.match(sessionSource, /if \(!key\.startsWith\('_'\)\) kept\[key\] = value/,
+        'and leaves out only the working state the app keeps on a trace');
     assert.match(compactSource, /_compactTraceStyleButtons\(trace, label\)/, 'the phone\'s trace rows offer them');
     assert.match(compactSource, /_compactTraceStyleButtons\(pair, label\)/, 'and its pair rows');
 

@@ -8,6 +8,7 @@ const translationsSource = readFileSync(new URL('../src/i18n/translations.js', i
 for (const key of [
     'sessionProjectLazyFilesTitle',
     'sessionProjectLazyFilesBody',
+    'sessionProjectLazyFilesViewHint',
     'sessionProjectReadFailedTitle',
     'sessionProjectReadFailedBody',
 ]) {
@@ -63,6 +64,15 @@ const originalAlert = Modal.alert;
 const alerts = [];
 Modal.alert = async (title, body, options) => {
     alerts.push({ title, body, options });
+};
+
+// The dialog a file in memory-saving mode gets: it offers to save a view.
+const originalConfirm = Modal.confirm;
+const confirms = [];
+let confirmAnswer = false;
+Modal.confirm = async (body, options) => {
+    confirms.push({ body, options });
+    return confirmAnswer;
 };
 
 try {
@@ -153,10 +163,45 @@ try {
             lazy: true,
         },
     ]]);
+    // A file in memory-saving mode is not copied into an archive: the dialog
+    // says so and offers the view, which is what keeps the work on such a
+    // file. Declined: nothing is saved.
+    confirmAnswer = false;
     assert.equal(await lazyProject.saveProjectSession(), false);
-    assert.equal(lazyProject.download, null, 'lazy project must not create a download');
-    assert.equal(alerts.length, 1, 'lazy project should explain why saving is blocked');
-    assert.match(alerts[0].body, /large\.parquet/);
+    assert.equal(lazyProject.download, null, 'declined: nothing is downloaded');
+    assert.equal(alerts.length, 0, 'it is an offer, not a dead end');
+    assert.equal(confirms.length, 1, 'a lazy project offers the view');
+    assert.match(confirms[0].body, /large\.parquet/, 'naming the files that are not copied');
+    assert.doesNotMatch(confirms[0].body, /full-load limit/i, 'and without advice a large file cannot follow');
+    assert.match(confirms[0].options.confirmText, /view/i, 'the button saves a view');
+    // Accepted: the view is saved — a .json with the workspace and no data.
+    confirmAnswer = true;
+    assert.equal(await lazyProject.saveProjectSession(), false, 'still not a complete project');
+    assert.match(lazyProject.download?.name || '', /\.json$/, 'accepted: the view is downloaded');
+    const savedView = JSON.parse(await lazyProject.download.blob.text());
+    assert.equal(savedView.files[0].archivePath, null, 'the view carries no bytes');
+    assert.equal(savedView.files.length, 1);
+
+    // What the app keeps on a trace while it draws stays out of a session: on
+    // a lazy file `_lazyDetailCache` is the rows last read for the window, and
+    // a view holds no data.
+    lazyProject.plotManager.plots.set('panel-1', {
+        mode: 'timeseries',
+        traces: [{ fileId: 'f1', varName: 'x', axis: 'y', color: '#123456', _lazyDetailCache: { fileId: 'f1', varName: 'x', x: [0, 1], y: [5, 6] } }],
+        phaseTraces: [{ fileId: 'f1', x: 'x', y: 'x', _working: [1, 2, 3] }],
+    });
+    lazyProject.plotManager._capturePlotView = () => null;
+    lazyProject.plotManager._defaultLiveViewPolicy = () => ({});
+    lazyProject.plotManager._defaultCursors = () => ({});
+    const [capturedPlot] = lazyProject._capturePlotSessions();
+    assert.deepEqual(capturedPlot.traces, [{ fileId: 'f1', varName: 'x', axis: 'y', color: '#123456' }], 'a saved trace is what the user chose');
+    assert.deepEqual(capturedPlot.phaseTraces, [{ fileId: 'f1', x: 'x', y: 'x' }]);
+    assert.deepEqual(
+        lazyProject._sessionTrace({ fileId: 'f1', varName: 'x', _lazyDetailCache: { x: [1] } }),
+        { fileId: 'f1', varName: 'x' },
+        'and a view saved with it loads without it',
+    );
+    lazyProject.plotManager.plots.clear();
 
     alerts.length = 0;
     const unreadable = new SessionProjectHarness([[
@@ -231,4 +276,5 @@ try {
     console.log('Session complete-project eager/lazy/gridded checks passed.');
 } finally {
     Modal.alert = originalAlert;
+    Modal.confirm = originalConfirm;
 }

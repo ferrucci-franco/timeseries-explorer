@@ -104,7 +104,12 @@ export function installPlotAnalysisRangeMethods(TargetClass) {
             button.setAttribute('aria-pressed', String(active));
             button.addEventListener('click', (event) => {
                 event.preventDefault();
-                if (!!rangeFull === isFull) return;
+                // The mode that is on NOW is read from the button, which
+                // _syncAnalysisRangeSection keeps current. The `rangeFull`
+                // this section was built with is stale as soon as the panel
+                // syncs it instead of rebuilding it: built in Full, a press
+                // on Selection, and Full could never be pressed again.
+                if (button.getAttribute('aria-pressed') === 'true') return;
                 onMode(isFull);
             });
             segmented.appendChild(button);
