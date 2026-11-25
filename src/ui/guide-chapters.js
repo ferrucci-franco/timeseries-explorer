@@ -832,12 +832,25 @@ export const GUIDE_CHAPTERS = [
         },
         async run(d) {
             const map = () => d.$('#gridded-view .gridded-map');
+            // The map view names an extraction's series in the order they are
+            // made, so the first point's series is this one.
+            const POINT_SERIES = 'grid:x1';
             // The place of an extraction is written in coordinates, which no
             // language translates: the way to find its row, and its folder,
             // without naming them.
             const placeRow = () => d.$$('#variables-tree .tree-item')
                 .find((e) => /34\.5°S 58\.5°W/.test(e.textContent));
-            const placeShown = () => !!placeRow()?.getClientRects().length;
+            const seriesRow = () => d.$$('#variables-tree .tree-item')
+                .find((e) => e.dataset.varName === POINT_SERIES);
+            // A row of a closed folder is in the tree but not on screen, and a
+            // drag has to start where the pointer can be seen: open the folder
+            // this row sits in (its node's parent node is that folder).
+            const onScreen = (row) => !!row?.getClientRects().length;
+            const openFolderOf = async (row) => {
+                const folder = row?.closest('.tree-node')?.parentElement?.closest('.tree-node');
+                const head = folder?.querySelector('.tree-item');
+                if (head) await d.tap({ el: head.querySelector('.tree-label') || head });
+            };
 
             await d.cam(['#files-section'], 1.4, 600);
             d.say(say(
@@ -998,14 +1011,22 @@ export const GUIDE_CHAPTERS = [
                 '两者都在左侧的树里，位于<b>提取</b>之下',
             ));
             await d.cam(['#files-section', '#variables-tree'], 1.35, 700);
-            if (!placeShown()) {
-                const folder = placeRow()?.closest('.tree-node')?.parentElement?.closest('.tree-node');
-                const row = folder?.querySelector('.tree-item');
-                if (row) await d.tap({ el: row.querySelector('.tree-label') || row });
-            }
-            if (!placeShown()) throw new Error('guide: the extractions are not in the tree');
+            if (!onScreen(placeRow())) await openFolderOf(placeRow());
+            if (!onScreen(placeRow())) throw new Error('guide: the extractions are not in the tree');
             await d.move({ el: placeRow() });
-            await d.wait(2200);
+            await d.wait(1800);
+
+            d.say(say(
+                'Each place is a folder: open it for its series',
+                'Chaque lieu est un dossier : ouvrez-le pour ses séries',
+                'Cada lugar es una carpeta: ábrala para ver sus series',
+                'Ogni luogo è una cartella: aprila per le sue serie',
+                '每个地点都是一个文件夹：打开它就能看到序列',
+            ));
+            if (!onScreen(seriesRow())) await openFolderOf(seriesRow());
+            if (!onScreen(seriesRow())) throw new Error('guide: the extracted series is not on screen');
+            await d.move({ el: seriesRow() });
+            await d.wait(2000);
             await d.cam(null, null, 700);
 
             // ── Out of the map, into the plots ──
@@ -1028,7 +1049,10 @@ export const GUIDE_CHAPTERS = [
                 'Trascinane una su un pannello, come ogni altra serie',
                 '把其中一条拖到面板上，和普通序列一样',
             ));
-            await d.plot('grid:x1', 0, { label: 'P1 · t2m' });
+            // Closing the map redraws the tree, so the folder may be shut again.
+            if (!onScreen(seriesRow())) await openFolderOf(seriesRow());
+            if (!onScreen(seriesRow())) throw new Error('guide: nothing visible to drag onto the panel');
+            await d.plot(POINT_SERIES, 0, { label: 'P1 · t2m' });
             const drawn = await d.until(() => d.$('.layout-panel .js-plotly-plot'), 20000);
             if (!drawn) throw new Error('guide: the extracted series did not reach the plots');
             await d.wait(1600);
