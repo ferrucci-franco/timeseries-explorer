@@ -223,14 +223,14 @@ try {
         assert.ok((await jobs()).ran.includes(op), `${name}: computed by a worker job (${op})`);
         // The main thread's answer to the same question: with no pool, the
         // analysis computes where it is.
-        const same = await page.evaluate(({ read, main, text }) => {
+        const same = await page.evaluate(async ({ read, main, text }) => {
             const pm = window.app.plotManager;
             const toText = (0, eval)(`(${text})`);
             const fromWorker = toText((0, eval)(`(${read})`)());
             const pool = pm._analysisPool;
             pm._analysisPool = () => null;
             try {
-                return fromWorker === toText((0, eval)(`(${main})`)()) && fromWorker.length > 20;
+                return fromWorker === toText(await (0, eval)(`(${main})`)()) && fromWorker.length > 20;
             } finally {
                 pm._analysisPool = pool;
             }
@@ -289,6 +289,35 @@ try {
             const r = pm._computeTrends(p)[0].result; return { trend: r.trend, exp: r.exp, curves: r.curves, delta: r.delta }; }`,
     });
 
+    // Histogram: the stats and the counts of every sample; the number of bins
+    // is what a recompute changes.
+    const histogramRead = `() => { const p = window.app.plotManager.plots.get(${JSON.stringify(panelId)});
+        return { summary: p._histSummary, k: p._histSpec.k, edges: Array.from(p._histSpec.edges), bars: p.histogramDiv.data.map(t => Array.from(t.y)) }; }`;
+    await check({
+        name: 'Histogram', id: panelId, op: 'analysis:histogramStats',
+        open: async () => {
+            await page.locator('.timeseries-analysis-menu-btn').first().click();
+            await page.locator('.panel-analysis-menu .analysis-card[data-mark="histogram"]').click();
+            await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.histogramDiv?._fullLayout, panelId, { timeout: 30000 });
+        },
+        values: [24, 60, 35],
+        change: (binCount) => page.evaluate(({ id, binCount }) => {
+            const pm = window.app.plotManager;
+            const state = pm.plots.get(id).histogram;
+            Object.assign(state, { rangeFull: true, binMode: 'count', binCount });
+            pm._scheduleHistogramRecompute(id, { immediate: true });
+        }, { id: panelId, binCount }),
+        setting: () => page.evaluate(id => { const state = window.app.plotManager.plots.get(id).histogram; return [state.rangeFull, state.binMode, state.binCount]; }, panelId),
+        result: {
+            ready: `(k) => { const p = window.app.plotManager.plots.get(${JSON.stringify(panelId)});
+                return p?._histSpec?.k === k && p.histogramDiv?.data?.[0]?.y?.length === k && !p._analysisPill && (p._histSummary?.[0]?.nFinite || 0) > 100000; }`,
+            read: histogramRead,
+        },
+        mainThread: `async () => { const pm = window.app.plotManager; const p = pm.plots.get(${JSON.stringify(panelId)});
+            await pm._recomputeHistogram(${JSON.stringify(panelId)}, p); await new Promise(resolve => setTimeout(resolve, 300)); return (${histogramRead})(); }`,
+    });
+    assert.ok((await jobs()).ran.includes('analysis:histogramCounts'), 'Histogram: counted by a worker job too');
+
     // The 2D curve fit: a against b, in a second panel; the model is what a
     // recompute changes.
     const twoDId = await page.evaluate((first) => {
@@ -343,7 +372,7 @@ try {
     assert.equal(fitsComputed, 1, 'a change of model fits the pair once');
 
     assert.deepEqual(errors, [], 'no page error');
-    console.log('In-memory analyses: computed on the worker, the main thread\'s bits, and Cancel stops them (curve fit, trend, 2D fit).');
+    console.log('In-memory analyses: computed on the worker, the main thread\'s bits, and Cancel stops them (curve fit, trend, histogram, 2D fit).');
 } finally {
     await browser.close();
     await server.close();

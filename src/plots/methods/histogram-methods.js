@@ -15,12 +15,11 @@ import {
     HISTOGRAM_BAR_MODES,
     HISTOGRAM_BIN_MODES,
     HISTOGRAM_VALUE_RANGE_MODES,
-    histogramFiniteStats,
     resolveHistogramEdges,
-    countHistogramBins,
     normalizeHistogramCounts,
     histogramBinGeometry,
 } from '../../utils/histogram.js';
+import { histogramCountsOf, histogramStatsOf } from '../../compute/analysis/histogram.js';
 
 const HIST_LAYOUTS = new Set(['horizontal', 'vertical']);
 
@@ -532,6 +531,37 @@ proto._histogramSamplesForTrace = function(trace, range) {
     return values.slice(start, end);
 };
 
+// Where those samples are, without copying them: the trace's values and the
+// index range of the active temporal range.
+proto._histogramSpanForTrace = function(trace, range) {
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    if (!values || !values.length) return { values: [], start: 0, end: 0 };
+    const whole = { values, start: 0, end: values.length };
+    if (!range) return whole;
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+    if (!times || times.length !== values.length) return whole;
+    let [lo, hi] = range;
+    if (lo > hi) [lo, hi] = [hi, lo];
+    const start = Math.max(0, Math.min(values.length, this._lowerBound(times, lo)));
+    const end = Math.max(start, Math.min(values.length, this._upperBound(times, hi)));
+    return { values, start, end };
+};
+
+// The samples and finite stats of one in-memory trace. Many samples: a copy
+// of them made a block at a time, and the stats on the compute worker (the
+// copy comes back with them, to be counted next) — `owned` says the samples
+// are that copy, free to hand to another job. Few: where they are.
+proto._histogramEagerStats = async function(trace, range, { computeQuartiles, signal }) {
+    const span = this._histogramSpanForTrace(trace, range);
+    if (this._analysisUsesWorker?.(span.end - span.start)) {
+        const [copy] = await this._analysisRowsForWorker([span.values], span.start, span.end, signal);
+        const done = await this._histogramStatsJob(copy, { computeQuartiles, signal });
+        return { samples: done.values, stat: done.stat, owned: true };
+    }
+    const samples = this._histogramSamplesForTrace(trace, range);
+    return { samples, stat: histogramStatsOf({ values: samples, computeQuartiles }), owned: false };
+};
+
 proto._recomputeHistogram = async function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.histogramDiv || plot.mode !== 'histogram') return;
     const token = (plot._histToken || 0) + 1;
@@ -601,13 +631,17 @@ proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
     // reconsider measures.
     const byTrace = new Map();
     const eager = usable.filter(trace => !lazy.includes(trace));
+    // The quartiles only choose an automatic bin count: with the bins set by
+    // hand nothing reads them, and sorting the samples for them is the larger
+    // half of this pass.
+    const computeQuartiles = state.binMode === 'auto';
     if (eager.length) {
-        const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        const measured = await this._measureAnalysisKernelAsync(panelId, plot, async () => {
             for (const trace of eager) {
-                const samples = this._histogramSamplesForTrace(trace, range);
-                byTrace.set(trace, { samples, stat: histogramFiniteStats(samples) });
+                byTrace.set(trace, await this._histogramEagerStats(trace, range, { computeQuartiles, signal }));
             }
         }, warnings);
+        if (plot._histToken !== token) return;
         // The measurement widened the range and rescheduled; this pass is stale.
         if (measured.superseded) return;
     }
@@ -682,10 +716,19 @@ proto._recomputeHistogramNow = async function(panelId, plot, token, signal) {
         ? await this._lazyHistogramCounts(lazyToCount.map(p => ({ trace: p.trace, finite: p.finite })), range, spec, { signal, onRows: progress })
         : null;
     if (plot._histToken !== token) return;
+    // An in-memory trace whose samples are a copy made for the worker is
+    // counted there; the others where they are.
+    await Promise.all(perTrace.map(async (p) => {
+        if (p.stat.nFinite <= 0) p.counted = null;
+        else if (p.lazy) p.counted = lazyCounts.get(p.trace);
+        else if (p.owned) p.counted = await this._histogramCountsJob(p.samples, spec, { signal });
+        else p.counted = histogramCountsOf({ values: p.samples, spec });
+        // Counted: the samples are not read again.
+        p.samples = null;
+    }));
+    if (plot._histToken !== token) return;
     let totalBinned = 0;
     for (const p of perTrace) {
-        if (p.stat.nFinite <= 0) p.counted = null;
-        else p.counted = p.lazy ? lazyCounts.get(p.trace) : countHistogramBins(p.samples, spec);
         if (p.counted && p.visible) totalBinned += p.counted.nBinned;
     }
 

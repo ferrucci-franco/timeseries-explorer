@@ -244,4 +244,36 @@ const { pairFitRows } = await import(new URL('../src/compute/analysis/pair-fit.j
     }
     console.log(`analysis jobs: analysis:pairFit, ${models.length} models, the main thread's bits`);
 }
+
+// ── analysis:histogramStats and analysis:histogramCounts ──────────
+const { histogramStatsOf, histogramCountsOf } = await import(new URL('../src/compute/analysis/histogram.js', import.meta.url));
+const { resolveHistogramEdges, HISTOGRAM_AUTO_MAX_BINS, HISTOGRAM_MANUAL_MAX_BINS } = await import(new URL('../src/utils/histogram.js', import.meta.url));
+{
+    let seed = 5;
+    const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const N = 40009;
+    const values = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+        values[i] = Math.exp(random() * 2) + Math.sin(i / 300);
+        if (i % 131 === 7) values[i] = NaN;
+        if (i % 4999 === 11) values[i] = Infinity;
+    }
+    for (const computeQuartiles of [true, false]) {
+        const main = histogramStatsOf({ values, computeQuartiles });
+        const worker = onWorker('analysis:histogramStats', { values, computeQuartiles });
+        assertSame(worker.stat, main, `histogram stats, quartiles ${computeQuartiles}`);
+        assertSame(worker.values, values, 'the values come back with their stats, the same numbers');
+        assert.equal(Number.isNaN(main.q1), !computeQuartiles, 'quartiles only when asked for');
+    }
+    const stat = histogramStatsOf({ values });
+    for (const options of [{ binMode: 'auto' }, { binMode: 'count', binCount: 37 }, { binMode: 'width', binWidth: 0.25 },
+        { binMode: 'count', binCount: 20, valueRangeMode: 'manual', valueMin: 1, valueMax: 4 }]) {
+        const spec = resolveHistogramEdges([stat], { ...options, autoMaxBins: HISTOGRAM_AUTO_MAX_BINS, manualMaxBins: HISTOGRAM_MANUAL_MAX_BINS });
+        assert.equal(spec.ok, true);
+        const main = histogramCountsOf({ values, spec });
+        assertSame(onWorker('analysis:histogramCounts', { values, spec }), structuredClone(main), `histogram counts, ${JSON.stringify(options)}`);
+        assert.ok(main.nBinned > 0);
+    }
+    console.log("analysis jobs: analysis:histogramStats and analysis:histogramCounts, the main thread's bits");
+}
 process.exit(0);

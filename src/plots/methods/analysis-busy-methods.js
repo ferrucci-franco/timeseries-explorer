@@ -24,7 +24,7 @@
 // and its Cancel by doing the same — see CLAUDE.md.
 
 import i18n from '../../i18n/index.js';
-import { getAnalysisPool } from '../../core/analysis-pool.js';
+import { ANALYSIS_INLINE_ROWS, getAnalysisPool } from '../../core/analysis-pool.js';
 
 const PILL_CLASS = 'analysis-computing-indicator';
 
@@ -116,6 +116,28 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         }
         aborted();
         return out;
+    };
+
+    /**
+     * One job on the analysis workers. Resolves to its result, or to null
+     * where there is no worker to run it — the caller then runs the same
+     * kernel on the main thread. `transfer` hands buffers over; `signal`
+     * stops the job (AbortError).
+     */
+    proto._analysisJob = async function(op, payload, { transfer = [], signal = null } = {}) {
+        const pool = this._analysisPool?.() || null;
+        if (!pool) return null;
+        try {
+            return await pool.run(op, payload, { transfer, signal });
+        } catch (error) {
+            if (error?.workerUnavailable) return null;
+            throw error;
+        }
+    };
+
+    // Whether `rows` values are worth handing to a worker.
+    proto._analysisUsesWorker = function(rows) {
+        return rows > ANALYSIS_INLINE_ROWS && !!this._analysisPool?.();
     };
 
     // The signal the queries of this panel's analysis carry. One controller per

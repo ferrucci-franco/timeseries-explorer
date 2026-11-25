@@ -15,6 +15,7 @@ import { detectSamplingGaps } from '../utils/sampling-gaps.js';
 import { curveFitRows } from '../compute/analysis/curve-fit.js';
 import { trendRows } from '../compute/analysis/trend.js';
 import { pairFitRows } from '../compute/analysis/pair-fit.js';
+import { histogramCountsOf, histogramStatsOf } from '../compute/analysis/histogram.js';
 
 const HANDLERS = {
     'dataTool:pipeline': ({ values, time, steps }) => {
@@ -63,6 +64,16 @@ const HANDLERS = {
     },
     'analysis:trend': (payload) => ({ result: trendRows(payload || {}) }),
     'analysis:pairFit': (payload) => ({ result: pairFitRows(payload || {}) }),
+    // The values come back with their stats: the panel counts them next, and
+    // a buffer handed over and back is never copied.
+    'analysis:histogramStats': (payload) => {
+        const values = payload?.values;
+        return { result: { stat: histogramStatsOf(payload || {}), values }, transfer: collectBuffers([values]) };
+    },
+    'analysis:histogramCounts': (payload) => {
+        const result = histogramCountsOf(payload || {});
+        return { result, transfer: collectBuffers([result.counts]) };
+    },
     'fft:spectrum': (input) => {
         const spectrum = computeAmplitudeSpectrum(input || {});
         return {

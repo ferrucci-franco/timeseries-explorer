@@ -26,11 +26,8 @@
 // No Plotly here: the module runs in Node against DuckDB-WASM in the tests.
 
 import { streamColumns } from '../../data/column-stream.js';
-import {
-    countHistogramBins,
-    histogramFiniteStats,
-    HISTOGRAM_EXACT_QUANTILE_MAX_N,
-} from '../../utils/histogram.js';
+import { HISTOGRAM_EXACT_QUANTILE_MAX_N } from '../../utils/histogram.js';
+import { histogramCountsOf, histogramStatsOf } from '../../compute/analysis/histogram.js';
 
 function abortError() {
     const err = new Error('Histogram cancelled');
@@ -148,6 +145,30 @@ proto._lazyHistogramPass = async function(traces, range, visit, { signal = null,
 };
 
 /**
+ * The finite stats of values the caller owns (a copy made for this, or the
+ * values a lazy pass kept): on a worker when there are many, the buffer
+ * handed over and back; here otherwise. Resolves to `{ stat, values }` —
+ * `values` the same numbers, to count next (a view of the returned buffer
+ * after a worker job; the array passed in is then detached).
+ */
+proto._histogramStatsJob = async function(values, { computeQuartiles = true, signal = null } = {}) {
+    if (this._analysisUsesWorker?.(values?.length || 0) && values.buffer instanceof ArrayBuffer) {
+        const done = await this._analysisJob('analysis:histogramStats', { values, computeQuartiles }, { transfer: [values.buffer], signal });
+        if (done) return done;
+    }
+    return { stat: histogramStatsOf({ values, computeQuartiles }), values };
+};
+
+/** The counts of values the caller owns against the shared edges, likewise. */
+proto._histogramCountsJob = async function(values, spec, { signal = null } = {}) {
+    if (this._analysisUsesWorker?.(values?.length || 0) && values.buffer instanceof ArrayBuffer) {
+        const done = await this._analysisJob('analysis:histogramCounts', { values, spec }, { transfer: [values.buffer], signal });
+        if (done) return done;
+    }
+    return histogramCountsOf({ values, spec });
+};
+
+/**
  * histogramFiniteStats for each lazy trace, over every row in the range:
  * `Map(trace → { stat, finite })`, `finite` the trace's finite values in order
  * when there are no more than the quartile limit (null past it).
@@ -216,17 +237,22 @@ proto._lazyHistogramStats = async function(traces, range, { needQuartiles = true
             });
             continue;
         }
-        const finite = a.kept ? a.buffer.subarray(0, a.size) : null;
+        let finite = a.kept ? a.buffer.subarray(0, a.size) : null;
         let q1 = NaN;
         let q3 = NaN;
-        if (a.nFinite >= 2) {
+        if (needQuartiles && a.nFinite >= 2) {
             // The quartiles of the same sample the in-memory kernel sorts:
-            // every finite value, or every stride-th.
-            const sample = finite || samples.get(trace)?.values || null;
+            // every finite value, or every stride-th. Only when something
+            // reads them (an automatic bin count), and off the main thread
+            // when the sample is large: sorting 2 M values held the page for
+            // 0.6–1.7 s after the file had been read (#383).
+            const strided = finite ? null : (samples.get(trace)?.values || null);
+            const sample = finite || (strided ? Float64Array.from(strided) : null);
             if (sample) {
-                const quartiles = histogramFiniteStats(sample);
-                q1 = quartiles.q1;
-                q3 = quartiles.q3;
+                const done = await this._histogramStatsJob(sample, { computeQuartiles: true, signal });
+                q1 = done.stat.q1;
+                q3 = done.stat.q3;
+                if (finite) finite = done.values;
             }
         }
         out.set(trace, {
@@ -249,13 +275,13 @@ proto._lazyHistogramCounts = async function(entries, range, spec, { signal = nul
     const out = new Map();
     const streamed = [];
     for (const { trace, finite } of entries) {
-        if (finite) out.set(trace, countHistogramBins(finite, spec));
+        if (finite) out.set(trace, await this._histogramCountsJob(finite, spec, { signal }));
         else streamed.push(trace);
     }
     if (!streamed.length) return out;
     for (const trace of streamed) out.set(trace, { counts: new Float64Array(spec.k), underflow: 0, overflow: 0, nBinned: 0 });
     await this._lazyHistogramPass(streamed, range, (trace, values) => {
-        const part = countHistogramBins(values, spec);
+        const part = histogramCountsOf({ values, spec });
         const total = out.get(trace);
         for (let i = 0; i < spec.k; i++) total.counts[i] += part.counts[i];
         total.underflow += part.underflow;

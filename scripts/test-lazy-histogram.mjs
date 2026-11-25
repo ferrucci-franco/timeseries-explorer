@@ -53,6 +53,7 @@ vm.runInNewContext(histogramSource.slice(samplerStart, samplerEnd), { proto: sam
 // And the recompute reads the lazy passes.
 assert.match(histogramSource, /this\._lazyHistogramStats\(lazy, range/, 'the panel reads lazy traces through the lazy passes');
 assert.match(histogramSource, /this\._lazyHistogramCounts\(/, 'and counts them there');
+assert.match(histogramSource, /const computeQuartiles = state\.binMode === 'auto';/, 'the in-memory path computes quartiles only for an automatic bin count, as the lazy one');
 assert.doesNotMatch(histogramSource, /histogramLazyUnsupported'\)\}`\);\n\s*\} else \{\n\s*eager\.push/, 'a lazy trace is no longer refused outright');
 
 // PlotManager imports Plotly, so the few of its methods the data methods call
@@ -152,7 +153,9 @@ function harness(files, transform = {}, inverted = []) {
 function eagerHistogram(h, traces, range, options) {
     const per = traces.map(trace => {
         const samples = h._histogramSamplesForTrace(trace, range);
-        return { trace, samples, stat: histogramFiniteStats(samples) };
+        // As _recomputeHistogramNow asks for them: the quartiles only choose
+        // an automatic bin count, and are not computed otherwise.
+        return { trace, samples, stat: histogramFiniteStats(samples, { computeQuartiles: options.binMode === 'auto' }) };
     });
     const spec = resolveHistogramEdges(per.map(p => p.stat), { ...options, autoMaxBins: HISTOGRAM_AUTO_MAX_BINS, manualMaxBins: HISTOGRAM_MANUAL_MAX_BINS });
     const counts = spec.ok ? per.map(p => (p.stat.nFinite ? countHistogramBins(p.samples, spec) : null)) : [];
@@ -242,7 +245,8 @@ const binOptions = [
         writeFileSync(file, original
             .replace('const cap = HISTOGRAM_EXACT_QUANTILE_MAX_N;', `const cap = ${cap};`)
             .replace("from '../../data/column-stream.js'", `from '${root}data/column-stream.js'`)
-            .replace("from '../../utils/histogram.js'", `from '${root}utils/histogram.js'`));
+            .replace("from '../../utils/histogram.js'", `from '${root}utils/histogram.js'`)
+            .replace("from '../../compute/analysis/histogram.js'", `from '${root}compute/analysis/histogram.js'`));
         const { installPlotHistogramLazyMethods: install } = await import(`file://${file}`);
         class Lowered { constructor() { this.files = new Map(); this.activeFileId = 'f'; } }
         installPlotDataMethods(Lowered);
