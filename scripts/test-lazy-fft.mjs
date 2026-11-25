@@ -31,6 +31,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire, register } from 'node:module';
 import path from 'node:path';
 import vm from 'node:vm';
+import { finiteRangeExtent } from '../src/compute/kernels/block-index.js';
+import { scanFiniteExtent } from '../src/utils/finite-extent.js';
 
 register(new URL('./support/vite-asset-url-hooks.mjs', import.meta.url));
 const DuckDbSource = (await import(new URL('../src/data/duckdb-source.js', import.meta.url))).default;
@@ -83,7 +85,8 @@ function sliceMethod(name) {
     return `proto.${name} = ${match[1] || ''}function(${match[2]}) ${managerSource.slice(braceAt, end + '\n    }'.length)};`;
 }
 const managerMethods = {};
-new Function('proto', 'console', ['_getTimeVar', 'isVariableSignInverted', '_timeShiftForMode', '_finiteExtent', '_extractUnit', '_traceName'].map(sliceMethod).join('\n'))(managerMethods, console);
+// _finiteExtent reads a long typed series through its block index.
+new Function('proto', 'console', 'finiteRangeExtent', 'scanFiniteExtent', ['_getTimeVar', 'isVariableSignInverted', '_timeShiftForMode', '_finiteExtent', '_extractUnit', '_traceName'].map(sliceMethod).join('\n'))(managerMethods, console, finiteRangeExtent, scanFiniteExtent);
 
 // The worker, the real module, driven as a browser would drive it.
 let workerHandler = null;
