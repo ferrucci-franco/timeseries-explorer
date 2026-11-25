@@ -37,9 +37,15 @@ import { formatNaturalDuration } from './fft.js';
 export const HOVER_READOUT_POINT_LIMIT = 100_000;
 export const HOVER_READOUT_TOKEN = '%{hovertext}';
 
-const escapeHtml = text => String(text).replace(/[&<>"]/g, ch => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
-}[ch]));
+// Called for every line of every point on each redraw (4 000 strings per zoom
+// of a two-signal plot), and a number almost never holds one of the four: the
+// test is far cheaper than the replace, which builds a new string either way.
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+const HTML_SPECIAL = /[&<>"]/;
+const escapeHtml = (text) => {
+    const string = String(text);
+    return HTML_SPECIAL.test(string) ? string.replace(/[&<>"]/g, ch => HTML_ESCAPES[ch]) : string;
+};
 
 const MAPS = {
     // Frequency ↔ period. A zero frequency has an infinite period, which is

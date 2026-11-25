@@ -77,7 +77,8 @@ import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
 import { SAMPLE_MARKERS_MIN_PX_ON, SAMPLE_MARKERS_MIN_PX_OFF } from '../utils/sample-markers.js';
 import { REPEATED_MARK_MIN_RUN } from '../utils/repeated-marks.js';
-import { createExtentCache } from '../utils/finite-extent.js';
+import { createExtentCache, scanFiniteExtent } from '../utils/finite-extent.js';
+import { finiteRangeExtent, isSortedFiniteAxis, sortedLowerBound, sortedUpperBound } from '../compute/kernels/block-index.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -4507,12 +4508,14 @@ class PlotManager {
                 if (own.max > max) max = own.max;
                 continue;
             }
-            for (const value of arr) {
-                if (!Number.isFinite(value)) continue;
-                if (positive && !(value > 0)) continue;
-                if (value < min) min = value;
-                if (value > max) max = value;
-            }
+            // A long typed series answers from its block index (the same
+            // numbers, without reading every value: an autoscale of a decoded
+            // song read 19 M of them); positive-only needs every value.
+            const own = !positive && ArrayBuffer.isView(arr)
+                ? finiteRangeExtent(arr)
+                : scanFiniteExtent(arr, positive);
+            if (own.min < min) min = own.min;
+            if (own.max > max) max = own.max;
         }
         return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
     }
@@ -5521,6 +5524,18 @@ class PlotManager {
             const x = item?.x || [];
             const y = item?.y || [];
             const count = Math.min(x.length, y.length);
+            // A typed time axis in order (nearly every one): the samples in the
+            // window are one run, found by binary search, and its extent comes
+            // from the block index — the same numbers as the test per sample
+            // below, which read every sample of the record for a Fit Y.
+            if (ArrayBuffer.isView(y) && isSortedFiniteAxis(x)) {
+                const lo = sortedLowerBound(x, minX, count);
+                const hi = sortedUpperBound(x, maxX, count);
+                const own = positive ? scanFiniteExtent(y.subarray(lo, hi), true) : finiteRangeExtent(y, lo, hi);
+                if (own.min < min) min = own.min;
+                if (own.max > max) max = own.max;
+                continue;
+            }
             for (let i = 0; i < count; i++) {
                 const xv = this._coerceAxisValue(x[i]);
                 if (!Number.isFinite(xv) || xv < minX || xv > maxX) continue;

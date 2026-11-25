@@ -7,6 +7,18 @@
 export function scanFiniteExtent(arr, positive = false) {
     let min = Infinity;
     let max = -Infinity;
+    // An index loop where there is one: the same values in the same order as
+    // the iterator, several times faster on a typed array of millions.
+    if (Array.isArray(arr) || ArrayBuffer.isView(arr)) {
+        for (let i = 0; i < arr.length; i++) {
+            const value = arr[i];
+            if (!Number.isFinite(value)) continue;
+            if (positive && !(value > 0)) continue;
+            if (value < min) min = value;
+            if (value > max) max = value;
+        }
+        return { min, max };
+    }
     for (const value of arr) {
         if (!Number.isFinite(value)) continue;
         if (positive && !(value > 0)) continue;

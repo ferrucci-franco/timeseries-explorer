@@ -16,6 +16,12 @@
 // Plotly x values through here, which on a calendar axis are strings or Dates.
 // So decimation reads only Y, and returns indexes the caller materializes.
 
+// Wide buckets of a long typed series are read through its block min/max
+// index (block-index.js): the same indexes, without reading every sample.
+import { BLOCK_BUCKET_MIN, blockIndexFor, indexedExtremes } from './block-index.js';
+
+export { BLOCK_SIZE, BLOCK_INDEX_MIN_LENGTH, blockIndexFor } from './block-index.js';
+
 // Scratch buffer for the index list. Never handed to Plotly — the output arrays
 // are freshly allocated at their exact final size, because Plotly keeps a
 // reference to whatever it is given and mutating that later corrupts hover.
@@ -30,11 +36,14 @@ function ensureScratch(size) {
 
 /**
  * Decimate y[start..end) to at most `target` points.
+ * @param {object} [options]
+ * @param {boolean} [options.blockIndex=true] read wide buckets through the
+ *   block index (same result; false forces the plain scan, for the tests)
  * @returns {{ indexes: Int32Array, count: number }} absolute indexes into y,
  *   ascending. The returned array is a shared scratch buffer: read it, do not
  *   keep it.
  */
-export function decimateRangeIndexes(yValues, start, end, target) {
+export function decimateRangeIndexes(yValues, start, end, target, options = {}) {
     const n = Math.max(0, end - start);
     // Upper bound on emitted points: first + 2 per bucket + last.
     const indexes = ensureScratch(Math.max(4, target + 4));
@@ -49,6 +58,9 @@ export function decimateRangeIndexes(yValues, start, end, target) {
 
     const bucketCount = Math.max(1, Math.floor((target - 2) / 2));
     const bucketSize = Math.max(1, Math.ceil((n - 2) / bucketCount));
+    const blocks = options.blockIndex !== false && bucketSize >= BLOCK_BUCKET_MIN
+        ? blockIndexFor(yValues)
+        : null;
 
     indexes[count++] = start;
     let last = 0;   // local index of the most recently emitted point
@@ -57,14 +69,20 @@ export function decimateRangeIndexes(yValues, start, end, target) {
         const bucketEnd = Math.min(n - 1, bucketStart + bucketSize);
         let minIdx = bucketStart;
         let maxIdx = bucketStart;
-        let minVal = yValues[start + bucketStart];
-        let maxVal = minVal;
 
-        for (let i = bucketStart + 1; i < bucketEnd; i++) {
-            const value = yValues[start + i];
-            if (!Number.isFinite(value)) continue;
-            if (!Number.isFinite(minVal) || value < minVal) { minVal = value; minIdx = i; }
-            if (!Number.isFinite(maxVal) || value > maxVal) { maxVal = value; maxIdx = i; }
+        if (blocks && bucketEnd - bucketStart >= BLOCK_BUCKET_MIN) {
+            const found = indexedExtremes(yValues, blocks, start + bucketStart, start + bucketEnd);
+            if (found.minAt >= 0) minIdx = found.minAt - start;
+            if (found.maxAt >= 0) maxIdx = found.maxAt - start;
+        } else {
+            let minVal = yValues[start + bucketStart];
+            let maxVal = minVal;
+            for (let i = bucketStart + 1; i < bucketEnd; i++) {
+                const value = yValues[start + i];
+                if (!Number.isFinite(value)) continue;
+                if (!Number.isFinite(minVal) || value < minVal) { minVal = value; minIdx = i; }
+                if (!Number.isFinite(maxVal) || value > maxVal) { maxVal = value; maxIdx = i; }
+            }
         }
 
         // Emit in source order so the drawn line never doubles back on itself.
@@ -111,11 +129,11 @@ export function copyRange(src, start, end) {
  * The visual pair for y[start..end): decimated when the range exceeds `target`,
  * copied verbatim when it does not.
  */
-export function visualPairForRange(xValues, yValues, start, end, target) {
+export function visualPairForRange(xValues, yValues, start, end, target, options) {
     const n = Math.max(0, end - start);
     if (n <= target || n <= 2) {
         return { x: copyRange(xValues, start, end), y: copyRange(yValues, start, end) };
     }
-    const { indexes, count } = decimateRangeIndexes(yValues, start, end, target);
+    const { indexes, count } = decimateRangeIndexes(yValues, start, end, target, options);
     return { x: pickAt(xValues, indexes, count), y: pickAt(yValues, indexes, count) };
 }

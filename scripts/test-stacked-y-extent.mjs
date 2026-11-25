@@ -12,6 +12,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { finiteRangeExtent, isSortedFiniteAxis, sortedLowerBound, sortedUpperBound } from '../src/compute/kernels/block-index.js';
+import { scanFiniteExtent } from '../src/utils/finite-extent.js';
 
 const source = readFileSync(new URL('../src/plots/plot-manager.js', import.meta.url), 'utf8');
 const interactionSource = readFileSync(new URL('../src/plots/methods/interaction-methods.js', import.meta.url), 'utf8');
@@ -33,7 +35,9 @@ vm.runInNewContext([
     '_axisIsLog',
     '_padAxisRange',
     '_padRange',
-].map(classMethod).join('\n'), { proto });
+].map(classMethod).join('\n'), {
+    proto, ArrayBuffer, finiteRangeExtent, isSortedFiniteAxis, sortedLowerBound, sortedUpperBound, scanFiniteExtent,
+});
 
 // _coerceAxisValue lives with the interaction methods (date strings → epoch ms).
 {

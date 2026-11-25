@@ -1,7 +1,7 @@
 # Performance optimization — measured results
 
 Work items 1–4 from [optimization-blueprint.md](optimization-blueprint.md), one
-commit each. Every number below was produced by a script in this repo and can
+commit each, and point 5 (the block min/max index), measured on its own data. Every number below was produced by a script in this repo and can
 be reproduced.
 
 **Machine:** Windows 11, Node v24.14.1.
@@ -336,6 +336,91 @@ Correctness: `scripts/test-expr-compiler.mjs` checks 188 comparisons against a
 frozen copy of the interpreter — 29 formulas × 6 sizes, plus error-message
 equality (they are shown verbatim in the UI), the single-sample-operand quirk
 that clamps `n` to 1, and the cache-key-must-include-operand-shape case.
+
+---
+
+## Point 5 — a block min/max index: zoom and autoscale stop reading every sample
+
+**Why.** Point 2 stopped copying the viewport, but the decimation still read
+every sample of it, on every zoom and pan event, and an autoscale read every
+value of every trace and of the time axis. On a decoded song — 3 min 34 s at
+44.1 kHz, 9.47 M samples per channel, two channels, held in memory — that was
+**~100 ms per zoom or pan event** zoomed out and **~0.5 s per autoscale**
+(double click, reset axes), and the profile put more than half of the zoom in
+`decimateRangeIndexes` and most of the autoscale in `_finiteExtent`.
+
+**What changed.** `src/compute/kernels/block-index.js` records, once per long
+typed series (≥ 262 144 samples), where the smallest and largest finite value
+of each block of 64 samples is, and of each super block of 64 blocks. A range
+— a decimation bucket, or the window of a Fit Y — is read as its ragged head,
+the recorded extremes of the whole blocks and super blocks inside it, and its
+ragged tail: a few hundred reads instead of the whole range.
+
+- `decimateRangeIndexes` (`resample.js`) reads a bucket of 512 samples or more
+  through the index. Narrower buckets (a window of under ~500 000 samples) are
+  scanned as before: they were already cheap.
+- `_finiteExtent` (autoscale, and the time pane of every analysis) takes a typed
+  array's extent from the index.
+- `_finiteYExtentInXRange` (Fit Y, and the Y fit after a stacked toggle or a
+  Live Update poll) finds the window by binary search when the time axis is a
+  typed array in order (checked once per array) and takes its extent from the
+  index. An axis that goes back, holds a NaN, or is a plain array is scanned as
+  before.
+- `scanFiniteExtent` reads arrays with an index loop instead of an iterator
+  (the same values in the same order, ~3× faster on a typed array).
+- The hover readout skips the HTML escape of a number that holds nothing to
+  escape (4 000 strings per zoom of a two-signal panel).
+
+**The same answer, not a close one.** The scan keeps the earliest index of the
+smallest (largest) finite value of a bucket; a block keeps its earliest by the
+same strict comparison and blocks are combined left to right by it too, so
+the decimation picks the very same indexes — the drawn curve is identical, -0
+against 0 included. `test:resample-kernel` compares the indexed decimation with
+the plain scan and with the frozen pre-rewrite copy (`bench/legacy-resample.mjs`)
+on long traces with NaN runs, ±Infinity, ties, -0 and Float32 storage;
+`test:block-index` compares the extents, and `_finiteExtent` and
+`_finiteYExtentInXRange` sliced out of `plot-manager.js`, with verbatim copies
+of the versions that scanned.
+
+**What it relies on.** The index is kept per array (a `WeakMap`) and trusted
+while the array keeps its length — the contract `_getTransformedVariableData`
+already caches a signal's values by: a series that changes is a new array (a
+data tool, a reload, a transform, a Live Update append), never the same array
+written over. It costs 1/8 of a byte per sample (1.2 MB beside the 38 MB of a
+9.5 M-sample Float32 channel), and building it is one pass over the series,
+paid once, by the first draw that needs it.
+
+**Measured** — the song above in Chromium (`Plotly.relayout` of the x range,
+time to the end of the app's handler; medians of 12 events per step, two runs,
+`main` and this change alternated on the same machine):
+
+| Action | Before | After |
+| :--- | ---: | ---: |
+| zoom / pan, whole record visible | 91–105 ms | 33–36 ms |
+| zoom / pan, 80 % visible | 77–82 ms | 32–41 ms |
+| zoom / pan, 50 % visible | 59–62 ms | 32–36 ms |
+| zoom / pan, 1 % visible | 24–32 ms | 20–28 ms |
+| autoscale (double click) | 490–560 ms | 33–45 ms |
+| `_finiteExtent` of both channels | 200–256 ms | 0.1–0.3 ms |
+
+The analyses draw their time pane through the same path, and their autoscale
+read the same values (the FFT's already came from its cached overview).
+Same file, both channels, medians of 4 events:
+
+| Analysis | Autoscale before | after | Zoom (whole record) before | after |
+| :--- | ---: | ---: | ---: | ---: |
+| FFT | 26 ms | 29 ms | 44 ms | 36 ms |
+| Histogram | 518 ms | 47 ms | 36 ms | 39 ms |
+| Integral | 602 ms | 44 ms | 44 ms | 37 ms |
+| Curve fit | 610 ms | 46 ms | 107 ms | 45 ms |
+| Trend | 549 ms | 34 ms | 96 ms | 35 ms |
+
+The 2D plot and the correlation pairs zoom in 8–12 ms either way: Plotly only,
+their trajectory is decimated by stride, not by reading the samples.
+
+What is left of a zoom is Plotly's own restyle and redraw of two 2 000-point
+traces (~20–30 ms here), the same at every zoom level; zoomed in past ~1 % the
+decimation was never the cost, and nothing changes there.
 
 ---
 
