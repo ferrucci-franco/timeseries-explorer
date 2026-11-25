@@ -20,7 +20,7 @@
 // index (block-index.js): the same indexes, without reading every sample.
 import { BLOCK_BUCKET_MIN, blockIndexFor, indexedExtremes } from './block-index.js';
 
-export { BLOCK_SIZE, BLOCK_INDEX_MIN_LENGTH, blockIndexFor } from './block-index.js';
+export { BLOCK_SIZE, BLOCK_INDEX_MIN_LENGTH, blockIndexFor, ensureBlockIndex } from './block-index.js';
 
 // Scratch buffer for the index list. Never handed to Plotly — the output arrays
 // are freshly allocated at their exact final size, because Plotly keeps a

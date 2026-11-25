@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 
 import { makeTrace, refVisualForRange, refDownsampleTimeseries } from '../bench/legacy-resample.mjs';
-import { visualPairForRange, decimateRangeIndexes, blockIndexFor, BLOCK_SIZE, BLOCK_INDEX_MIN_LENGTH } from '../src/compute/kernels/resample.js';
+import { visualPairForRange, decimateRangeIndexes, blockIndexFor, ensureBlockIndex, BLOCK_SIZE, BLOCK_INDEX_MIN_LENGTH } from '../src/compute/kernels/resample.js';
 
 let checks = 0;
 
@@ -145,7 +145,7 @@ for (const n of SIZES) {
     }
     let indexed = 0;
     for (const [label, values] of [['float64', y], ['float32', y32]]) {
-        assert.ok(blockIndexFor(values), `${label}: a long typed series is indexed`);
+        assert.ok(ensureBlockIndex(values), `${label}: a long typed series is indexed`);
         for (const target of [2000, 4000, 500]) {
             for (const [start, end] of windows) {
                 const got = decimateRangeIndexes(values, start, end, target);

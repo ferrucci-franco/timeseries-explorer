@@ -1377,8 +1377,8 @@ What was done:
   a new axis array (the transform cache is dropped), so the extent is read
   again then and only then. The values' extent, and the decimation, read a
   long typed series through its block min/max index
-  (`src/compute/kernels/block-index.js`, built once per array; see
-  `docs/perf-optimization-results.md`, point 5).
+  (`src/compute/kernels/block-index.js`, built once per array while the page
+  is idle; see `docs/perf-optimization-results.md`, point 5).
 
 Tested by `test:finite-extent-cache` (new), the FFT tests and `test:xcorr`.
 

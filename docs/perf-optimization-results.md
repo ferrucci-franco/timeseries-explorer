@@ -387,8 +387,18 @@ while the array keeps its length — the contract `_getTransformedVariableData`
 already caches a signal's values by: a series that changes is a new array (a
 data tool, a reload, a transform, a Live Update append), never the same array
 written over. It costs 1/8 of a byte per sample (1.2 MB beside the 38 MB of a
-9.5 M-sample Float32 channel), and building it is one pass over the series,
-paid once, by the first draw that needs it.
+9.5 M-sample Float32 channel).
+
+**Built while the page is idle.** Building the index is one pass over the
+series, ~1.5 times one scan of it. Built by the first draw that needed it (the
+first version of this change), it made opening a long signal ~60 ms slower on
+the two-channel song. It is now built in slices of ~0.5 ms from
+`requestIdleCallback` (a timer where there is none, as in Node), and every
+query scans, exactly as before, until it is ready: opening a signal costs what
+it did without an index, and the index is there by the first zoom (the song's
+two channels take ~100 ms of idle time). `test:block-index` checks that the
+index built in slices is the one built at once, and `e2e:zoom-block-index`
+waits for it before it compares.
 
 **Measured** — the song above in Chromium (`Plotly.relayout` of the x range,
 time to the end of the app's handler; medians of 12 events per step, two runs,
@@ -415,8 +425,34 @@ Same file, both channels, medians of 4 events:
 | Curve fit | 610 ms | 46 ms | 107 ms | 45 ms |
 | Trend | 549 ms | 34 ms | 96 ms | 35 ms |
 
-The 2D plot and the correlation pairs zoom in 8–12 ms either way: Plotly only,
-their trajectory is decimated by stride, not by reading the samples.
+**Calendar axis** — 5 M rows, one every 3 s (Jan.–Jul. 2023), two signals, in
+memory; same measurement:
+
+| Plot | Autoscale before | after | Zoom (whole record) before | after |
+| :--- | ---: | ---: | ---: | ---: |
+| Time series | 289 ms | 52 ms | 60 ms | 41 ms |
+| Heatmap | 290 ms | 52 ms | 65 ms | 34 ms |
+| Temporal profile | 328 ms | 55 ms | 40 ms | 45 ms |
+| Integral | 313 ms | 59 ms | 62 ms | 33 ms |
+| Histogram | 287 ms | 62 ms | 60 ms | 40 ms |
+| Curve fit | 276 ms | 47 ms | 69 ms | 38 ms |
+| Trend | 268 ms | 63 ms | 59 ms | 48 ms |
+| FFT | 45 ms | 45 ms | 32 ms | 29 ms |
+
+**Opening an analysis** (the longest main-thread task, song): curve fit 313 →
+162 ms, histogram 337 → 185 ms, the time series and the others unchanged — the
+time pane's autoscale is the part that got cheaper, and the index costs nothing
+there since it is built later.
+
+**The other plot types.** The 2D plot, the correlation pairs and the 2D curve
+fit zoom in 8–14 ms either way: Plotly only, their trajectory is decimated by
+stride, not by reading the samples. The ▶x 2D animation's autoscale read every
+value of both signals: 279–315 ms → 8–9 ms. 2D+t, 3D and the ▶x 3D animation
+turn their camera in 4–6 ms and autoscale in 10–19 ms, before and after; what
+they hold the page for (0.6–1.6 s, longer with a calendar axis) is the opening
+itself, inside `Plotly.newPlot`, building the WebGL scene — measured here with
+the software WebGL of headless Chromium, and not this app's code. The
+dashboard opens without a long task.
 
 What is left of a zoom is Plotly's own restyle and redraw of two 2 000-point
 traces (~20–30 ms here), the same at every zoom level; zoomed in past ~1 % the
