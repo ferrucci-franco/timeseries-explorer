@@ -862,7 +862,51 @@ done, and the same measurements after it.
 
 ### #381: In-memory analyses on the compute worker
 
-Not landed yet.
+Landing in parts; each part adds its analyses here.
+
+**What was done (the base, and the Curve fit of a time series).** The analyses
+of a file in memory get a pool of workers whose tasks can be stopped
+(`ExclusiveWorkerPool`, `src/core/analysis-pool.js`): the Data Tools' worker
+script, one task per worker, and a task whose signal fires has its worker
+terminated. Each analysis' kernel is one function of plain data
+(`src/compute/analysis/`), called by the worker op and by the main thread, so
+the bits are the same (`scripts/test-analysis-jobs.mjs`). In the panel an
+in-memory fit over more than 20 000 rows arrives the way a lazy fit does: the
+previous fit stays drawn, the pill shows, the run's signal stops the job,
+Cancel puts the settings back (`scripts/e2e-analysis-cancel-memory.mjs`). See
+`docs/architecture.md`, "Analysis jobs".
+
+**Curve fit, in memory, after** (same harness, `--analyses=curve-fit
+--modes=eager`; the "before" is the table under "Full results"):
+
+| Analysis | Rows | Mode | Action | Longest task: computation | in Plotly | no JS (render) | Longest task overall | Frame gap | Time to result | A newer request stops the one in flight | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Curve fit | 1.2 M | eager | open | 20 | 144 | 1 | 165 | 162 | 192 |  | range: 33 % of the file |
+| Curve fit | 1.2 M | eager | type | 19 | 87 | 0 | 94 | 84 | 206 |  |  |
+| Curve fit | 1.2 M | eager | param: linear → quadratic | 24 | 65 | 0 | 89 | 76 | 178 |  |  |
+| Curve fit | 1.2 M | eager | param: quadratic → exponential | 14 | 76 | 0 | 85 | 76 | 1025 |  |  |
+| Curve fit | 1.2 M | eager | drag | 13 | 78 | 0 | 88 | 77 | 283 | nothing in flight | slider events waited ≤ 68 ms |
+| Curve fit | 1.2 M | eager | cancel | 23 | 77 | 2 | 80 | 76 | — |  | too late: the pill was gone when the press landed, 96 ms after it |
+| Curve fit | 10.0 M | eager | open | 61 | 161 | 1 | 222 | 216 | 234 |  | range: 33 % of the file |
+| Curve fit | 10.0 M | eager | type | 98 | 98 | 2 | 198 | 185 | 641 |  |  |
+| Curve fit | 10.0 M | eager | param: linear → quadratic | 141 | 54 | 1 | 195 | 181 | 783 |  |  |
+| Curve fit | 10.0 M | eager | param: quadratic → exponential | 107 | 78 | 1 | 177 | 163 | 16538 |  |  |
+| Curve fit | 10.0 M | eager | drag | 61 | 67 | 1 | 128 | 113 | 530 | no: on the main thread, which it held 203 ms | slider events waited ≤ 203 ms |
+| Curve fit | 10.0 M | eager | cancel | 82 | 87 | 9 | 150 | 136 | 20 |  | cancelled; the range is back |
+
+- The longest computation task goes from 1 199 ms to 14 ms at 1.2 M rows for
+  the exponential, and from 18 576 ms to 107 ms at 10 M. No task of the Curve
+  fit is over 250 ms any more; what is left of the main thread's share is the
+  copy of the range handed to the worker (two slices) and Plotly's redraw.
+- The time to result is the fit's own time, now spent on the worker: 1.0 s at
+  1.2 M rows and 16.5 s at 10 M for the exponential, during which the page
+  responds.
+- **Cancel** can be pressed: at 10 M rows the cancelled run stops in 20 ms and
+  the range is back. At 1.2 M rows the linear fit of the harness' cancel step
+  ends before the press lands (96 ms), which is not a held thread.
+
+Still on the main thread, in memory: Trend, the 2D fit, Histogram, Heatmap,
+Temporal profile, Integral and the pair Correlation.
 
 ### #382: Lazy exponential fits
 
