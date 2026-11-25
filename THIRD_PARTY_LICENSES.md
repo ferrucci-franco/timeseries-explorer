@@ -32,9 +32,9 @@ through the TopoJSON redistribution [world-atlas](https://github.com/topojson/wo
 2.0.2 (ISC license, Copyright 2013-2019 Michael Bostock). Converted to plain
 polylines for the gridded netCDF map view.
 
-## ERA5 example data (`public/examples/era5-argentina-cold-front.nc`, `public/examples/guide/era5_argentina.nc`)
+## ERA5 example data (`public/examples/era5-argentina-*.nc`, `public/examples/guide/era5_argentina.nc`)
 
-Surface fields of the ERA5 reanalysis over Argentina for 2-4 August 2024,
+Surface fields of the ERA5 reanalysis over Argentina for August 2024,
 produced by the [Copernicus Climate Change Service](https://climate.copernicus.eu/)
 at ECMWF and published under the Creative Commons Attribution 4.0 licence
 (CC-BY-4.0). Read from the NSF NCAR curated netCDF4 copy of ERA5 on AWS Open
