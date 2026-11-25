@@ -110,6 +110,10 @@ An analysis of a file held in memory computes off the main thread, so the page
 - `_analysisKernelOnRows` is the one place a kernel over in-memory rows is
   run from: a worker job when the rows are many, the function itself
   otherwise; `_analysisSpan` finds the rows of a range without copying them.
+- A lazy file's fit with no SQL form uses the same ops: its rows are read as a
+  stream and handed over in the chunks they arrive in
+  (`_collectLazyFitRows`, `_lazyFitJob`), and `analysis:joined` joins them in
+  the worker before running the kernel.
 - Every analysis computes this way for a file in memory: Curve fit, Trend,
   Histogram, Heatmap, Temporal profile and Integral on a time series; Curve
   fit and Correlation on a 2D plot (the `analysis:*` ops of the worker). The

@@ -2179,7 +2179,7 @@ issue se cierre:
 | ~~Integral (análisis) sobre 10 M filas, eje calendario~~ | **resuelto**: la integral lazy lee el archivo por trozos con el kernel de memoria (11–12 s a 10 M filas, sin la consulta SQL que agotaba la memoria) | #385 |
 | ~~Integral (análisis) con eje de tiempo numérico~~ | **resuelto**: el mismo camino por trozos sirve para cualquier eje (20–24 s a 10 M filas) | #385 |
 | ~~Histograma~~ | **resuelto**: los cuartiles y el conteo de los valores leídos se calculan en el worker de cómputo, y los cuartiles solo cuando un número de bins automático los lee (21 ms de tarea más larga) | #383 |
-| Ajustes exponenciales (curve fit, trend, ajuste 2D) con hasta 6 M filas en el rango | el ajuste corre en el hilo principal (1–10 s) | #382 |
+| ~~Ajustes exponenciales (curve fit, trend, ajuste 2D) con hasta 6 M filas en el rango~~ | **resuelto**: las filas se leen por trozos y se entregan al worker de cómputo, que las une y corre el núcleo de memoria (10 s → 13 ms de tarea más larga con 4 M filas en el rango); un ajuste en vuelo que ya no se pide se detiene al programarse el cambio | #382 |
 | ~~Heatmap, perfil temporal, correlación de pares~~ | **resuelto**: un cambio nuevo aborta la consulta que reemplaza (una señal por corrida, `_analysisRunSignal`); una consulta compartida con otro panel no se corta para ese panel | #384 |
 | ~~Trend~~ | **resuelto**: la interrupción de DuckDB llega como `AbortError` y el estado dice "cancelado" | #384 |
 | ~~Herramienta de correlación cruzada, archivo por encima de 8 M filas~~ | **resuelto**: el presupuesto de filas se comprueba antes de medir el eje (rechazo en ~17 ms, sin consultas), y las consultas del eje llevan señal de cancelación | #388 |

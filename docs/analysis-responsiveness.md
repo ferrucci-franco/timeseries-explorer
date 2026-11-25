@@ -1030,7 +1030,112 @@ worker already.
 
 ### #382: Lazy exponential fits
 
-Not landed yet.
+**What was done.** A lazy fit with no SQL form — every model of the
+time-series Curve fit, the Trend's exponential, the 2D fit's exponential
+family — no longer reads its rows in one query and fits them on the main
+thread.
+
+- `_collectLazyFitRows` reads the rows the single read returned
+  (`_lazyFitPass`: the same query, transforms and cut) as a stream and keeps
+  them as the chunks they arrive in, up to `FIT_KEEP_LAZY_ROWS` (6 M), the
+  most a fit holds.
+- The chunks are handed to the compute worker one buffer each, never joined
+  on the main thread; `analysis:joined` joins them there and runs the
+  in-memory kernel on the result (`analysis:curveFit`, with the residuals
+  and their decimation; `analysis:trendExp`; `analysis:pairFit`). The same
+  function as an in-memory file's fit, so the same bits.
+- That replaces both paths that held the thread: the single read up to 2 M
+  rows, and from 2 M to 6 M the streamed fit that kept its rows and polished
+  them between two passes. Past 6 M rows the fit streams every pass, as
+  before; where there is no worker the previous paths run unchanged.
+- A job in flight whose fit is no longer what is asked is stopped when the
+  change is scheduled (`_abortStaleCurveFitJobs`, `_abortStaleTrendJobs`,
+  `_abortStalePhase2dFitJob`), not when the recompute it schedules runs.
+
+Tests: `scripts/test-lazy-curve-fit.mjs` (the collected chunks, joined, are
+the rows of the single read bit for bit; the limit; cancel),
+`scripts/test-analysis-jobs.mjs` (`analysis:joined` over uneven chunks gives
+the whole arrays' bits) and `scripts/e2e-lazy-fit-worker.mjs` (the three fits
+on a lazy file: a worker job fed by a stream, equal to the previous path's
+fit, stopped at schedule time).
+
+**After**, the matrix (`--analyses=curve-fit,trend,phase2d-fit --modes=lazy`):
+
+| Analysis | Rows | Mode | Action | Longest task: computation | in Plotly | no JS (render) | Longest task overall | Frame gap | Time to result | A newer request stops the one in flight | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Curve fit | 1.2 M | lazy | open | 17 | 146 | 1 | 164 | 149 | 183 |  | range: 33 % of the file |
+| Curve fit | 1.2 M | lazy | type | 7 | 60 | 0 | 67 | 51 | 734 |  |  |
+| Curve fit | 1.2 M | lazy | param: linear → quadratic | 4 | 65 | 0 | 69 | 60 | 804 |  |  |
+| Curve fit | 1.2 M | lazy | param: quadratic → exponential | 11 | 107 | 1 | 118 | 111 | 2804 |  |  |
+| Curve fit | 1.2 M | lazy | drag | 2 | 62 | 0 | 64 | 48 | 769 | yes: aborted 0 ms after, ended 14 ms later | slider events waited ≤ 7 ms |
+| Curve fit | 1.2 M | lazy | cancel | 8 | 79 | 5 | 91 | 86 | 8 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| Trend | 1.2 M | lazy | open | 10 | 68 | 0 | 78 | 71 | 776 |  | range: 33 % of the file |
+| Trend | 1.2 M | lazy | type | 0 | 0 | 0 | 0 | 0 | 831 |  |  |
+| Trend | 1.2 M | lazy | param: value band on | 7 | 56 | 0 | 61 | 50 | 950 |  |  |
+| Trend | 1.2 M | lazy | param: exponential on | 8 | 97 | 0 | 105 | 97 | 2268 |  |  |
+| Trend | 1.2 M | lazy | drag | 0 | 0 | 0 | 0 | 41 | 1016 | yes: aborted 0 ms after, ended 4 ms later | slider events waited ≤ 1 ms |
+| Trend | 1.2 M | lazy | cancel | 12 | 57 | 2 | 65 | 63 | 3 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| 2D curve fit | 1.2 M | lazy | open | 12 | 59 | 1 | 72 | 72 | 138 |  |  |
+| 2D curve fit | 1.2 M | lazy | type | 0 | 0 | 0 | 0 | 74 | 485 |  |  |
+| 2D curve fit | 1.2 M | lazy | param: linear → quadratic | 0 | 0 | 0 | 0 | 44 | 1233 |  |  |
+| 2D curve fit | 1.2 M | lazy | param: quadratic → exponential | 0 | 0 | 0 | 0 | 35 | 3063 |  |  |
+| 2D curve fit | 1.2 M | lazy | drag | 0 | 0 | 0 | 0 | 85 | 570 | yes: aborted 1 ms after, ended 98 ms later | slider events waited ≤ 3 ms |
+| 2D curve fit | 1.2 M | lazy | cancel | 1 | 0 | 86 | 87 | 80 | 3 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| Curve fit | 10.0 M | lazy | open | 17 | 180 | 1 | 198 | 197 | 214 |  | range: 33 % of the file |
+| Curve fit | 10.0 M | lazy | type | 9 | 52 | 0 | 59 | 45 | 11514 |  |  |
+| Curve fit | 10.0 M | lazy | param: linear → quadratic | 17 | 68 | 0 | 85 | 71 | 15768 |  |  |
+| Curve fit | 10.0 M | lazy | param: quadratic → exponential | 95 | 65 | 1 | 95 | 80 | 169121 |  |  |
+| Curve fit | 10.0 M | lazy | drag | 3 | 62 | 1 | 65 | 52 | 3737 | yes: aborted 0 ms after, ended 52 ms later | slider events waited ≤ 4 ms |
+| Curve fit | 10.0 M | lazy | cancel | 9 | 62 | 4 | 75 | 72 | 5 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| Trend | 10.0 M | lazy | open | 20 | 67 | 0 | 87 | 80 | 5883 |  | range: 33 % of the file |
+| Trend | 10.0 M | lazy | type | 18 | 122 | 1 | 140 | 136 | 6748 |  |  |
+| Trend | 10.0 M | lazy | param: value band on | 11 | 76 | 69 | 87 | 138 | 7480 |  |  |
+| Trend | 10.0 M | lazy | param: exponential on | 79 | 0 | 1 | 79 | 73 | 181873 |  |  |
+| Trend | 10.0 M | lazy | drag | 13 | 59 | 0 | 72 | 64 | 5997 | yes: aborted 1 ms after, ended 62 ms later | slider events waited ≤ 7 ms |
+| Trend | 10.0 M | lazy | cancel | 7 | 72 | 9 | 88 | 83 | 11 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| 2D curve fit | 10.0 M | lazy | open | 25 | 78 | 1 | 103 | 97 | 182 |  |  |
+| 2D curve fit | 10.0 M | lazy | type | 0 | 0 | 0 | 0 | 45 | 3376 |  |  |
+| 2D curve fit | 10.0 M | lazy | param: linear → quadratic | 0 | 0 | 0 | 0 | 45 | 6623 |  |  |
+| 2D curve fit | 10.0 M | lazy | param: quadratic → exponential | 107 | 0 | 3 | 107 | 100 | 204934 |  |  |
+| 2D curve fit | 10.0 M | lazy | drag | 0 | 0 | 0 | 0 | 44 | 3197 | yes: aborted 0 ms after, ended 127 ms later | slider events waited ≤ 2 ms |
+| 2D curve fit | 10.0 M | lazy | cancel | 10 | 93 | 10 | 113 | 118 | 14 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+
+**After**, a 4 M-row range (`--rows=10000000 --range=0.3,0.7`):
+
+| Analysis | Rows | Mode | Action | Longest task: computation | in Plotly | no JS (render) | Longest task overall | Frame gap | Time to result | A newer request stops the one in flight | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Curve fit | 10.0 M | lazy | open | 15 | 153 | 1 | 168 | 154 | 187 |  | range: 33 % of the file |
+| Curve fit | 10.0 M | lazy | type | 7 | 60 | 1 | 64 | 60 | 3236 |  |  |
+| Curve fit | 10.0 M | lazy | param: linear → quadratic | 9 | 63 | 1 | 66 | 61 | 3323 |  |  |
+| Curve fit | 10.0 M | lazy | param: quadratic → exponential | 13 | 57 | 0 | 69 | 57 | 12198 |  |  |
+| Curve fit | 10.0 M | lazy | drag | 4 | 60 | 0 | 64 | 58 | 3155 | yes: aborted 1 ms after, ended 5 ms later | slider events waited ≤ 4 ms |
+| Curve fit | 10.0 M | lazy | cancel | 20 | 85 | 2 | 107 | 99 | 3 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| Trend | 10.0 M | lazy | open | 16 | 64 | 0 | 80 | 75 | 5179 |  | range: 33 % of the file |
+| Trend | 10.0 M | lazy | type | 12 | 58 | 0 | 70 | 60 | 5259 |  |  |
+| Trend | 10.0 M | lazy | param: value band on | 12 | 65 | 0 | 77 | 63 | 5554 |  |  |
+| Trend | 10.0 M | lazy | param: exponential on | 4 | 56 | 0 | 60 | 51 | 17778 |  |  |
+| Trend | 10.0 M | lazy | drag | 10 | 63 | 1 | 74 | 68 | 5677 | yes: aborted 1 ms after, ended 20 ms later | slider events waited ≤ 10 ms |
+| Trend | 10.0 M | lazy | cancel | 13 | 50 | 4 | 62 | 54 | 3 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| 2D curve fit | 10.0 M | lazy | open | 9 | 52 | 1 | 62 | 64 | 127 |  |  |
+| 2D curve fit | 10.0 M | lazy | type | 0 | 0 | 0 | 0 | 41 | 3011 |  |  |
+| 2D curve fit | 10.0 M | lazy | param: linear → quadratic | 0 | 0 | 0 | 0 | 43 | 5478 |  |  |
+| 2D curve fit | 10.0 M | lazy | param: quadratic → exponential | 0 | 0 | 0 | 0 | 0 | 12296 |  |  |
+| 2D curve fit | 10.0 M | lazy | drag | 0 | 0 | 0 | 0 | 39 | 2942 | yes: aborted 1 ms after, ended 72 ms later | slider events waited ≤ 2 ms |
+| 2D curve fit | 10.0 M | lazy | cancel | 0 | 0 | 0 | 0 | 39 | 3 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+
+- Longest computation task for the exponential, before → after: at 1.2 M
+  rows (0.96 M in range), Curve fit 2 823 → 11 ms, Trend 1 074 → 8 ms, 2D fit
+  2 924 → 0 ms; over the 4 M-row range, 10 464 → 13 ms, 10 751 → 4 ms and
+  10 107 → 0 ms. No lazy fit holds the thread over 250 ms at 1 M, 4 M or 8 M
+  rows in range.
+- Over the 4 M-row range the result also comes sooner (21.1 → 12.2 s for the
+  Curve fit, 24.5 → 17.8 s for the Trend, 19.9 → 12.3 s for the 2D fit): one
+  read of the range instead of three, and the polish on a core of its own.
+- A newer request stops the one in flight 0–1 ms after it is made (160–190 ms
+  before), and Cancel stops the run in 3–14 ms.
+- Unchanged: past 6 M rows in range each evaluation of the polish is a read of
+  the file, so an exponential over 8 M rows of the 10 M CSV still takes about
+  three minutes to arrive (169–205 s) — with the page free meanwhile.
 
 ### #383: Lazy histogram
 
