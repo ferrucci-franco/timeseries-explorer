@@ -5607,6 +5607,21 @@ proto._repeatedOverlayUpdate = function(plot) {
     return { shapes: overlay.shapes };
 };
 
+// A lazy file's Repeated marks have arrived (_repeatedLazyMarks, in
+// repeated-methods.js, which stays free of Plotly so it loads in Node): redraw
+// the bars and the item's state.
+proto._repeatedLazyArrived = function(plot) {
+    if (!plot?.div || !plot.showRepeated || plot.mode !== 'timeseries') {
+        this._syncMarksControlsForPlot?.(plot);
+        return;
+    }
+    if (![...this.plots.values()].includes(plot)) return;
+    if (this._repeatedOverlayUpdate(plot)) {
+        Plotly.relayout(plot.div, { shapes: this._timeseriesOverlayShapes(plot) });
+    }
+    this._refreshRepeatedNotice(plot);
+};
+
 proto._refreshRepeatedNotice = function(plot) {
     this._syncMarksControlsForPlot(plot);
     if (plot?.mode !== 'timeseries' || !plot.showRepeated) {

@@ -18,7 +18,6 @@
 import i18n from '../../i18n/index.js';
 import { repeatedTimestampRuns } from '../../utils/repeated-timestamps.js';
 import { REPEATED_MARK_MIN_RUN, repeatedMarkColumns, repeatedMarksForView } from '../../utils/repeated-marks.js';
-import Plotly from '../../vendor/plotly.js';
 
 export function installPlotRepeatedMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -126,8 +125,8 @@ export function installPlotRepeatedMethods(TargetClass) {
             const controller = new AbortController();
             entry.controller = controller;
             entry.pendingKey = key;
-            Promise.resolve()
-                .then(() => source.getRepeatedColumns(data, sourceRange[0], sourceRange[1], columns, { minRun, signal: controller.signal }))
+            new Promise(resolve => resolve(
+                source.getRepeatedColumns(data, sourceRange[0], sourceRange[1], columns, { minRun, signal: controller.signal })))
                 .then((result) => {
                     if (Number.isFinite(result?.total)) {
                         if (!this._repeatedLazyTotals) this._repeatedLazyTotals = new WeakMap();
@@ -155,19 +154,6 @@ export function installPlotRepeatedMethods(TargetClass) {
                 });
         }
         return { marks: [], stale: entry.view, pending: true };
-    };
-
-    // A lazy file's marks have arrived: redraw the bars and the item's state.
-    proto._repeatedLazyArrived = function(plot) {
-        if (!plot?.div || !plot.showRepeated || plot.mode !== 'timeseries') {
-            this._syncMarksControlsForPlot?.(plot);
-            return;
-        }
-        if (![...this.plots.values()].includes(plot)) return;
-        if (this._repeatedOverlayUpdate(plot)) {
-            Plotly.relayout(plot.div, { shapes: this._timeseriesOverlayShapes(plot) });
-        }
-        this._refreshRepeatedNotice(plot);
     };
 
     // Stop reading a plot's lazy marks (the toggle went off, the panel is gone).
