@@ -20,6 +20,11 @@ export function trendExpRows(expModel, band, tPrime, values) {
     return fitPair(expModel, tPrime, maskTrendValues(values, band));
 }
 
+/** The exponential alone, from display times: what a lazy segment asks for. */
+export function trendExpOf({ times, values, t0, scale, band = null, expModel = 'none' }) {
+    return { exp: trendExpRows(expModel, band, shiftedTime(times, t0, scale), values) };
+}
+
 export function trendRows({ times, values, t0, scale, band = null, expModel = 'none' }) {
     const tPrime = shiftedTime(times, t0, scale);
     const trend = runPassesOnArrays(trendSteps({ band }), tPrime, values);

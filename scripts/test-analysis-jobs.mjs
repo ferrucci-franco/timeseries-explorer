@@ -382,4 +382,49 @@ const { calendarPeriodWindows, collectMissingDays, computeDefiniteIntegral } = a
     }
     console.log(`analysis jobs: analysis:integral, ${integrals} cases with their daily groups, the main thread's bits`);
 }
+
+// ── analysis:joined: a lazy file's rows, handed over in the chunks they were read in ──
+const { trendExpOf } = await import(new URL('../src/compute/analysis/trend.js', import.meta.url));
+{
+    let seed = 77;
+    const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const N = 21011;
+    const times = new Float64Array(N);
+    const values = new Float64Array(N);
+    const other = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+        times[i] = 10 + i * 0.2;
+        values[i] = 6 * Math.exp(-i / 5000) + 1 + (random() - 0.5) * 0.2;
+        other[i] = 2 + i / 900 + (random() - 0.5) * 0.1;
+        if (i % 613 === 2) values[i] = NaN;
+    }
+    // Cut at the same uneven places for every array, a one-row chunk among them.
+    const cuts = [0, 1, 4097, 4098, 9000, 16384, N];
+    const split = (array) => cuts.slice(1).map((end, i) => array.slice(cuts[i], end));
+    const joined = (op, payload, chunks) => onWorker('analysis:joined', { op, payload, chunks });
+    for (const model of [...FIT_MODELS].filter(candidate => candidate !== 'none')) {
+        const fit = { model, t0: 10, scale: 60, buckets: 2000 };
+        assertSame(joined('analysis:curveFit', fit, { times: split(times), values: split(values) }),
+            structuredClone(curveFitRows({ ...fit, times, values })), `joined curve fit, ${model}`);
+        assertSame(joined('analysis:pairFit', { model }, { x: split(other), y: split(values) }),
+            structuredClone(pairFitRows({ model, x: other, y: values })), `joined pair fit, ${model}`);
+    }
+    for (const band of [null, { lower: 1.5, upper: 5 }]) {
+        for (const expModel of ['exponential', 'exponential-offset', 'first-order', 'first-order-offset']) {
+            const options = { expModel, band, t0: 10, scale: 60 };
+            const main = trendExpOf({ ...options, times, values });
+            assertSame(joined('analysis:trendExp', options, { times: split(times), values: split(values) }), structuredClone(main), `joined trend exponential, ${expModel}`);
+            // And it is the exponential the whole-segment kernel computes.
+            assertSame(main.exp, trendRows({ ...options, times, values }).exp, 'the same exponential as the segment kernel');
+        }
+    }
+    // One chunk is used as it is; an unknown op, or a joined inside a joined, is refused.
+    assertSame(joined('analysis:pairFit', { model: 'linear' }, { x: [other], y: [values] }), structuredClone(pairFitRows({ model: 'linear', x: other, y: values })), 'a single chunk');
+    for (const op of ['analysis:nothing', 'analysis:joined']) {
+        posted.length = 0;
+        listener({ data: { id: 'job', op: 'analysis:joined', payload: { op, payload: {}, chunks: {} } } });
+        assert.equal(posted[0].ok, false, `${op} inside a joined job is refused`);
+    }
+    console.log("analysis jobs: analysis:joined, rows in uneven chunks give the whole arrays' bits");
+}
 process.exit(0);

@@ -32,6 +32,7 @@
 // the segment is refused and says so, rather than reporting the overview's
 // numbers as if they were the file's.
 
+import { FIT_KEEP_LAZY_ROWS } from './fit-lazy-methods.js';
 import { fitPair, buildFitCurve, predict } from '../../utils/regression.js';
 import { runPassesOnChunks } from '../../utils/fit-passes.js';
 import { maskTrendValues, trendDelta, trendSteps } from '../../utils/trend-fit.js';
@@ -405,6 +406,32 @@ export function installPlotTrendLazyMethods(TargetClass) {
         return results;
     };
 
+    // The jobs in flight whose segment no longer asks for what they compute
+    // (its range, band, exponential or signal changed, or it is gone): stopped
+    // now, when the change is scheduled, rather than when the recompute it
+    // schedules gets to run (#382). Segments that share a stopped job (the
+    // aggregate queries of one file) are let go with it, and asked again.
+    proto._abortStaleTrendJobs = function(plot) {
+        const jobs = plot?._trendLazyJobs;
+        if (!jobs?.size) return;
+        const state = this._ensureTrendState(plot);
+        const stopped = new Set();
+        for (const [id, job] of jobs) {
+            const segment = state.segments.find(candidate => candidate.id === id);
+            const trace = segment ? this._trendTraceFor(plot, segment) : null;
+            let key = null;
+            if (trace && this._isVisible(trace)) {
+                key = this._trendKey(plot, segment, trace, this._trendRange(plot, segment), this._trendTimeInfo(plot, trace), trendSegmentBand(segment));
+            }
+            if (key !== job.key) stopped.add(job.controller);
+        }
+        if (!stopped.size) return;
+        for (const [id, job] of [...jobs]) {
+            if (stopped.has(job.controller)) jobs.delete(id);
+        }
+        for (const controller of stopped) controller?.abort();
+    };
+
     // The identity of one segment's numbers: everything they are computed from.
     proto._trendKey = function(plot, segment, trace, range, info, band) {
         const token = this._fftDataToken?.(trace.fileId) ?? '';
@@ -642,6 +669,28 @@ export function installPlotTrendLazyMethods(TargetClass) {
     proto._trendLazyExpFit = async function(plot, r, { signal = null } = {}) {
         const { trace, range, info, band, segment } = r;
         const t0 = range[0];
+        // With a worker to fit on: the rows read as a stream, handed over
+        // chunk by chunk and fitted there by the in-memory kernel (#382).
+        if (this._analysisPool?.()) {
+            const collected = await this._collectLazyFitRows(trace.fileId, [trace.varName], range, FIT_KEEP_LAZY_ROWS, {
+                signal, onRows: read => this._setTrendProgress?.(plot, 'exp', read, 1),
+            });
+            if (collected.ok) {
+                const computed = await this._lazyFitJob('analysis:trendExp',
+                    { expModel: segment.expModel, band: band || null, t0, scale: info.scale },
+                    { times: collected.time, values: collected.valuesByVar.get(trace.varName) }, signal);
+                if (computed) return computed.exp;
+            } else if (collected.reason !== 'tooManyRows') {
+                return null;
+            } else {
+                const streamed = await this._streamLazyFit(trace.fileId, [trace.varName], range, segment.expModel,
+                    (time, byVar) => [shiftedTime(time, t0, info.scale), maskTrendValues(byVar.get(trace.varName) || [], band)], {
+                        signal,
+                        onProgress: (pass, read) => this._setTrendProgress?.(plot, 'exp', read, pass),
+                    });
+                return streamed.fit;
+            }
+        }
         const rows = await this._fetchLazyFitRows(trace.fileId, [trace.varName], range, undefined, signal);
         if (rows.ok) {
             const tPrime = shiftedTime(rows.time, t0, info.scale);

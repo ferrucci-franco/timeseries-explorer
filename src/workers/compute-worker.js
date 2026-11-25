@@ -13,7 +13,7 @@ import { detectSpikeWindow } from '../compute/kernels/outliers.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
 import { detectSamplingGaps } from '../utils/sampling-gaps.js';
 import { curveFitRows } from '../compute/analysis/curve-fit.js';
-import { trendRows } from '../compute/analysis/trend.js';
+import { trendExpOf, trendRows } from '../compute/analysis/trend.js';
 import { pairFitRows } from '../compute/analysis/pair-fit.js';
 import { histogramCountsOf, histogramStatsOf } from '../compute/analysis/histogram.js';
 import { pairCorrelationRows } from '../compute/analysis/correlation.js';
@@ -67,6 +67,7 @@ const HANDLERS = {
         return { result, transfer: collectBuffers([result.residual?.x, result.residual?.y]) };
     },
     'analysis:trend': (payload) => ({ result: trendRows(payload || {}) }),
+    'analysis:trendExp': (payload) => ({ result: trendExpOf(payload || {}) }),
     'analysis:pairFit': (payload) => ({ result: pairFitRows(payload || {}) }),
     // The values come back with their stats: the panel counts them next, and
     // a buffer handed over and back is never copied.
@@ -96,6 +97,32 @@ const HANDLERS = {
         };
     },
 };
+
+// The rows of a lazy file arrive as the chunks they were read in, their
+// buffers handed over one by one so the main thread never joins them: here
+// each named field is joined into one array, and the op runs on the result as
+// it would on arrays that were whole from the start (the fit kernels'
+// accumulators give the same bits either way; joined, the job is one function
+// call instead of a pass per chunk).
+HANDLERS['analysis:joined'] = ({ op, payload, chunks }) => {
+    const handler = HANDLERS[op];
+    if (!handler || op === 'analysis:joined') throw new Error(`Unknown op "${op}"`);
+    const joined = { ...(payload || {}) };
+    for (const [field, parts] of Object.entries(chunks || {})) joined[field] = joinChunks(parts);
+    return handler(joined);
+};
+
+function joinChunks(parts) {
+    const list = parts || [];
+    if (list.length === 1) return list[0];
+    const out = new Float64Array(list.reduce((n, part) => n + (part?.length || 0), 0));
+    let at = 0;
+    for (const part of list) {
+        out.set(part, at);
+        at += part.length;
+    }
+    return out;
+}
 
 self.addEventListener('message', (event) => {
     const { id, op, payload } = event.data || {};
