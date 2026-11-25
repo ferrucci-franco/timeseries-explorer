@@ -80,7 +80,19 @@ user keeps exploring what is on screen. So **every analysis, existing or new**:
    `_cancelAnalysisComputation`); a lazy result keyed by its settings is
    re-keyed after the restore (`_rekeyCurveFitsAfterRestore`). Nothing starts
    the cancelled computation again until its inputs change.
-5. **Is tested:** add the analysis to `scripts/e2e-analysis-cancel.mjs`. That e2e
+5. **Computes off the main thread on a file in memory too.** A kernel that
+   runs on the main thread cannot be stopped: the pill shows, but the page
+   takes no click until it ends. Write the kernel as a function of plain data
+   (`src/compute/analysis/`, or a pure `src/utils/` function), give the
+   compute worker an `analysis:*` op that calls it
+   (`src/workers/compute-worker.js`), and run it through
+   `_analysisKernelOnRows` with the run's signal
+   (`src/plots/methods/analysis-busy-methods.js`): a worker job when the rows
+   are many, the same function where they are few or there is no worker — so
+   the bits are the same. Add the op to `scripts/test-analysis-jobs.mjs` and
+   the analysis to `scripts/e2e-analysis-cancel-memory.mjs`. See
+   `docs/architecture.md`, "Analysis jobs".
+6. **Is tested:** add the analysis to `scripts/e2e-analysis-cancel.mjs`. That e2e
    changes a setting with the analysis' queries hanging until aborted, presses
    Cancel, and checks that the work stopped, the previous result stayed and
    the setting is back.

@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { pairCorrelationRows } from '../../compute/analysis/correlation.js';
 import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
@@ -632,6 +633,20 @@ export function installPlotCorrelationMethods(TargetClass) {
         };
     };
 
+    // Where those rows are, without copying them.
+    proto._correlationPairSpan = function(pair, range, rangeFull) {
+        const times = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
+        const xVals = this._getTransformedVariableData(pair.fileId, pair.x) || [];
+        const yVals = this._getTransformedVariableData(pair.fileId, pair.y) || [];
+        const n = Math.min(times?.length || 0, xVals.length || 0, yVals.length || 0);
+        if (rangeFull) return { xVals, yVals, start: 0, end: n };
+        let [lo, hi] = range;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const start = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        const end = Math.max(start, Math.min(n, this._upperBound(times, hi)));
+        return { xVals, yVals, start, end };
+    };
+
     proto._isLazyFile = function(fileId) {
         return !!this.files.get(fileId)?.data?._duckdb;
     };
@@ -644,6 +659,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         // changed: stop it now, so the new one does not queue behind it on
         // DuckDB (#384). The result on screen stays until the new one is in.
         this._abortAnalysisRun(plot, '_correlationRunAbort');
+        this._abortAnalysisRun(plot, '_correlationEagerAbort');
         const run = () => {
             const state = this._ensureCorrelationState(plot);
             const adjusted = this._autoLimitAnalysisRange(plot, state, 'correlation');
@@ -712,18 +728,41 @@ export function installPlotCorrelationMethods(TargetClass) {
         const lazyByFile = new Map();
         // Pearson over the selected slice is the range-dependent cost; the
         // auto-limit reconsider measures exactly this.
-        const measured = this._measureAnalysisKernel(panelId, plot, () => {
-            pairs.forEach((pair, index) => {
-                if (this._isLazyFile(pair.fileId)) {
-                    if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
-                    lazyByFile.get(pair.fileId).push({ index, pair });
-                    return;
+        // A pair of many rows is computed on the compute worker (the same
+        // kernel), so the page and the Cancel button stay free; this run's
+        // signal stops it, and so does a newer run.
+        const eagerSignal = this._analysisRunSignal(plot, '_correlationEagerAbort');
+        let measured;
+        try {
+            measured = await this._measureAnalysisKernelAsync(panelId, plot, async () => {
+                for (let index = 0; index < pairs.length; index++) {
+                    const pair = pairs[index];
+                    if (this._isLazyFile(pair.fileId)) {
+                        if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
+                        lazyByFile.get(pair.fileId).push({ index, pair });
+                        continue;
+                    }
+                    const span = this._correlationPairSpan(pair, range, state.rangeFull);
+                    const stats = await this._analysisKernelOnRows({
+                        op: 'analysis:correlation',
+                        kernel: pairCorrelationRows,
+                        sources: [span.xVals, span.yVals],
+                        start: span.start,
+                        end: span.end,
+                        signal: eagerSignal,
+                        payload: ([x, y]) => ({ x, y }),
+                    });
+                    results[index] = { pair, label: label(pair), nScope: span.end - span.start, ...stats };
                 }
-                const series = this._correlationPairSeries(pair, range, state.rangeFull);
-                const stats = pearsonCorrelation(series.x, series.y);
-                results[index] = { pair, label: label(pair), nScope: series.nScope, ...stats };
             });
-        });
+        } catch (error) {
+            // Stopped: Cancel, or a newer run that takes over.
+            if (error?.name === 'AbortError') return;
+            throw error;
+        } finally {
+            this._settleAnalysisRun(plot, '_correlationEagerAbort', eagerSignal);
+        }
+        if (plot._correlationToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'correlation') return;
         // The measurement widened the range and rescheduled; this pass is stale.
         if (measured.superseded) return;
 

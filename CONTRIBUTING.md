@@ -172,7 +172,12 @@ does the same:
   (`_abortAnalysisRun`), as the FFT, the heatmap, the temporal profile, the
   pair correlation and the integral do;
 - register its pane, its tokens and where its settings live there;
-- extend `scripts/e2e-analysis-cancel.mjs`.
+- compute off the main thread for a file in memory too: its kernel as a
+  function of plain data, run through `_analysisKernelOnRows` (a job on the
+  compute worker when the rows are many), so the page and Cancel stay usable;
+- extend `scripts/e2e-analysis-cancel.mjs` (lazy files) and
+  `scripts/e2e-analysis-cancel-memory.mjs` and `scripts/test-analysis-jobs.mjs`
+  (files in memory).
 
 `CLAUDE.md` has the details.
 

@@ -13,6 +13,7 @@ import {
     INTEGRAL_MAX_GROUPS,
     INTEGRAL_MISSING_POLICIES,
 } from '../../compute/kernels/definite-integral.js';
+import { integralMissingDays, integralRows } from '../../compute/analysis/integral.js';
 import {
     axisDuration,
     buildIntegralExportTable,
@@ -899,6 +900,7 @@ proto._scheduleIntegralRecompute = function(panelId, options = {}) {
     // stop it now, so the new one does not wait behind it (#385). What it drew
     // stays on screen until the new result replaces it.
     this._abortAnalysisRun(plot, '_integralRunAbort');
+    this._abortAnalysisRun(plot, '_integralEagerAbort');
     const run = () => {
         const state = this._ensureIntegralState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'integral');
@@ -934,6 +936,19 @@ proto._integralSeriesForTrace = function(trace, range = null) {
     };
 };
 
+// Where the rows _integralSeriesForTrace returns are, without copying them.
+proto._integralSpanForTrace = function(trace, range = null) {
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
+    const length = Math.min(times.length || 0, values.length || 0);
+    if (!length || !range) return { times, values, start: 0, end: length };
+    let [lower, upper] = range;
+    if (lower > upper) [lower, upper] = [upper, lower];
+    const start = Math.max(0, Math.min(length, this._lowerBound(times, lower)) - 1);
+    const end = Math.max(start, Math.min(length, this._upperBound(times, upper) + 1));
+    return { times, values, start, end };
+};
+
 proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.integralDiv || plot.mode !== 'integral') return;
     const token = (plot._integralToken || 0) + 1;
@@ -957,13 +972,39 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             lazy.push({ trace, traceIndex, name, base });
             continue;
         }
-        const selected = this._integralSeriesForTrace(trace, range);
-        eager.push({
-            trace, traceIndex, name, base,
-            times: selected.times,
-            values: selected.values,
+        // The rows of the range, with a neighbour on each side. A signal of
+        // many rows is integrated on the compute worker, which is handed its
+        // own copy of them (`span`); a short one here, from a slice taken only
+        // if it is read.
+        const span = this._integralSpanForTrace(trace, range);
+        const candidate = { trace, traceIndex, name, base, span, onWorker: !!this._analysisUsesWorker?.(span.end - span.start) };
+        let selected = null;
+        const rows = () => (selected ||= this._integralSeriesForTrace(trace, range));
+        Object.defineProperties(candidate, {
+            times: { get: () => rows().times, enumerable: true },
+            values: { get: () => rows().values, enumerable: true },
         });
+        eager.push(candidate);
     }
+    // This run's signal for the worker jobs: a newer run aborts it, and so
+    // does Cancel.
+    const eagerSignal = eager.some(candidate => candidate.onWorker)
+        ? this._analysisRunSignal(plot, '_integralEagerAbort')
+        : null;
+    const onWorker = (candidate, op, kernel, payload) => this._analysisKernelOnRows({
+        op,
+        kernel,
+        sources: [candidate.span.times, candidate.span.values],
+        start: candidate.span.start,
+        end: candidate.span.end,
+        signal: eagerSignal,
+        payload: ([times, values]) => ({
+            times, values, range,
+            kind: candidate.base.kind === 'index' ? 'index' : (candidate.base.kind === 'datetime' ? 'datetime' : 'numeric'),
+            ...payload,
+        }),
+    });
+  try {
 
     // Calendar grouping: the whole-range total is still computed for every
     // signal — it is what the summary and the status line report, and what the
@@ -980,9 +1021,16 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     if (state.missingPolicy === 'discard-day-all') {
         for (const candidate of eager) {
             if (candidate.base.kind !== 'datetime') continue;
+            if (candidate.onWorker) {
+                const options = this._integralKernelParams(state, { base: candidate.base, times: null }, range, null).options;
+                const found = await onWorker(candidate, 'analysis:integralMissingDays', integralMissingDays, { options });
+                for (const day of found.days) eagerHoleDays.add(day);
+                continue;
+            }
             const params = this._integralKernelParams(state, candidate, range, null);
             for (const day of collectMissingDays(candidate.values, params.time, params.options).days) eagerHoleDays.add(day);
         }
+        if (plot._integralToken !== token) return;
     }
 
     // Lazy traces: the same kernel over every row of the file, streamed
@@ -1005,8 +1053,26 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     // Measured over the real quadrature, before anything is drawn: if this says
     // the full range is affordable after all, the reconsider widens it and
     // reschedules, and this pass's output is superseded.
-    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+    const measured = await this._measureAnalysisKernelAsync(panelId, plot, async () => {
         for (const candidate of eager) {
+            if (candidate.base.assumed) assumedSeconds = true;
+            if (candidate.base.kind === 'index') indexAxis = true;
+            if (candidate.onWorker) {
+                // The same kernel and the same rows, on the compute worker
+                // (src/compute/analysis/integral.js).
+                const options = this._integralKernelParams(state, { base: candidate.base, times: null }, range, sharedExcludedDays).options;
+                const computed = await onWorker(candidate, 'analysis:integral', integralRows, { options, windows: groupWindows || null });
+                models.push({
+                    trace: candidate.trace,
+                    traceIndex: candidate.traceIndex,
+                    name: candidate.name,
+                    unit: this._integralValueUnit(candidate.trace),
+                    base: candidate.base,
+                    result: computed.result,
+                    groups: computed.groups,
+                });
+                continue;
+            }
             const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
             const result = computeDefiniteIntegral(candidate.values, params.time, params.options);
             if (candidate.base.assumed) assumedSeconds = true;
@@ -1024,6 +1090,8 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             });
         }
     }, warnings);
+    if (plot._integralToken !== token) return;
+    if (!plot.integralDiv || plot.mode !== 'integral') return;
     if (measured.superseded) return;
     for (const candidate of lazy) {
         const entry = lazyRun.byTrace.get(candidate.trace);
@@ -1142,6 +1210,13 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
                     .replace('{time}', formatAxisDuration(ready[0], ready[0].result.coveredTime));
     this._setIntegralComputing(plot, false);
     this._setIntegralStatus(plot, summary, warnings, 'ready', notes);
+  } catch (error) {
+    // Stopped: Cancel, or a newer run that takes over. What is on screen stays.
+    if (error?.name === 'AbortError') return;
+    throw error;
+  } finally {
+    this._settleAnalysisRun(plot, '_integralEagerAbort', eagerSignal);
+  }
 };
 
 // The lazy traces of a run: every row of their files, streamed through the
@@ -1488,8 +1563,15 @@ proto._applyIntegralPieVisibility = function(plot, visible) {
     if (plot._integralPieVisible === next) return;
     plot._integralPieVisible = next;
     container.classList.toggle('integral-pie-visible', next);
-    Plotly.Plots.resize(plot.integralDiv);
-    if (next && plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
+    // A pane that is not laid out yet (the panel is being mounted, as when
+    // the layout is split with the Integral open) has nothing to resize, and
+    // Plotly rejects the call: it is sized when it is drawn.
+    const resize = (div) => {
+        if (!div?.isConnected || !div.offsetWidth || !div.offsetHeight) return;
+        Promise.resolve(Plotly.Plots.resize(div)).catch(() => { /* not displayed after all */ });
+    };
+    resize(plot.integralDiv);
+    if (next) resize(plot.integralPieDiv);
 };
 
 proto._buildIntegralPieLayout = function(plot) {

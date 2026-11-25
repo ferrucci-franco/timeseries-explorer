@@ -896,6 +896,7 @@ proto._scheduleCalendarHeatmapRecompute = function(panelId, options = {}) {
     // stop it now, so the new one does not queue behind it on DuckDB (#384).
     // What it drew stays on screen until the new result replaces it.
     this._abortAnalysisRun(plot, '_calendarHeatmapRunAbort');
+    this._abortAnalysisRun(plot, '_calendarHeatmapEagerAbort');
     const run = () => {
         const state = this._ensureCalendarHeatmapState(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'heatmap');
@@ -1024,56 +1025,68 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
     };
 
     // The eager aggregation is the range-dependent cost; the auto-limit
-    // reconsider measures exactly this and nothing around it.
-    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+    // reconsider measures exactly this and nothing around it. A trace of many
+    // rows is aggregated on the compute worker (the same kernel), so the page
+    // and the Cancel button stay free; this run's signal stops it, and so does
+    // a newer run.
+    const eagerSignal = eager.length ? this._analysisRunSignal(plot, '_calendarHeatmapEagerAbort') : null;
+    const eagerDone = this._measureAnalysisKernelAsync(panelId, plot, async () => {
         for (const trace of eager) {
-            const selected = this._calendarHeatmapSeriesForTrace(
-                trace,
-                state.rangeFull ? null : [rangeStart, rangeEnd],
-            );
-            const { times, values } = selected;
-            if (!times?.length || !values?.length) {
+            const span = this._analysisSpan(trace, state.rangeFull ? null : [rangeStart, rangeEnd]);
+            if (span.end <= span.start) {
                 warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapNoRows')}`);
                 continue;
             }
-            if (times.length !== values.length) {
+            if ((span.times.length || 0) !== (span.values.length || 0)) {
                 warnings.push(`${this._traceName(trace.varName, trace.fileId)}: time/value length mismatch`);
             }
             try {
-                const grid = buildCalendarHeatmap({
-                    times,
-                    values,
-                    calendarMode: state.calendarMode,
-                    aggregation: state.aggregation,
-                    // Eager arrays are already cropped with binary bounds.
-                    rangeStart: null,
-                    rangeEnd: null,
-                    // Transformed arrays already include crop and timeShift.
-                    timeShiftMs: 0,
-                    domainStart: densifyOptions.domainStart,
-                    domainEnd: densifyOptions.domainEnd,
-                    traceCount: retainedTraceCount,
-                    runtime,
+                const grid = await this._analysisKernelOnRows({
+                    op: 'analysis:heatmap',
+                    kernel: buildCalendarHeatmap,
+                    sources: [span.times, span.values],
+                    start: span.start,
+                    end: span.end,
+                    signal: eagerSignal,
+                    payload: ([times, values]) => ({
+                        times,
+                        values,
+                        calendarMode: state.calendarMode,
+                        aggregation: state.aggregation,
+                        // Eager arrays are already cropped with binary bounds.
+                        rangeStart: null,
+                        rangeEnd: null,
+                        // Transformed arrays already include crop and timeShift.
+                        timeShiftMs: 0,
+                        domainStart: densifyOptions.domainStart,
+                        domainEnd: densifyOptions.domainEnd,
+                        traceCount: retainedTraceCount,
+                        runtime,
+                    }),
                 });
                 if (!grid?.ok) { noteGridFailure(trace, grid); continue; }
                 noteGridWarnings(trace, grid);
                 modelByTrace.set(trace, { trace, grid });
             } catch (error) {
+                if (error?.name === 'AbortError') throw error;
                 warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
             }
         }
-    }, warnings);
-    // The measurement widened the range and rescheduled; this pass is stale.
-    if (measured.superseded) return;
+    }, warnings).finally(() => this._settleAnalysisRun(plot, '_calendarHeatmapEagerAbort', eagerSignal));
 
     // Lazy traces are aggregated exactly in DuckDB (never the overview), then
     // densified through the same kernel path as eager. Group by file so each
     // file is scanned once for all of its requested vars.
-    const lazyPromise = lazyTraces.length
-        ? this._runLazyCalendarHeatmap(panelId, plot, token, lazyTraces, densifyOptions, {
-            rangeFull: state.rangeFull, rangeStart, rangeEnd, warnings, noteGridWarnings, noteGridFailure, modelByTrace,
-        })
-        : Promise.resolve();
+    const lazyPromise = eagerDone.then((measured) => {
+        // The measurement widened the range and rescheduled, or a newer run
+        // took over while the eager traces were aggregated: this pass is stale.
+        if (measured.superseded || plot._calendarHeatmapToken !== token) return { aborted: true };
+        return lazyTraces.length
+            ? this._runLazyCalendarHeatmap(panelId, plot, token, lazyTraces, densifyOptions, {
+                rangeFull: state.rangeFull, rangeStart, rangeEnd, warnings, noteGridWarnings, noteGridFailure, modelByTrace,
+            })
+            : undefined;
+    });
 
     lazyPromise.then((outcome) => {
         // Its query was stopped: Cancel, or a newer run that takes over.
@@ -1109,6 +1122,8 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
             this._syncCalendarHeatmapSummary(plot);
         });
     }).catch((error) => {
+        // Stopped: Cancel, or a newer run that takes over.
+        if (error?.name === 'AbortError') return;
         if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
         plot.heatmapContainer?.setAttribute('aria-busy', 'false');
         this._setCalendarHeatmapStatus(plot, error?.message || String(error), 'error');

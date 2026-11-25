@@ -2178,7 +2178,7 @@ issue se cierre:
 |---|---|---|
 | ~~Integral (análisis) sobre 10 M filas, eje calendario~~ | **resuelto**: la integral lazy lee el archivo por trozos con el kernel de memoria (11–12 s a 10 M filas, sin la consulta SQL que agotaba la memoria) | #385 |
 | ~~Integral (análisis) con eje de tiempo numérico~~ | **resuelto**: el mismo camino por trozos sirve para cualquier eje (20–24 s a 10 M filas) | #385 |
-| Histograma | lee todas las filas, pero los cuartiles se calculan después en el hilo principal (0,6–1,7 s) | #383 |
+| ~~Histograma~~ | **resuelto**: los cuartiles y el conteo de los valores leídos se calculan en el worker de cómputo, y los cuartiles solo cuando un número de bins automático los lee (21 ms de tarea más larga) | #383 |
 | Ajustes exponenciales (curve fit, trend, ajuste 2D) con hasta 6 M filas en el rango | el ajuste corre en el hilo principal (1–10 s) | #382 |
 | ~~Heatmap, perfil temporal, correlación de pares~~ | **resuelto**: un cambio nuevo aborta la consulta que reemplaza (una señal por corrida, `_analysisRunSignal`); una consulta compartida con otro panel no se corta para ese panel | #384 |
 | ~~Trend~~ | **resuelto**: la interrupción de DuckDB llega como `AbortError` y el estado dice "cancelado" | #384 |

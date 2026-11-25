@@ -219,8 +219,9 @@ for (const [label, path] of [
     ['curve fit', 'src/plots/methods/phase2d-fit-methods.js'],
 ]) {
     const source = read(path);
-    assert.match(source, /_measureAnalysisKernel\(/, `${label} must measure its kernel`);
-    assert.match(source, /measured\.superseded\)\s*return/, `${label} must abandon a superseded pass`);
+    // Measured around the kernel, awaited where it runs as a worker job.
+    assert.match(source, /_measureAnalysisKernel(Async)?\(/, `${label} must measure its kernel`);
+    assert.match(source, /measured\.superseded\b[^;{]*\)\s*return/, `${label} must abandon a superseded pass`);
 }
 
 console.log('Measured analysis-range checks passed.');

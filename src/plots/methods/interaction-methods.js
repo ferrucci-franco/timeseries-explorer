@@ -1556,6 +1556,24 @@ proto._measureAnalysisKernel = function(panelId, plot, run, warnings = null) {
     return { result, elapsedMs, superseded };
 };
 
+// The same measurement around a kernel that is awaited (a worker job): the
+// time it took is what the auto-limit reconsider projects from, as above.
+proto._measureAnalysisKernelAsync = async function(panelId, plot, run, warnings = null) {
+    const state = this._analysisStateForMode(plot, plot?.mode);
+    const seededIndex = Array.isArray(warnings) && state?.autoRangeWarning
+        ? warnings.indexOf(state.autoRangeWarning)
+        : -1;
+    const startedAt = performance.now();
+    const result = await run();
+    const elapsedMs = performance.now() - startedAt;
+    const superseded = this._reconsiderAutoLimitedRange(panelId, plot, elapsedMs);
+    if (!superseded && seededIndex >= 0) {
+        if (state.autoRangeWarning) warnings[seededIndex] = state.autoRangeWarning;
+        else warnings.splice(seededIndex, 1);
+    }
+    return { result, elapsedMs, superseded };
+};
+
 proto._panelIdForPlot = function(plot) {
     for (const [id, candidate] of this.plots) {
         if (candidate === plot) return id;
