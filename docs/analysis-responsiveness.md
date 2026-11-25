@@ -943,8 +943,90 @@ Two things the first measurement of this change showed, both fixed in it:
   a fit — #386's subject ("a time pane" of the borderline list), left as it
   is here.
 
-Still on the main thread, in memory: Histogram, Heatmap, Temporal profile,
-Integral and the pair Correlation.
+**The other five, in memory, after** (Histogram, Heatmap, Temporal profile,
+Integral, pair Correlation; `--analyses=histogram,heatmap,temporal-profile,integral,integral-calendar,correlation
+--modes=eager`). Their kernels were already functions of plain data, or were
+made so (`src/compute/analysis/histogram.js`, `integral.js`,
+`correlation.js`); `_analysisKernelOnRows` runs one over the rows of
+in-memory arrays on a worker when there are many, and where they are
+otherwise. Each analysis has a run signal of its own for these jobs.
+
+| Analysis | Rows | Mode | Action | Longest task: computation | in Plotly | no JS (render) | Longest task overall | Frame gap | Time to result | A newer request stops the one in flight | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Histogram | 1.2 M | eager | open | 17 | 109 | 1 | 128 | 125 | 957 |  |  |
+| Histogram | 1.2 M | eager | type | 0 | 0 | 0 | 0 | 0 | 706 |  |  |
+| Histogram | 1.2 M | eager | param: bins: auto → 40 | 0 | 0 | 0 | 0 | 0 | 202 |  |  |
+| Histogram | 1.2 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 493 | nothing in flight | slider events waited ≤ 30 ms |
+| Histogram | 1.2 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 4 |  | cancelled; the range is back |
+| Integral | 1.2 M | eager | open | 20 | 150 | 0 | 170 | 164 | 364 |  |  |
+| Integral | 1.2 M | eager | type | 0 | 0 | 0 | 0 | 0 | 245 |  |  |
+| Integral | 1.2 M | eager | param: trapezoidal → rectangular | 0 | 0 | 0 | 0 | 0 | 273 |  |  |
+| Integral | 1.2 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 221 | nothing in flight | slider events waited ≤ 17 ms |
+| Integral | 1.2 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 4 |  | cancelled; the range is back |
+| Correlation (pairs) | 1.2 M | eager | open | 23 | 54 | 0 | 77 | 63 | 255 |  |  |
+| Correlation (pairs) | 1.2 M | eager | type | 0 | 0 | 0 | 0 | 0 | 70 |  |  |
+| Correlation (pairs) | 1.2 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 230 | nothing in flight | slider events waited ≤ 8 ms |
+| Correlation (pairs) | 1.2 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 5 |  | cancelled; the range is back |
+| Heatmap | 1.2 M | eager | open | 24 | 143 | 0 | 168 | 161 | 722 |  |  |
+| Heatmap | 1.2 M | eager | type | 0 | 0 | 0 | 0 | 0 | 498 |  |  |
+| Heatmap | 1.2 M | eager | param: week × day → day × hour | 8 | 45 | 0 | 53 | 53 | 536 |  |  |
+| Heatmap | 1.2 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 213 | nothing in flight | slider events waited ≤ 13 ms |
+| Heatmap | 1.2 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 3 |  | cancelled; the range is back |
+| Temporal profile | 1.2 M | eager | open | 47 | 121 | 1 | 169 | 168 | 519 |  |  |
+| Temporal profile | 1.2 M | eager | type | 0 | 0 | 0 | 0 | 0 | 473 |  |  |
+| Temporal profile | 1.2 M | eager | param: period: day → week | 0 | 0 | 0 | 0 | 0 | 493 |  |  |
+| Temporal profile | 1.2 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 327 | nothing in flight | slider events waited ≤ 16 ms |
+| Temporal profile | 1.2 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 3 |  | cancelled; the range is back |
+| Integral (calendar axis) | 1.2 M | eager | open | 19 | 106 | 1 | 125 | 115 | 290 |  |  |
+| Integral (calendar axis) | 1.2 M | eager | type | 0 | 0 | 0 | 0 | 0 | 298 |  |  |
+| Integral (calendar axis) | 1.2 M | eager | param: group by: none → day | 0 | 0 | 0 | 0 | 53 | 307 |  |  |
+| Integral (calendar axis) | 1.2 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 201 | nothing in flight | slider events waited ≤ 24 ms |
+| Integral (calendar axis) | 1.2 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 3 |  | cancelled; the range is back |
+| Histogram | 10.0 M | eager | open | 57 | 216 | 1 | **273** | 259 | 1981 |  |  |
+| Histogram | 10.0 M | eager | type | 0 | 0 | 0 | 0 | 0 | 1789 |  |  |
+| Histogram | 10.0 M | eager | param: bins: auto → 40 | 0 | 0 | 0 | 0 | 0 | 408 |  |  |
+| Histogram | 10.0 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 1392 | yes: its worker is terminated | slider events waited ≤ 16 ms |
+| Histogram | 10.0 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 9 |  | cancelled; the range is back |
+| Integral | 10.0 M | eager | open | 65 | 199 | 1 | **266** | 266 | 1054 |  |  |
+| Integral | 10.0 M | eager | type | 0 | 0 | 0 | 0 | 0 | 1162 |  |  |
+| Integral | 10.0 M | eager | param: trapezoidal → rectangular | 0 | 0 | 0 | 0 | 0 | 773 |  |  |
+| Integral | 10.0 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 538 | nothing in flight | slider events waited ≤ 20 ms |
+| Integral | 10.0 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 4 |  | cancelled; the range is back |
+| Correlation (pairs) | 10.0 M | eager | open | 94 | 52 | 1 | 122 | 111 | 623 |  |  |
+| Correlation (pairs) | 10.0 M | eager | type | 0 | 0 | 0 | 0 | 0 | 331 |  |  |
+| Correlation (pairs) | 10.0 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 385 | nothing in flight | slider events waited ≤ 25 ms |
+| Correlation (pairs) | 10.0 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 15 |  | cancelled; the range is back |
+| Heatmap | 10.0 M | eager | open | 72 | 254 | 1 | **326** | 326 | 3799 |  |  |
+| Heatmap | 10.0 M | eager | type | 0 | 0 | 0 | 0 | 0 | 2605 |  |  |
+| Heatmap | 10.0 M | eager | param: week × day → day × hour | 56 | 57 | 1 | 114 | 104 | 2461 |  |  |
+| Heatmap | 10.0 M | eager | drag | 0 | 0 | 0 | 0 | 35 | 1748 | yes: its worker is terminated | slider events waited ≤ 26 ms |
+| Heatmap | 10.0 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 15 |  | cancelled; the range is back |
+| Temporal profile | 10.0 M | eager | open | 90 | 194 | 1 | **284** | 276 | 2932 |  |  |
+| Temporal profile | 10.0 M | eager | type | 0 | 0 | 0 | 0 | 0 | 2893 |  |  |
+| Temporal profile | 10.0 M | eager | param: period: day → week | 0 | 0 | 0 | 0 | 0 | 3022 |  |  |
+| Temporal profile | 10.0 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 2780 | yes: its worker is terminated | slider events waited ≤ 35 ms |
+| Temporal profile | 10.0 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 13 |  | cancelled; the range is back |
+| Integral (calendar axis) | 10.0 M | eager | open | 66 | 198 | 1 | **264** | 251 | 961 |  |  |
+| Integral (calendar axis) | 10.0 M | eager | type | 0 | 0 | 0 | 0 | 0 | 744 |  |  |
+| Integral (calendar axis) | 10.0 M | eager | param: group by: none → day | 16 | 81 | 0 | 97 | 104 | 966 |  |  |
+| Integral (calendar axis) | 10.0 M | eager | drag | 0 | 0 | 0 | 0 | 0 | 394 | nothing in flight | slider events waited ≤ 34 ms |
+| Integral (calendar axis) | 10.0 M | eager | cancel | 0 | 0 | 0 | 0 | 0 | 8 |  | cancelled; the range is back |
+
+- Longest computation task, before → after, at 10 M rows: Temporal profile
+  3 757 → 90 ms, Heatmap 2 861 → 72 ms, Histogram 1 724 → 57 ms, Integral
+  1 291 → 66 ms, Correlation 358 → 94 ms. Every action after the first shows
+  no task over 50 ms at all.
+- **Cancel** can be pressed in all of them: the run stops and the range is
+  back in 3–15 ms.
+- The histogram no longer computes quartiles when the bins are set by hand:
+  nothing reads them, and sorting the samples for them was the larger half of
+  its pass ("bins: auto → 40" at 10 M rows: 408 ms to the result).
+- What is still over 250 ms is the **opening** of an analysis on the 10 M file
+  (264–326 ms), and it is Plotly drawing the time pane of 10 M rows beside
+  the analysis (199–254 ms "in Plotly"), not a kernel: #386's subject.
+
+With this, no in-memory analysis computes on the main thread: the FFT had its
+worker already.
 
 ### #382: Lazy exponential fits
 
@@ -952,7 +1034,38 @@ Not landed yet.
 
 ### #383: Lazy histogram
 
-Not landed yet.
+Landed with the last part of #381, on the same worker ops.
+
+The read of a lazy file was never the problem: the task was
+`histogramFiniteStats`, called on the main thread once the stream had ended,
+sorting the values the read had kept (up to 2 M) for the quartiles, and then
+counting them.
+
+- The quartiles of the kept values (or of the stride sample past the limit)
+  are computed by `analysis:histogramStats` on the compute worker, the buffer
+  handed over and back; the counts by `analysis:histogramCounts`.
+- They are computed only when an automatic bin count reads them
+  (`needQuartiles`), also when the values were kept — which they were not
+  checked for before.
+- The run's signal stops the jobs, as it stops the stream.
+
+After (`--analyses=histogram --modes=lazy`):
+
+| Analysis | Rows | Mode | Action | Longest task: computation | in Plotly | no JS (render) | Longest task overall | Frame gap | Time to result | A newer request stops the one in flight | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Histogram | 1.2 M | lazy | open | 21 | 167 | 1 | 189 | 185 | 2415 |  |  |
+| Histogram | 1.2 M | lazy | type | 0 | 0 | 0 | 0 | 0 | 1484 |  |  |
+| Histogram | 1.2 M | lazy | param: bins: auto → 40 | 0 | 0 | 0 | 0 | 38 | 740 |  |  |
+| Histogram | 1.2 M | lazy | drag | 0 | 0 | 0 | 0 | 0 | 942 | yes: aborted 175 ms after, ended 113 ms later | slider events waited ≤ 3 ms |
+| Histogram | 1.2 M | lazy | cancel | 0 | 0 | 0 | 0 | 0 | 4 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+| Histogram | 10.0 M | lazy | open | 21 | 144 | 0 | 161 | 148 | 15134 |  |  |
+| Histogram | 10.0 M | lazy | type | 0 | 0 | 0 | 0 | 0 | 13129 |  |  |
+| Histogram | 10.0 M | lazy | param: bins: auto → 40 | 0 | 0 | 0 | 0 | 0 | 7575 |  |  |
+| Histogram | 10.0 M | lazy | drag | 0 | 0 | 0 | 0 | 0 | 11253 | yes: aborted 171 ms after, ended 123 ms later | slider events waited ≤ 0 ms |
+| Histogram | 10.0 M | lazy | cancel | 0 | 0 | 0 | 0 | 0 | 3 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
+
+The longest computation task goes from 0.63–1.7 s to 21 ms; what is left of
+"open" is Plotly's first draw. The time to result is the read of the file.
 
 ### #384: Superseded lazy SQL queries, and Trend's Cancel
 

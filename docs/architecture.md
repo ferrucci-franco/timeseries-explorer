@@ -107,10 +107,15 @@ An analysis of a file held in memory computes off the main thread, so the page
   same function runs on the main thread.
 - The rows a job needs are copied once for it, a block at a time
   (`_analysisRowsForWorker`), and their buffers handed over.
-- Moved so far: the Curve fit and the Trend of a time series and the Curve fit
-  of a 2D plot (`analysis:curveFit`, `analysis:trend`, `analysis:pairFit`).
-  The others follow the same shape (#381);
-  `scripts/e2e-analysis-cancel-memory.mjs` is where each is added.
+- `_analysisKernelOnRows` is the one place a kernel over in-memory rows is
+  run from: a worker job when the rows are many, the function itself
+  otherwise; `_analysisSpan` finds the rows of a range without copying them.
+- Every analysis computes this way for a file in memory: Curve fit, Trend,
+  Histogram, Heatmap, Temporal profile and Integral on a time series; Curve
+  fit and Correlation on a 2D plot (the `analysis:*` ops of the worker). The
+  FFT has its own worker. A new analysis does the same, and is added to
+  `scripts/e2e-analysis-cancel-memory.mjs` and
+  `scripts/test-analysis-jobs.mjs`.
 
 ### `src/parsers`
 
