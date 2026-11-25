@@ -331,4 +331,55 @@ for (const { name, transform, inverted } of TRANSFORMS) {
     assert.match(manager, /installPlotFitLazyMethods\(PlotManager\);/, 'installed on the plot manager');
 }
 
+// ── The rows a worker fit is handed (#382) ────────────────────────
+// With a worker to fit on, the rows are read as a stream and kept as the
+// chunks they arrive in (_collectLazyFitRows), for the worker to join. Joined,
+// they are the rows the single read returns, bit for bit — so the fit run on
+// them is the fit this file has always been held to.
+{
+    const hl = harness(lazy);
+    const join = (parts) => {
+        const out = new Float64Array(parts.reduce((n, part) => n + part.length, 0));
+        let at = 0;
+        for (const part of parts) { out.set(part, at); at += part.length; }
+        return out;
+    };
+    const sameArray = (got, want, label) => {
+        assert.equal(got.length, want.length, `${label}: as many rows`);
+        for (let i = 0; i < want.length; i++) {
+            assert.ok(Object.is(got[i], want[i]) || (Number.isNaN(got[i]) && Number.isNaN(want[i])), `${label}: row ${i} (${got[i]} vs ${want[i]})`);
+        }
+    };
+    const names = Object.keys(lazy.variables).filter(name => name !== lazy.metadata.timeName).slice(0, 2);
+    const timeData = eager.variables[eager.metadata.timeName].data;
+    const lo = Number(timeData[0]);
+    const hi = Number(timeData[timeData.length - 1]);
+    for (const range of [[lo, hi], [lo + (hi - lo) * 0.21, lo + (hi - lo) * 0.83], [lo - 5, lo + (hi - lo) * 0.02]]) {
+        const fetched = await hl._fetchLazyFitRows('f', names, range);
+        assert.equal(fetched.ok, true);
+        let reads = 0;
+        const collected = await hl._collectLazyFitRows('f', names, range, 1e9, { onRows: () => { reads += 1; } });
+        assert.equal(collected.ok, true);
+        assert.equal(collected.rows, fetched.time.length, 'the rows in the range');
+        sameArray(join(collected.time), fetched.time, `collected time, range ${range}`);
+        for (const name of names) sameArray(join(collected.valuesByVar.get(name)), fetched.valuesByVar.get(name), `collected ${name}, range ${range}`);
+        assert.ok(reads >= 1, 'with the rows read reported as it goes');
+        // The chunks are the collector's own: not views of one another.
+        assert.equal(new Set([...collected.time, ...names.flatMap(name => collected.valuesByVar.get(name))].map(part => part.buffer)).size,
+            collected.time.length * (1 + names.length), 'each chunk has a buffer of its own to hand over');
+        // Past the limit it says so, and stops reading.
+        const refused = await hl._collectLazyFitRows('f', names, range, fetched.time.length - 1);
+        assert.deepEqual(refused, { ok: false, reason: 'tooManyRows' }, 'past the limit: too many rows, nothing kept');
+        const exact = await hl._collectLazyFitRows('f', names, range, fetched.time.length);
+        assert.equal(exact.ok, true, 'exactly the limit is within it');
+    }
+    // No worker in this harness: the job says so, and the caller keeps its path.
+    assert.equal(await hl._lazyFitJob('analysis:curveFit', {}, { times: [new Float64Array(2)] }), null, 'with no worker, no job');
+    // A cancelled read rejects.
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(hl._collectLazyFitRows('f', names, [lo, hi], 1e9, { signal: controller.signal }), error => error?.name === 'AbortError');
+    console.log('lazy curve fit: the rows collected for a worker fit are the rows of the single read');
+}
+
 console.log('lazy curve fit: every row, the in-memory fit bit for bit');

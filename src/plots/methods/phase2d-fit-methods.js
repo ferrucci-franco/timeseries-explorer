@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { FIT_KEEP_LAZY_ROWS } from './fit-lazy-methods.js';
 import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
@@ -305,6 +306,31 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             && !!this._phase2dPairDeferred(plot, p));
     };
 
+    // Pairs whose fit is not known yet for what is asked now. A pair whose
+    // result is cached under its current key is not fitted again.
+    proto._phase2dPairsToFit = function(plot) {
+        return (plot.phaseTraces || []).filter(p => {
+            if (p.visible === false || this._phase2dPairModel(p) === 'none' || !this._phase2dPairDeferred(plot, p)) return false;
+            const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(p));
+            // Known for what is asked now, or cancelled from the pill for it:
+            // either way not fitted again until something changes.
+            const key = this._phase2dLazyFitKey(plot, p);
+            return !(cached && cached.key === key && (cached.status === 'ok' || cached.status === 'cancelled'));
+        });
+    };
+
+    // The fits under way answer something that is no longer asked (a model or
+    // the range changed): stopped now, when the change is scheduled, rather
+    // than when the recompute it schedules gets to run (#382).
+    proto._abortStalePhase2dFitJob = function(plot) {
+        const job = plot?._phase2dLazyJob;
+        if (!job) return;
+        const wanted = this._phase2dPairsToFit(plot).map(p => this._phase2dLazyFitKey(plot, p)).join('\u0001');
+        if (wanted === job.wanted) return;
+        job.controller?.abort();
+        plot._phase2dLazyJob = null;
+    };
+
     // Query DuckDB for the exact fit of every lazy pair with a model, cache the
     // results on the plot, then re-render curves + drawer. Token-guarded so a
     // superseded query never paints stale coefficients.
@@ -314,16 +340,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (!state.fitEnabled) return;
         if (!plot._phase2dLazyFits) plot._phase2dLazyFits = new Map();
 
-        // Pairs whose fit is not known yet for what is asked now. A pair whose
-        // result is cached under its current key is not fitted again.
-        const lazyPairs = (plot.phaseTraces || []).filter(p => {
-            if (p.visible === false || this._phase2dPairModel(p) === 'none' || !this._phase2dPairDeferred(plot, p)) return false;
-            const cached = plot._phase2dLazyFits.get(this._phase2dPairId(p));
-            // Known for what is asked now, or cancelled from the pill for it:
-            // either way not fitted again until something changes.
-            const key = this._phase2dLazyFitKey(plot, p);
-            return !(cached && cached.key === key && (cached.status === 'ok' || cached.status === 'cancelled'));
-        });
+        const lazyPairs = this._phase2dPairsToFit(plot);
         const wanted = lazyPairs.map(p => this._phase2dLazyFitKey(plot, p)).join('\u0001');
         // The same fits already under way: let them finish. Anything else asked
         // now replaces them — a newer request stops the one it supersedes
@@ -395,6 +412,36 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 }
                 for (const pair of rowPairs) {
                     const model = this._phase2dPairModel(pair);
+                    const streamProgress = (pass, read) => {
+                        if (plot._phase2dLazyToken !== token) return;
+                        this._setPhase2dFitStatus(plot, i18n.t('fitLazyStreaming')
+                            .replace('{pass}', String(pass))
+                            .replace('{rows}', i18n.formatNumber(read)), 'loading');
+                    };
+                    // With a worker to fit on: the rows read as a stream,
+                    // handed over chunk by chunk and fitted there by the
+                    // in-memory kernel (#382).
+                    if (this._analysisPool?.()) {
+                        const collected = await this._collectLazyFitRows(fileId, [pair.x, pair.y], [lo, hi], FIT_KEEP_LAZY_ROWS, {
+                            signal, onRows: read => streamProgress(1, read),
+                        });
+                        if (collected.ok) {
+                            const computed = await this._lazyFitJob('analysis:pairFit', { model },
+                                { x: collected.valuesByVar.get(pair.x), y: collected.valuesByVar.get(pair.y) }, signal);
+                            if (computed) {
+                                byPair.set(pair, { status: 'ok', fit: computed.fit, nScope: computed.nScope });
+                                continue;
+                            }
+                        } else if (collected.reason !== 'tooManyRows') {
+                            byPair.set(pair, { status: collected.reason || 'noSql' });
+                            continue;
+                        } else {
+                            const streamed = await this._streamLazyFit(fileId, [pair.x, pair.y], [lo, hi], model,
+                                (time, byVar) => [byVar.get(pair.x), byVar.get(pair.y)], { signal, onProgress: streamProgress });
+                            byPair.set(pair, { status: 'ok', fit: streamed.fit, nScope: streamed.nScope });
+                            continue;
+                        }
+                    }
                     const rows = await this._fetchLazyFitRows(fileId, [pair.x, pair.y], [lo, hi], undefined, signal);
                     if (rows.ok) {
                         const fit = fitPair(model, rows.valuesByVar.get(pair.x), rows.valuesByVar.get(pair.y));
@@ -1191,6 +1238,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (!plot || plot.mode !== 'phase2d') return;
         clearTimeout(plot._phase2dFitRecomputeTimer);
         const state = this._ensurePhase2dState(plot);
+        if (state.fitEnabled) this._abortStalePhase2dFitJob(plot);
         const adjusted = this._autoLimitAnalysisRange(plot, state, 'phase2d');
         if (adjusted) {
             state.timeSeriesHidden = false;

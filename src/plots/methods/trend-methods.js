@@ -147,6 +147,7 @@ export function installPlotTrendMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot?.div || plot.mode !== 'trend') return;
         clearTimeout(plot._trendRecomputeTimer);
+        this._abortStaleTrendJobs?.(plot);
         const run = () => {
             if (this.plots.get(panelId) !== plot || plot.mode !== 'trend' || !plot.div) return;
             this._setTrendStatus(plot, i18n.t('trendCalculating'), 'loading');

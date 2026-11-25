@@ -6,7 +6,7 @@ import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import Modal from '../../ui/modal.js';
 import { createCopyButton } from '../../ui/copy-button.js';
 import { buildFitCurve } from '../../utils/regression.js';
-import { FIT_MAX_LAZY_ROWS, RESIDUAL_BUCKETS } from './fit-lazy-methods.js';
+import { FIT_KEEP_LAZY_ROWS, FIT_MAX_LAZY_ROWS, RESIDUAL_BUCKETS } from './fit-lazy-methods.js';
 import { ANALYSIS_INLINE_ROWS } from '../../core/analysis-pool.js';
 import {
     FIT_MODEL_OPTIONS,
@@ -365,6 +365,45 @@ export function installPlotCurveFitMethods(TargetClass) {
                     this._paintCurveFits(panelId, plot, this._computeCurveFits(plot));
                     continue;
                 }
+                const progress = (pass, read) => {
+                    if (!current()) return;
+                    const text = pass === 'residuals'
+                        ? i18n.t('fitLazyResiduals').replace('{rows}', i18n.formatNumber(read))
+                        : i18n.t('fitLazyStreaming').replace('{pass}', String(pass)).replace('{rows}', i18n.formatNumber(read));
+                    this._setCurveFitStatus(plot, `F${r.index + 1}: ${text}`, 'loading');
+                };
+                // With a worker to fit on: the rows are read as a stream and
+                // handed over chunk by chunk, and the fit — the in-memory
+                // kernel — runs there, for any range the fit would otherwise
+                // hold rows of (FIT_KEEP_LAZY_ROWS). Nothing of it on the main
+                // thread but the reading (#382). Past that, streamed passes.
+                if (this._analysisPool?.()) {
+                    const collected = await this._collectLazyFitRows(r.trace.fileId, [r.trace.varName], r.range, FIT_KEEP_LAZY_ROWS, {
+                        signal, onRows: read => progress(1, read),
+                    });
+                    if (!current()) continue;
+                    let result = null;
+                    if (collected.ok) {
+                        const computed = await this._lazyFitJob('analysis:curveFit',
+                            { model: r.entry.model, t0: r.range[0], scale: r.info.scale, buckets: RESIDUAL_BUCKETS },
+                            { times: collected.time, values: collected.valuesByVar.get(r.trace.varName) }, signal);
+                        if (!current()) continue;
+                        if (computed) result = this._curveFitResult(r.trace, r.range, r.info, computed.fit, computed.residual, computed.nScope);
+                    } else if (collected.reason === 'tooManyRows') {
+                        result = await this._curveFitStreamed(plot, r, { signal, onProgress: progress });
+                    } else {
+                        entry = { key: r.key, result: null, status: 'error' };
+                    }
+                    if (result) entry = { key: r.key, result, status: 'ok' };
+                }
+                if (entry) {
+                    if (!current()) continue;
+                    jobs.delete(r.entry.id);
+                    plot._curveFitCache.set(r.entry.id, entry);
+                    if (this.plots.get(panelId) !== plot || plot.mode !== 'curve-fit') return;
+                    this._paintCurveFits(panelId, plot, this._computeCurveFits(plot));
+                    continue;
+                }
                 const rows = await this._fetchLazyFitRows(r.trace.fileId, [r.trace.varName], r.range, FIT_MAX_LAZY_ROWS, signal);
                 if (!current()) continue;
                 if (rows.ok) {
@@ -427,10 +466,33 @@ export function installPlotCurveFitMethods(TargetClass) {
         }
     };
 
+    // The jobs in flight whose fit is no longer what is asked (its model,
+    // range or signal changed, or it is gone): stopped now, when the change is
+    // scheduled, rather than when the recompute it schedules gets to run —
+    // a read of a large file, or a fit on the worker, answering settings that
+    // have just changed (#382). What they drew stays on screen meanwhile.
+    proto._abortStaleCurveFitJobs = function(plot) {
+        const jobs = plot?._curveFitLazyJobs;
+        if (!jobs?.size) return;
+        const state = this._ensureCurveFitState(plot);
+        for (const [id, job] of [...jobs]) {
+            const entry = state.fits.find(fit => fit.id === id);
+            const trace = entry ? this._curveFitTraceFor(plot, entry) : null;
+            let key = null;
+            if (trace && entry.model !== 'none' && this._isVisible(trace)) {
+                key = this._curveFitKey(plot, entry, trace, this._curveFitRange(plot, entry), this._curveFitTimeInfo(plot, trace));
+            }
+            if (key === job.key) continue;
+            job.controller?.abort();
+            jobs.delete(id);
+        }
+    };
+
     proto._scheduleCurveFitRecompute = function(panelId, options = {}) {
         const plot = this.plots.get(panelId);
         if (!plot?.div || plot.mode !== 'curve-fit') return;
         clearTimeout(plot._curveFitRecomputeTimer);
+        this._abortStaleCurveFitJobs(plot);
         const run = () => {
             if (this.plots.get(panelId) !== plot || plot.mode !== 'curve-fit' || !plot.div) return;
             this._setCurveFitStatus(plot, i18n.t('curveFitCalculating'), 'loading');

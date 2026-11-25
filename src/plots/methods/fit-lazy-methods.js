@@ -106,6 +106,52 @@ export function installPlotFitLazyMethods(TargetClass) {
         }
     };
 
+    /**
+     * The rows _fetchLazyFitRows returns, read as a stream and kept as the
+     * chunks they arrive in — for a fit that runs on the compute worker,
+     * which is handed the chunks and joins them there. One query's worth of
+     * conversion, transform and cut per chunk instead of one task for them
+     * all, and nothing joined on the main thread. Resolves to
+     * `{ ok: true, rows, time: [chunk…], valuesByVar: Map(name → [chunk…]) }`,
+     * or `{ ok: false, reason: 'tooManyRows' }` past `maxRows` (the read stops
+     * there), or the reasons _lazyFitPass throws.
+     */
+    proto._collectLazyFitRows = async function(fileId, varNames, displayRange, maxRows, { signal = null, onRows = null } = {}) {
+        const time = [];
+        const valuesByVar = new Map(varNames.map(name => [name, []]));
+        let rows = 0;
+        const tooMany = new Error('tooManyRows');
+        try {
+            await this._lazyFitPass(fileId, varNames, displayRange, (chunkTime, byVar) => {
+                if (!chunkTime.length) return;
+                rows += chunkTime.length;
+                if (rows > maxRows) throw tooMany;
+                // Copies of its own: a chunk's arrays are the stream's until
+                // it yields the next, and these are handed to a worker.
+                time.push(Float64Array.from(chunkTime));
+                for (const name of varNames) valuesByVar.get(name).push(Float64Array.from(byVar.get(name) || []));
+            }, { signal, onRows });
+        } catch (error) {
+            if (error === tooMany) return { ok: false, reason: 'tooManyRows' };
+            if (error?.reason) return { ok: false, reason: error.reason };
+            throw error;
+        }
+        return { ok: true, rows, time, valuesByVar };
+    };
+
+    /**
+     * A fit kernel over collected chunks, on the compute worker: `op` with
+     * `payload`, and each field of `chunks` joined there from its parts.
+     * Resolves to null where there is no worker (the caller keeps its own
+     * path). The chunks' buffers are handed over: they are not read again.
+     */
+    proto._lazyFitJob = async function(op, payload, chunks, signal = null) {
+        if (!this._analysisJob) return null;
+        const transfer = [];
+        for (const parts of Object.values(chunks)) for (const part of parts) transfer.push(part.buffer);
+        return this._analysisJob('analysis:joined', { op, payload, chunks }, { transfer, signal });
+    };
+
     // A fit of the lazy rows in a range, over every one of them: its kernel's
     // passes (fitSteps), each one a stream of the rows. `toXY(time, byVar)`
     // gives the x/y a chunk is fitted on. Resolves to { fit, nScope } — nScope
