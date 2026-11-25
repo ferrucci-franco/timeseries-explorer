@@ -111,7 +111,9 @@ try {
     const context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
     const page = await context.newPage();
     const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
+    // With its stack: a page error here has been a draw onto a panel already
+    // rebuilt, and only the stack says whose.
+    page.on('pageerror', e => errors.push(String(e.stack || e.message)));
     await page.goto(baseUrl);
     await page.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'), null, { timeout: 60000 });
     await page.setInputFiles('#file-input', [makeCsv()]);
