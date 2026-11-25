@@ -27,6 +27,8 @@ import {
     fitEquationParts,
 } from '../../utils/fit-models.js';
 import { csvValueCell } from '../../utils/csv-cell.js';
+import { pairFitRows } from '../../compute/analysis/pair-fit.js';
+import { ANALYSIS_INLINE_ROWS } from '../../core/analysis-pool.js';
 
 // Range-input formatting / datetime conversion — mirrors the FFT & Correlation
 // panels so the Todo/Selección controls look and behave identically.
@@ -174,24 +176,53 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     // are already applied by the transformed-data getters. In Selección only the
     // rows whose transformed time falls inside [lo, hi] participate; value-level
     // NaN/±Inf are left for the kernel to exclude and count.
-    proto._phase2dPairSeries = function(plot, pair) {
+    // Where those rows are, without copying them.
+    proto._phase2dPairSpan = function(plot, pair) {
         const state = this._ensurePhase2dState(plot);
-        const xVals = this._getTransformedVariableData(pair.fileId, pair.x);
-        const yVals = this._getTransformedVariableData(pair.fileId, pair.y);
+        const xVals = this._getTransformedVariableData(pair.fileId, pair.x) || [];
+        const yVals = this._getTransformedVariableData(pair.fileId, pair.y) || [];
         if (state.rangeFull) {
-            const n = Math.min(xVals?.length || 0, yVals?.length || 0);
-            return { x: (xVals || []).slice(0, n), y: (yVals || []).slice(0, n), nScope: n };
+            return { xVals, yVals, start: 0, end: Math.min(xVals.length || 0, yVals.length || 0) };
         }
         const times = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
-        const n = Math.min(times?.length || 0, xVals?.length || 0, yVals?.length || 0);
+        const n = Math.min(times?.length || 0, xVals.length || 0, yVals.length || 0);
         const [lo, hi] = this._phase2dFitActiveRange(plot);
         const start = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
         const end = Math.max(start, Math.min(n, this._upperBound(times, hi)));
-        return {
-            x: (xVals || []).slice(start, end),
-            y: (yVals || []).slice(start, end),
-            nScope: end - start,
-        };
+        return { xVals, yVals, start, end };
+    };
+
+    proto._phase2dPairSeries = function(plot, pair) {
+        const { xVals, yVals, start, end } = this._phase2dPairSpan(plot, pair);
+        return { x: xVals.slice(start, end), y: yVals.slice(start, end), nScope: end - start };
+    };
+
+    // How a pair's fit arrives when it is not computed on the spot: 'lazy' —
+    // read from a file in memory-saving mode; 'memory' — the rows are in
+    // memory, many of them, and the fit runs on the compute worker; null —
+    // computed here and now (few rows, or no worker to hand them to). Both
+    // deferred kinds go through _refreshPhase2dLazyFits and keep their result
+    // in plot._phase2dLazyFits, so nothing is fitted twice.
+    proto._phase2dPairDeferred = function(plot, pair) {
+        if (this._isLazyFile?.(pair.fileId)) return 'lazy';
+        if (!this._analysisPool?.()) return null;
+        const span = this._phase2dPairSpan(plot, pair);
+        return span.end - span.start > ANALYSIS_INLINE_ROWS ? 'memory' : null;
+    };
+
+    // An in-memory pair on the compute worker: the same kernel, off the main
+    // thread, stopped when `signal` fires. Null where there is no worker.
+    proto._phase2dFitOnWorker = async function(plot, pair, model, signal) {
+        const pool = this._analysisPool?.() || null;
+        if (!pool) return null;
+        const series = this._phase2dPairSeries(plot, pair);
+        const transfer = [...new Set([series.x?.buffer, series.y?.buffer].filter(buffer => buffer instanceof ArrayBuffer))];
+        try {
+            return await pool.run('analysis:pairFit', { model, x: series.x, y: series.y }, { transfer, signal });
+        } catch (error) {
+            if (error?.workerUnavailable) return null;
+            throw error;
+        }
     };
 
     // Compute one OLS fit per visible pair for the active model, cache on the
@@ -214,15 +245,20 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: false });
                 return;
             }
-            if (this._isLazyFile?.(pair.fileId)) {
+            const deferred = this._phase2dPairDeferred(plot, pair);
+            if (deferred) {
                 // Lazy pairs are fitted exactly in DuckDB by _refreshPhase2dLazyFits
-                // (async). Reuse its cached result when it matches the current
-                // pair/model/range; otherwise show it as pending.
+                // (async), and in-memory pairs of many rows on the compute
+                // worker by the same. Reuse its cached result when it matches
+                // the current pair/model/range; otherwise show it as pending.
+                // (`lazy` says "of a lazy file" once the fit is known, and
+                // "still coming" until then; `inMemory` tells the two apart.)
+                const inMemory = deferred === 'memory';
                 const key = this._phase2dLazyFitKey(plot, pair);
                 const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
                 if (cached && cached.key === key && cached.fit) {
                     const curve = cached.fit.status === 'ok' ? buildFitCurve(cached.fit, undefined, curveOptions) : { x: [], y: [] };
-                    results.push({ pair, index, label, model, fit: cached.fit, curve, nScope: cached.nScope, lazy: true });
+                    results.push({ pair, index, label, model, fit: cached.fit, curve, nScope: cached.nScope, lazy: !inMemory });
                 } else {
                     // Until the new fit arrives (or after it was cancelled from
                     // the computing pill) the previous curve stays drawn; `fit`
@@ -231,7 +267,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                     const previous = sameKey ? cached?.previous : (cached?.fit || cached?.previous);
                     const curve = previous?.status === 'ok' ? buildFitCurve(previous, undefined, curveOptions) : null;
                     results.push({
-                        pair, index, label, model, fit: null, curve, nScope: NaN, lazy: true,
+                        pair, index, label, model, fit: null, curve, nScope: NaN, lazy: true, inMemory,
                         lazyStatus: sameKey ? cached?.status : 'pending', stale: !!curve,
                         curveModel: curve ? previous.model : null,
                     });
@@ -239,7 +275,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 return;
             }
             const series = this._phase2dPairSeries(plot, pair);
-            const fit = fitPair(model, series.x, series.y);
+            const { fit } = pairFitRows({ model, x: series.x, y: series.y });
             const curve = fit && fit.status === 'ok' ? buildFitCurve(fit, undefined, curveOptions) : { x: [], y: [] };
             results.push({ pair, index, label, model, fit, curve, nScope: series.nScope, lazy: false });
         });
@@ -266,7 +302,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return (plot?.phaseTraces || []).some(p =>
             p.visible !== false
             && this._phase2dPairModel(p) !== 'none'
-            && this._isLazyFile?.(p.fileId));
+            && !!this._phase2dPairDeferred(plot, p));
     };
 
     // Query DuckDB for the exact fit of every lazy pair with a model, cache the
@@ -281,7 +317,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         // Pairs whose fit is not known yet for what is asked now. A pair whose
         // result is cached under its current key is not fitted again.
         const lazyPairs = (plot.phaseTraces || []).filter(p => {
-            if (p.visible === false || this._phase2dPairModel(p) === 'none' || !this._isLazyFile?.(p.fileId)) return false;
+            if (p.visible === false || this._phase2dPairModel(p) === 'none' || !this._phase2dPairDeferred(plot, p)) return false;
             const cached = plot._phase2dLazyFits.get(this._phase2dPairId(p));
             // Known for what is asked now, or cancelled from the pill for it:
             // either way not fitted again until something changes.
@@ -302,7 +338,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const job = { wanted, controller };
         plot._phase2dLazyJob = job;
         const signal = controller?.signal || null;
-        this._setPhase2dFitStatus(plot, i18n.t('phase2dFitLazyPending'), 'loading');
+        // "Fitting the large file…" is for a file being read; pairs in memory
+        // are simply being calculated.
+        const reading = lazyPairs.some(p => this._isLazyFile?.(p.fileId));
+        this._setPhase2dFitStatus(plot, i18n.t(reading ? 'phase2dFitLazyPending' : 'phase2dFitCalculating'), 'loading');
 
         const [lo, hi] = this._phase2dFitActiveRange(plot);
         const byFile = new Map();
@@ -321,6 +360,20 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             const rowPairs = pairs.filter(p => EXP_FAMILY_MODELS.has(this._phase2dPairModel(p)));
             const byPair = new Map();
             try {
+                if (!this._isLazyFile?.(fileId)) {
+                    // A file in memory: each pair on the compute worker, or
+                    // here where there is none — the same kernel either way.
+                    for (const pair of pairs) {
+                        const model = this._phase2dPairModel(pair);
+                        const computed = await this._phase2dFitOnWorker(plot, pair, model, signal)
+                            || (() => {
+                                const series = this._phase2dPairSeries(plot, pair);
+                                return pairFitRows({ model, x: series.x, y: series.y });
+                            })();
+                        byPair.set(pair, { status: 'ok', fit: computed.fit, nScope: computed.nScope });
+                    }
+                    return { pairs, stats: pairs.map(p => byPair.get(p)) };
+                }
                 if (sqlPairs.length) {
                     if (!source?.getPhaseRegressionStats) {
                         sqlPairs.forEach(p => byPair.set(p, { status: 'noSql' }));
@@ -369,7 +422,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 return { pairs, stats: pairs.map(p => byPair.get(p)) };
             } catch (err) {
                 if (err?.name === 'AbortError') return { pairs, aborted: true };
-                console.warn('[phase2d-fit] lazy query failed:', err);
+                console.warn('[phase2d-fit] deferred fit failed:', err);
                 return { pairs, error: 'error' };
             }
         });
@@ -1057,7 +1110,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (!plot || plot.mode !== 'phase2d' || !plot._phase2dLazyJob) return;
         if (!plot._phase2dLazyFits) plot._phase2dLazyFits = new Map();
         for (const pair of plot.phaseTraces || []) {
-            if (pair.visible === false || this._phase2dPairModel(pair) === 'none' || !this._isLazyFile?.(pair.fileId)) continue;
+            if (pair.visible === false || this._phase2dPairModel(pair) === 'none' || !this._phase2dPairDeferred(plot, pair)) continue;
             const id = this._phase2dPairId(pair);
             const key = this._phase2dLazyFitKey(plot, pair);
             const cached = plot._phase2dLazyFits.get(id);
@@ -1221,7 +1274,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 if (lazyStatus === 'error') return i18n.t('phase2dFitLazyError');
                 if (lazyStatus === 'noRegr' || lazyStatus === 'noSql') return i18n.t('phase2dFitLazyNoRegr');
                 if (lazyStatus === 'undefined') return i18n.t('phase2dFitNoData');
-                return i18n.t('phase2dFitLazyPending');
+                return i18n.t(lazy === 'memory' ? 'phase2dFitCalculating' : 'phase2dFitLazyPending');
             }
             return i18n.t('phase2dFitNoData');
         }
@@ -1469,7 +1522,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
         const warn = options.pending
             ? i18n.t('phase2dFitCalculating')
-            : this._phase2dFitWarningText(r.fit, r.lazy, r.lazyStatus);
+            : this._phase2dFitWarningText(r.fit, r.lazy && r.inMemory ? 'memory' : r.lazy, r.lazyStatus);
         if (warn) {
             const w = document.createElement('div');
             w.className = 'phase2d-fit-warning';
@@ -1593,8 +1646,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             ['pearson_r', (r) => (r.model === 'linear' || r.model === 'power' ? num(fitOf(r, 'r')) : '')],
             ['r_squared', (r) => num(fitOf(r, 'r2'))],
             ['rmse', (r) => num(fitOf(r, 'rmse'))],
-            ['status', (r) => (r.lazy ? 'lazy-unsupported' : (r.model === 'none' ? 'none' : (r.fit?.status ?? ''))),],
-            ['warning', (r) => (r.lazy ? 'lazy-pending' : (r.fit?.warning ?? ''))],
+            ['status', (r) => (r.lazy && !r.inMemory ? 'lazy-unsupported' : (r.model === 'none' ? 'none' : (r.fit?.status ?? (r.inMemory ? 'pending' : '')))),],
+            ['warning', (r) => (r.lazy && !r.inMemory ? 'lazy-pending' : (r.fit?.warning ?? ''))],
         ];
         const headers = [];
         const columns = [];

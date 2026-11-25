@@ -304,7 +304,7 @@ export function installPlotAnalysisBusyMethods(TargetClass) {
         if (mode === 'phase2d') {
             if (plot._phase2dLazyJob) return false;
             return !(plot.phaseTraces || []).some((pair) => {
-                if (pair.visible === false || this._phase2dPairModel?.(pair) === 'none' || !this._isLazyFile?.(pair.fileId)) return false;
+                if (pair.visible === false || this._phase2dPairModel?.(pair) === 'none' || !this._phase2dPairDeferred?.(plot, pair)) return false;
                 const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
                 return !(cached && cached.status === 'ok' && cached.key === this._phase2dLazyFitKey(plot, pair));
             });

@@ -5,7 +5,8 @@
 // but the page takes no click until the result is there. On the worker
 // (src/core/analysis-pool.js) the page stays free, and the run's signal
 // terminates the worker. For each analysis moved there so far — the Curve fit
-// of a time series — over a CSV of 150 000 rows open in memory:
+// and the Trend of a time series, and the Curve fit of a 2D plot — over a CSV
+// of 150 000 rows open in memory:
 //
 //   1. the first result comes from a worker job, and is the result the kernel
 //      gives on the main thread, bit for bit;
@@ -210,8 +211,139 @@ try {
     await fitted('first-order-offset');
     assert.equal((await fitState()).rows, ROWS, 'the next fit computes');
 
+    // ── The same five steps for the other analyses moved to the worker ──
+    const text = `value => JSON.stringify(value, (key, v) => (typeof v === 'number' && !Number.isFinite(v) ? '#' + v : v))`;
+    async function check({ name, id, op, open, change, values, setting, result, mainThread }) {
+        const panelPill = page.locator(`.layout-panel[data-id="${id}"] .analysis-computing-indicator.active`);
+        const ready = (value) => page.waitForFunction(({ fn, value }) => (0, eval)(`(${fn})`)(value), { fn: result.ready, value }, { timeout: 120000 });
+        await page.evaluate(() => { window.__jobs.hang = false; window.__jobs.ran.length = 0; });
+        await open();
+        await change(values[0]);
+        await ready(values[0]);
+        assert.ok((await jobs()).ran.includes(op), `${name}: computed by a worker job (${op})`);
+        // The main thread's answer to the same question: with no pool, the
+        // analysis computes where it is.
+        const same = await page.evaluate(({ read, main, text }) => {
+            const pm = window.app.plotManager;
+            const toText = (0, eval)(`(${text})`);
+            const fromWorker = toText((0, eval)(`(${read})`)());
+            const pool = pm._analysisPool;
+            pm._analysisPool = () => null;
+            try {
+                return fromWorker === toText((0, eval)(`(${main})`)()) && fromWorker.length > 20;
+            } finally {
+                pm._analysisPool = pool;
+            }
+        }, { read: result.read, main: mainThread, text });
+        assert.equal(same, true, `${name}: the worker gives what the main thread gives`);
+
+        // Hang, change, Cancel.
+        await page.evaluate(() => { window.__jobs.hang = true; window.__jobs.started = 0; window.__jobs.aborted = 0; });
+        const settingBefore = await setting();
+        await change(values[1]);
+        await panelPill.waitFor({ timeout: 15000 });
+        await page.waitForFunction(() => window.__jobs.started >= 1, null, { timeout: 15000 });
+        assert.equal((await jobs()).noSignal, 0, `${name}: its jobs carry the analysis' signal`);
+        await panelPill.locator('.analysis-cancel-btn').click();
+        await page.waitForFunction(() => window.__jobs.aborted >= 1 && window.__jobs.aborted === window.__jobs.started, null, { timeout: 15000 });
+        await panelPill.waitFor({ state: 'detached', timeout: 15000 });
+        assert.deepEqual(await setting(), settingBefore, `${name}: the setting is back to the one of the result on screen`);
+        const startedAtCancel = (await jobs()).started;
+        await page.waitForTimeout(600);
+        assert.equal((await jobs()).started, startedAtCancel, `${name}: nothing starts the cancelled computation again`);
+
+        // A newer request aborts the one it supersedes.
+        await page.evaluate(() => { window.__jobs.started = 0; window.__jobs.aborted = 0; });
+        await change(values[1]);
+        await page.waitForFunction(() => window.__jobs.started >= 1, null, { timeout: 15000 });
+        const firstWave = (await jobs()).started;
+        await change(values[2]);
+        await page.waitForFunction(first => window.__jobs.aborted >= first && window.__jobs.started > first, firstWave, { timeout: 15000 });
+
+        // Answering again.
+        await page.evaluate(() => { window.__jobs.hang = false; });
+        await change(values[1]);
+        await ready(values[1]);
+        assert.equal(await panelPill.count(), 0, `${name}: the pill is gone`);
+        console.log(`  ${name}: worker job, the main thread's bits, Cancel and supersede`);
+    }
+
+    // Trend: the numbers of a segment over the whole signal; the exponential
+    // asked for is what a recompute changes.
+    await check({
+        name: 'Trend', id: panelId, op: 'analysis:trend',
+        open: async () => {
+            await page.locator('.timeseries-analysis-menu-btn').first().click();
+            await page.locator('.panel-analysis-menu .analysis-card[data-mark="trend"]').click();
+            await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.trendTableEl, panelId, { timeout: 30000 });
+        },
+        values: ['none', 'exponential-offset', 'first-order-offset'],
+        change: (expModel) => page.evaluate(({ id, expModel }) => window.app.plotManager._updateTrendSegment(id, { rangeFull: true, expModel }), { id: panelId, expModel }),
+        setting: () => page.evaluate(id => window.app.plotManager.plots.get(id).trend.segments.map(segment => [segment.rangeFull, segment.expModel || 'none']), panelId),
+        result: {
+            ready: `(expModel) => { const p = window.app.plotManager.plots.get(${JSON.stringify(panelId)}); const r = p?._trendResults?.[0];
+                return !!r?.result?.trend && (r.segment.expModel || 'none') === expModel && (expModel === 'none' ? !r.result.exp : !!r.result.exp); }`,
+            read: `() => { const r = window.app.plotManager.plots.get(${JSON.stringify(panelId)})._trendResults[0].result; return { trend: r.trend, exp: r.exp, curves: r.curves, delta: r.delta }; }`,
+        },
+        mainThread: `() => { const pm = window.app.plotManager; const p = pm.plots.get(${JSON.stringify(panelId)}); p._trendCache.clear();
+            const r = pm._computeTrends(p)[0].result; return { trend: r.trend, exp: r.exp, curves: r.curves, delta: r.delta }; }`,
+    });
+
+    // The 2D curve fit: a against b, in a second panel; the model is what a
+    // recompute changes.
+    const twoDId = await page.evaluate((first) => {
+        window.app.layoutManager.splitPanel(first, 'h', false);
+        return [...document.querySelectorAll('.layout-panel')].map(panel => panel.dataset.id).find(id => id !== first);
+    }, panelId);
+    await page.waitForFunction(() => document.querySelectorAll('.layout-panel').length === 2);
+    await page.evaluate(id => window.app.plotManager._setMode(id, 'phase2d'), twoDId);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.mode === 'phase2d', twoDId);
+    await page.evaluate((id) => {
+        const el = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        window.app.plotManager.addTrace(id, 'b', el);
+        window.app.plotManager.addTrace(id, 'a', el);
+    }, twoDId);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.phaseTraces?.length > 0, twoDId, { timeout: 30000 });
+    let fitsComputed = 0;
+    await check({
+        name: '2D curve fit', id: twoDId, op: 'analysis:pairFit',
+        open: async () => {
+            await page.locator(`.layout-panel[data-id="${twoDId}"] .timeseries-analysis-menu-btn`).click();
+            await page.locator('.panel-analysis-menu .analysis-card[data-mark="phase2d-fit"]').click();
+            await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.phase2dFitContainer, twoDId, { timeout: 30000 });
+            await page.evaluate((id) => { const state = window.app.plotManager.plots.get(id).phase2d; state.rangeFull = true; }, twoDId);
+        },
+        values: ['linear', 'exponential-offset', 'quadratic'],
+        change: (model) => page.evaluate(({ id, model }) => {
+            const pm = window.app.plotManager;
+            for (const pair of pm.plots.get(id).phaseTraces) pair.fitModel = model;
+            pm._schedulePhase2dFitRecompute(id, { immediate: true });
+        }, { id: twoDId, model }),
+        setting: () => page.evaluate(id => window.app.plotManager.plots.get(id).phaseTraces.map(pair => pair.fitModel), twoDId),
+        result: {
+            ready: `(model) => { const r = window.app.plotManager.plots.get(${JSON.stringify(twoDId)})?._phase2dFits?.[0]; return r?.fit?.status === 'ok' && r.fit.model === model; }`,
+            read: `() => { const r = window.app.plotManager.plots.get(${JSON.stringify(twoDId)})._phase2dFits[0]; return { fit: r.fit, n: r.nScope, curve: r.curve }; }`,
+        },
+        mainThread: `() => { const pm = window.app.plotManager; const r = pm._computePhase2dFits(pm.plots.get(${JSON.stringify(twoDId)}))[0]; return { fit: r.fit, n: r.nScope, curve: r.curve }; }`,
+    });
+    // One fit per request: the 2D fit used to fit every pair twice.
+    fitsComputed = await page.evaluate(async (id) => {
+        const pm = window.app.plotManager;
+        window.__jobs.ran.length = 0;
+        for (const pair of pm.plots.get(id).phaseTraces) pair.fitModel = 'first-order-offset';
+        pm._schedulePhase2dFitRecompute(id, { immediate: true });
+        for (let i = 0; i < 600; i++) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            const r = pm.plots.get(id)._phase2dFits?.[0];
+            if (r?.fit?.model === 'first-order-offset') break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return window.__jobs.ran.filter(op => op === 'analysis:pairFit').length;
+    }, twoDId);
+    assert.equal(fitsComputed, 1, 'a change of model fits the pair once');
+
     assert.deepEqual(errors, [], 'no page error');
-    console.log('In-memory analyses: computed on the worker, the main thread\'s bits, and Cancel stops them (curve fit).');
+    console.log('In-memory analyses: computed on the worker, the main thread\'s bits, and Cancel stops them (curve fit, trend, 2D fit).');
 } finally {
     await browser.close();
     await server.close();

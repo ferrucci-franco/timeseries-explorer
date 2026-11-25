@@ -185,7 +185,10 @@ export function installPlotTrendMethods(TargetClass) {
         const done = results.filter(r => r.result).length;
         const pending = results.some(r => r.lazy && !r.result && r.lazyStatus === 'pending');
         const cancelled = results.some(r => r.lazy && !r.result && r.lazyStatus === 'cancelled');
-        if (pending) this._setTrendStatus(plot, i18n.t('trendLazyPending'), 'loading');
+        // "Reading the file…" is for a file being read; the segments of a file
+        // in memory are simply being calculated.
+        const reading = results.some(r => r.lazy && !r.inMemory && !r.result && r.lazyStatus === 'pending');
+        if (pending) this._setTrendStatus(plot, i18n.t(reading ? 'trendLazyPending' : 'trendCalculating'), 'loading');
         else if (cancelled) this._setTrendStatus(plot, i18n.t(results.some(r => r.staleResult) ? 'analysisCancelledKept' : 'analysisCancelled'), 'muted');
         else this._setTrendStatus(plot, done ? i18n.t('trendStatus').replace('{count}', String(done)) : '', 'muted');
     };
@@ -1140,7 +1143,7 @@ export function installPlotTrendMethods(TargetClass) {
             if (r.lazyStatus === 'unsupported') return i18n.t('trendLazyOverviewOnly');
             if (r.lazyStatus === 'generatedAxis') return i18n.t('trendLazyGeneratedAxis');
             if (r.lazyStatus === 'error') return i18n.t('trendLazyError');
-            return i18n.t('trendLazyPending');
+            return i18n.t(r.inMemory ? 'trendCalculating' : 'trendLazyPending');
         }
         return '';
     };

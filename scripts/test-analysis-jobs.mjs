@@ -204,4 +204,44 @@ const { FIT_MODELS } = await import(new URL('../src/utils/fit-models.js', import
     assertSame(onWorker('analysis:curveFit', few), structuredClone(curveFitRows(few)), 'too few rows');
     console.log(`analysis jobs: analysis:curveFit, ${models.length} models, the main thread's bits`);
 }
+
+// ── analysis:trend and analysis:pairFit ───────────────────────────
+const { trendRows } = await import(new URL('../src/compute/analysis/trend.js', import.meta.url));
+const { pairFitRows } = await import(new URL('../src/compute/analysis/pair-fit.js', import.meta.url));
+{
+    let seed = 23;
+    const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const N = 25013;
+    const times = new Float64Array(N);
+    const values = new Float64Array(N);
+    const other = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+        times[i] = 50 + i * 0.5;
+        values[i] = 3 * (1 - Math.exp(-i / 6000)) + 0.0004 * i + (random() - 0.5) * 0.2;
+        other[i] = 1 + i / 500 + (random() - 0.5) * 0.05;
+        if (i % 811 === 9) values[i] = NaN;
+        if (i === 777) values[i] = -Infinity;
+    }
+    let cases = 0;
+    for (const band of [null, { lower: 0.5, upper: 2.5 }, { lower: null, upper: 2 }]) {
+        for (const expModel of ['none', 'exponential', 'exponential-offset', 'first-order', 'first-order-offset']) {
+            const payload = { times, values, t0: 50, scale: 3600, band, expModel };
+            const main = trendRows(payload);
+            const worker = onWorker('analysis:trend', payload);
+            assertSame(worker, structuredClone(main), `trend, band ${JSON.stringify(band)}, ${expModel}`);
+            assertSame(worker.trend, main.trend, 'trend: the sums');
+            assert.equal(worker.exp === null, expModel === 'none', 'an exponential only when asked for');
+            cases += 1;
+        }
+    }
+    console.log(`analysis jobs: analysis:trend, ${cases} cases, the main thread's bits`);
+    const models = [...FIT_MODELS].filter(model => model !== 'none');
+    for (const model of models) {
+        const payload = { model, x: other, y: values };
+        const main = pairFitRows(payload);
+        assertSame(onWorker('analysis:pairFit', payload), structuredClone(main), `pair fit, ${model}`);
+        assert.equal(main.nScope, N);
+    }
+    console.log(`analysis jobs: analysis:pairFit, ${models.length} models, the main thread's bits`);
+}
 process.exit(0);
