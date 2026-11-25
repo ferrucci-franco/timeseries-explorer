@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { installAppFullscreen } from '../../ui/app-fullscreen.js';
 import Modal from '../../ui/modal.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { initTopBarScroll, placeTopBarMenu } from '../../ui/top-bar-scroll.js';
@@ -127,6 +128,18 @@ proto.initEventListeners = function() {
     this._initLanguageMenu();
 
     document.getElementById('theme-toggle').addEventListener('click', () => this.toggleTheme());
+
+    // The app's own full screen (not F11's, which brings the browser's bars
+    // back at the top edge), with its exit pill.
+    this._appFullscreen = installAppFullscreen({
+        button: document.getElementById('fullscreen-btn'),
+        texts: () => ({
+            fullscreen: i18n.t('fullscreen'),
+            exitFullscreen: i18n.t('exitFullscreen'),
+            exitPill: i18n.t('exitFullscreenPill'),
+        }),
+    });
+    this._initOptionHelpButtons();
 
     document.getElementById('supported-formats-link')?.addEventListener('click', () => {
         this.showSupportedFormats();
@@ -513,6 +526,32 @@ proto._setScrollablePlotArea = async function(enabled) {
     this._syncScrollablePlotAreaUI();
     setTimeout(() => this.plotManager.resizeAll(), 80);
     return true;
+};
+
+// A "?" beside a switch of the Options: pressed, it opens a box under the
+// switch with the text of its tooltip. A tooltip is slow to come, and never
+// comes on a touch screen.
+proto._initOptionHelpButtons = function() {
+    document.querySelectorAll('.option-help-btn[data-option-help]').forEach((button) => {
+        const popover = document.getElementById(button.getAttribute('aria-controls'));
+        if (!popover) return;
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const show = popover.hidden;
+            if (show) popover.textContent = i18n.t(button.dataset.optionHelp);
+            popover.hidden = !show;
+            button.setAttribute('aria-expanded', String(show));
+        });
+    });
+};
+
+// After a language change: the open boxes say it in the new language.
+proto._syncOptionHelpButtons = function() {
+    document.querySelectorAll('.option-help-btn[data-option-help]').forEach((button) => {
+        const popover = document.getElementById(button.getAttribute('aria-controls'));
+        if (popover && !popover.hidden) popover.textContent = i18n.t(button.dataset.optionHelp);
+    });
 };
 
 proto._syncScrollablePlotAreaUI = function() {

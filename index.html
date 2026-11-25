@@ -133,6 +133,11 @@
                 </button>
                 <div id="example-menu" class="example-menu" role="menu" hidden></div>
             </div>
+            <!-- Full screen: the page's own (ui/app-fullscreen.js), not F11's.
+                 Its icon and title are set by the module, with its state. -->
+            <button id="fullscreen-btn" class="icon-btn fullscreen-btn" type="button" aria-pressed="false" title="Full screen" aria-label="Full screen">
+                <span class="icon" aria-hidden="true"></span>
+            </button>
             <!-- Theme Toggle -->
             <button id="theme-toggle" class="icon-btn" title="Toggle theme">
                 <span class="icon">🌙</span>
@@ -1157,10 +1162,17 @@
                     <input type="checkbox" id="hover-proximity" checked>
                     <span data-i18n="hoverProximity">Hover by proximity</span>
                 </label>
-                <label class="checkbox-label" title="With several files open, the hover of a curve also names the parameters that tell its run apart from the others." data-i18n-title="hoverRunParametersTooltip">
-                    <input type="checkbox" id="hover-run-parameters" checked>
-                    <span data-i18n="hoverRunParameters">Run parameters in hover</span>
-                </label>
+                <!-- The one switch whose name alone nobody understood: it also
+                     has a help button, whose box holds the tooltip's text (a
+                     tooltip is slow to come, and on touch never does). -->
+                <div class="option-help-row">
+                    <label class="checkbox-label" title="With several files open, the hover of a curve also names the parameters that tell its run apart from the others." data-i18n-title="hoverRunParametersTooltip">
+                        <input type="checkbox" id="hover-run-parameters" checked>
+                        <span data-i18n="hoverRunParameters">Hover: parameters that differ between files</span>
+                    </label>
+                    <button type="button" class="fft-help-btn option-help-btn" data-option-help="hoverRunParametersTooltip" aria-expanded="false" aria-controls="hover-run-parameters-help" title="What is this?" data-i18n-title="optionHelpTitle" aria-label="What is this?" data-i18n-aria-label="optionHelpTitle">?</button>
+                </div>
+                <div id="hover-run-parameters-help" class="fft-help-popover option-help-popover" hidden></div>
                 <div class="legend-overlay-row">
                     <label class="checkbox-label legend-overlay-option" title="Pointing at one time plot marks the same instant on all the others and reads their values into a box in the corner." data-i18n-title="syncHoverTooltip">
                         <input type="checkbox" id="sync-hover">

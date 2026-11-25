@@ -64,6 +64,10 @@ Start in:
 Start in:
 
 - `src/app/methods/ui-methods.js`
+- `src/ui/app-fullscreen.js` (the full-screen button and its exit pill)
+- `src/styles/base.css` (`--top-bar-height`, `--top-bar-control-height`; a
+  switch that stays pressed carries `aria-pressed="true"`, which is what
+  colours it)
 
 ### Derived variables and formula autocomplete
 

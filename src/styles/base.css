@@ -206,14 +206,15 @@ textarea,
    Top Bar
    ============================================ */
 .top-bar {
-    --top-bar-control-height: 42px;
+    --top-bar-height: 54px;
+    --top-bar-control-height: 38px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.75rem 1.5rem;
+    padding: 0.5rem 1.5rem;
     background-color: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
-    height: 60px;
+    height: var(--top-bar-height);
     flex-shrink: 0;
     position: relative;
     z-index: 1300;
@@ -224,7 +225,7 @@ textarea,
 }
 
 .top-bar.hidden {
-    margin-top: -60px;
+    margin-top: calc(-1 * var(--top-bar-height));
     visibility: hidden;
     transition: margin-top 0.3s ease, visibility 0s linear 0.3s;
 }
@@ -263,7 +264,7 @@ textarea,
 }
 
 .top-bar-left h1 {
-    font-size: 1.25rem;
+    font-size: 1.15rem;
     font-weight: 600;
     line-height: 1.1;
     white-space: nowrap;
@@ -722,13 +723,13 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 .icon-btn {
     height: var(--top-bar-control-height);
     min-height: var(--top-bar-control-height);
-    padding: 0.5rem 0.75rem;
+    padding: 0.4rem 0.65rem;
     border: 1px solid var(--border-color);
     background-color: var(--bg-primary);
     color: var(--text-primary);
     cursor: pointer;
     border-radius: 8px;
-    font-size: 1.1rem;
+    font-size: 1rem;
     transition: all 0.2s;
     display: flex;
     align-items: center;
@@ -741,8 +742,8 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 }
 
 .menu-icon svg {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1.15rem;
+    height: 1.15rem;
     display: block;
 }
 
@@ -755,14 +756,97 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 
 /* The scrollable-plot-area switch, in the top bar with the layout buttons. */
 .scrollable-plot-area-btn .icon svg {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1.15rem;
+    height: 1.15rem;
     display: block;
 }
 
+/* A switch of the top bar that stays pressed (scrollable plot area, full
+   screen) shows it: a border alone was not seen. */
+.icon-btn[aria-pressed="true"]:not(:disabled) {
+    border-color: var(--primary-color);
+    background-color: color-mix(in srgb, var(--primary-color) 24%, var(--bg-primary));
+    color: var(--primary-color);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+.icon-btn[aria-pressed="true"]:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--primary-color) 32%, var(--bg-primary));
+}
+
+/* Full screen (ui/app-fullscreen.js): the button's icon, and the pill that
+   leaves it — semi-transparent amber, shown on entering and when the pointer
+   reaches the top edge. */
+.fullscreen-btn[hidden] {
+    display: none;
+}
+
+.fullscreen-btn .icon svg {
+    width: 1.15rem;
+    height: 1.15rem;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.app-fullscreen-pill {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    z-index: 20000;
+    transform: translate(-50%, -6px);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px 8px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 168, 0, 0.75);
+    background: rgba(255, 236, 140, 0.82);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    color: #3d2f00;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1.2;
+    cursor: pointer;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+}
+
+body.theme-dark .app-fullscreen-pill {
+    background: rgba(120, 92, 8, 0.78);
+    color: #fff3c4;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+
+.app-fullscreen-pill.show {
+    opacity: 0.92;
+    transform: translate(-50%, 0);
+    pointer-events: auto;
+}
+
+.app-fullscreen-pill:hover,
+.app-fullscreen-pill:focus-visible {
+    opacity: 1;
+}
+
+.app-fullscreen-pill svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+}
+
 .reset-layout-icon .reset-layout-glyph {
-    width: 1.3rem;
-    height: 1.3rem;
+    width: 1.2rem;
+    height: 1.2rem;
     display: block;
 }
 

@@ -146,6 +146,12 @@ Reusable UI building blocks outside the main app class.
   - recursive split-panel workspace
 - `modal.js`
   - custom modal dialogs
+- `app-fullscreen.js`
+  - the app's own full screen (the top bar's screen button, and F11 where the
+    browser lets a page take it): the page's Fullscreen API, so the top edge
+    shows no browser bar, and an amber pill there to leave it. The one piece
+    ported from the owner's other apps; texts in `translations.js`, styles in
+    `src/styles/base.css`
 
 ### `src/i18n`
 

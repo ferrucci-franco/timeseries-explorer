@@ -66,4 +66,31 @@ const ui = read('src/app/methods/ui-methods.js');
 assert.ok(/getElementById\('scrollable-plot-area-btn'\)\?\.addEventListener/.test(ui), 'the button is wired');
 assert.ok(/scrollable-plot-area-btn[\s\S]{0,400}aria-pressed/.test(ui), 'and says whether it is on');
 
+// A switch of the top bar that stays pressed shows it with its background,
+// not with a border alone.
+const baseCss = read('src/styles/base.css');
+assert.match(baseCss, /\.icon-btn\[aria-pressed="true"\]:not\(:disabled\) \{[^}]*background-color:/, 'a pressed top-bar switch changes its background');
+
+// The run parameters also have a help button: pressed, it opens a box with the
+// tooltip's own text (a tooltip is slow to come, and never comes on touch).
+assert.match(options, /class="fft-help-btn option-help-btn" data-option-help="hoverRunParametersTooltip"[^>]*aria-controls="hover-run-parameters-help"/,
+    'the run parameters have a help button');
+assert.match(options, /id="hover-run-parameters-help" class="fft-help-popover option-help-popover" hidden/, 'and the box it opens');
+assert.match(ui, /popover\.textContent = i18n\.t\(button\.dataset\.optionHelp\)/, 'the box holds the tooltip\'s text');
+assert.doesNotMatch(english, /hoverRunParameters: 'Run parameters in hover'/, 'and a name that says what it shows');
+
+// Full screen: the app's own, with its button in the top bar, an icon that is
+// not the four corners of Auto-fit, and texts in every language.
+assert.ok(/id="fullscreen-btn"/.test(html), 'the top bar carries the full-screen button');
+assert.match(ui, /installAppFullscreen\(\{\s*button: document\.getElementById\('fullscreen-btn'\)/, 'wired to the full-screen module');
+const fullscreen = read('src/ui/app-fullscreen.js');
+assert.match(fullscreen, /requestFullscreen\(\{ navigationUI: 'hide' \}\)/, 'through the page\'s Fullscreen API');
+assert.match(fullscreen, /<rect x="3" y="3\.5" width="18" height="13" rx="2"\/>/, 'its icon is a screen');
+assert.match(fullscreen, /event\.key !== 'F11'/, 'F11 enters it where the browser allows');
+assert.match(baseCss, /\.app-fullscreen-pill \{/, 'the exit pill is styled');
+for (const key of ['fullscreen', 'exitFullscreen', 'exitFullscreenPill', 'optionHelpTitle']) {
+    const count = [...translations.matchAll(new RegExp(`^\\s+${key}:`, 'gm'))].length;
+    assert.ok(count >= LANGS, `${key}: in all ${LANGS} languages (found ${count})`);
+}
+
 console.log('every option says what it does, and the hidden one is findable: ok');
