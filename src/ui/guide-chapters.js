@@ -99,6 +99,19 @@ function plotPoint(gd, x, y) {
     return [r.left + xa._offset + xa.l2p(xa.d2l(x)), r.top + ya._offset + ya.l2p(ya.d2l(y))];
 }
 
+/**
+ * The pixel of a longitude and a latitude on the gridded map, so that a demo
+ * can point at a place and not at a corner of the drawing area. Like
+ * `plotArea`, it mixes the element's rectangle with Plotly's own layout, so it
+ * is read with the camera at rest.
+ */
+function mapPoint(gd, lon, lat) {
+    const r = gd.getBoundingClientRect();
+    const xa = gd._fullLayout.xaxis;
+    const ya = gd._fullLayout.yaxis;
+    return [r.left + xa._offset + xa.l2p(lon), r.top + ya._offset + ya.l2p(lat)];
+}
+
 /** A point of a plot's drawing area, as fractions of it (0,0 = top left). */
 function plotArea(gd, fx, fy) {
     const r = gd.getBoundingClientRect();
@@ -800,6 +813,117 @@ export const GUIDE_CHAPTERS = [
             await d.folder('Battery');
             await d.plot('pypsa:storage_units/Battery/state_of_charge', 1, { label: 'Battery · state_of_charge' });
             await d.wait(2200);
+        },
+    },
+
+    {
+        id: 'era5-maps', g: 'tools', icon: '⊞', est: 42000,
+        t: say('With ERA5 and other grids', 'Avec ERA5 et autres grilles', 'Con ERA5 y otras grillas', 'Con ERA5 e altre griglie', '配合 ERA5 等网格数据'),
+        d: say(
+            'A netCDF of a model or a reanalysis — ERA5 from the Copernicus CDS, WRF, a CMIP run — opens on a <b>map</b>, not as ten thousand loose series. Choose the variable, play the time, and take the series of a point, or the average of a box, into the plots where the FFT, the fits and the cursors are.',
+            'Un netCDF de modèle ou de réanalyse — ERA5 du CDS Copernicus, WRF, une simulation CMIP — s’ouvre sur une <b>carte</b>, et non en dix mille séries éparses. Choisissez la variable, lancez le temps, puis emportez la série d’un point, ou la moyenne d’une zone, vers les graphiques où sont la FFT, les ajustements et les curseurs.',
+            'Un netCDF de un modelo o de un reanálisis — ERA5 del CDS de Copernicus, WRF, una corrida CMIP — abre en un <b>mapa</b>, no en diez mil series sueltas. Elija la variable, reproduzca el tiempo y lleve la serie de un punto, o el promedio de una zona, a los gráficos donde están la FFT, los ajustes y los cursores.',
+            'Un netCDF di un modello o di una rianalisi — ERA5 dal CDS di Copernicus, WRF, una corsa CMIP — si apre su una <b>mappa</b>, non in diecimila serie sparse. Scegli la variabile, avvia il tempo e porta la serie di un punto, o la media di un’area, nei grafici dove stanno FFT, fit e cursori.',
+            '模式或再分析的 netCDF——Copernicus CDS 的 ERA5、WRF、CMIP 试验——会打开为一张<b>地图</b>，而不是上万条零散序列。选择变量、播放时间，再把某一点的序列或某片区域的平均值送进图表，那里有 FFT、拟合和游标。',
+        ),
+        async setup(d) {
+            await d.loadPublic('examples/guide/era5_argentina.nc');
+            await d.until(() => d.$('#gridded-view:not([hidden]) .gridded-map .main-svg'), 20000);
+        },
+        async run(d) {
+            await d.cam(['#files-section'], 1.4, 600);
+            d.say(say(
+                'ERA5 over Argentina, as the Copernicus CDS writes it',
+                'ERA5 sur l’Argentine, tel que l’écrit le CDS Copernicus',
+                'ERA5 sobre Argentina, tal como lo escribe el CDS de Copernicus',
+                'ERA5 sull’Argentina, come lo scrive il CDS di Copernicus',
+                '阿根廷上空的 ERA5，正是 Copernicus CDS 写出的样子',
+            ));
+            await d.move({ sel: '.file-entry.active .file-entry-name' });
+            await d.wait(1800);
+
+            await d.cam(null, null, 700);
+            d.say(say(
+                'It opens on a map: no series to pick first',
+                'Il s’ouvre sur une carte : aucune série à choisir d’abord',
+                'Abre en un mapa: no hay que elegir series primero',
+                'Si apre su una mappa: nessuna serie da scegliere prima',
+                '它直接打开为地图：无需先挑选序列',
+            ));
+            await d.wait(1700);
+
+            d.say(say(
+                'Every variable of the file, in the toolbar',
+                'Toutes les variables du fichier, dans la barre',
+                'Todas las variables del archivo, en la barra',
+                'Tutte le variabili del file, nella barra',
+                '文件里的每个变量，都在工具栏中',
+            ));
+            await d.choose('#gridded-view [data-role="variable"]', '/t2m');
+            await d.wait(900);
+
+            d.say(say(
+                '<b>▶</b> and the cold air climbs from Patagonia',
+                '<b>▶</b> et l’air froid remonte de Patagonie',
+                '<b>▶</b> y el aire frío sube desde la Patagonia',
+                '<b>▶</b> e l’aria fredda risale dalla Patagonia',
+                '<b>▶</b> 冷空气自巴塔哥尼亚北上',
+            ));
+            await d.tap('#gridded-view [data-step="play"]');
+            await d.wait(7000);
+            if (d.$('#gridded-view [data-step="play"]')?.dataset.icon === 'pause') {
+                await d.tap('#gridded-view [data-step="play"]');
+            }
+            await d.wait(600);
+
+            d.say(say(
+                'The <b>Point</b> tool reads one cell: here, Buenos Aires',
+                'L’outil <b>Point</b> lit une maille : ici, Buenos Aires',
+                'La herramienta <b>Punto</b> lee una celda: acá, Buenos Aires',
+                'Lo strumento <b>Punto</b> legge una cella: qui, Buenos Aires',
+                '<b>点</b>工具读取一个网格单元：这里是布宜诺斯艾利斯',
+            ));
+            await d.tap('#gridded-view [data-mode="point"]');
+            await d.wait(500);
+            await d.tap(mapPoint(d.$('#gridded-view .gridded-map'), -58.5, -34.5));
+            await d.wait(2000);
+
+            d.say(say(
+                'Extract it: every step of that cell becomes a series',
+                'Extrayez-la : chaque pas de cette maille devient une série',
+                'Extraerla: cada paso de esa celda se vuelve una serie',
+                'Estraila: ogni passo di quella cella diventa una serie',
+                '提取之后，该单元的每个时次就构成一条序列',
+            ));
+            await d.tap('#gridded-view [data-action="extract-point"]');
+            // `until` only reports, so the demo says out loud what it could not
+            // do: e2e:guide fails on a throw, not on a caption that lies.
+            const extracted = await d.until(() => /34\.5°S 58\.5°W/.test(
+                d.$('#gridded-view [data-role="results-body"]')?.textContent || ''), 15000);
+            if (!extracted) throw new Error('guide: the point over Buenos Aires was not extracted');
+            await d.wait(1600);
+
+            d.say(say(
+                'In the plots it is a curve like any other',
+                'Dans les graphiques, c’est une courbe comme une autre',
+                'En los gráficos es una curva como cualquier otra',
+                'Nei grafici è una curva come le altre',
+                '在图表中，它就是一条普通的曲线',
+            ));
+            await d.tap('#gridded-view [data-action="plot"]');
+            const drawn = await d.until(() => d.$('.layout-panel .js-plotly-plot')
+                && d.$('#gridded-view')?.hidden, 20000);
+            if (!drawn) throw new Error('guide: the extracted series did not reach the plots');
+            await d.wait(1800);
+
+            d.say(say(
+                'Ten degrees in two days, where the front passed',
+                'Dix degrés en deux jours, là où le front est passé',
+                'Diez grados en dos días, por donde pasó el frente',
+                'Dieci gradi in due giorni, dove è passato il fronte',
+                '锋面过境之处，两天内下降十度',
+            ));
+            await d.wait(2600);
         },
     },
 ];

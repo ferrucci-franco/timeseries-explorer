@@ -13,8 +13,9 @@ That choice has three consequences worth knowing:
   demo to its end and fails on the first one that cannot find its target; run it
   after rearranging a toolbar or a dialog.
 - Nothing is downloaded but the app itself. The data is generated in the browser
-  (seeded, so every run shows the same curves); the one exception is a 175 KB
-  PyPSA network under `public/examples/guide/`.
+  (seeded, so every run shows the same curves); the exceptions are the two
+  files under `public/examples/guide/`, fetched by the demo that needs them: a
+  175 KB PyPSA network and 0.47 MB of real ERA5 over Argentina.
 
 Until the guide has been opened once, a small dot on the menu button (and on the
 entry) points at it; the only thing remembered is that it was opened
@@ -29,6 +30,7 @@ entry) points at it; the only thing remembered is that it was opened
 | `src/app/demo-mode.js` | `?demo`: what the copy of the app inside the frame does differently. |
 | `src/styles/guide.css` | The window's styles. |
 | `scripts/gen-guide-pypsa-example.py` | Writes `public/examples/guide/island_grid.nc` (needs `pypsa`, `highspy`, `netcdf4`). |
+| `scripts/fetch-era5-argentina-example.py` | Writes `public/examples/guide/era5_argentina.nc`, real ERA5 (`--only demo`). See `docs/era5-argentina-example.md`. |
 | `scripts/test-guide-chapters.mjs` | Every chapter complete, every text in every language. No browser. |
 | `scripts/e2e-guide.mjs` | Plays every demo in a real browser. |
 
@@ -78,7 +80,7 @@ expected duration in milliseconds, for the progress bar of the first run.
 | --- | --- |
 | `d.say(text)` | The caption under the screen. |
 | `d.wait(ms)` | Wait (stops while paused). |
-| `d.until(() => cond, ms)` | Wait for the app: a file parsed, a plot drawn. |
+| `d.until(() => cond, ms)` | Wait for the app: a file parsed, a plot drawn. It **reports**, it does not raise: where the demo cannot go on without it (the ERA5 demo and its extracted point), throw, so `e2e:guide` fails instead of playing a caption that lies. |
 | `d.cam(target, scale)` / `d.cam(null)` | Zoom on an element (or several: an array), or show the whole app. |
 | `d.move(target)` / `d.tap(target)` | Move the pointer; click. A target is a selector, an element, `[x, y]`, or `{ el, ax, ay }` for a point of an element. |
 | `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. |
@@ -93,6 +95,12 @@ expected duration in milliseconds, for the progress bar of the first run.
 | `d.reveal(element)` | Scroll its panel so that it is in view. |
 | `d.loadText(name, text)`, `d.loadPublic(path)`, `d.loadBundledResult(script, name)` | Open data, in `setup`. |
 | `d.$(sel)`, `d.$$(sel)`, `d.panel(i)`, `d.app` | The frame's document and app, for anything else. |
+
+Two helpers in `guide-chapters.js` turn what a plot draws into a place to point
+at: `plotArea(gd, fx, fy)`, a fraction of a plot's drawing area, and
+`mapPoint(gd, lon, lat)`, a longitude and a latitude on the gridded map — which
+is how the ERA5 demo puts its point on Buenos Aires and not on a corner. Both
+read Plotly's own layout, so they are called with the camera at rest.
 
 `d.analysis()` is the only place that knows where the analyses are in a panel's
 toolbar. When that part of the toolbar is redesigned, change it there and both
