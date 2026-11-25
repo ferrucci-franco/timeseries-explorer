@@ -227,6 +227,14 @@ try {
         await change(values[0]);
         await ready(values[0]);
         assert.ok((await jobs()).ran.includes(op), `${name}: computed by a worker job (${op})`);
+        // Read the answer only once nothing is recomputing. While a run is in
+        // flight a segment carries `staleResult` and no `result` — the
+        // previous numbers stay on screen, which is the rule — so a sample
+        // taken in that window reads null, or an answer about to be replaced.
+        // That is how this check failed in CI ("Trend: the worker gives what
+        // the main thread gives") without anything being wrong.
+        await panelPill.waitFor({ state: 'hidden', timeout: 60000 });
+        await ready(values[0]);
         // The main thread's answer to the same question: with no pool, the
         // analysis computes where it is.
         const same = await page.evaluate(async ({ read, main, text }) => {
