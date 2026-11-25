@@ -32,6 +32,9 @@
 // written over. Only typed arrays are indexed: they hold every numeric signal,
 // and a plain array is what a caller may still be filling.
 //
+// The index is built while the page is idle (see "Built while the page is
+// idle" below): until it is ready, every query scans as it did without one.
+//
 // Memory: two Int32 per block (and per super block), 1/8 of a byte per
 // sample — 1.2 MB for 9.5 M samples, beside the 38 MB (Float32) or 76 MB
 // (Float64) of the series itself.
@@ -44,36 +47,43 @@ export const BLOCK_INDEX_MIN_LENGTH = 1 << 18;
 // A range narrower than this has too few whole blocks in it to gain.
 export const BLOCK_BUCKET_MIN = 8 * BLOCK_SIZE;
 
-const blockIndexes = new WeakMap();
-
 // A second level, of SUPER blocks (SUPER_SIZE blocks each), keeps a whole-record
 // query to a few thousand reads: one per block of a 9.5 M-sample song would
 // be 150 000, each to a different place in memory.
 export const SUPER_SIZE = 64;
 
-function buildBlockIndex(y) {
+// Complete indexes, by array.
+const blockIndexes = new WeakMap();
+
+// Each block's earliest smallest and largest finite value, for blocks
+// [fromBlock, toBlock). The comparisons with ±Infinity are what keep a
+// non-finite value out: NaN passes no comparison, and a value only replaces
+// the running extreme when strictly beyond it, so the earliest one stays —
+// the scan's answer (Number.isFinite, then a strict comparison), measured
+// ~15 % faster.
+function indexBlocks(y, minAt, maxAt, fromBlock, toBlock) {
     const n = y.length;
-    const blocks = Math.ceil(n / BLOCK_SIZE);
-    const minAt = new Int32Array(blocks);
-    const maxAt = new Int32Array(blocks);
-    for (let b = 0; b < blocks; b++) {
+    for (let b = fromBlock; b < toBlock; b++) {
         const from = b * BLOCK_SIZE;
         const to = Math.min(n, from + BLOCK_SIZE);
-        let minIdx = -1;
-        let maxIdx = -1;
-        let minVal = 0;
-        let maxVal = 0;
+        let low = -1;
+        let high = -1;
+        let lowVal = Infinity;
+        let highVal = -Infinity;
         for (let i = from; i < to; i++) {
             const value = y[i];
-            if (!Number.isFinite(value)) continue;
-            if (minIdx < 0 || value < minVal) { minVal = value; minIdx = i; }
-            if (maxIdx < 0 || value > maxVal) { maxVal = value; maxIdx = i; }
+            if (value < lowVal && value !== -Infinity) { lowVal = value; low = i; }
+            if (value > highVal && value !== Infinity) { highVal = value; high = i; }
         }
-        minAt[b] = minIdx;
-        maxAt[b] = maxIdx;
+        minAt[b] = low;
+        maxAt[b] = high;
     }
-    // Each super block from its blocks, left to right, by the same strict
-    // comparison: its earliest extreme.
+}
+
+// Each super block from its blocks, left to right, by the same strict
+// comparison: its earliest extreme.
+function finishIndex(y, minAt, maxAt) {
+    const blocks = minAt.length;
     const supers = Math.ceil(blocks / SUPER_SIZE);
     const superMinAt = new Int32Array(supers);
     const superMaxAt = new Int32Array(supers);
@@ -83,17 +93,125 @@ function buildBlockIndex(y) {
         superMinAt[s] = minIdx;
         superMaxAt[s] = maxIdx;
     }
-    return { length: n, minAt, maxAt, superMinAt, superMaxAt };
-}
-
-/** The block index of `y`, built on first use; null where it does not apply. */
-export function blockIndexFor(y) {
-    if (!ArrayBuffer.isView(y) || y.length < BLOCK_INDEX_MIN_LENGTH) return null;
-    const cached = blockIndexes.get(y);
-    if (cached && cached.length === y.length) return cached;
-    const index = buildBlockIndex(y);
+    const index = { length: y.length, minAt, maxAt, superMinAt, superMaxAt };
     blockIndexes.set(y, index);
     return index;
+}
+
+const indexable = y => ArrayBuffer.isView(y) && y.length >= BLOCK_INDEX_MIN_LENGTH;
+
+function readyIndex(y) {
+    const cached = blockIndexes.get(y);
+    return cached && cached.length === y.length ? cached : null;
+}
+
+/**
+ * The block index of `y`, built now if it is not there yet (one pass over the
+ * series); null where it does not apply. For the tests and for callers that
+ * will query the same series many times at once.
+ */
+export function ensureBlockIndex(y) {
+    if (!indexable(y)) return null;
+    const ready = readyIndex(y);
+    if (ready) return ready;
+    const blocks = Math.ceil(y.length / BLOCK_SIZE);
+    const minAt = new Int32Array(blocks);
+    const maxAt = new Int32Array(blocks);
+    indexBlocks(y, minAt, maxAt, 0, blocks);
+    return finishIndex(y, minAt, maxAt);
+}
+
+// ── Built while the page is idle ────────────────────────────────────────────
+//
+// Building the index is one pass over the series, about 1.5 times what one
+// scan of it costs. Paid by the draw that first needs it, it made opening a
+// long signal slower than before (~60 ms on a two-channel song). So the index
+// is built in slices of ~1 ms when the page has nothing else to do
+// (requestIdleCallback; a timer where there is none), and until it is ready
+// every query scans, exactly as it did without an index. Nothing a user does
+// waits for it, and the answers do not depend on whether it is there.
+
+const BUILD_SLICE_BLOCKS = 2048;     // 131 072 samples, ~0.5 ms
+const BUILD_TIMER_BUDGET_MS = 4;     // per timer tick, where there is no idle callback
+const building = new WeakMap();      // array → its build in progress
+const buildQueue = [];               // { ref, length, minAt, maxAt, next }
+let pumpScheduled = false;
+
+const now = () => globalThis.performance?.now?.() ?? Date.now();
+
+function schedulePump() {
+    if (pumpScheduled || !buildQueue.length) return;
+    pumpScheduled = true;
+    if (typeof globalThis.requestIdleCallback === 'function') {
+        // The timeout lets a page that is never idle still get its index, a
+        // slice at a time.
+        globalThis.requestIdleCallback(pump, { timeout: 1000 });
+    } else {
+        setTimeout(() => {
+            const until = now() + BUILD_TIMER_BUDGET_MS;
+            pump({ timeRemaining: () => until - now(), didTimeout: false });
+        }, 0);
+    }
+}
+
+function pump(deadline) {
+    pumpScheduled = false;
+    let slices = 0;
+    // At least one slice per call, so that a page busy past the idle timeout
+    // still progresses; then as many as the idle period holds.
+    while (buildQueue.length && (slices === 0 || deadline.timeRemaining() > 1)) {
+        const job = buildQueue[0];
+        const y = job.ref.deref?.() ?? job.strong;
+        if (!y || y.length !== job.length || readyIndex(y)) {
+            // Gone, changed length (a new array will be indexed on its own),
+            // or built meanwhile by ensureBlockIndex.
+            buildQueue.shift();
+            if (y) building.delete(y);
+            continue;
+        }
+        const blocks = job.minAt.length;
+        const end = Math.min(blocks, job.next + BUILD_SLICE_BLOCKS);
+        indexBlocks(y, job.minAt, job.maxAt, job.next, end);
+        job.next = end;
+        slices++;
+        if (end >= blocks) {
+            finishIndex(y, job.minAt, job.maxAt);
+            building.delete(y);
+            buildQueue.shift();
+        }
+    }
+    schedulePump();
+}
+
+function queueBuild(y) {
+    if (building.has(y)) return;
+    const blocks = Math.ceil(y.length / BLOCK_SIZE);
+    const job = {
+        // Weak, where the runtime has WeakRef: a series closed before its index
+        // is done is not kept alive by it.
+        ref: typeof WeakRef === 'function' ? new WeakRef(y) : { deref: () => null },
+        strong: typeof WeakRef === 'function' ? null : y,
+        length: y.length,
+        minAt: new Int32Array(blocks),
+        maxAt: new Int32Array(blocks),
+        next: 0,
+    };
+    building.set(y, job);
+    buildQueue.push(job);
+    schedulePump();
+}
+
+/**
+ * The block index of `y` if it is ready; null otherwise, and then its build is
+ * queued for when the page is idle. Null too where it does not apply (a plain
+ * array, a short series). A caller with null scans, as it did without one.
+ */
+export function blockIndexFor(y) {
+    if (!indexable(y)) return null;
+    const ready = readyIndex(y);
+    if (ready) return ready;
+    queueBuild(y);
+    return null;
 }
 
 // The running answer of a query, as it is read left to right. Module state
@@ -106,30 +224,30 @@ let maxVal = 0;
 function reset() {
     minIdx = -1;
     maxIdx = -1;
-    minVal = 0;
-    maxVal = 0;
+    minVal = Infinity;
+    maxVal = -Infinity;
 }
 
-// Samples y[from..to).
+// Samples y[from..to), by the comparisons of indexBlocks.
 function takeSamples(y, from, to) {
     for (let i = from; i < to; i++) {
         const value = y[i];
-        if (!Number.isFinite(value)) continue;
-        if (minIdx < 0 || value < minVal) { minVal = value; minIdx = i; }
-        if (maxIdx < 0 || value > maxVal) { maxVal = value; maxIdx = i; }
+        if (value < minVal && value !== -Infinity) { minVal = value; minIdx = i; }
+        if (value > maxVal && value !== Infinity) { maxVal = value; maxIdx = i; }
     }
 }
 
 // Units [from..to) of one level: their recorded extremes (-1: none finite).
+// A recorded extreme is finite, so a strict comparison is all it needs.
 function takeBlocks(y, lowAt, highAt, from, to) {
     for (let b = from; b < to; b++) {
         const lo = lowAt[b];
         if (lo < 0) continue;
         const low = y[lo];
-        if (minIdx < 0 || low < minVal) { minVal = low; minIdx = lo; }
+        if (low < minVal) { minVal = low; minIdx = lo; }
         const hi = highAt[b];
         const high = y[hi];
-        if (maxIdx < 0 || high > maxVal) { maxVal = high; maxIdx = hi; }
+        if (high > maxVal) { maxVal = high; maxIdx = hi; }
     }
 }
 

@@ -62,6 +62,14 @@ try {
     });
     await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?.data?.length >= 2, panelId, { timeout: 60000 });
 
+    // The index is built while the page is idle; until then every query
+    // scans. Wait for it, so that what follows is drawn through it.
+    await page.evaluate(async () => { window.__blockIndex = await import('/src/compute/kernels/block-index.js'); });
+    await page.waitForFunction((id) => {
+        const pm = window.app.plotManager;
+        return pm.plots.get(id).traces.every(t => !!window.__blockIndex.blockIndexFor(pm._getTransformedVariableData(t.fileId, t.varName)));
+    }, panelId, { timeout: 60000, polling: 200 });
+
     // What is drawn, against the plain scan over the same arrays.
     const compare = (range) => page.evaluate(async ([id, range]) => {
         const { visualPairForRange, blockIndexFor } = await import('/src/compute/kernels/resample.js');

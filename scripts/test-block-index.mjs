@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 import {
-    BLOCK_INDEX_MIN_LENGTH, BLOCK_SIZE, SUPER_SIZE, blockIndexFor, finiteRangeExtent,
+    BLOCK_INDEX_MIN_LENGTH, BLOCK_SIZE, SUPER_SIZE, blockIndexFor, ensureBlockIndex, finiteRangeExtent,
     isSortedFiniteAxis, sortedLowerBound, sortedUpperBound,
 } from '../src/compute/kernels/block-index.js';
 import { createExtentCache, scanFiniteExtent } from '../src/utils/finite-extent.js';
@@ -66,7 +66,7 @@ const y32 = Float32Array.from(y64);
 const zeros = new Float64Array(n);
 zeros.fill(-0, 0, BLOCK_SIZE * 3 + 5);
 for (const [label, y] of [['float64', y64], ['float32', y32], ['zeros', zeros]]) {
-    assert.ok(blockIndexFor(y), `${label}: indexed`);
+    assert.ok(ensureBlockIndex(y), `${label}: indexed`);
     const ranges = [
         [0, n], [1, n - 1], [BLOCK_SIZE, n - BLOCK_SIZE], [BLOCK_SIZE - 1, BLOCK_SIZE * 9 + 1],
         [50_000, 90_000], [49_999, 90_001], [BLOCK_SIZE * 999 + 7, BLOCK_SIZE * 1007 - 3],
@@ -93,6 +93,24 @@ assert.ok(Object.is(finiteRangeExtent(zeros).min, -0), 'the earliest zero is the
     assertExtent(finiteRangeExtent(plain, 10, 4000), scanFiniteExtent(plain.slice(10, 4000)), 'a plain array is scanned');
     assert.equal(blockIndexFor(plain), null, 'and not indexed');
     assert.equal(blockIndexFor(new Float64Array(1000)), null, 'nor is a short series');
+}
+
+// ── Built while idle: the same index, and scans until then ─────────────────
+{
+    const fresh = hardSeries(BLOCK_INDEX_MIN_LENGTH * 3 + 5);
+    const copy = fresh.slice();
+    assert.equal(blockIndexFor(fresh), null, 'not ready on first ask: its build is queued');
+    assertExtent(finiteRangeExtent(fresh, 3, fresh.length - 3), scanFiniteExtent(fresh.subarray(3, fresh.length - 3)), 'meanwhile: the scan');
+    // No requestIdleCallback in Node: timer slices, a few ms each.
+    const started = Date.now();
+    while (!blockIndexFor(fresh) && Date.now() - started < 20000) await new Promise(resolve => setTimeout(resolve, 5));
+    const idle = blockIndexFor(fresh);
+    assert.ok(idle, 'built in slices, while idle');
+    const once = ensureBlockIndex(copy);
+    for (const key of ['minAt', 'maxAt', 'superMinAt', 'superMaxAt']) {
+        assert.deepEqual(Array.from(idle[key]), Array.from(once[key]), `${key}: the idle build = the build at once`);
+    }
+    checks += 4;
 }
 
 // ── isSortedFiniteAxis ──────────────────────────────────────────────────────
@@ -187,6 +205,8 @@ const assertNullableExtent = (got, want, label) => {
     const holed = time.slice(); holed[1234] = NaN;
     const other = hardSeries(n - 1000);
     const otherTime = time.subarray(0, n - 1000);
+    // Indexed now, so the fast paths are what is compared.
+    for (const array of [time, other, shuffled, holed]) ensureBlockIndex(array);
     const cases = [
         ['ordered', [{ x: time, y: y64 }, { x: otherTime, y: other }]],
         ['float32 values', [{ x: time, y: y32 }]],
