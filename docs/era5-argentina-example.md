@@ -1,13 +1,31 @@
 # The ERA5 example over Argentina
 
-Two files of **real ERA5 reanalysis** ship with the app as the example of a
-gridded netCDF dataset: a whole country, several variables, and a weather event
-worth watching step by step.
+Three files of **real ERA5 reanalysis** ship with the app as the example of a
+gridded netCDF dataset: a whole country, several variables, and weather worth
+watching step by step.
 
 | File | Size | Grid | Steps | Variables |
 | --- | ---: | --- | ---: | --- |
+| `public/examples/era5-argentina-august-2024.nc` | 9.7 MB | 71 × 45 at 0.5° | 248 three-hourly, 2024-08-01 00 UTC → 2024-08-31 21 UTC | `t2m`, `d2m`, `u10`, `v10`, `msl`, `tcc` |
 | `public/examples/era5-argentina-cold-front.nc` | 3.3 MB | 141 × 89 at 0.25° | 24 hourly, 2024-08-02 12 UTC → 2024-08-03 11 UTC | `t2m`, `d2m`, `u10`, `v10`, `msl`, `tcc` |
 | `public/examples/guide/era5_argentina.nc` | 0.47 MB | 71 × 45 at 0.5° | 16 three-hourly, 2024-08-02 12 UTC → 2024-08-04 09 UTC | `t2m`, `u10`, `v10`, `msl` |
+
+They are three cuts of one dataset, so they can be told apart by what they are
+for, not by what they say:
+
+- **the month** is the one to explore. A point extracted from it is a series of
+  248 steps: several fronts, and a daily cycle at eight samples a day, so an
+  FFT of it still shows the 24-hour peak. Over Buenos Aires it runs from
+  26.1 °C on the afternoon of 2 August to 4.7 °C on the morning of the 12th.
+- **the day** is the one to look at. Full 0.25° resolution and one map an hour
+  through the sharpest hours of the front.
+- **the demo** is the one that travels inside the animated guide, small enough
+  not to weigh on it.
+
+Size matters here beyond the repository: `public/examples/` is copied into the
+desktop package and into the portable build, so every megabyte is downloaded by
+every user. That is why the month is at 0.5° and three-hourly, which costs
+9.7 MB where the same month hourly at 0.25° would cost about 103 MB.
 
 The box is 21 °S to 56 °S and 74 °W to 52 °W: Argentina whole, with the Andes
 crest, the Patagonian coast, the Río de la Plata and the Malvinas/Falklands in
@@ -17,7 +35,8 @@ ERA5 request.
 
 ## The event
 
-The window is the **cold outbreak of 2-4 August 2024**. June, July and August
+The month is August 2024 because of the event the two shorter files are cut
+around: the **cold outbreak of 2-4 August 2024**. June, July and August
 2024 were scanned over the box for the 48-hour window whose mean temperature
 falls most from its first six hours to its last six hours, in the northern half
 (21-32 °S) and the southern half (42-56 °S) at once. Comparing the same hours of
@@ -55,10 +74,10 @@ about 25 seconds in all).
 **The values are ERA5's own, unmodified.** What changed is the packaging, so
 that the file looks like what a user actually downloads and brings to the app:
 
-- the box is cut out of the global grid, and the demo keeps one cell in two and
-  one hour in three (`test:era5-example` checks that the two files agree
-  exactly on every shared cell: the small one is the big one's cells, not an
-  average or a reinterpolation);
+- the box is cut out of the global grid, and the month and the demo keep one
+  cell in two and one hour in three (`test:era5-example` checks that the three
+  files agree exactly on every shared cell: the smaller ones hold the bigger
+  one's cells, not an average or a reinterpolation);
 - the layout is the one the Copernicus CDS has written since September 2024 —
   `valid_time` int64 in seconds since 1970, `latitude` descending, `number`
   scalar, `expver` per step, float32 with a NaN fill, zlib + shuffle, one map
@@ -92,18 +111,21 @@ Citation of the netCDF4 copy:
 
 ```
 python3 scripts/fetch-era5-argentina-example.py
-python3 scripts/fetch-era5-argentina-example.py --only demo
-python3 scripts/fetch-era5-argentina-example.py --cache /tmp/era5.npz
+python3 scripts/fetch-era5-argentina-example.py --only demo --only full
+python3 scripts/fetch-era5-argentina-example.py --only month --cache /tmp/era5-cache
 ```
 
 Needs network access to `nsf-ncar-era5.s3.amazonaws.com` and `numpy`, `h5py`,
-`fsspec`, `requests`, `netCDF4`. `--cache` keeps the fetched window in an
-`.npz`, so another cut of the same window costs nothing. The window, the box
-and the two files' shapes are constants at the top of the script.
+`fsspec`, `requests`, `netCDF4`. Each file asks HDF5 for exactly the hours and
+cells it keeps, so the two short ones take about half a minute each and the
+month about eight. `--cache` names a directory where each file's fetched window
+is kept as an `.npz`, so writing it again costs nothing. The box, the month and
+the three files' shapes are constants at the top of the script.
 
 ## Tests
 
-`npm run test:era5-example` (in the release suite) opens both files with the
-app's own gridded engine and checks the layout, the grid, the sizes they ship
-under, the values over Buenos Aires, that the cold outbreak is still in the
-data, and that the two files agree on every shared cell.
+`npm run test:era5-example` (in the release suite) opens the three files with
+the app's own gridded engine and checks the layout, the grid, the sizes they
+ship under, the values over Buenos Aires, that the cold outbreak is still in
+the two short files and the month's warmest and coldest hours are still where
+they were, and that the files agree on every cell they share.
