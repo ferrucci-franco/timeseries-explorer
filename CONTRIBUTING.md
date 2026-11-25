@@ -178,6 +178,10 @@ does the same:
 - extend `scripts/e2e-analysis-cancel.mjs` (lazy files) and
   `scripts/e2e-analysis-cancel-memory.mjs` and `scripts/test-analysis-jobs.mjs`
   (files in memory).
+- list it in `scripts/bench-analysis-responsiveness.mjs`: `npm run
+  e2e:analysis-responsive` fails when an action on an analysis runs a
+  computation task of more than 250 ms, and when the menus offer an analysis
+  it does not measure.
 
 `CLAUDE.md` has the details.
 

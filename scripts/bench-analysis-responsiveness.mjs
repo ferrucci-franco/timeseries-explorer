@@ -39,7 +39,7 @@
 //       [--analyses=fft,histogram,…] [--actions=open,type,param,drag,cancel] \
 //       [--dir=<where the CSVs go>] [--out=results.json] [--md=table.md] \
 //       [--range=0.1,0.9] [--limit=250] [--profile=false] [--timeout=900000] \
-//       [--headed]
+//       [--headed] [--check]
 //   node scripts/bench-analysis-responsiveness.mjs --report=a.json,b.json
 //
 // Every action runs under V8's sampling profiler (CDP `Profiler`, one sample
@@ -48,8 +48,12 @@
 // functions that held the thread. --profile=false measures without it (the
 // split then only knows the synchronous part of each Plotly call).
 //
-// Not in any CI chain: it measures, it asserts nothing. Needs a Chromium for
-// Playwright.
+// As a measurement it asserts nothing. With --check it is the pass/fail check
+// of the `e2e` chain (`npm run e2e:analysis-responsive`, #389): the 1.2 M-row
+// files, both modes, every analysis of the menus; it fails on a computation
+// task over the limit, on a newer request that does not stop the one in
+// flight, and on an analysis the app offers that is not listed here. See "The
+// check" at the end. Needs a Chromium for Playwright.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,9 +67,14 @@ const args = Object.fromEntries(process.argv.slice(2).map((arg) => {
     return match ? [match[1], match[2] ?? 'true'] : [arg, 'true'];
 }));
 const list = (value, fallback) => (value ? String(value).split(',').map(item => item.trim()).filter(Boolean) : fallback);
-const ROWS = list(args.rows, ['1200000', '10000000']).map(Number);
+// --check: the same measurement as a pass/fail check, for CI (`npm run
+// e2e:analysis-responsive`). The 1.2 M-row files, in memory and lazy, every
+// analysis of the menus, and three actions — type a bound, change a parameter,
+// drag a slider — judged at the end (see "The check" below).
+const CHECK = args.check === 'true';
+const ROWS = list(args.rows, CHECK ? ['1200000'] : ['1200000', '10000000']).map(Number);
 const MODES = list(args.modes, ['lazy', 'eager']);
-const ACTIONS = list(args.actions, ['open', 'type', 'param', 'drag', 'cancel']);
+const ACTIONS = list(args.actions, CHECK ? ['type', 'param', 'drag'] : ['open', 'type', 'param', 'drag', 'cancel']);
 const LIMIT_MS = Number(args.limit || 250);
 const PROFILE = args.profile !== 'false';
 const DIR = args.dir || path.join(os.tmpdir(), 'analysis-responsiveness');
@@ -151,7 +160,9 @@ const OTHER = [
     { id: 'audio', label: 'Audio (prepare and play)', file: 'numeric' },
 ];
 const ALL_IDS = [...OTHER.slice(0, 1), ...TIME_ANALYSES, ...OTHER.slice(1, 2), ...PAIR_ANALYSES, ...OTHER.slice(2)].map(item => item.id);
-const WANTED = new Set(list(args.analyses, ALL_IDS));
+// The check is of the analyses of the two menus; the rest is measured only.
+const MENU_IDS = [...TIME_ANALYSES, ...PAIR_ANALYSES].map(item => item.id);
+const WANTED = new Set(list(args.analyses, CHECK ? MENU_IDS : ALL_IDS));
 for (const id of WANTED) if (!ALL_IDS.includes(id)) throw new Error(`unknown analysis "${id}" (known: ${ALL_IDS.join(', ')})`);
 
 // ─── The files ────────────────────────────────────────────────────────────
@@ -1317,3 +1328,66 @@ save();
 if (args.md) fs.writeFileSync(args.md, `${table}\n`);
 console.log(`\n${table}\n`);
 for (const note of notes) console.log(`note: ${note}`);
+
+// ─── The check ───────────────────────────────────────────────────────────
+//
+// What --check fails on:
+//   · an analysis the app's menus offer that is not measured here — a new
+//     analysis must be listed above before it can pass;
+//   · an action whose longest COMPUTATION task is over the limit (250 ms).
+//     Plotly's redraw and the paint are not counted: headless Chromium paints
+//     WebGL in software, which says nothing of a real screen;
+//   · a newer request, made while a computation is in flight, that does not
+//     stop it (a computation on the main thread counts when it held the page
+//     for more than the limit);
+//   · an action that ended in an error or never gave its result, a session
+//     that failed, a page error — a check that measured nothing must not pass.
+if (CHECK) {
+    const failures = [];
+    // The analyses the menus offer, read from the source that builds them.
+    const marks = fs.readFileSync(new URL('../src/plots/methods/marks-methods.js', import.meta.url), 'utf8');
+    const block = marks.slice(marks.indexOf('proto._analysisModes = function(plot) {'), marks.indexOf('proto._activeAnalysisId'));
+    const offered = [...block.matchAll(/\{ id: '([a-z0-9-]+)'/g)].map(match => match[1]);
+    if (offered.length < 9) failures.push(`the analyses of the menus could not be read from marks-methods.js (${offered.join(', ')})`);
+    const measured = new Set([...TIME_ANALYSES.map(item => item.mode), ...PAIR_ANALYSES.map(item => item.pick)]);
+    for (const id of offered) {
+        if (!measured.has(id)) failures.push(`the analysis "${id}" is offered by the app and not measured here: add it to TIME_ANALYSES or PAIR_ANALYSES`);
+    }
+    const wantedRows = results.filter(row => MENU_IDS.includes(row.analysis));
+    const describe = row => `${row.label}, ${row.rows} rows, ${row.mode}, ${row.action}${row.param ? ` (${row.param})` : ''}`;
+    for (const row of wantedRows) {
+        if (row.error) failures.push(`${describe(row)}: ${row.error}`);
+        else if (row.action !== 'open' && row.action !== 'cancel' && (row.ttr === null || row.ttr === undefined)) failures.push(`${describe(row)}: no result`);
+        if (row.longestCompute > LIMIT_MS) {
+            const held = (row.attribution?.self || []).slice(0, 3).map(item => `${item.name} ${item.ms} ms`).join(', ');
+            failures.push(`${describe(row)}: a computation task of ${row.longestCompute} ms, over the ${LIMIT_MS} ms limit${held ? ` (${held})` : ''}`);
+        }
+        // "On the main thread, which it held N ms" is read off the gap between
+        // timers during the drag, which Plotly's redraw and a busy machine
+        // widen too: it counts when it is over the limit, like any other task.
+        const heldMs = Number(/^no: on the main thread, which it held (\d+) ms/.exec(row.supersede || '')?.[1]);
+        const withinLimit = Number.isFinite(heldMs) && heldMs <= LIMIT_MS;
+        if (row.supersede && /^no\b/.test(row.supersede) && !withinLimit) failures.push(`${describe(row)}: a newer request did not stop the one in flight — ${row.supersede}`);
+    }
+    // Every analysis asked for, in every mode, was measured through every action.
+    for (const id of WANTED) {
+        if (!MENU_IDS.includes(id)) continue;
+        for (const mode of MODES) {
+            for (const action of ACTIONS) {
+                if (action === 'param' && !(TIME_ANALYSES.find(item => item.id === id) || PAIR_ANALYSES.find(item => item.id === id)).params.length) continue;
+                if (!wantedRows.some(row => row.analysis === id && row.mode === mode && row.action === action)) {
+                    failures.push(`${id}, ${mode}, ${action}: not measured`);
+                }
+            }
+        }
+    }
+    for (const note of notes) {
+        if (/page errors|session failed|^(numeric|calendar) \d+ (lazy|eager):/.test(note)) failures.push(note);
+    }
+    if (failures.length) {
+        console.error(`\nAnalysis responsiveness check FAILED (${failures.length}):`);
+        for (const failure of failures) console.error(`  · ${failure}`);
+        process.exit(1);
+    }
+    console.log(`Analysis responsiveness check passed: ${wantedRows.length} actions over ${[...WANTED].filter(id => MENU_IDS.includes(id)).length} analyses, none over ${LIMIT_MS} ms of computation.`);
+}

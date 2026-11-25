@@ -1432,7 +1432,24 @@ Measured (10 M rows, lazy, the tool picked; three runs before, two runs after):
 
 ### #389: The CI check
 
-Not landed yet.
+Landed: `npm run e2e:analysis-responsive` ("Running it", "The check"). On the
+tree that closes #381, #382 and #383 it passes: 84 actions over the ten
+entries of the two menus, none over 250 ms of computation.
+
+Shown once that it catches a regression: with the in-memory analyses put back
+on the main thread (`_analysisUsesWorker` made to answer no), run on the
+Histogram and the Temporal profile in memory, it fails with
+
+```
+Analysis responsiveness check FAILED (8):
+  · Histogram, 1200000 rows, eager, open: a computation task of 907 ms, over the 250 ms limit (histogramFiniteStats (src/utils/histogram.js:57) 462 ms, …)
+  · Histogram, 1200000 rows, eager, drag: a newer request did not stop the one in flight — no: on the main thread, which it held 731 ms
+  · Temporal profile, 1200000 rows, eager, open: a computation task of 339 ms, over the 250 ms limit (buildTemporalProfile (src/utils/temporal-profile.js:285) 107 ms, …)
+  …
+```
+
+`scripts/e2e-lazy-fft-responsive.mjs` stays: it holds the lazy FFT to its
+read of a larger file, which this check's 1.2 M rows do not reach.
 
 ## Running it
 
@@ -1448,4 +1465,33 @@ above. The CSVs are generated on the first run (710 MB for the four) and kept
 in `--dir`. The whole matrix takes about 45 minutes here: 9 and 4 minutes for
 the 1.2 M file lazy and eager, 23 and 8 for the 10 M one.
 
-It is a measurement, not a check: it asserts nothing and is in no CI chain.
+Run like that it is a measurement: it asserts nothing.
+
+### The check
+
+```
+npm run e2e:analysis-responsive
+```
+
+The same harness with `--check`, in the `e2e` chain (CI's browser job). It
+measures the 1.2 M-row files, in memory and in memory-saving mode, through
+every analysis of the two menus — open, type the range, change each
+parameter, drag a slider while a recompute is in flight — and fails when:
+
+- the longest **computation** task of an action is over 250 ms (`--limit`).
+  Plotly's redraw and the paint are not counted: headless Chromium paints
+  WebGL in software, which says nothing of a real screen;
+- a newer request made during a computation does not stop it (a worker that
+  ran on, a read that ran to its end, or a computation on the main thread that
+  held the page for more than the limit — the hold is read off the gap between
+  timers during the drag, which Plotly's redraw and a busy runner widen too);
+- the app's menus offer an analysis this file does not list
+  (`TIME_ANALYSES`, `PAIR_ANALYSES`): a new analysis fails the check until it
+  is measured;
+- an action ends in an error or gives no result, a session fails, or the page
+  throws — a check that measured nothing does not pass.
+
+A failure names the action and the functions that held the thread. It takes
+six to seven minutes (84 actions, about five seconds each, most of it the
+waits that make the measurement valid), which is more than the four #389
+hoped for; the browser job has the room.

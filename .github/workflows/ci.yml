@@ -70,8 +70,10 @@ jobs:
     runs-on: ubuntu-24.04
     # The chain took 29 of its 30 minutes on 2026-11-15 (PR #377), before the
     # audio-window, WAV-export and legend-style checks joined it. A job cut off
-    # by the clock reports nothing about the checks it did not reach.
-    timeout-minutes: 45
+    # by the clock reports nothing about the checks it did not reach. The
+    # analysis responsiveness check (#389) added about seven minutes to the
+    # 27 the chain took on 2026-11-25.
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v4

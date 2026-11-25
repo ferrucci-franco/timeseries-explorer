@@ -96,6 +96,13 @@ user keeps exploring what is on screen. So **every analysis, existing or new**:
    changes a setting with the analysis' queries hanging until aborted, presses
    Cancel, and checks that the work stopped, the previous result stayed and
    the setting is back.
+7. **Does not hold the page:** no action on it may run a computation task of
+   more than 250 ms, in memory or lazy. `npm run e2e:analysis-responsive`
+   (`scripts/bench-analysis-responsiveness.mjs --check`, in the `e2e` chain)
+   measures every analysis of the menus on a 1.2 M-row file and fails
+   otherwise — and fails for an analysis the menus offer that it does not
+   list, so add a new one to its `TIME_ANALYSES` or `PAIR_ANALYSES`.
+   `docs/analysis-responsiveness.md`, "The check".
 
 In the Analysis menu, picking the analysis that is already on changes
 nothing; only None turns it off.
