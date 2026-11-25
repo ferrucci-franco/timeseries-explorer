@@ -213,11 +213,15 @@ const close = (actual, expected, tolerance, label) => {
 // or fitting it. A linear scan over this virtual source would be impractical.
 {
     const source = read('src/plots/methods/phase2d-fit-methods.js');
-    const start = source.indexOf('proto._phase2dPairSeries = function');
-    const end = source.indexOf('\n    };', start) + 7;
-    assert.ok(start >= 0 && end > start, 'Curve Fit pair sampler can be isolated');
+    // The sampler and the span it copies (where the rows are, found by
+    // bisection without copying anything).
     const proto = {};
-    vm.runInNewContext(source.slice(start, end), { proto });
+    for (const name of ['_phase2dPairSpan', '_phase2dPairSeries']) {
+        const start = source.indexOf(`proto.${name} = function`);
+        const end = source.indexOf('\n    };', start) + 7;
+        assert.ok(start >= 0 && end > start, `Curve Fit pair sampler can be isolated (${name})`);
+        vm.runInNewContext(source.slice(start, end), { proto });
+    }
 
     const length = 20_000_000;
     let timeReads = 0;
@@ -268,6 +272,7 @@ const close = (actual, expected, tolerance, label) => {
         _phase2dFitActiveRange: () => [1000, 263143],
         _lowerBound: lowerBound,
         _upperBound: upperBound,
+        _phase2dPairSpan: proto._phase2dPairSpan,
     };
     const result = proto._phase2dPairSeries.call(
         harness,
