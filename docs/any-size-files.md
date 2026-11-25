@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); la escucha (🔊), que lee del archivo cada fila del rango que suena, y la exportación WAV de ese rango, por trozos ("Implementado: escuchar un archivo lazy"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). El resto (fases 5 y 6), estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); la escucha (🔊), que lee del archivo cada fila del rango que suena, y la exportación WAV de ese rango, por trozos ("Implementado: escuchar un archivo lazy"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). La fase 5 se cerró con una decisión, no con código nuevo: el proyecto de un archivo lazy es su vista ("Decidido (fase 5)"). De la fase 6 queda MAT: OpenModelica primero, MATLAB anotado como hueco (#396).** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -82,12 +82,13 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
 | Escuchar (🔊) | ~~deshabilitado: solo el resumen está en memoria~~ **lee del archivo cada fila del rango que suena** (sección "Implementado: escuchar un archivo lazy"); la uniformidad del paso se comprueba en el rango al leerlo, no en el archivo entero, y se rechaza, diciéndolo, una señal que existe solo en el resumen | `audioRangeNotUniform`, `audioReasonLazyNoSource` |
 | Exportar WAV (#92) | nació en lazy: **cada fila del rango, en dos pasadas por trozos hacia un `Blob` hecho de partes**, sin el tope del búfer de la escucha; los mismos bytes que en memoria | — |
-| Guardar proyecto | rechazado | *"A complete project cannot be saved while these files are using memory-saving mode. Increase their full-load limit in Settings and reload them, or save a view instead"* |
+| Guardar proyecto | ~~rechazado, con el consejo de subir el límite~~ **el diálogo ofrece guardar la vista**, que es lo que conserva el trabajo sobre un archivo grande (sección "Decidido (fase 5)") | `sessionProjectLazyFilesBody`, `sessionProjectLazyFilesViewHint` |
 
 La última cadena merece una nota: para un CSV de 5 GB, "subí el límite y
 recargá" es un consejo que no se puede seguir (sección 3). El mensaje describe
 un mundo donde lazy es una preferencia; para archivos grandes es la única
-opción, y el proyecto debería poder guardarse igual (sección 6).
+opción. *Resuelto de otra forma que la que este párrafo pedía: sección
+"Decidido (fase 5)".*
 
 ### Lo que cuesta, en CSV, que no se ve
 
@@ -293,8 +294,8 @@ En orden de valor visible por esfuerzo:
 | 3 | Herramientas puntuales y de ventana como **columnas virtuales SQL**: derivada, IQR, detrend (tras su pasada de agregados) | 1–2 días + paridad eager/lazy por herramienta | medio: semántica de no finitos y Δt = 0 |
 | 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
 | 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo; **4b-1 hecha** (ejecutor, sumidero, media móvil), **4b-2 hecha** (filtro digital), **4b-3 hecha** (picos, relleno, reemplazo por interpolación, integral con *interpolar*), **4b-4 hecha** (remuestreo y colapsar como datasets lazy, correlación cruzada con presupuesto), **4b-5 hecha** (los resultados en disco — la base en OPFS — y conservados entre sesiones, la continuación en vivo) | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
-| 5 | Proyecto por definición para archivos lazy | 2–3 días | medio: formato de sesión, compatibilidad hacia atrás |
-| 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
+| 5 | ~~Proyecto por definición para archivos lazy~~ — **cerrada sin hacerla**: eso ya es la vista (.json); el diálogo ahora la ofrece ("Decidido (fase 5)") | — | — |
+| 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). **MAT es lo que sigue**: los resultados de OpenModelica / Dymola (v4) primero; los `.mat` de MATLAB (v5/v7 y v7.3) quedan como hueco conocido, #396. MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
 
 Las fases 1–3 son autónomas y baratas, y dejan la app con exportación exacta y
 tres herramientas más en lazy sin materializar un solo array. La 4 es la
@@ -2206,6 +2207,55 @@ Esto sí cambia el resultado de *Full* en lazy: ahora es el del modo estándar,
 bit a bit (`scripts/test-lazy-fft.mjs`, *Full* y selecciones, eje real y
 generado, contado y sin contar; `scripts/e2e-lazy-fft-responsive.mjs`
 comprueba que *Full* transforma las 1 200 000 filas).
+
+### Decidido (fase 5): el proyecto de un archivo lazy es su vista
+
+La fase 5 proponía guardar, para un archivo lazy, "la definición y no los
+bytes". Revisado con una pregunta práctica —*¿para qué sirve un proyecto
+completo con un archivo inmenso adentro?*— la respuesta es que para nada que
+la vista no dé ya:
+
+- **La vista (.json) ya es el proyecto por definición.** Guarda paneles,
+  pestañas, zooms, fórmulas, herramientas de datos y datasets derivados como
+  receta, y se carga sobre el archivo abierto; si no está, pide elegirlo.
+  Funciona en lazy desde la 3b.
+- **Lo único propio del .zip es llevar los bytes**, y con un archivo grande eso
+  no lo hace más portátil (un .zip de 5 GB se comparte igual que el CSV de
+  5 GB más un .json de pocos KB), duplica el archivo en disco en cada guardado
+  y obliga a extraerlo para reabrirlo en lazy. Además el .zip se arma entero en
+  memoria (`zipSync`).
+
+Así que no se escribió un formato nuevo. Lo que se hizo:
+
+- **El diálogo** de *Guardar proyecto completo* con un archivo lazy abierto ya
+  no aconseja "subí el límite y recargá" (imposible con un archivo que no entra
+  en memoria): dice que esos archivos no se copian, los nombra, explica qué
+  guarda una vista y **su botón la guarda** (`saveProjectSession` →
+  `saveViewSession`). Cancelar no guarda nada.
+- **Un defecto encontrado al probarlo**: la vista de un archivo lazy guardaba,
+  dentro de cada traza, `_lazyDetailCache` — las filas leídas para la ventana
+  visible, ~260 KB por traza —, es decir datos en un archivo que promete no
+  llevarlos, y que cargado sobre *otro* archivo podían dibujarse como suyos.
+  Ahora una traza se guarda sin su estado de trabajo (`_sessionTrace`: fuera
+  todo campo que empieza con `_`), y se limpia también al cargar, por las
+  vistas ya guardadas. La vista de la prueba pasó de 875 KB a 11 KB.
+
+Pruebas: `scripts/test-session-project-save.mjs` (el diálogo ofrece la vista,
+no menciona el límite, Cancelar no descarga, el botón descarga un .json sin
+datos; una traza se guarda y se carga sin estado de trabajo) y
+`scripts/e2e-lazy-project-view.mjs` (Chromium: un CSV de 12 MB en lazy con una
+derivada, un detrend lineal y un zoom; el diálogo, la vista descargada, y en
+una página nueva con el mismo archivo abierto en lazy, la vista devuelve las
+dos variables como expresiones sobre el archivo, las trazas, el zoom y los
+mismos valores del detrend leídos del archivo).
+
+**Hueco conocido, abierto: `.mat` de MATLAB en lazy (#396).** Un `.mat`
+guardado desde MATLAB (v5/v7 o v7.3) se carga siempre entero: abre hasta el
+límite de carga completa y nunca por encima de 1536 MB inflados. La salida de
+hoy es exportar a Parquet desde MATLAB (`parquetwrite`). Se difiere a
+propósito: primero van los resultados de OpenModelica / Dymola (v4), escritos
+contra una interfaz de lector por trozos a la que los dos lectores de MATLAB se
+agregan después (el diseño está en el issue).
 
 ### Regla: lo nuevo nace funcionando en lazy
 

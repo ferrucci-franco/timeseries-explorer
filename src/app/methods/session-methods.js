@@ -35,18 +35,28 @@ proto.saveProjectSession = async function() {
         }
     }
     if (lazyFiles.length) {
+        // A complete project copies every source file into the archive. A file
+        // in memory-saving mode is one that does not fit in memory, so its copy
+        // would be a second file of that size, zipped in memory — and "raise
+        // the limit and reload" is advice nobody with such a file can follow.
+        // What keeps the work on it is the view: the workspace as definitions,
+        // reopened on the same file. So the dialog offers that, in one press.
         const list = lazyFiles
             .map(name => `<li title="${this._escapeSessionHTML(name)}">${this._escapeSessionHTML(name)}</li>`)
             .join('');
         const body = `
             <div class="session-missing-intro">${this._escapeSessionHTML(i18n.t('sessionProjectLazyFilesBody'))}</div>
             <ul class="session-missing-files">${list}</ul>
+            <div class="session-missing-intro">${this._escapeSessionHTML(i18n.t('sessionProjectLazyFilesViewHint'))}</div>
         `;
-        await Modal.alert(i18n.t('sessionProjectLazyFilesTitle'), body, {
+        const saveView = await Modal.confirm(body, {
+            title: i18n.t('sessionProjectLazyFilesTitle'),
             icon: 'ZIP',
             html: true,
             className: 'modal-dialog-session-missing',
+            confirmText: i18n.t('extraSaveViewJson'),
         });
+        if (saveView) await this.saveViewSession();
         return false;
     }
 
@@ -351,8 +361,8 @@ proto._capturePlotSessions = function(source = this.plotManager.plots) {
         plots.push({
             panelId,
             mode: plot.mode,
-            traces: plot.traces.map(t => this._cloneSerializable(t)),
-            phaseTraces: plot.phaseTraces.map(t => this._cloneSerializable(t)),
+            traces: plot.traces.map(t => this._sessionTrace(t)),
+            phaseTraces: plot.phaseTraces.map(t => this._sessionTrace(t)),
             phasePending: this._cloneSerializable(plot.phasePending),
             stateSlots: this._cloneSerializable(plot.stateSlots),
             stateAnimDim: plot.stateAnimDim || 2,
@@ -1239,10 +1249,10 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         this.plotManager._stopAnim(plot);
         plot.mode = saved.mode || 'timeseries';
         plot.traces = (saved.traces || [])
-            .map(trace => ({ ...trace, fileId: fileMap.get(trace.fileId) }))
+            .map(trace => ({ ...this._sessionTrace(trace), fileId: fileMap.get(trace.fileId) }))
             .filter(trace => trace.fileId && this._sessionTraceExists(trace));
         plot.phaseTraces = (saved.phaseTraces || [])
-            .map(trace => ({ ...trace, fileId: fileMap.get(trace.fileId) }))
+            .map(trace => ({ ...this._sessionTrace(trace), fileId: fileMap.get(trace.fileId) }))
             .filter(trace => trace.fileId && this._sessionPhaseTraceExists(trace));
         plot.phasePending = { x: null, y: null, z: null, fileId: null };
         plot.stateAnimDim = saved.stateAnimDim || 2;
@@ -1409,6 +1419,22 @@ proto._safeFileName = function(value) {
         .replace(/\s+/g, '_')
         .replace(/^_+|_+$/g, '');
     return clean || 'session';
+};
+
+// A trace as a session holds it: what the user chose (signal, axis, colour…),
+// without what the app keeps on it while it draws. A field whose name starts
+// with `_` is working state — on a file in memory-saving mode,
+// `_lazyDetailCache` is the rows last read for the visible window: saved, a
+// view carried hundreds of KB of data per trace, and loaded on another file it
+// could have been drawn as that file's. Dropped on the way out, and on the way
+// in for the views already saved with it.
+proto._sessionTrace = function(trace) {
+    if (!trace || typeof trace !== 'object') return trace;
+    const kept = {};
+    for (const [key, value] of Object.entries(trace)) {
+        if (!key.startsWith('_')) kept[key] = value;
+    }
+    return this._cloneSerializable(kept);
 };
 
 proto._cloneSerializable = function(value) {
