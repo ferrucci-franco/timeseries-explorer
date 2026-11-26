@@ -994,6 +994,13 @@ export function installGriddedMethods(TargetClass) {
                 <aside class="gridded-panel" data-role="panel">
                     <section class="gridded-panel-section gridded-what-section">
                         <div class="gridded-what" data-role="what"></div>
+                        <div class="gridded-add-hint" data-role="add-hint" hidden>
+                            <span data-role="add-hint-text"></span>
+                            <span class="gridded-add-hint-actions">
+                                <button type="button" class="gridded-primary" data-action="add-current"></button>
+                                <button type="button" data-action="add-cancel"></button>
+                            </span>
+                        </div>
                     </section>
                     <section class="gridded-panel-section gridded-inspector" data-role="inspector">
                         <h3 data-role="inspector-heading"></h3>
@@ -1293,6 +1300,8 @@ export function installGriddedMethods(TargetClass) {
             this._griddedRenderControls(current);
             this._griddedRequestMap(current);
             this._griddedRefitScale(current);
+            // Picked for "+ Another variable at P1": read there now.
+            if (current.addTo) this._griddedAddToArmed(current);
         });
         root.querySelector('[data-role="palette"]').addEventListener('change', event => {
             const current = view();
@@ -1510,7 +1519,9 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'remove-group') this._griddedRemoveGroup(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'remove-set') this._griddedRemoveSet(current, target.closest('[data-group]')?.dataset.group, target.closest('[data-set]')?.dataset.set);
             else if (action === 'reuse-group') this._griddedReusePlace(current, target.closest('[data-group]')?.dataset.group);
-            else if (action === 'extract-here') this._griddedExtractHere(current, target.closest('[data-group]')?.dataset.group);
+            else if (action === 'add-variable') this._griddedArmAdd(current, target.closest('[data-group]')?.dataset.group);
+            else if (action === 'add-current') this._griddedAddToArmed(current);
+            else if (action === 'add-cancel') this._griddedDisarmAdd(current);
             else if (action === 'remove-all') this._griddedRemoveAll(current);
             else if (action === 'toggle-results') this._griddedToggleResults(current);
             else if (action === 'methods-help') this._griddedShowMethodsHelp();
@@ -1539,6 +1550,11 @@ export function installGriddedMethods(TargetClass) {
             } else if (event.key === 'Escape') {
                 this._griddedSelect(current, null);
             }
+        });
+        document.addEventListener('keydown', event => {
+            const current = view();
+            if (event.key !== 'Escape' || !current?.addTo || root.hidden || document.querySelector('.modal-overlay')) return;
+            this._griddedDisarmAdd(current);
         });
         root.addEventListener('keydown', event => {
             if (event.target.closest('input, select, textarea')) return;
@@ -1780,6 +1796,7 @@ export function installGriddedMethods(TargetClass) {
                     view.selection[name] = Number(dimSelect.value);
                     this._griddedSyncScope(view);
                     this._griddedRenderResults(view);
+                    if (view.addTo) this._griddedAddToArmed(view);
                     this._griddedRequestMap(view);
                     this._griddedRefitScale(view);
                 });
@@ -4342,8 +4359,6 @@ export function installGriddedMethods(TargetClass) {
             element.setAttribute('aria-label', title);
             return element;
         };
-        const variableNow = this._griddedVariable(view);
-        const current = variableNow?.timeDim && variableNow.timeDim === view.model.primaryTimeDim ? variableNow : null;
         for (const group of view.groups || []) {
             const item = document.createElement('li');
             item.className = 'gridded-result';
@@ -4364,12 +4379,7 @@ export function installGriddedMethods(TargetClass) {
                 note.textContent = group.note;
                 text.appendChild(note);
             }
-            // The small "+" (place the point or box again, to read it another
-            // way) only where there is no "+ add <variable>" row to say it.
-            const adding = !!current && !this._griddedGroupHasVariable(view, group, current);
-            head.append(swatch, text,
-                ...(adding ? [] : [button('reuse-group', '+', i18n.t('griddedReuseHere'))]),
-                button('remove-group', '✕', i18n.t('griddedRemoveExtraction')));
+            head.append(swatch, text, button('remove-group', '✕', i18n.t('griddedRemoveExtraction')));
             if (view.justAdded?.groupId === group.id) item.classList.add('is-new');
             const sets = document.createElement('ul');
             sets.className = 'gridded-sets';
@@ -4391,26 +4401,24 @@ export function installGriddedMethods(TargetClass) {
                 sets.appendChild(row);
             }
             item.append(head);
-            // The variable now on the map, not yet read at this place: one
-            // click adds it to the series of this place, read the same way,
-            // without placing the point or box again. Last in the place's
-            // list, where the series it adds will go.
-            let addRow = null;
-            if (adding) {
-                addRow = document.createElement('button');
-                addRow.type = 'button';
-                addRow.className = 'gridded-reuse-var';
-                addRow.dataset.action = 'extract-here';
-                addRow.textContent = i18n.t('griddedExtractHere').replace('{variable}', current.longName || current.name);
-                addRow.title = i18n.t('griddedExtractHereTitle').replace(/\{tag\}/g, group.tag);
-            }
-            item.append(sets);
-            if (addRow) item.appendChild(addRow);
+            // Another variable at this place: the Variable menu lights up,
+            // and the variable picked there is read here, the same way.
+            const addRow = document.createElement('button');
+            addRow.type = 'button';
+            addRow.className = 'gridded-reuse-var';
+            addRow.dataset.action = 'add-variable';
+            addRow.textContent = i18n.t('griddedAddVariable').replace(/\{tag\}/g, group.tag);
+            addRow.title = i18n.t('griddedAddVariableTitle').replace(/\{tag\}/g, group.tag);
+            const armed = view.addTo === group.id;
+            addRow.classList.toggle('is-armed', armed);
+            addRow.setAttribute('aria-pressed', String(armed));
+            item.append(sets, addRow);
             list.appendChild(item);
         }
         const empty = this._griddedEl('results-empty');
         if (empty) empty.hidden = !!(view.groups || []).length;
         view.justAdded = null;
+        this._griddedSyncAddHint(view);
         this._griddedSyncActions(view);
     };
 
@@ -4422,17 +4430,73 @@ export function installGriddedMethods(TargetClass) {
         return keys.every(key => group.sets.some(set => set.key === key));
     };
 
-    // Read the variable now chosen at a place of the list, with how that
-    // place was read (nearest cell or interpolation, the same box).
-    proto._griddedExtractHere = function(view, id) {
+    /**
+     * "+ Another variable at P1": the Variable menu lights up and takes the
+     * focus, a line under it says what it is for, and the variable picked
+     * there next (or its level) is read at P1, the same way P1 was read —
+     * without placing the point or box again. Escape or Cancel let go.
+     */
+    proto._griddedArmAdd = function(view, id) {
         const group = (view.groups || []).find(item => item.id === id);
         if (!group) return;
+        view.addTo = view.addTo === id ? null : id;
+        this._griddedRenderResults(view);
+        if (!view.addTo) return;
+        const select = this._griddedEl('variable');
+        if (select) {
+            select.scrollIntoView({ block: 'nearest' });
+            select.classList.remove('gridded-attention');
+            void select.offsetWidth;
+            select.classList.add('gridded-attention');
+            select.addEventListener('animationend', () => select.classList.remove('gridded-attention'), { once: true });
+            select.focus({ preventScroll: true });
+        }
+        this._griddedSetStatus(i18n.t('griddedAddHint').replace(/\{tag\}/g, group.tag));
+    };
+
+    proto._griddedDisarmAdd = function(view) {
+        if (!view?.addTo) return;
+        view.addTo = null;
+        this._griddedSetStatus('');
+        this._griddedRenderResults(view);
+    };
+
+    // The line under the Variable menu while a place waits for a variable.
+    proto._griddedSyncAddHint = function(view) {
+        const hint = this._griddedEl('add-hint');
+        if (!hint) return;
+        const group = view.addTo ? (view.groups || []).find(item => item.id === view.addTo) : null;
+        if (view.addTo && !group) view.addTo = null;
+        hint.hidden = !group;
+        if (!group) return;
+        hint.querySelector('[data-role="add-hint-text"]').textContent = i18n.t('griddedAddHint').replace(/\{tag\}/g, group.tag);
+        const variable = this._griddedVariable(view);
+        const usable = variable?.timeDim && variable.timeDim === view.model.primaryTimeDim && !this._griddedGroupHasVariable(view, group, variable);
+        const useCurrent = hint.querySelector('[data-action="add-current"]');
+        useCurrent.hidden = !usable;
+        if (usable) useCurrent.textContent = i18n.t('griddedAddCurrent').replace('{variable}', variable.longName || variable.name);
+        hint.querySelector('[data-action="add-cancel"]').textContent = i18n.t('griddedAddCancel');
+    };
+
+    // The variable now chosen, read at the place that waits for it.
+    proto._griddedAddToArmed = function(view) {
+        const group = (view.groups || []).find(item => item.id === view.addTo);
+        view.addTo = null;
+        this._griddedSyncAddHint(view);
+        if (!group) return;
+        const variable = this._griddedVariable(view);
+        if (variable && this._griddedGroupHasVariable(view, group, variable)) {
+            this._griddedSetStatus(i18n.t('griddedAlreadyExtracted').replace('{tag}', group.tag));
+            this._griddedRenderResults(view);
+            return;
+        }
         if (group.kind === 'point') {
             view.pointMethod = group.method === 'bilinear' ? 'bilinear' : 'nearest';
             this._griddedExtractPoint(view, { ...group.geometry });
         } else {
             this._griddedExtractRegion(view, { ...group.geometry });
         }
+        this._griddedRenderResults(view);
     };
 
     proto._griddedCheckedSeries = function(view) {

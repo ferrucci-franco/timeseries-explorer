@@ -1643,3 +1643,54 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 @media (prefers-reduced-motion: reduce) {
     .gridded-result.is-new { animation: none; }
 }
+
+/* "+ Another variable at P1" pressed: the button stays lit while P1 waits,
+   and the Variable menu blinks to say where to pick it. */
+.gridded-view .gridded-reuse-var.is-armed {
+    border-style: solid;
+    background: color-mix(in srgb, var(--primary-color) 18%, transparent);
+}
+
+.gridded-view select.gridded-attention {
+    animation: gridded-attention 0.6s ease-in-out 4;
+}
+
+@keyframes gridded-attention {
+    0%, 100% { box-shadow: none; }
+    50% {
+        border-color: #14b8a6;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.85), 0 0 14px rgba(20, 184, 166, 0.7);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gridded-view select.gridded-attention {
+        animation: none;
+        box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.85);
+    }
+}
+
+.gridded-add-hint {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid color-mix(in srgb, #14b8a6 60%, transparent);
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, #14b8a6 12%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.gridded-add-hint[hidden] {
+    display: none;
+}
+
+.gridded-add-hint-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.gridded-add-hint-actions [hidden] {
+    display: none;
+}
