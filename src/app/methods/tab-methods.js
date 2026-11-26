@@ -277,6 +277,7 @@ proto.switchTab = async function(index) {
             tabs.activeIndex = index;
             this._renderTabs();
             await this._showTab(tabs.items[index]);
+            this._restoreTabMap(tabs.items[index]);
             this._afterTabChange();
         } finally {
             this._tabSwitching = null;
@@ -294,12 +295,28 @@ proto._prepareTabLeave = function() {
     this.plotManager._closeDashboardCardEditor?.();
     // Nothing plays from a panel that is not on screen.
     this.plotManager.stopAudioPlayback?.();
-    // The map of a gridded dataset covers the panels: they are what is changing.
-    if (typeof this._griddedState === 'function' && this._griddedState().visibleFileId) this._hideGriddedView?.();
+    // The map of a gridded dataset covers the panels: they are what is
+    // changing. The tab keeps it: back on this tab, the map is back too.
+    const leaving = this._ensureTabsState().items[this.tabs.activeIndex];
+    const mapFileId = typeof this._griddedState === 'function' ? this._griddedState().visibleFileId : null;
+    if (leaving) leaving.mapFileId = mapFileId || null;
+    if (mapFileId) this._hideGriddedView?.();
+};
+
+// The map a tab was showing when it was left, shown again on it.
+proto._restoreTabMap = function(item) {
+    const fileId = item?.mapFileId;
+    if (!fileId || typeof this._griddedState !== 'function') return;
+    if (!this.files?.get(fileId)?.gridded || !this._griddedState().views.has(fileId)) {
+        item.mapFileId = null;
+        return;
+    }
+    this._showGriddedView?.(fileId);
 };
 
 proto._afterTabChange = function() {
     this._renderTabs();
+    this._griddedSyncReturnButton?.();
     this._updateActionButtons?.();
     // The dashboards held at an instant are this tab's now.
     this.plotManager?.renderDashboardTimeMarks?.();

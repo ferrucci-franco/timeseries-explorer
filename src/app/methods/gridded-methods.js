@@ -4615,7 +4615,7 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedPlotInNewTab = async function(view, names) {
         const name = this._griddedTabName(view);
         this._griddedState().returnFileId = view.fileId;
-        this._hideGriddedView();
+        // Not hidden here: leaving the tab hides it, and the tab keeps it.
         await this.addTab();
         const tabs = this._ensureTabsState();
         const index = tabs.activeIndex;
@@ -4766,7 +4766,9 @@ export function installGriddedMethods(TargetClass) {
         const entry = activeId ? this.files.get(activeId) : null;
         // Only after the map handed its series to the plots: a map closed
         // with "Close map" stays closed (its file row's Map button opens it).
-        const show = !!entry?.gridded && state.returnFileId === activeId && state.visibleFileId !== activeId;
+        const mapTab = this._griddedMapTabIndex(activeId);
+        const show = !!entry?.gridded && state.visibleFileId !== activeId
+            && (state.returnFileId === activeId || mapTab !== null);
         if (!show) {
             if (button) button.hidden = true;
             return;
@@ -4778,7 +4780,11 @@ export function installGriddedMethods(TargetClass) {
             button.className = 'gridded-return';
             button.addEventListener('click', () => {
                 const fileId = this.plotManager.activeFileId;
-                if (this.files.get(fileId)?.gridded) this._showGriddedView(fileId);
+                if (!this.files.get(fileId)?.gridded) return;
+                // Back to the tab the map is on, where it shows again.
+                const index = this._griddedMapTabIndex(fileId);
+                if (index !== null) this.switchTab(index);
+                else this._showGriddedView(fileId);
             });
             host.appendChild(button);
         }
@@ -4786,6 +4792,14 @@ export function installGriddedMethods(TargetClass) {
         button.querySelector('span').textContent = i18n.t('griddedReturnToMap').replace('{file}', this._fileDisplayName(entry));
         button.title = i18n.t('griddedReturnToMapTitle');
         button.hidden = false;
+    };
+
+    // The tab, other than the one on screen, that keeps this file's map.
+    proto._griddedMapTabIndex = function(fileId) {
+        const tabs = this.tabs;
+        if (!tabs?.items || !fileId) return null;
+        const index = tabs.items.findIndex((item, at) => at !== tabs.activeIndex && item.mapFileId === fileId);
+        return index < 0 ? null : index;
     };
 
     proto._griddedApplyTheme = function() {
