@@ -33,10 +33,11 @@ bordes conocidos, la mayoría dichos en la interfaz.
 |---|---|---|---|
 | 1 | **`.mat` de MATLAB** (v5/v7 y v7.3) en lazy | se cargan siempre enteros; issue #396 | escribir un "lector por columnas" con la forma que describe `src/parsers/mat-v4-stream.js`; `src/data/columnar-ingest.js` lo abre en lazy sin más cambios. Enganchar en `_lazyMatReader` (`src/app/methods/file-methods.js`). Modelo de prueba: `scripts/test-lazy-mat.mjs` |
 | 2 | **pickle, netCDF de series, audio** | solo cargan enteros (Excel entra por conversión a Parquet) | el mismo camino que 1: un lector por columnas por formato. Solo si hace falta |
-| 3 | **Fórmulas sin forma SQL** (las que el traductor de `src/expr/sql.js` no escribe) | en lazy existen solo sobre el resumen; la app lo avisa al crearlas (`derivedLazyOverviewOnly`) y los análisis las rechazan (`statsLazyOverviewOnly`, `trendLazyOverviewOnly`) | ampliar el traductor función por función, o calcularlas con el ejecutor por trozos (`src/data/chunk-executor.js`) |
+| 3 | **Fórmulas sin forma SQL** | el traductor de `src/expr/sql.js` escribe **las 23 funciones** del lenguaje (`DERIVED_CONSTANTS`/`DERIVED_FUNCTIONS` en `src/app/constants.js`), `diff()` y `cumsum()` incluidas, como ventanas: no falta ninguna. Lo que no tiene forma SQL es un **nombre que no resuelve** — una variable que solo existe en el resumen, y entonces lo que se construya sobre ella también— y una fórmula cuyo SQL pasa los 20 000 caracteres (`MAX_SQL_LENGTH`). En lazy esas existen solo sobre el resumen; la app lo avisa al crearlas (`derivedLazyOverviewOnly`) y los análisis las rechazan (`statsLazyOverviewOnly`, `trendLazyOverviewOnly`) | para el nombre que no resuelve, calcularla con el ejecutor por trozos (`src/data/chunk-executor.js`), que es el único camino: no hay función que agregar al traductor |
 | 4 | **Eje de tiempo generado** (archivo sin columna de tiempo) | el análisis de tendencia lo rechaza en lazy y dice por qué (`trendLazyGeneratedAxis`) | "Implementado: análisis de tendencia exacto", huecos conocidos |
 | 5 | **Límites del `.mat` lazy** | la copia ocupa disco del orden de `data_2`; recargar copia todo de nuevo; un archivo corto y muy ancho ahorra poca memoria (su resumen son casi todas sus filas) | "Implementado: resultados `.mat` en lazy", huecos conocidos. Para el último: un lector eager con arreglos tipados, o el resumen por demanda |
-| 6 | **Huecos de más de 4 M de muestras seguidas** | el relleno y la integral no los cruzan y lo informan | "Implementado (fase 4b-3)". Caso muy raro |
+| 6 | **Correlación cruzada: tope de 8 M filas** | la herramienta lee las dos columnas enteras en memoria hasta `LAZY_XCORR_MAX_ROWS` (8 M filas, 128 MB) y por encima se niega diciendo por qué (`dataToolXcorrLazyTooLarge`: remuestrear a un Δt más grueso primero). Medir el eje ya no cuesta: las consultas llevan señal, se detienen al dejar la herramienta y un archivo pasado el tope se niega antes de medirlo | "Implementado (fase 4b-4)", sección "Global". La ruta directa O(N·L) no se paga a esos tamaños; subir el tope es cambiar la FFT de la correlación por una por trozos |
+| 7 | **Huecos de más de 4 M de muestras seguidas** | el relleno y la integral no los cruzan y lo informan | "Implementado (fase 4b-3)". Caso muy raro |
 
 **Sin medir con archivos reales.** Todo lo del `.mat` lazy se midió con archivos
 sintéticos (288 MB, 3 000 series, 12 000 pasos: ~20 s, ~260 MB de heap). Falta
@@ -44,11 +45,16 @@ probar con resultados reales del dueño: con su tamaño, cantidad de variables y
 pasos se ajustan `INGEST_GROUP_COLUMNS` e `INGEST_OVERVIEW_VALUES`
 (`src/data/columnar-ingest.js`).
 
-**Fuera del modo lazy, abiertos:** #387 (el bloque de rango del perfil temporal
-en memoria), #399 (un error de página intermitente en
-`scripts/e2e-analysis-range-mode.mjs`, no reproducido), y la velocidad en
-memoria: se arregló que la página no se congele, no el tiempo hasta el
-resultado.
+**Fuera del modo lazy, abiertos:** #394 (un fallo intermitente del CI en
+`e2e:gridded-netcdf`: la página se pierde mientras carga un proyecto guardado,
+sin reproducir) y la velocidad en memoria: se arregló que la página no se
+congele, no el tiempo hasta el resultado. Cerrados, de la lista de defectos de
+`docs/analysis-responsiveness.md`: #387 (el bloque de rango que se quedaba en
+*Selección* cuando la vista previa automática se ensanchaba — también en el
+histograma, el heatmap y la integral) y #399 (el error de página de Plotly al
+dibujar sobre un panel ya reconstruido: la guardia `_fullLayout` de `a85ef17`,
+ahora en los seis actualizadores de banda, con una prueba que falla si a uno le
+falta).
 
 **Para quien retome** (reglas en `CLAUDE.md`): todo cambio termina en un PR
 fusionado a `main` con los dos jobs de CI en verde; lo que lee valores de una
@@ -66,7 +72,10 @@ necesitan el DuckDB nativo y solo corren en el CI.
 La pregunta que lo originó fue *"¿podría leer un CSV de 5 GB entero, sin
 lazy?"*. La respuesta corta a esa pregunta literal está en la sección 3 y es no.
 Pero la pregunta literal no es la que importa. "Leer cualquier tamaño" son tres
-cosas distintas, y hoy la app cumple una y media:
+cosas distintas. Cuando se escribió esta sección la app cumplía una y media;
+hoy cumple las tres para CSV, Parquet y los `.mat` de OpenModelica / Dymola,
+con los bordes que la sección 0 lista. Lo que sigue es el planteo original —
+los puntos 2 y 3 se leen como lo que faltaba, no como lo que falta:
 
 1. **Abrir** un archivo de cualquier tamaño. Para CSV y Parquet ya es cierto: el
    camino lazy los abre sin materializarlos, y lo único que crece con el tamaño
@@ -75,9 +84,10 @@ cosas distintas, y hoy la app cumple una y media:
    lazy". Para los `.mat` de MATLAB, Excel, pickle, netCDF y audio no es
    cierto, y no puede serlo por la vía eager (sección 3).
 2. **Que todas las funciones trabajen sobre el archivo completo** aunque esté
-   abierto en lazy. Hoy no: en lazy, las herramientas de datos están
-   deshabilitadas salvo una, la FFT tiene tope, la exportación escribe el
-   resumen y el proyecto no se guarda (sección 2).
+   abierto en lazy. Al escribirlo, no: en lazy las herramientas de datos
+   estaban deshabilitadas salvo una, la FFT tenía tope, la exportación escribía
+   el resumen y el proyecto no se guardaba (sección 2, que lleva la cuenta de
+   cada una). Hoy sí, con los bordes de la sección 0.
 3. **Que el resultado también pueda ser de cualquier tamaño**: la derivada de
    una señal de 200 millones de muestras tiene 200 millones de muestras, y
    tiene que vivir en algún lado que no sea la RAM.

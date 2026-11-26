@@ -60,6 +60,18 @@ Owns plot state and every Plotly-driven behavior.
   - the range section every analysis shows (Full / Selection, and the two
     bounds with their sliders): one builder and one sync, so a new analysis
     gets the block rather than a copy of it
+  - and one refresh, `_syncAnalysisRangeControls`, for when the range changes
+    with nobody touching the controls — the automatic preview widened back to
+    the whole file once the measured pass proves it affordable
+    (`_reconsiderAutoLimitedRange`). Without it the block describes the range
+    that was cut while the panel draws the whole file (#387). One line per
+    analysis; `scripts/test-analysis-range.mjs` fails for a new analysis that
+    does not add its own
+  - a band drawn over the time pane asks `div._fullLayout` first: that is
+    Plotly still owning the div, and a relayout on one it has already torn
+    down — the panel rebuilt under a range press, a result arriving late —
+    throws inside Plotly (#399). The same test fails for an updater that
+    does not ask
 - `methods/analysis-fit-methods.js`
   - whose the toolbar's Fit X / Fit Y / Fit all are: the time series while it
     is on screen, and the analysis' own pane when it is folded away — which
