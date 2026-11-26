@@ -1388,6 +1388,20 @@ export function installGriddedMethods(TargetClass) {
             event.currentTarget._touched = true;
             this._griddedStep('play');
         });
+        // Every other control answers a finger during Play too. A phone busy
+        // drawing the maps of a fast Play delivered the click of a tap late,
+        // or never: Close map, the download, the menus did nothing until
+        // Play was paused. So a finger landing on a control holds Play — no
+        // map drawn — until a moment after it lifts, and the tap's click
+        // comes through. The map itself holds Play its own way (a pan), and
+        // Play's button acts as the finger lands (above).
+        document.addEventListener('pointerdown', event => {
+            if (event.pointerType === 'mouse') return;
+            const current = view();
+            if (!current?.playing || root.hidden) return;
+            if (event.target.closest?.('[data-role="map"], [data-step="play"]')) return;
+            this._griddedHoldPlayForTap(current);
+        }, true);
         root.querySelector('[data-role="stride"]').addEventListener('change', event => {
             const current = view();
             if (current) current.stride = event.target.value || 'step';
@@ -2074,6 +2088,8 @@ export function installGriddedMethods(TargetClass) {
 
     // After the last move of the map, how long Play waits to go on.
     const PLAY_HOLD_MS = 300;
+    // The longest a finger on a control holds Play (_griddedHoldPlayForTap).
+    const PLAY_TAP_HOLD_MAX_MS = 3000;
 
     /**
      * Play waits while the map is moved (a pan, a zoom, the whole map framed
@@ -2095,6 +2111,28 @@ export function installGriddedMethods(TargetClass) {
             view.held = false;
         };
         view.holdTimer = setTimeout(release, PLAY_HOLD_MS);
+    };
+
+    /**
+     * Hold Play while a finger is on a control, and for a moment after it
+     * lifts: the page draws no map then, so the click the tap makes is
+     * dispatched. Released by itself even if the lift never reaches the page.
+     */
+    proto._griddedHoldPlayForTap = function(view) {
+        clearTimeout(view.holdTimer);
+        view.held = true;
+        const release = () => {
+            document.removeEventListener('pointerup', lifted, true);
+            document.removeEventListener('pointercancel', lifted, true);
+            clearTimeout(view.holdTimer);
+            view.holdTimer = setTimeout(() => { view.held = false; }, PLAY_HOLD_MS);
+        };
+        const lifted = () => release();
+        document.addEventListener('pointerup', lifted, true);
+        document.addEventListener('pointercancel', lifted, true);
+        // A finger that stays (a long press, a menu opened by the system):
+        // Play goes on after a while all the same.
+        view.holdTimer = setTimeout(release, PLAY_TAP_HOLD_MAX_MS);
     };
 
     proto._griddedPlayLoop = async function(view) {

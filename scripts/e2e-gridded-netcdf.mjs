@@ -1051,6 +1051,23 @@ try {
                 await touchAt('touchEnd', []);
             }
             await page.waitForFunction(() => { const view = window.app._griddedVisibleView(); return view.playing && !view.held; }, null, { timeout: 3000 });
+            // A finger on any other control (Close map, the download, a menu)
+            // holds Play while it is down and a moment after: a phone busy
+            // drawing the maps of a fast Play never delivered those taps.
+            {
+                const speed = await page.evaluate(() => {
+                    const rect = document.querySelector('#gridded-view [data-role="speed"]').getBoundingClientRect();
+                    return [rect.left + rect.width / 2, rect.top + rect.height / 2];
+                });
+                await touchAt('touchStart', [speed]);
+                assert.deepEqual(await playState(), { playing: true, held: true }, 'a finger on a control holds Play');
+                const index = await page.evaluate(() => { const view = window.app._griddedVisibleView(); return view.selection[window.app._griddedTimeDim(view)] || 0; });
+                await page.waitForTimeout(400);
+                assert.equal(await page.evaluate(() => { const view = window.app._griddedVisibleView(); return view.selection[window.app._griddedTimeDim(view)] || 0; }), index,
+                    'no step is drawn while the finger is down');
+                await touchAt('touchEnd', []);
+                await page.waitForFunction(() => { const view = window.app._griddedVisibleView(); return view.playing && !view.held; }, null, { timeout: 3000 });
+            }
             // A finger on Pause pauses as it lands, once: the click Safari
             // makes when it lifts (late, or never, while Play keeps the
             // phone busy) does not play again.
