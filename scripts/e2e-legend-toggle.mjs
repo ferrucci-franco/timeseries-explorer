@@ -136,6 +136,38 @@ try {
         await page.locator('input[name="legend-pos"][value="overlay"]').check();
         await page.locator('#legend-corner-picker .legend-corner-btn[data-corner="tl"]').click();
 
+        // "Add units to the legends" relabels the legend, and that is all it
+        // may do. The panels are rebuilt for it — the trace name is folded
+        // into hovers, exports and legend-click identity, so a restyle would
+        // desynchronise them — and a rebuild starts from the data's own
+        // extent, so the zoom the reader was on used to go with the tick.
+        await page.evaluate((id) => {
+            const div = window.app.plotManager.plots.get(id).div;
+            // The rebuild makes a new div; this tag is how the check knows the
+            // panel really was rebuilt and not merely restyled.
+            div.__beforeUnits = true;
+            return window.Plotly.relayout(div, { 'xaxis.range': [2, 4], 'xaxis.autorange': false });
+        }, panelId);
+        const xRange = (id) => page.evaluate(
+            (panel) => [...window.app.plotManager.plots.get(panel).div._fullLayout.xaxis.range].map(Number),
+            id,
+        );
+        const zoomed = await xRange(panelId);
+        assert.ok(Math.abs(zoomed[0] - 2) < 1e-6 && Math.abs(zoomed[1] - 4) < 1e-6,
+            `the panel is zoomed in before the tick (${zoomed})`);
+        await page.locator('#legend-units').check();
+        await page.waitForFunction((id) => {
+            const div = window.app.plotManager.plots.get(id)?.div;
+            return !!div?._fullLayout?.xaxis && !div.__beforeUnits;
+        }, panelId, { timeout: 15000 });
+        assert.equal(await page.evaluate(() => window.app.plotManager.legendUnits), true,
+            'the units setting is on');
+        const kept = await xRange(panelId);
+        assert.ok(Math.abs(kept[0] - zoomed[0]) < 1e-6 && Math.abs(kept[1] - zoomed[1]) < 1e-6,
+            `the units checkbox keeps the view it was read at (${zoomed} → ${kept})`);
+        await page.locator('#legend-units').uncheck();
+        await page.waitForFunction(() => window.app.plotManager.legendUnits === false);
+
         await add(LONG);
         await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?.data?.length >= 3, panelId);
         // The panel takes the whole content area: a 65-character name is
