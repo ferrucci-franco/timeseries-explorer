@@ -1812,6 +1812,11 @@ html.compact .light-version-notice .light-notice-analytics {
     color: var(--text-secondary);
 }
 
+/* The phone layout has its own way to an example (below), and no guide. */
+html.compact .welcome-actions { display: block; }
+html.compact #welcome-examples-btn,
+html.compact #welcome-guide-btn { display: none; }
+
 html.compact #file-select-btn {
     width: 100%;
     min-height: 48px;

@@ -768,6 +768,7 @@ const translations = {
             dropFilesToAdd: 'Drop files to open them',
             or: 'or',
             selectFile: 'Select File',
+            welcomeExamples: 'Examples',
 
             // Messages
             fileLoaded: 'File loaded successfully',
@@ -4020,6 +4021,7 @@ const translations = {
             dropFilesToAdd: 'Déposez les fichiers pour les ouvrir',
             or: 'ou',
             selectFile: 'Sélectionner un fichier',
+            welcomeExamples: 'Exemples',
 
             // Messages
             fileLoaded: 'Fichier chargé avec succès',
@@ -7201,6 +7203,7 @@ const translations = {
             dropFilesToAdd: 'Suelta los archivos para abrirlos',
             or: 'o',
             selectFile: 'Seleccionar archivo',
+            welcomeExamples: 'Ejemplos',
             fileLoaded: 'Archivo cargado correctamente',
             errorLoading: 'Error al cargar el archivo',
             errorDetailsLabel: "Detalles tecnicos",
@@ -10356,6 +10359,7 @@ const translations = {
             dropFilesToAdd: 'Rilascia i file per aprirli',
             or: 'oppure',
             selectFile: 'Seleziona file',
+            welcomeExamples: 'Esempi',
             fileLoaded: 'File caricato correttamente',
             errorLoading: 'Errore durante il caricamento del file',
             errorDetailsLabel: "Dettagli tecnici",
@@ -13448,6 +13452,7 @@ const translations = {
             dropFilesToAdd: '松开以打开文件',
             or: '或',
             selectFile: '选择文件',
+            welcomeExamples: '示例',
             // Messages
             fileLoaded: '文件加载成功',
             errorLoading: '加载文件出错',

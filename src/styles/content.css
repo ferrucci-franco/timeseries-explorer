@@ -112,6 +112,84 @@
     transform: translateY(0);
 }
 
+/* The welcome screen's actions: Select File, Examples (the 🧪 menu) and the
+   Animated guide, side by side, wrapping when the drop zone is narrow. */
+.welcome-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.welcome-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: 500;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.welcome-btn[hidden] { display: none; }
+
+.drop-zone-content .welcome-btn .welcome-btn-icon {
+    display: inline;
+    font-size: 1.15rem;
+    line-height: 1;
+    margin: 0;
+}
+
+.welcome-btn-caret {
+    font-size: 0.85em;
+    opacity: 0.8;
+}
+
+.welcome-secondary-btn {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1.5px solid color-mix(in srgb, var(--primary-color) 55%, var(--border-color));
+}
+
+.welcome-secondary-btn:hover:not(:disabled),
+.welcome-secondary-btn[aria-expanded="true"] {
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    border-color: var(--primary-color);
+}
+
+.welcome-secondary-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+/* The guide stands out: a first visit should see it. The same gradient
+   marks its entry in the ☰ menu (guide.css). */
+.welcome-guide-btn {
+    border: none;
+    color: #fff;
+    background: linear-gradient(135deg, #8b5cf6, #ec4899);
+    box-shadow: 0 4px 14px rgba(139, 92, 246, 0.35);
+}
+
+.welcome-guide-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(139, 92, 246, 0.5);
+}
+
+.welcome-btn:active {
+    transform: translateY(0);
+}
+
+.welcome-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
 .light-version-notice {
     width: min(920px, calc(100vw - 7rem));
     max-width: min(920px, 100%);

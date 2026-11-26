@@ -406,8 +406,10 @@ export function installCompactMethods(ViewerClass) {
         const extra = el('div', 'compact-empty-extra');
         const example = button('compact-secondary-btn compact-try-example', i18n.t('compactTryExample'), () => this._openCompactSheet('more', { toggle: false, focus: 'examples' }));
         extra.append(example);
+        // After the row the Select File button is in (the welcome actions).
         const select = content.querySelector('#file-select-btn');
-        content.insertBefore(extra, select?.nextSibling || null);
+        const row = select?.closest('.welcome-actions') || select;
+        content.insertBefore(extra, row?.parentNode === content ? row.nextSibling : null);
         this._compactEmptyExample = example;
     };
 

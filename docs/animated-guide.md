@@ -1,6 +1,7 @@
 # Animated guide
 
-**Menu → Animated guide** (also a button in the Help window) opens short demos
+**Menu → Animated guide** (also a button on the welcome screen, beside Select File
+and Examples, and one in the Help window) opens short demos
 of features that are easy to miss. Each demo loops like an animated picture, but
 it is not a recording: the real app runs in a frame and a script drives it with
 the events a person would make.
