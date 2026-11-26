@@ -2928,7 +2928,7 @@
 /* Where a new extraction of a map went (_griddedShowInTree): the folder,
    then the new series, light up twice. */
 .tree-item.tree-flash {
-    animation: tree-flash 0.55s ease-in-out 2;
+    animation: tree-flash 0.8s ease-in-out 4;
 }
 
 @keyframes tree-flash {

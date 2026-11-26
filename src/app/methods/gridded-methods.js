@@ -992,6 +992,9 @@ export function installGriddedMethods(TargetClass) {
                     </div>
                 </div>
                 <aside class="gridded-panel" data-role="panel">
+                    <section class="gridded-panel-section gridded-what-section">
+                        <div class="gridded-what" data-role="what"></div>
+                    </section>
                     <section class="gridded-panel-section gridded-inspector" data-role="inspector">
                         <h3 data-role="inspector-heading"></h3>
                         <div class="gridded-inspector-rows">
@@ -1004,7 +1007,6 @@ export function installGriddedMethods(TargetClass) {
                     </section>
                     <section class="gridded-panel-section gridded-tools">
                         <h3 class="gridded-tools-heading"><span data-role="tools-heading"></span><button type="button" class="fft-help-btn gridded-help-btn" data-action="methods-help">?</button></h3>
-                        <div class="gridded-what" data-role="what"></div>
                         <div class="gridded-modes" role="radiogroup" data-role="modes">
                             <button type="button" class="gridded-mode" data-mode="navigate"></button>
                             <button type="button" class="gridded-mode" data-mode="point"></button>
@@ -3938,7 +3940,7 @@ export function installGriddedMethods(TargetClass) {
                 leaves[leaves.length - 1].scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
                 leaves.forEach(flash);
             }
-        }, reduce ? 0 : 700);
+        }, reduce ? 0 : 1600);
     };
 
     proto._griddedCommitData = function(view, data) {
@@ -4362,8 +4364,11 @@ export function installGriddedMethods(TargetClass) {
                 note.textContent = group.note;
                 text.appendChild(note);
             }
+            // The small "+" (place the point or box again, to read it another
+            // way) only where there is no "+ add <variable>" row to say it.
+            const adding = !!current && !this._griddedGroupHasVariable(view, group, current);
             head.append(swatch, text,
-                button('reuse-group', '+', i18n.t('griddedReuseHere')),
+                ...(adding ? [] : [button('reuse-group', '+', i18n.t('griddedReuseHere'))]),
                 button('remove-group', '✕', i18n.t('griddedRemoveExtraction')));
             if (view.justAdded?.groupId === group.id) item.classList.add('is-new');
             const sets = document.createElement('ul');
@@ -4387,17 +4392,20 @@ export function installGriddedMethods(TargetClass) {
             }
             item.append(head);
             // The variable now on the map, not yet read at this place: one
-            // click reads it here, without placing the point or box again.
-            if (current && !this._griddedGroupHasVariable(view, group, current)) {
-                const more = document.createElement('button');
-                more.type = 'button';
-                more.className = 'gridded-reuse-var';
-                more.dataset.action = 'extract-here';
-                more.textContent = i18n.t('griddedExtractHere').replace('{variable}', current.longName || current.name);
-                more.title = i18n.t('griddedExtractHereTitle').replace('{tag}', group.tag);
-                item.appendChild(more);
+            // click adds it to the series of this place, read the same way,
+            // without placing the point or box again. Last in the place's
+            // list, where the series it adds will go.
+            let addRow = null;
+            if (adding) {
+                addRow = document.createElement('button');
+                addRow.type = 'button';
+                addRow.className = 'gridded-reuse-var';
+                addRow.dataset.action = 'extract-here';
+                addRow.textContent = i18n.t('griddedExtractHere').replace('{variable}', current.longName || current.name);
+                addRow.title = i18n.t('griddedExtractHereTitle').replace(/\{tag\}/g, group.tag);
             }
             item.append(sets);
+            if (addRow) item.appendChild(addRow);
             list.appendChild(item);
         }
         const empty = this._griddedEl('results-empty');

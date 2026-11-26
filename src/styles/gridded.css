@@ -1569,12 +1569,25 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
     margin-left: 0;
 }
 
+/* The colour range's button as tall as the download and Close map. */
+.gridded-map-tools [data-action="autofit-menu"] {
+    height: 28px;
+    box-sizing: border-box;
+}
+
+.gridded-what-section {
+    display: none;
+}
+
+.gridded-view.is-side-controls .gridded-what-section {
+    display: block;
+}
+
 .gridded-view.is-side-controls .gridded-what {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 0.35rem 0.5rem;
     align-items: center;
-    margin: 0 0 0.6rem;
 }
 
 .gridded-what .gridded-field,
@@ -1602,7 +1615,8 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 /* "+ another variable here", under a place: the way to extract the variable
    now chosen at a place already in the list, in one click. */
 .gridded-view .gridded-reuse-var {
-    margin: 0.15rem 0 0.1rem 1.9rem;
+    align-self: flex-start;
+    margin: 0.1rem 0 0 0.15rem;
     padding: 0.1rem 0.5rem;
     border: 1px dashed color-mix(in srgb, var(--primary-color) 70%, transparent);
     border-radius: 0.35rem;
