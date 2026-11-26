@@ -629,7 +629,9 @@ proto._integralSelectionShapes = function(plot) {
 };
 
 proto._updateIntegralSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
-    if (!plot?.div || plot.mode !== 'integral') return;
+    // `_fullLayout` is Plotly still owning this div: a relayout on one it
+    // has already torn down throws inside Plotly (#399, as in the FFT).
+    if (!plot?.div?._fullLayout || plot.mode !== 'integral') return;
     Plotly.relayout(plot.div, { shapes: this._integralSelectionShapes(plot) });
     this._syncIntegralOptionsPanel(plot);
 };

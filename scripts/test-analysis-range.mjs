@@ -96,6 +96,61 @@ for (const name of readdirSync(methodsDir)) {
 }
 assert.deepEqual(offenders, [], `the range block is built only in analysis-range-methods.js:\n${offenders.join('\n')}`);
 
+// ── The block follows the range when nobody touched the controls ──
+// The automatic preview is widened back to the whole file behind the panel's
+// back (_reconsiderAutoLimitedRange), and the block went on describing the
+// range that had been cut: *Selection* pressed, its sliders on the preview's
+// block, over a result of the whole file (#387). So the refresh is shared too,
+// one line per analysis, and a new analysis adds its own.
+has(shared, /_syncAnalysisRangeControls = function/, 'the shared refresh of the block exists');
+const controls = shared.slice(shared.indexOf('proto._syncAnalysisRangeControls = function'));
+// The menu's id, where it differs from the panel's mode.
+const MODE_OF = { 'phase2d-fit': 'phase2d' };
+for (const id of offered) {
+    has(controls, new RegExp(`case '${MODE_OF[id] || id}':`),
+        `${id}: its block and its band are refreshed by the shared one`);
+}
+has(read('src/plots/methods/data-methods.js'),
+    /_syncAnalysisRangeControls\?\.\(panelId, plot, mode\)/,
+    'widening the automatic preview puts the block back in step with the range');
+// A name misspelled there would be swallowed (the calls are optional), so each
+// one is read back from the refresh and matched to its declaration.
+const called = [...controls.matchAll(/call\('(_[A-Za-z0-9]+)'/g)].map(match => match[1]);
+assert.ok(called.length >= 2 * offered.length,
+    `the refresh calls each analysis' own panel sync and band update (${called.length} calls)`);
+const declared = new Set();
+for (const name of readdirSync(methodsDir)) {
+    if (!name.endsWith('.js')) continue;
+    for (const match of read(`src/plots/methods/${name}`).matchAll(/proto\.(_[A-Za-z0-9]+) = function/g)) {
+        declared.add(match[1]);
+    }
+}
+for (const name of new Set(called)) {
+    assert.ok(declared.has(name), `${name}: the refresh names a method that does not exist`);
+}
+
+// ── The band is never drawn onto a div Plotly has let go ──────────
+// Pressing Full or Selection redraws the panel, and a band update that lands
+// after the redraw threw inside Plotly: "Cannot read properties of undefined
+// (reading '_guiEditing')" (#399). Asking whether the div exists is not the
+// question — `_fullLayout` is, since that is Plotly letting go of it. The FFT
+// was guarded first (a85ef17); every updater asks it now.
+const unguarded = [];
+for (const name of readdirSync(methodsDir)) {
+    if (!name.endsWith('.js')) continue;
+    const source = read(`src/plots/methods/${name}`);
+    for (const match of source.matchAll(/proto\.(_update[A-Za-z0-9]*SelectionShapes) = function/g)) {
+        const start = match.index;
+        const after = source.indexOf('proto._', start + match[0].length);
+        // Without the comments: a note about _fullLayout is not a guard.
+        const body = source.slice(start, after > start ? after : source.length).replace(/\/\/[^\n]*/g, '');
+        if (!/Plotly\.(relayout|restyle|react)\(/.test(body)) continue;
+        if (!/_fullLayout/.test(body)) unguarded.push(`${name}: ${match[1]}`);
+    }
+}
+assert.deepEqual(unguarded, [],
+    `a band update must ask _fullLayout before it draws:\n${unguarded.join('\n')}`);
+
 // The old per-analysis formatting helpers are gone with the copies.
 for (const name of ['curve-fit-methods.js', 'trend-methods.js', 'correlation-methods.js', 'phase2d-fit-methods.js']) {
     const source = read(`src/plots/methods/${name}`);

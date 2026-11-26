@@ -213,6 +213,69 @@ export function installPlotAnalysisRangeMethods(TargetClass) {
             }
         });
     };
+
+    /**
+     * The range block, and the band drawn over the time pane, brought back
+     * into step with the analysis' state after something other than the user
+     * changed the range: the automatic preview widened back to the whole file
+     * (`_reconsiderAutoLimitedRange`), say. Without it the panel says one
+     * thing — *Selection* pressed, the two sliders on the preview's block —
+     * and shows another, the result of the whole file (#387).
+     *
+     * One line per analysis, as everything about this block is; a new one adds
+     * its own, and `scripts/test-analysis-range.mjs` fails if it does not. The
+     * two calls are named even where the band update syncs the panel itself
+     * (the histogram, the heatmap): a sync is idempotent, and the band update
+     * does nothing at all when Plotly has let the div go, which is exactly
+     * when the panel still has to be told. Cancel has a richer path of its own
+     * (`_restoreAnalysisSettings`), which also repaints what it puts back.
+     */
+    proto._syncAnalysisRangeControls = function (panelId, plot, mode = plot?.mode) {
+        if (!plot) return;
+        const call = (name, ...args) => {
+            try { this[name]?.(...args); } catch (error) { console.warn(`[analysis] ${name}:`, error); }
+        };
+        switch (mode) {
+        case 'fft':
+            call('_syncFftOptionsPanel', plot);
+            call('_updateFftSelectionShapes', panelId, plot);
+            break;
+        case 'histogram':
+            call('_syncHistogramOptionsPanel', plot);
+            call('_updateHistogramSelectionShapes', panelId, plot);
+            break;
+        case 'heatmap':
+            call('_syncCalendarHeatmapOptionsPanel', plot);
+            call('_updateCalendarHeatmapSelectionShapes', panelId, plot);
+            break;
+        case 'temporal-profile':
+            call('_syncTemporalProfileOptionsPanel', plot);
+            call('_updateTemporalProfileSelectionShapes', panelId, plot);
+            break;
+        case 'integral':
+            call('_syncIntegralOptionsPanel', plot);
+            call('_updateIntegralSelectionShapes', panelId, plot);
+            break;
+        case 'correlation':
+            call('_syncCorrelationRangeInputs', plot);
+            call('_updateCorrelationSelectionShapes', panelId, plot);
+            break;
+        case 'phase2d':
+            call('_syncPhase2dFitRangeInputs', plot);
+            call('_updatePhase2dFitSelectionShapes', panelId, plot);
+            break;
+        case 'curve-fit':
+            call('_syncCurveFitRangeInputs', plot);
+            call('_updateCurveFitSelectionShapes', plot);
+            break;
+        case 'trend':
+            call('_syncTrendRangeInputs', plot);
+            call('_updateTrendSelectionShapes', plot);
+            break;
+        default:
+            break;
+        }
+    };
 }
 
 function rangeRow(labelText, control, tooltip = '', extraClass = '') {
