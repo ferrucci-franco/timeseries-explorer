@@ -19,7 +19,8 @@
 //     over the whole signal and over a selection;
 //   · on a generated (row-number) time axis, which has no time column to
 //     filter in SQL, the kernel is streamed over the rows instead and matches
-//     the in-memory numbers BIT FOR BIT;
+//     the in-memory numbers BIT FOR BIT — over a selection and over the whole
+//     file, whose axis runs 0…N−1 because a row's stored time IS its row;
 //   · the exponential asked for on a segment is the in-memory fit of the rows
 //     the band keeps, bit for bit;
 //   · a cancelled run stops;
@@ -358,17 +359,60 @@ for (const { name: tName, transform, inverted } of TRANSFORMS) {
     console.log('  in memory, the panel path: ok');
 }
 
-// ── A generated time axis is refused, not answered from the overview ────────
+// ── A generated (row-number) time axis is read like any other ──────────────
+// Its stored time IS the row, so the stretch on screen and the rows in the
+// file are the same rows. The overview numbered itself instead, which drew a
+// 50 021-row file as an axis of 0…299 and made every range on it the file's
+// first 300 rows (#413).
 {
     const lazyGen = await loadLazy(generatedProfile);
-    assert.equal(duck.timeValueSql(lazyGen), null, 'a generated axis has no time column to shift');
+    assert.equal(duck.timeValueSql(lazyGen), null, 'a generated axis has no time column to filter in SQL');
     assert.equal(lazyGen._duckdb.generatedTime, true, 'and it is marked as generated');
-    const h = harness(lazyGen);
-    const results = await lazyTrends(h, plotFor([{ varName: 'a', rangeFull: true }]));
-    assert.equal(results[0].result, null, 'nothing is reported for an axis that numbers the overview');
-    assert.equal(results[0].lazyStatus, 'generatedAxis', 'and it says why');
-    console.log('  generated axis refused: ok');
+    // Counted by the load scan itself: the axis spans the file from the first
+    // paint, with no COUNT of its own.
+    assert.equal(lazyGen._duckdb.totalRows, ROWS, 'the file is counted as it loads');
+    assert.equal(lazyGen.metadata.timeStart, 0, 'the axis starts at the first row of the file');
+    assert.equal(lazyGen.metadata.timeEnd, ROWS - 1, 'and ends at its last');
+    const overview = lazyGen.variables[lazyGen.metadata.timeName].data;
+    assert.ok(overview.length < ROWS, `the overview is a sample (${overview.length} of ${ROWS})`);
+    assert.ok(overview[overview.length - 1] > overview.length,
+        `whose times are the rows they came from (${overview[0]}…${overview[overview.length - 1]})`);
+
+    const eagerGen = await eagerFrom(lazyGen);
+    const hLazy = harness(lazyGen);
+    const hEager = harness(eagerGen);
+    const domain = hLazy._trendDomain(plotFor([{ varName: 'a' }]));
+    assert.deepEqual([domain.min, domain.max], [0, ROWS - 1], "the panel's axis is the file's rows");
+    assert.deepEqual(
+        hEager._trendDomain(plotFor([{ varName: 'a' }])),
+        domain,
+        'the same axis the file in memory has',
+    );
+    const span = domain.max - domain.min;
+    const specs = [
+        { varName: 'a', rangeFull: true },
+        { varName: 'a', x1: Math.round(span * 0.2), x2: Math.round(span * 0.7) },
+        { varName: 'b', x1: Math.round(span * 0.35), x2: Math.round(span * 0.9), bandOn: true, lower: 2, upper: 9 },
+    ];
+    for (const spec of specs) {
+        const label = `generated / ${spec.varName}${spec.rangeFull ? ' (full)' : ''}`;
+        const plot = plotFor([spec]);
+        const [got] = await lazyTrends(hLazy, plot);
+        assert.ok(got.result, `${label}: settled (${got.lazyStatus})`);
+        const trace = { varName: spec.varName, fileId: 'f', axis: 'y' };
+        const info = hLazy._trendTimeInfo(plot, trace);
+        const want = eagerTrend(hEager, plot.trend.segments[0], trace, got.result.range, info);
+        assertTrendParity(got.result.trend, want, label, { exact: true });
+    }
+    // And Full is every row of the file, not the overview's first and last:
+    // `nScope` is the rows the segment's range holds (`n` leaves out the one
+    // row of `b` that reads as infinite).
+    const [full] = await lazyTrends(hLazy, plotFor([{ varName: 'b', rangeFull: true }]));
+    assert.equal(full.result.trend.nScope, ROWS,
+        `Full covers every row of the file (${full.result.trend.nScope} of ${ROWS})`);
+    console.log('  generated axis, bit for bit and every row: ok');
 }
+
 
 // ── Without the regression aggregates, the kernel is streamed ───────────────
 // Bit for bit the in-memory numbers: the same kernel, fed the file's rows a

@@ -18,10 +18,11 @@
 //     itself streamed over the rows, a chunk at a time, which is exact bit for
 //     bit at the cost of reading them.
 //
-// A lazy file whose time axis is GENERATED from the row number is refused, and
-// says so: in memory-saving mode that axis numbers the rows of the overview,
-// not of the file, so the stretch the panel shows and the rows the file holds
-// at those positions are not the same rows (docs/any-size-files.md).
+// A lazy file whose time axis is GENERATED from the row number is read like
+// any other: what the file stores as a row's time IS that row, so the stretch
+// the panel shows and the rows the file holds there are the same rows. It goes
+// down the streamed path, since SQL cannot filter, in the pass that aggregates
+// them, a window computed over every row (#413, docs/any-size-files.md).
 //
 // The exponential trend is per segment and asked for explicitly: it is an
 // iterative fit (src/utils/exp-fit.js), so on a lazy file it is a score of
@@ -133,7 +134,11 @@ export function installPlotTrendLazyMethods(TargetClass) {
     proto._trendLazyDisplayDomain = function(trace) {
         const data = this.files.get(trace?.fileId)?.data;
         const source = data?._duckdb?.source;
-        if (!source?.timeValueSql?.(data)) return null;
+        // The file's own ends, not the overview's: a sample holds neither the
+        // first row nor the last. A row-number axis has no time column to ask
+        // for — its stored time IS the row — so it is read the same way (#413).
+        if (!data?._duckdb) return null;
+        if (!data._duckdb.generatedTime && !source?.timeValueSql?.(data)) return null;
         let lo = Number(data.metadata?.timeStart);
         let hi = Number(data.metadata?.timeEnd);
         if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
@@ -214,22 +219,6 @@ export function installPlotTrendLazyMethods(TargetClass) {
         const data = this.files.get(trace?.fileId)?.data;
         const source = data?._duckdb?.source;
         return !!source?.getTrendStats && !!source.timeValueSql?.(data);
-    };
-
-    /**
-     * Whether a lazy file's time axis is generated from the row number, which
-     * this analysis cannot read a stretch of.
-     *
-     * In memory-saving mode the overview is a reservoir sample renumbered from
-     * zero, so the panel's axis counts the overview's rows while the file's
-     * rows are numbered 0…N−1. A segment placed on that axis would name one
-     * set of rows on screen and another in the file: there is no honest answer
-     * to give, so the segment says why instead.
-     */
-    proto._trendAxisIsGeneratedRowNumber = function(trace) {
-        const data = this.files.get(trace?.fileId)?.data;
-        if (!data?._duckdb) return false;
-        return !!data._duckdb.generatedTime;
     };
 
     /**
@@ -496,13 +485,15 @@ export function installPlotTrendLazyMethods(TargetClass) {
         }
 
         // What cannot be read from the file is refused, not answered from the
-        // overview: a signal that only exists there, and a file whose time axis
-        // numbers the overview's rows rather than the file's.
+        // overview: a signal that only exists there. A file whose time axis is
+        // the row number is read like any other — its stored time IS that row,
+        // so the stretch on screen and the rows in the file are the same rows
+        // (#413) — through the streamed kernel, since SQL cannot filter a
+        // window in the same pass that aggregates it.
         const refused = [];
         const readable = [];
         for (const r of fresh) {
             if (!this._trendHasLazyRows(r.trace)) refused.push([r, 'unsupported']);
-            else if (this._trendAxisIsGeneratedRowNumber(r.trace)) refused.push([r, 'generatedAxis']);
             else readable.push(r);
         }
         for (const [r, status] of refused) {
