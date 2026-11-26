@@ -86,6 +86,7 @@ export function installPlotTrendLazyMethods(TargetClass) {
 
     proto._trendActiveSegment = function(plot) {
         const state = this._ensureTrendState(plot);
+        if (state.activeSegment < 0) return null;
         return state.segments[state.activeSegment] || state.segments[0] || null;
     };
 

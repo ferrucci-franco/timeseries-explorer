@@ -72,6 +72,9 @@ export function installPlotAnalysisRangeMethods(TargetClass) {
     proto._buildAnalysisRangeSection = function (spec = {}) {
         const {
             prefix,
+            // false: no Full / Selection row, only the bounds (Trend, whose
+            // segments are always a stretch of the signal).
+            showMode = true,
             rangeFull = false,
             lo = null,
             hi = null,
@@ -90,31 +93,33 @@ export function installPlotAnalysisRangeMethods(TargetClass) {
         const fragment = document.createDocumentFragment();
 
         // Full / Selection.
-        const segmented = document.createElement('div');
-        segmented.className = 'fft-segmented analysis-range-segmented';
-        for (const isFull of [true, false]) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = i18n.t(isFull ? 'fftRangeFull' : 'fftRangeSelection');
-            button.title = i18n.t(isFull ? fullTooltipKey : selectionTooltipKey);
-            button.dataset.analysisRangeFull = String(isFull);
-            button.dataset[`${prefix}RangeFull`] = String(isFull);
-            const active = !!rangeFull === isFull;
-            button.classList.toggle('active', active);
-            button.setAttribute('aria-pressed', String(active));
-            button.addEventListener('click', (event) => {
-                event.preventDefault();
-                // The mode that is on NOW is read from the button, which
-                // _syncAnalysisRangeSection keeps current. The `rangeFull`
-                // this section was built with is stale as soon as the panel
-                // syncs it instead of rebuilding it: built in Full, a press
-                // on Selection, and Full could never be pressed again.
-                if (button.getAttribute('aria-pressed') === 'true') return;
-                onMode(isFull);
-            });
-            segmented.appendChild(button);
+        if (showMode) {
+            const segmented = document.createElement('div');
+            segmented.className = 'fft-segmented analysis-range-segmented';
+            for (const isFull of [true, false]) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = i18n.t(isFull ? 'fftRangeFull' : 'fftRangeSelection');
+                button.title = i18n.t(isFull ? fullTooltipKey : selectionTooltipKey);
+                button.dataset.analysisRangeFull = String(isFull);
+                button.dataset[`${prefix}RangeFull`] = String(isFull);
+                const active = !!rangeFull === isFull;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-pressed', String(active));
+                button.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    // The mode that is on NOW is read from the button, which
+                    // _syncAnalysisRangeSection keeps current. The `rangeFull`
+                    // this section was built with is stale as soon as the panel
+                    // syncs it instead of rebuilding it: built in Full, a press
+                    // on Selection, and Full could never be pressed again.
+                    if (button.getAttribute('aria-pressed') === 'true') return;
+                    onMode(isFull);
+                });
+                segmented.appendChild(button);
+            }
+            fragment.appendChild(rangeRow(i18n.t('fftRange'), segmented, '', 'analysis-range-mode'));
         }
-        fragment.appendChild(rangeRow(i18n.t('fftRange'), segmented, '', 'analysis-range-mode'));
 
         // The two bounds, each a field with its slider under it.
         const grid = document.createElement('div');

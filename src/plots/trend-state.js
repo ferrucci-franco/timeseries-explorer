@@ -28,6 +28,9 @@ import { EXP_FAMILY_MODELS } from '../utils/exp-fit.js';
 
 export const TREND_LAYOUTS = new Set(['horizontal', 'vertical']);
 export const TREND_MAX_SEGMENTS = 12;
+// The segment menu's "None": no segment is active, so every segment is drawn
+// in grey and none of them has handles on the plot.
+export const TREND_NO_ACTIVE = -1;
 
 // The exponential models a segment may ask for, in menu order. There is no
 // "none" among them: the tick box beside the menu is what turns the fit off,
@@ -147,7 +150,8 @@ export function normalizeTrendState(raw = {}) {
         timeUnit: raw.timeUnit === 's' || raw.timeUnit === 'min' || raw.timeUnit === 'h' || raw.timeUnit === 'd'
             ? raw.timeUnit
             : defaults.timeUnit,
-        activeSegment: Math.max(0, Math.min(segments.length - 1, active)),
+        // -1 is "None": no segment active, every one drawn in grey.
+        activeSegment: active === TREND_NO_ACTIVE ? TREND_NO_ACTIVE : Math.max(0, Math.min(segments.length - 1, active)),
         bandSigma: Number.isFinite(sigma)
             ? Math.max(TREND_BAND_SIGMA_MIN, Math.min(TREND_BAND_SIGMA_MAX, sigma))
             : defaults.bandSigma,
