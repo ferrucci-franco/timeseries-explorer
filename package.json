@@ -41,6 +41,7 @@
     "gen:csv-parity-fixtures": "node scripts/gen-csv-parity-fixtures.mjs",
     "test:csv": "node scripts/test-csv-fixtures.mjs",
     "test:guide-chapters": "node scripts/test-guide-chapters.mjs",
+    "test:guide-mat": "node scripts/test-guide-mat.mjs",
     "test:csv-robust-parsing": "node scripts/test-csv-robust-parsing.mjs",
     "test:csv-robust-duckdb": "node scripts/test-csv-robust-duckdb.mjs",
     "test:csv-nan-cells": "node scripts/test-csv-nan-cells.mjs",

@@ -14,6 +14,7 @@
 
 import i18n from '../i18n/index.js';
 import { GUIDE_CHAPTERS, GUIDE_GROUPS } from './guide-chapters.js';
+import { createOmStage } from './guide-om-stage.js';
 
 const ABORT = { abort: true };
 
@@ -580,6 +581,42 @@ html.demo *{scroll-behavior:auto !important}`;
 
     panels() { return this.$$('.layout-panel'); }
     panel(i = 0) { return this.panels()[i] || null; }
+
+    /**
+     * The stand-in for the simulation tool, drawn over the app inside the
+     * frame (guide-om-stage.js). Built the first time a demo asks for it, and
+     * gone with the frame when the demo starts again.
+     */
+    om() {
+        if (!this._om) this._om = createOmStage(this.doc);
+        return this._om;
+    }
+
+    /** Close the dialog on screen by its button, as a person would. */
+    async modalOk(opts = {}) {
+        const button = await this.until(() => this.$('.modal-overlay .modal-btn-confirm'), opts.wait || 4000)
+            ? this.$('.modal-overlay .modal-btn-confirm') : null;
+        if (!button) return false;
+        await this.wait(opts.read != null ? opts.read : 1400);
+        await this.tap(button, { after: opts.after != null ? opts.after : 600 });
+        return true;
+    }
+
+    /**
+     * Put new bytes behind the file that is open, the way a simulation that
+     * ran again leaves a new file where the old one was. Reload re-reads the
+     * file through the handle the app holds, so it finds what was staged —
+     * and, in the "as new" mode, keeps the previous run as another version.
+     */
+    restage(bytes, name) {
+        const id = this.app.plotManager?.activeFileId;
+        const entry = id && this.app.files.get(id);
+        if (!entry) throw new Error('guide: no file to restage');
+        const filename = name || entry.file?.name || 'result.mat';
+        const W = this.W;
+        entry.fileHandle = { getFile: async () => new W.File([bytes], filename) };
+        return entry;
+    }
 
     /** The row of a variable in the tree, scrolled into view. */
     async variable(name) {

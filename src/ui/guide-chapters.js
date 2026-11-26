@@ -13,6 +13,8 @@
 // network, a small file under public/examples/guide/ written by
 // scripts/gen-guide-pypsa-example.py.
 
+import { pendulumResultMat, PENDULUM_RUNS } from './guide-om-result.js';
+
 const say = (en, fr, es, it, zh) => ({ en, fr, es, it, zh });
 
 export const GUIDE_GROUPS = {
@@ -701,6 +703,220 @@ export const GUIDE_CHAPTERS = [
             ));
             await d.move('#reload-file');
             await d.wait(2400);
+        },
+    },
+
+    {
+        id: 'load-as-new', g: 'tools', icon: '⧉', est: 69000,
+        t: say('Compare runs of a simulation', 'Comparer des exécutions', 'Comparar corridas de una simulación',
+            'Confrontare esecuzioni di una simulazione', '比较多次仿真运行'),
+        d: say(
+            'A simulation writes its result over the previous one. The switch next to <b>🔄</b> turns Reload into <b>Reload as new</b>: the run that was loaded is kept as another version instead of being replaced. Then <b>⧉</b>, in the toolbar of the panel, draws the variables already plotted from every loaded file — one curve per run, in one plot.',
+            'Une simulation écrit son résultat par-dessus le précédent. L’interrupteur à côté de <b>🔄</b> transforme Recharger en <b>Recharger comme nouvelle version</b> : l’exécution déjà chargée est conservée au lieu d’être remplacée. Ensuite <b>⧉</b>, dans la barre du panneau, trace les variables déjà affichées depuis tous les fichiers chargés — une courbe par exécution, dans un seul graphique.',
+            'Una simulación escribe su resultado encima del anterior. El interruptor junto a <b>🔄</b> convierte Recargar en <b>Recargar como nueva versión</b>: la corrida ya cargada se conserva en vez de reemplazarse. Después <b>⧉</b>, en la barra del panel, dibuja las variables ya graficadas desde todos los archivos cargados — una curva por corrida, en un solo gráfico.',
+            'Una simulazione scrive il suo risultato sopra il precedente. L’interruttore accanto a <b>🔄</b> trasforma Ricarica in <b>Ricarica come nuova versione</b>: l’esecuzione già caricata viene conservata invece di essere sostituita. Poi <b>⧉</b>, nella barra del pannello, traccia le variabili già mostrate da tutti i file caricati — una curva per esecuzione, in un solo grafico.',
+            '仿真会把结果覆盖在上一次之上。<b>🔄</b> 旁边的开关把“重新加载”变成<b>作为新版本重新加载</b>：已加载的那次运行会被保留，而不是被替换。然后用面板工具栏里的 <b>⧉</b>，把已绘制的变量从所有已加载文件中一并画出——每次运行一条曲线，同在一张图上。',
+        ),
+        async setup(d) {
+            // Three runs of ExampleSimplePendulum with more and more damping,
+            // computed here and written as OpenModelica result files
+            // (guide-om-result.js): nothing is downloaded.
+            d.runs = PENDULUM_RUNS.map((b) => pendulumResultMat({ b }));
+            d.om();
+        },
+        async run(d) {
+            const om = d.om();
+            const file = 'ExampleSimplePendulum_res.mat';
+            const compareButton = () => d.panel(0).querySelector('.compare-files-btn');
+
+            // ── The first run, in the simulation tool ──
+            om.show();
+            await d.wait(700);
+            d.say(say(
+                'A model in OpenModelica — <b>Simulate</b>',
+                'Un modèle dans OpenModelica — <b>Simulate</b>',
+                'Un modelo en OpenModelica — <b>Simulate</b>',
+                'Un modello in OpenModelica — <b>Simulate</b>',
+                'OpenModelica 中的一个模型——<b>Simulate</b>',
+            ));
+            await d.cam(om.el.simulate, 2.2, 700);
+            await d.tap(om.el.simulate, { after: 400 });
+
+            d.say(say(
+                'It is translated to C, compiled, and then run',
+                'Il est traduit en C, compilé, puis exécuté',
+                'Se traduce a C, se compila y luego se ejecuta',
+                'Viene tradotto in C, compilato e poi eseguito',
+                '先翻译成 C、编译，然后运行',
+            ));
+            await d.cam(om.el.messages, 1.5, 600);
+            om.tab('Compilation');
+            om.progress(8, 'Compiling ExampleSimplePendulum. Please wait for a while.');
+            for (const [i, line] of om.COMPILE_LINES.entries()) {
+                om.line(line);
+                om.progress(Math.min(70, 8 + i * 8), 'Compiling ExampleSimplePendulum. Please wait for a while.');
+                await d.wait(290);
+            }
+            om.tab('Output');
+            om.progress(86, 'Running simulation of ExampleSimplePendulum. Please wait for a while.');
+            for (const line of om.OUTPUT_LINES) {
+                om.line(line);
+                await d.wait(320);
+            }
+            om.progress(100, 'Simulation of ExampleSimplePendulum finished.');
+            await d.wait(550);
+
+            om.perspective('plotting');
+            om.curve(0.1);
+            d.say(say(
+                'The result is a file: <b>ExampleSimplePendulum_res.mat</b>',
+                'Le résultat est un fichier : <b>ExampleSimplePendulum_res.mat</b>',
+                'El resultado es un archivo: <b>ExampleSimplePendulum_res.mat</b>',
+                'Il risultato è un file: <b>ExampleSimplePendulum_res.mat</b>',
+                '结果就是一个文件：<b>ExampleSimplePendulum_res.mat</b>',
+            ));
+            await d.cam(om.el.variables, 1.5, 700);
+            await d.wait(1100);
+
+            // ── That file, here ──
+            await d.cam(null, null, 500);
+            om.hide();
+            await d.wait(600);
+            d.say(say(
+                'Drop that file here',
+                'Déposez ce fichier ici',
+                'Suelte ese archivo aquí',
+                'Rilascia quel file qui',
+                '把这个文件拖到这里',
+            ));
+            await d.loadFile(file, d.runs[0]);
+            await d.plot('theta');
+            await d.until(() => d.panel(0).querySelector('.js-plotly-plot'), 8000);
+            await d.wait(900);
+
+            // ── Another run: a parameter changed, no compiling ──
+            // The third run is the second one again, so it is played faster:
+            // by then the viewer knows where this is going.
+            for (const round of [1, 2]) {
+                const damping = PENDULUM_RUNS[round];
+                const pace = round === 1 ? 1 : 0.7;
+                const w = (ms) => d.wait(Math.round(ms * pace));
+                om.show();
+                om.perspective('plotting');
+                await w(600);
+                d.say(round === 1 ? say(
+                    'Back in OpenModelica: change a parameter',
+                    'De retour dans OpenModelica : changez un paramètre',
+                    'De vuelta en OpenModelica: cambie un parámetro',
+                    'Di nuovo in OpenModelica: cambia un parametro',
+                    '回到 OpenModelica：改一个参数',
+                ) : say(
+                    'A third run, with more damping again',
+                    'Une troisième exécution, encore plus amortie',
+                    'Una tercera corrida, con más amortiguación',
+                    'Una terza esecuzione, ancora più smorzata',
+                    '第三次运行，阻尼再大一些',
+                ));
+                await d.cam(om.el.damping, 3, Math.round(700 * pace));
+                await d.move(om.el.damping);
+                om.value('b', '', true);
+                for (const text of [String(damping)[0], String(damping).slice(0, 2), String(damping)]) {
+                    om.value('b', text, true);
+                    await w(230);
+                }
+                await w(400);
+                om.value('b', String(damping), false);
+
+                d.say(say(
+                    'Right button on the result: <b>Re-simulate</b>',
+                    'Bouton droit sur le résultat : <b>Re-simulate</b>',
+                    'Botón derecho sobre el resultado: <b>Re-simulate</b>',
+                    'Tasto destro sul risultato: <b>Re-simulate</b>',
+                    '在结果上点右键：<b>Re-simulate</b>',
+                ));
+                await d.cam(om.el.variables, 1.5, Math.round(600 * pace));
+                await d.move(om.el.resultRoot);
+                om.menu(true);
+                await w(650);
+                await d.tap(om.el.resimulateItem, { after: Math.round(250 * pace) });
+                om.menu(false);
+
+                d.say(say(
+                    'Only the run is repeated — nothing is compiled again',
+                    'Seule l’exécution est refaite — rien n’est recompilé',
+                    'Sólo se repite la ejecución — no se compila de nuevo',
+                    'Viene ripetuta solo l’esecuzione — non si ricompila',
+                    '只重复运行——不再编译',
+                ));
+                await d.cam(om.el.messages, 1.5, Math.round(600 * pace));
+                om.tab('Output');
+                om.progress(45, 'Running simulation of ExampleSimplePendulum. Please wait for a while.');
+                for (const line of om.OUTPUT_LINES) {
+                    om.line(line);
+                    await w(300);
+                }
+                om.progress(100, 'Simulation of ExampleSimplePendulum finished.');
+                om.curve(damping);
+                await w(450);
+                await d.cam(om.el.plot, 1.2, Math.round(600 * pace));
+                await w(900);
+
+                // ── Reload as new: the previous run is kept ──
+                await d.cam(null, null, 450);
+                om.hide();
+                // The file on disk is the one the new run has just written.
+                d.restage(d.runs[round], file);
+                await w(500);
+                if (round === 1) {
+                    d.say(say(
+                        'The file was overwritten. The switch: <b>AS NEW</b>',
+                        'Le fichier a été écrasé. L’interrupteur : <b>AS NEW</b>',
+                        'El archivo se sobrescribió. El interruptor: <b>AS NEW</b>',
+                        'Il file è stato sovrascritto. L’interruttore: <b>AS NEW</b>',
+                        '文件被覆盖了。这个开关：<b>AS NEW</b>',
+                    ));
+                    await d.cam('.reload-file-split', 2.6, 700);
+                    await d.tap('#reload-as-version-toggle', { after: 350 });
+                    await d.until(() => d.app.reloadAsNewVersionMode, 2000);
+                    await d.wait(500);
+                } else {
+                    await d.cam('.reload-file-split', 2.6, 500);
+                }
+                d.say(say(
+                    '<b>🔄</b> keeps the run that was loaded, and adds the new one',
+                    '<b>🔄</b> conserve l’exécution chargée et ajoute la nouvelle',
+                    '<b>🔄</b> conserva la corrida cargada y agrega la nueva',
+                    '<b>🔄</b> conserva l’esecuzione caricata e aggiunge la nuova',
+                    '<b>🔄</b> 保留已加载的那次运行，并加入新的一次',
+                ));
+                await d.tap('#reload-file', { after: 350 });
+                await d.modalOk({ read: Math.round(1600 * pace), after: 450 });
+                await d.cam('#files-section', 1.5, 600);
+                await w(800);
+
+                // ── One plot, one curve per run ──
+                d.say(say(
+                    '<b>⧉</b> draws what is plotted, from every file',
+                    '<b>⧉</b> trace ce qui est affiché, depuis tous les fichiers',
+                    '<b>⧉</b> dibuja lo que está graficado, desde todos los archivos',
+                    '<b>⧉</b> traccia ciò che è mostrato, da tutti i file',
+                    '<b>⧉</b> 把已绘制的内容从所有文件中一并画出',
+                ));
+                await d.cam(compareButton(), 2.4, Math.round(700 * pace));
+                await d.tap(compareButton(), { after: 450 });
+                await d.modalOk({ read: Math.round(1300 * pace), after: 450 });
+                await d.cam(null, null, 600);
+                await w(1300);
+            }
+
+            d.say(say(
+                'Three runs of one model, one plot',
+                'Trois exécutions d’un modèle, un seul graphique',
+                'Tres corridas de un modelo, un solo gráfico',
+                'Tre esecuzioni di un modello, un solo grafico',
+                '同一模型的三次运行，一张图',
+            ));
+            await d.wait(1800);
         },
     },
 
