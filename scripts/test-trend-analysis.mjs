@@ -29,6 +29,7 @@ import { linearFit, quadraticFitCentered } from '../src/utils/regression.js';
 import { detectBoundsOutliers } from '../src/compute/kernels/outliers.js';
 import {
     TREND_MAX_SEGMENTS,
+    TREND_NO_ACTIVE,
     defaultTrendSegment,
     defaultTrendState,
     normalizeTrendState,
@@ -217,6 +218,8 @@ for (const size of [1, 7, 1000, ROWS]) {
     assert.equal(wild.timeUnit, 's', 'an unknown unit falls back');
     assert.equal(wild.segments.length, TREND_MAX_SEGMENTS, 'at most the maximum number of segments');
     assert.equal(wild.activeSegment, 7, 'the active segment is kept inside the list');
+    assert.equal(normalizeTrendState({ activeSegment: TREND_NO_ACTIVE }).activeSegment, TREND_NO_ACTIVE, 'None (no segment active) is kept');
+    assert.equal(normalizeTrendState({ activeSegment: -5 }).activeSegment, 0, 'any other negative index is not');
     assert.ok(wild.bandSigma <= 10, 'the sigma factor is clamped');
     assert.equal(wild.curves.mean, false, 'a curve turned off stays off');
     assert.equal('nonsense' in wild.curves, false, 'an unknown curve is dropped');

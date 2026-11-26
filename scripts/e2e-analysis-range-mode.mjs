@@ -28,12 +28,14 @@ function makeCsv() {
     return { name: 'wave.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
 }
 
-const TIME_ANALYSES = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend'];
+// Not Trend: a segment is always a stretch of the signal, so its drawer has
+// the two bounds and no Full / Selection (scripts/e2e-trend.mjs checks that).
+const TIME_ANALYSES = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit'];
 const PLANE_ANALYSES = ['correlation', 'phase2d-fit'];
-// Curve fit and Trend keep a range per fit and per segment rather than one for
-// the panel (_analysisStateForMode has none for them), so the automatic
-// preview, and the widening checked below, never reach them.
-const NO_PREVIEW = new Set(['curve-fit', 'trend']);
+// Curve fit keeps a range per fit rather than one for the panel
+// (_analysisStateForMode has none for it), so the automatic preview, and the
+// widening checked below, never reach it.
+const NO_PREVIEW = new Set(['curve-fit']);
 
 // The Full / Selection buttons of a panel that are on screen (an analysis may
 // keep a block per fit or per segment; the first visible one is pressed).

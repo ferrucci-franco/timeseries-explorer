@@ -1746,6 +1746,10 @@
     padding: 4px 6px 8px;
     min-width: 0;
     min-height: 0;
+    /* The table's own colour, all the way across: a table wider than the
+       pane, scrolled sideways, used to show the pane's grey to the right of
+       its title bar and its header row. */
+    background: var(--bg-primary);
 }
 
 .trend-table-head {
@@ -1754,6 +1758,9 @@
     gap: 6px;
     position: sticky;
     top: 0;
+    /* Pinned on the left too, so the copy button stays in view while the
+       table is scrolled sideways. */
+    left: 0;
     z-index: 2;
     padding: 2px 0 4px;
     background: var(--bg-primary);
@@ -3916,8 +3923,15 @@ body.cursor-box-dragging {
     cursor: pointer;
 }
 
-.fft-tool-btn:hover {
+.fft-tool-btn:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--primary-color) 68%, var(--border-color));
+}
+
+/* A button that cannot act now (Trend's Remove on its last segment, Zoom
+   with no segment picked) says so. */
+.fft-tool-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .fft-tool-btn.active {
