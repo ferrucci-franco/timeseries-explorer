@@ -15,6 +15,7 @@
 import i18n from '../i18n/index.js';
 import { GUIDE_CHAPTERS, GUIDE_GROUPS } from './guide-chapters.js';
 import { createOmStage } from './guide-om-stage.js';
+import { createFileDialogStage } from './guide-file-dialog.js';
 
 const ABORT = { abort: true };
 
@@ -592,11 +593,34 @@ html.demo *{scroll-behavior:auto !important}`;
         return this._om;
     }
 
-    /** Close the dialog on screen by its button, as a person would. */
+    /**
+     * The stand-in for the file dialog (guide-file-dialog.js). Asking for it
+     * also makes the browser's own pickers harmless in the frame, so a demo
+     * can press the app's real Open button without a dialog of the operating
+     * system covering the guide.
+     */
+    fileDialog() {
+        if (!this._fileDialog) this._fileDialog = createFileDialogStage(this.doc, this.W);
+        return this._fileDialog;
+    }
+
+    /**
+     * Close the dialog on screen by its button, as a person would.
+     *
+     * A dialog is the app answering, and it opens in the middle of the frame
+     * — which is rarely where the camera is looking, since what opened it was
+     * a button it had just zoomed on. So the camera frames the whole dialog
+     * first: a demo that shows half a sentence and a cropped icon says
+     * nothing. The step that follows points the camera where it wants it.
+     */
     async modalOk(opts = {}) {
-        const button = await this.until(() => this.$('.modal-overlay .modal-btn-confirm'), opts.wait || 4000)
-            ? this.$('.modal-overlay .modal-btn-confirm') : null;
-        if (!button) return false;
+        const found = await this.until(() => this.$('.modal-overlay .modal-btn-confirm'), opts.wait || 4000);
+        if (!found) return false;
+        const dialog = this.$('.modal-overlay .modal-dialog') || this.$('.modal-overlay');
+        const button = this.$('.modal-overlay .modal-btn-confirm');
+        // It slides in: measured once it is where it will stay.
+        await this.wait(260);
+        if (dialog) await this.cam(dialog, 1.05, 500);
         await this.wait(opts.read != null ? opts.read : 1400);
         await this.tap(button, { after: opts.after != null ? opts.after : 600 });
         return true;

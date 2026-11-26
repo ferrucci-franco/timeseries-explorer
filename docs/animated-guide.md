@@ -27,6 +27,7 @@ entry) points at it; the only thing remembered is that it was opened
 | `src/ui/guide.js` | The window (list, screen, camera, captions) and the driver of a demo (pointer, gestures). Knows nothing about any particular demo. |
 | `src/ui/guide-chapters.js` | The demos, their texts in five languages, and their made-up data. |
 | `src/ui/guide-om-stage.js` | The stand-in for the simulation tool the "Load as new" demo shows (next section). |
+| `src/ui/guide-file-dialog.js` | The stand-in Open dialog, and what keeps the browser's own picker out of a demo. |
 | `src/ui/guide-om-result.js` | Three runs of `ExampleSimplePendulum`, written as OpenModelica result files in the browser. |
 | `src/app/demo-mode.js` | `?demo`: what the copy of the app inside the frame does differently. |
 | `src/styles/guide.css` | The window's styles. |
@@ -98,6 +99,7 @@ expected duration in milliseconds, for the progress bar of the first run.
 | `d.modalOk()` | Read the dialog on screen for a moment, then close it by its button. |
 | `d.restage(bytes, name)` | Put new bytes behind the open file, so that Reload finds a changed file (next section). |
 | `d.om()` | The stand-in for the simulation tool (next section). |
+| `d.fileDialog()` | The stand-in Open dialog — and the browser's own picker made harmless. |
 | `d.$(sel)`, `d.$$(sel)`, `d.panel(i)`, `d.app` | The frame's document and app, for anything else. |
 
 `d.analysis()` is the only place that knows where the analyses are in a panel's
@@ -109,7 +111,7 @@ the `value` of an option (`listWith(root, 'hann')`), never a label.
 
 ## The demo that shows the tool next door
 
-"Compare runs of a simulation" (`load-as-new`) is about what happens between
+"Modelica: compare runs of a simulation" (`load-as-new`) is about what happens between
 two runs, and half of that happens in OpenModelica: a parameter is changed, the
 model is simulated again — not compiled again — and the result file is
 overwritten. Three pieces make that showable without installing anything and
@@ -132,6 +134,14 @@ without a recording:
   `data_2`. `scripts/test-guide-mat.mjs` reads them back with the app's own
   parser, so a wrong matrix layout fails a test instead of quietly producing a
   tree of nonsense.
+- **A stand-in Open dialog** (`guide-file-dialog.js`): the demo presses the
+  app's **real** Open button, so the browser's own picker must not appear — a
+  script cannot drive it and nothing could close it again. Asking for the stage
+  takes `showOpenFilePicker` away from the frame and makes the hidden file
+  input's `click()` do nothing; the drawn dialog then shows the working
+  directory of the run, result file and build leftovers alike, and the file is
+  opened the way a drop opens one. Without it the file appeared by itself,
+  which is the one step a reader would have taken.
 - **A staged reload** (`d.restage`): the demo presses the real 🔄 with the real
   **AS NEW** switch. For the app to find a changed file, the file entry is
   given a handle whose `getFile()` returns the next run's bytes — what a

@@ -707,9 +707,10 @@ export const GUIDE_CHAPTERS = [
     },
 
     {
-        id: 'load-as-new', g: 'tools', icon: '⧉', est: 69000,
-        t: say('Compare runs of a simulation', 'Comparer des exécutions', 'Comparar corridas de una simulación',
-            'Confrontare esecuzioni di una simulazione', '比较多次仿真运行'),
+        id: 'load-as-new', g: 'tools', icon: '⧉', est: 75000,
+        t: say('Modelica: compare runs of a simulation', 'Modelica : comparer des exécutions',
+            'Modelica: comparar corridas de una simulación', 'Modelica: confrontare esecuzioni di una simulazione',
+            'Modelica：比较多次仿真运行'),
         d: say(
             'A simulation writes its result over the previous one. The switch next to <b>🔄</b> turns Reload into <b>Reload as new</b>: the run that was loaded is kept as another version instead of being replaced. Then <b>⧉</b>, in the toolbar of the panel, draws the variables already plotted from every loaded file — one curve per run, in one plot.',
             'Une simulation écrit son résultat par-dessus le précédent. L’interrupteur à côté de <b>🔄</b> transforme Recharger en <b>Recharger comme nouvelle version</b> : l’exécution déjà chargée est conservée au lieu d’être remplacée. Ensuite <b>⧉</b>, dans la barre du panneau, trace les variables déjà affichées depuis tous les fichiers chargés — une courbe par exécution, dans un seul graphique.',
@@ -783,12 +784,32 @@ export const GUIDE_CHAPTERS = [
             om.hide();
             await d.wait(600);
             d.say(say(
-                'Drop that file here',
-                'Déposez ce fichier ici',
-                'Suelte ese archivo aquí',
-                'Rilascia quel file qui',
-                '把这个文件拖到这里',
+                'Open that file here',
+                'Ouvrez ce fichier ici',
+                'Abra ese archivo aquí',
+                'Apri quel file qui',
+                '在这里打开那个文件',
             ));
+            const picker = d.fileDialog();
+            const openButton = d.$('#file-select-btn') || d.$('#load-new-file');
+            await d.cam(openButton, 2.4, 600);
+            await d.tap(openButton, { after: 350 });
+            await d.cam(null, null, 300);
+            picker.show();
+            await d.wait(700);
+            d.say(say(
+                'The result of the run, among what the build left',
+                'Le résultat de l’exécution, parmi ce qu’a laissé la compilation',
+                'El resultado de la corrida, entre lo que dejó la compilación',
+                'Il risultato dell’esecuzione, tra ciò che ha lasciato la compilazione',
+                '这次运行的结果，就在编译留下的文件里',
+            ));
+            await d.tap(picker.row(file), { after: 250 });
+            picker.select(file);
+            await d.wait(550);
+            await d.tap(picker.el.open, { after: 250 });
+            picker.hide();
+            await d.wait(400);
             await d.loadFile(file, d.runs[0]);
             await d.plot('theta');
             await d.until(() => d.panel(0).querySelector('.js-plotly-plot'), 8000);
@@ -889,7 +910,10 @@ export const GUIDE_CHAPTERS = [
                     '<b>🔄</b> conserva l’esecuzione caricata e aggiunge la nuova',
                     '<b>🔄</b> 保留已加载的那次运行，并加入新的一次',
                 ));
-                await d.tap('#reload-file', { after: 350 });
+                await d.tap('#reload-file', { after: 150 });
+                // Out of the zoom on the button at once: what answers is a
+                // dialog in the middle of the window, not the button.
+                await d.cam(null, null, 250);
                 await d.modalOk({ read: Math.round(1600 * pace), after: 450 });
                 await d.cam('#files-section', 1.5, 600);
                 await w(800);
@@ -903,7 +927,8 @@ export const GUIDE_CHAPTERS = [
                     '<b>⧉</b> 把已绘制的内容从所有文件中一并画出',
                 ));
                 await d.cam(compareButton(), 2.4, Math.round(700 * pace));
-                await d.tap(compareButton(), { after: 450 });
+                await d.tap(compareButton(), { after: 150 });
+                await d.cam(null, null, 250);
                 await d.modalOk({ read: Math.round(1300 * pace), after: 450 });
                 await d.cam(null, null, 600);
                 await w(1300);
