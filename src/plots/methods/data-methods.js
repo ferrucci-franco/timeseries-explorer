@@ -792,21 +792,34 @@ proto._sourceRangeForDisplayRange = function(fileId, displayRange, timeVar = nul
         const dataStart = Number(entry?.data?.metadata?.timeStart);
         const dataEnd = Number(entry?.data?.metadata?.timeEnd);
         const totalRows = Number(entry?.data?._duckdb?.totalRows);
+        const stepSeconds = this._indexTimeStepSeconds(fileId);
+        const mode = this._indexTimeStepMode(fileId);
+        const displayToRow = value => {
+            if (mode === 'index') return value;
+            if (this._isGeneratedCalendarTime(fileId, t) && !this._isHighResolutionGeneratedCalendarTime(fileId, t)) {
+                const originMs = this._timeOriginMsForVar(fileId, t);
+                return (value - originMs) / (stepSeconds * 1000);
+            }
+            return value / stepSeconds;
+        };
+        // A file with no time column of its own: what is stored as a row's
+        // time IS its row number (the projection writes ROW_NUMBER() over
+        // every row), so the row the display value names is the stored time,
+        // with no ratio in between. The ratio below is over the first and the
+        // last row the overview happens to hold, which turned the whole plot
+        // into the file's first few hundred rows (#413).
+        if (entry?.data?._duckdb?.generatedTime) {
+            const rowValues = values.map(displayToRow);
+            if (rowValues.every(Number.isFinite)) {
+                const last = Number.isFinite(totalRows) && totalRows > 0 ? totalRows - 1 : Infinity;
+                return rowValues.map(row => Math.max(0, Math.min(last, row)));
+            }
+        }
         if (Number.isFinite(dataStart)
             && Number.isFinite(dataEnd)
             && dataEnd > dataStart
             && Number.isFinite(totalRows)
             && totalRows > 1) {
-            const stepSeconds = this._indexTimeStepSeconds(fileId);
-            const mode = this._indexTimeStepMode(fileId);
-            const displayToRow = value => {
-                if (mode === 'index') return value;
-                if (this._isGeneratedCalendarTime(fileId, t) && !this._isHighResolutionGeneratedCalendarTime(fileId, t)) {
-                    const originMs = this._timeOriginMsForVar(fileId, t);
-                    return (value - originMs) / (stepSeconds * 1000);
-                }
-                return value / stepSeconds;
-            };
             const rowValues = values.map(displayToRow);
             if (rowValues.every(Number.isFinite)) {
                 const sourceValues = rowValues.map(row => {
@@ -1380,15 +1393,24 @@ proto._getTransformIndexData = function(fileId) {
         const generatedCalendarOrigin = generatedCalendar ? this._timeOriginMsForVar(fileId, timeVar) : 0;
         const generatedStepMode = generatedIndex ? this._indexTimeStepMode(fileId) : null;
         const generatedStepSeconds = generatedIndex ? this._indexTimeStepSeconds(fileId) : 0;
+        // A file with no time column of its own, in memory-saving mode: the
+        // arrays here are a sample of the file, and the row each sample came
+        // from is the value stored as its time — that is what the projection
+        // writes (_generatedIndexProjectionSql: ROW_NUMBER() OVER () - 1 over
+        // every row). The loop counter is the file's row only when every row
+        // is in memory, where the two are equal; on a lazy file it numbered
+        // the sample instead, so a 50 000-row file drew an axis of 0…299 and
+        // every range on it named the file's first 300 rows (#413).
+        const storedRowIsTime = generatedIndex && !!this.files.get(fileId)?.data?._duckdb?.generatedTime;
         for (let i = 0; i < total; i++) {
             const rawTime = rawTimes[i];
             // Row that drives a generated index: a DETECTED datetime axis can be
             // irregular/downsampled, so map source time → approximate row; a numeric
-            // or native-index axis uses the loop counter directly (its raw value is
+            // axis shown as an index uses the loop counter (its raw value is
             // seconds, not a row, so it must NOT be fed to the index formatter).
             const generatedRow = generatedFromDetectedTime && timeVar?.timeKind === 'datetime'
                 ? this._approxRowIndexFromSourceTime(fileId, rawTime, i)
-                : i;
+                : storedRowIsTime ? Number(rawTime) : i;
             const displayTime = generatedIndex
                 ? (generatedStepMode === 'index'
                     ? generatedRow

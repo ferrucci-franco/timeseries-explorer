@@ -844,26 +844,36 @@ proto._getDecodedLocationCandidates = function() {
 proto._initExampleMenu = function() {
     const btn  = document.getElementById('load-example-btn');
     const menu = document.getElementById('example-menu');
+    // The welcome screen's Examples button opens the same menu, under itself.
+    const welcomeBtn = document.getElementById('welcome-examples-btn');
+    const triggers = [btn, welcomeBtn].filter(Boolean);
+    let openedBy = null;
 
     const close = () => {
         menu.hidden = true;
-        btn.setAttribute('aria-expanded', 'false');
+        openedBy = null;
+        for (const trigger of triggers) trigger.setAttribute('aria-expanded', 'false');
     };
-    const open = () => {
+    const open = (trigger = btn) => {
         this._closePeerMenus('example');
         this._renderExampleMenu();
         menu.hidden = false;
-        placeTopBarMenu(menu, btn.closest('.example-menu-wrap') || btn);
-        btn.setAttribute('aria-expanded', 'true');
+        openedBy = trigger;
+        placeTopBarMenu(menu, trigger === btn ? (btn.closest('.example-menu-wrap') || btn) : trigger);
+        trigger.setAttribute('aria-expanded', 'true');
     };
 
-    btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        menu.hidden ? open() : close();
-    });
+    for (const trigger of triggers) {
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (menu.hidden) open(trigger);
+            else if (openedBy === trigger) close();
+            else { close(); open(trigger); }
+        });
+    }
 
     document.addEventListener('click', (e) => {
-        if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) close();
+        if (!menu.hidden && !menu.contains(e.target) && !triggers.some(t => t.contains(e.target))) close();
     });
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && !menu.hidden) close();
@@ -1979,7 +1989,7 @@ proto._renderExtraMenu = function() {
     // are easy to miss. Its demos show the desktop layout, so it is not
     // offered on the phone layout, nor where it cannot run.
     const guideItem = this._guideIsOffered()
-        ? makeAction('▶', 'extraGuide', () => this.openGuide(), { titleKey: 'extraGuideTooltip' })
+        ? makeAction('▶', 'extraGuide', () => this.openGuide(), { titleKey: 'extraGuideTooltip', iconClass: 'extra-menu-icon-guide' })
         : null;
 
     // The phone layout on a large screen: to try it, or for a touch screen
@@ -3401,12 +3411,14 @@ proto._loadFileExample = async function(example) {
 proto._setExampleLoading = function(loading, exampleName = '') {
     this._exampleLoading = loading;
     const btn = document.getElementById('load-example-btn');
+    const welcomeBtn = document.getElementById('welcome-examples-btn');
     const message = i18n.t('loadingExample').replace('{name}', exampleName);
 
     if (loading) {
         const token = { cancelled: false };
         this._exampleLoadToken = token;
         if (btn) btn.disabled = true;
+        if (welcomeBtn) welcomeBtn.disabled = true;
         this._setDropZoneStatus(true, message);
         this._showExampleLoadingOverlay(message, token);
         return token;
@@ -3415,6 +3427,7 @@ proto._setExampleLoading = function(loading, exampleName = '') {
     if (this._exampleLoadToken) this._exampleLoadToken.cancelled = true;
     this._exampleLoadToken = null;
     if (btn) btn.disabled = false;
+    if (welcomeBtn) welcomeBtn.disabled = false;
     this._setDropZoneStatus(false);
     this._hideExampleLoadingOverlay();
     return null;
@@ -3574,6 +3587,19 @@ proto._syncGuideNewMark = function() {
         } catch (_) { seen = true; }
     }
     document.documentElement.classList.toggle('guide-new', !seen);
+    this._syncWelcomeGuideButton();
+};
+
+// The welcome screen's Animated guide button: shown where the guide is
+// offered (not on the phone layout, nor inside the guide's own frame).
+proto._syncWelcomeGuideButton = function() {
+    const btn = document.getElementById('welcome-guide-btn');
+    if (!btn) return;
+    btn.hidden = !this._guideIsOffered();
+    if (!btn.dataset.wired) {
+        btn.dataset.wired = '1';
+        btn.addEventListener('click', () => this.openGuide());
+    }
 };
 
 proto.showHelp = function() {

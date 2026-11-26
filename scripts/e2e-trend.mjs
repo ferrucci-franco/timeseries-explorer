@@ -76,6 +76,12 @@ try {
     assert.equal(await page.evaluate(id => window.app.plotManager.plots.get(id).mode, panelId), 'trend');
     assert.equal(await page.locator('.trend-container .trend-table-wrap').count(), 1, 'the panel has its table pane');
     assert.equal(await page.locator('.trend-options').count(), 1, 'and its options drawer');
+    // A segment is always a stretch of the signal: its range has the two
+    // bounds and no Full / Selection.
+    assert.equal(await page.locator('.trend-options [data-analysis-range-full]').count(), 0, 'no Full / Selection in the drawer');
+    assert.equal(await page.locator('.trend-options [data-analysis-range-key]').count(), 4, 'but the two bounds and their sliders');
+    // The last segment stays, so Remove says it cannot act.
+    assert.equal(await page.locator('.trend-remove-btn').isDisabled(), true, 'Remove is off with a single segment');
 
     const result = (index = 0) => page.evaluate(({ id, index }) => {
         const r = window.app.plotManager.plots.get(id)._trendResults?.[index];
@@ -285,6 +291,18 @@ try {
     // ── A second segment over the ramp ──
     await page.locator('.trend-add-btn').click();
     await page.waitForFunction(id => window.app.plotManager.plots.get(id).trend.segments.length === 2, panelId);
+    // A new segment does not land on top of the one before it: with both on
+    // the same spot, removing one looked like it had done nothing.
+    {
+        const [a, b] = await page.evaluate(id => {
+            const pm = window.app.plotManager;
+            const plot = pm.plots.get(id);
+            return plot.trend.segments.map(segment => pm._trendRange(plot, segment));
+        }, panelId);
+        const shared = Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0]));
+        assert.ok(shared < (b[1] - b[0]) * 0.5, `the new segment is placed away from the first (${a} / ${b})`);
+    }
+    assert.equal(await page.locator('.trend-remove-btn').isDisabled(), false, 'with two segments, Remove is on');
     await setSegment({ rangeFull: false, x1: 1500, x2: 2500 });
     await settled(1);
     const ramp = await result(1);
@@ -404,6 +422,46 @@ try {
     }, { id: panelId, end: movedEnd }, { timeout: 60000 });
     const moved = await result();
     assert.ok(moved.nScope > 9001, 'and it now reads more rows of the file');
+
+    // ── None, Zoom and Remove ──
+    {
+        const grey = () => page.evaluate(id => (window.app.plotManager.plots.get(id).div.layout.shapes || [])
+            .filter(shape => shape.yref === 'paper' && shape.type === 'rect')
+            .map(shape => String(shape.fillcolor)), panelId);
+        await page.selectOption('.trend-segment-select', '-1');
+        await page.waitForFunction(id => window.app.plotManager.plots.get(id).trend.activeSegment === -1, panelId);
+        const fills = await grey();
+        assert.equal(fills.length, 2, 'None: both segments are still drawn');
+        assert.ok(fills.every(fill => fill.startsWith('rgba(128')), `and both in grey (${fills})`);
+        assert.equal((await tableRows()).some(row => row.active), false, 'no row is the active one');
+        assert.equal(await page.locator('.trend-zoom-btn').isDisabled(), true, 'nothing to zoom on');
+        assert.equal(await page.locator('.trend-remove-btn').isDisabled(), true, 'nor to remove');
+        assert.equal(await page.locator('.trend-none-hint').count(), 1, 'the drawer says how to pick one');
+
+        // Zoom fits the time axis to the segment, with a margin round it.
+        await page.selectOption('.trend-segment-select', '1');
+        await page.waitForFunction(id => window.app.plotManager.plots.get(id).trend.activeSegment === 1, panelId);
+        await page.locator('.trend-zoom-btn').click();
+        await page.waitForFunction(id => {
+            const pm = window.app.plotManager;
+            const plot = pm.plots.get(id);
+            const [lo, hi] = pm._trendRange(plot, plot.trend.segments[1]);
+            const pad = (hi - lo) * 0.05;
+            const range = plot.div._fullLayout.xaxis.range;
+            return Math.abs(range[0] - (lo - pad)) < 1e-6 && Math.abs(range[1] - (hi + pad)) < 1e-6;
+        }, panelId, { timeout: 15000 });
+
+        // Remove takes the selected segment out.
+        await page.locator('.trend-remove-btn').click();
+        await page.waitForFunction(id => window.app.plotManager.plots.get(id).trend.segments.length === 1, panelId);
+        assert.equal((await tableRows()).length, 1, 'one row left');
+        assert.equal(await page.locator('.trend-remove-btn').isDisabled(), true, 'and the last one stays');
+        // Back to two, for the CSV below: the ramp again.
+        await page.locator('.trend-add-btn').click();
+        await page.waitForFunction(id => window.app.plotManager.plots.get(id).trend.segments.length === 2, panelId);
+        await setSegment({ rangeFull: false, x1: 1500, x2: 2500 });
+        await settled(1);
+    }
 
     // ── The controls say what they are ──
     {

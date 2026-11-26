@@ -3426,6 +3426,13 @@ export default class DuckDbSource {
             if (!timeInfo.generated && scanned) {
                 if (Number.isFinite(scanned.timeStart)) legacy.metadata.timeStart = scanned.timeStart;
                 if (Number.isFinite(scanned.timeEnd)) legacy.metadata.timeEnd = scanned.timeEnd;
+            } else if (timeInfo.generated && Number.isFinite(scanned?.rows) && scanned.rows > 0) {
+                // A row-number axis: every row has a time, so the scan's count
+                // IS the file's row count and the axis runs 0…N−1. Left to the
+                // overview, its ends were the first and the last row the
+                // sample happened to hold (#413).
+                legacy.metadata.timeStart = 0;
+                legacy.metadata.timeEnd = scanned.rows - 1;
             }
             legacy.metadata.numTimesteps = Number.isFinite(scanned?.rows) ? scanned.rows : null;
         }
@@ -3449,7 +3456,14 @@ export default class DuckDbSource {
                 rawColumnNames: columnNames.slice(),
                 rawColumnTypes: columnTypes.slice(),
                 csvProfile: this._cloneCsvProfile(csvProfile),
-                totalRows,
+                // A row-number axis is counted by the load scan itself (every
+                // row has a time), so even a view knows its row count: the
+                // axis is the file's from the first paint, with no COUNT of
+                // its own (_ensureLazyRowCount).
+                totalRows: totalRows === undefined && timeInfo.generated
+                    && Number.isFinite(scanned?.rows) && scanned.rows > 0
+                    ? scanned.rows
+                    : totalRows,
                 overviewPoints: totalRows
                     ? Math.min(overviewPoints, totalRows)
                     : overviewPoints,

@@ -14,6 +14,7 @@ import {
     TREND_EXP_OPTIONS,
     TREND_LAYOUTS,
     TREND_MAX_SEGMENTS,
+    TREND_NO_ACTIVE,
     trendBandKeyMove,
     trendColor,
     trendSegmentBand,
@@ -110,9 +111,12 @@ export function installPlotTrendMethods(TargetClass) {
     };
 
     // ── Ranges ────────────────────────────────────────────────────
-    // Seed a segment's selection from the time view: its middle third, so both
-    // edges sit inside the plot where they can be grabbed.
-    proto._seedTrendSelection = function(plot, segment) {
+    // Seed a segment's selection from the time view: a third of it, so both
+    // edges sit inside the plot where they can be grabbed. The middle third,
+    // unless other segments are given in `avoid`: then the third of the view
+    // they cover least (the middle on a tie), so a new segment does not land
+    // exactly on top of the one before it.
+    proto._seedTrendSelection = function(plot, segment, { avoid = [] } = {}) {
         const domain = this._trendDomain(plot);
         const axis = plot?.div?._fullLayout?.xaxis;
         let lo = this._coerceAxisValue(axis?.range?.[0]);
@@ -125,8 +129,15 @@ export function installPlotTrendMethods(TargetClass) {
             hi = Math.max(domain.min, Math.min(domain.max, hi));
         }
         const third = (hi - lo) / 3;
-        segment.x1 = lo + third;
-        segment.x2 = hi - third;
+        const taken = avoid
+            .filter(other => other && other !== segment)
+            .map(other => this._trendRange(plot, other));
+        const overlap = (a, b) => taken.reduce((sum, [x, y]) => sum + Math.max(0, Math.min(b, y) - Math.max(a, x)), 0);
+        const candidates = [lo + third, lo, lo + 2 * third]
+            .map(start => ({ start, covered: overlap(start, start + third) }));
+        const best = candidates.reduce((pick, c) => (c.covered < pick.covered - third * 1e-9 ? c : pick));
+        segment.x1 = best.start;
+        segment.x2 = best.start + third;
     };
 
     proto._trendFormatTime = function(trace, value) {
@@ -290,17 +301,17 @@ export function installPlotTrendMethods(TargetClass) {
             const [lo, hi] = this._trendRange(plot, segment);
             const x0 = toX(lo);
             const x1 = toX(hi);
-            if (!segment.rangeFull) {
-                if (active) {
-                    const color = '#43a047';
-                    shapes.push(
-                        { type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(67,160,71,0.14)', line: { width: 0 }, layer: 'below' },
-                        { type: 'line', xref: 'x', yref: 'paper', x0, x1: x0, y0: 0, y1: 1, line: { color, width: 2 } },
-                        { type: 'line', xref: 'x', yref: 'paper', x0: x1, x1, y0: 0, y1: 1, line: { color, width: 2 } },
-                    );
-                } else {
-                    shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(128,128,128,0.10)', line: { width: 1, color: 'rgba(128,128,128,0.45)', dash: 'dot' }, layer: 'below' });
-                }
+            // Every segment is a stretch of the signal, drawn as one: the
+            // active one in green with its edges, the others in grey.
+            if (active) {
+                const color = '#43a047';
+                shapes.push(
+                    { type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(67,160,71,0.14)', line: { width: 0 }, layer: 'below' },
+                    { type: 'line', xref: 'x', yref: 'paper', x0, x1: x0, y0: 0, y1: 1, line: { color, width: 2 } },
+                    { type: 'line', xref: 'x', yref: 'paper', x0: x1, x1, y0: 0, y1: 1, line: { color, width: 2 } },
+                );
+            } else {
+                shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(128,128,128,0.10)', line: { width: 1, color: 'rgba(128,128,128,0.45)', dash: 'dot' }, layer: 'below' });
             }
             const mid = lo + (hi - lo) / 2;
             annotations.push({
@@ -812,7 +823,6 @@ export function installPlotTrendMethods(TargetClass) {
                     if (near(band.lower)) return 'band-lower';
                 }
             }
-            if (segment.rangeFull) return null;
             const axis = plot.div._fullLayout?.xaxis;
             const span = Math.abs(this._coerceAxisValue(axis?.range?.[1]) - this._coerceAxisValue(axis?.range?.[0])) || Math.abs(hi - lo) || 1;
             const tolerance = Math.max((12 / (axis?._length || 1)) * span, span * 1e-6);
@@ -886,6 +896,7 @@ export function installPlotTrendMethods(TargetClass) {
                 hi = dragging.startHi + delta;
             }
             if (lo > hi) [lo, hi] = [hi, lo];
+            dragging.segment.rangeFull = false;
             dragging.segment.x1 = Math.max(domain.min, Math.min(domain.max, lo));
             dragging.segment.x2 = Math.max(domain.min, Math.min(domain.max, hi));
             this._updateTrendSelectionShapes(plot);
@@ -1017,7 +1028,9 @@ export function installPlotTrendMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
         const state = this._ensureTrendState(plot);
-        state.activeSegment = Math.max(0, Math.min(state.segments.length - 1, Number(index) || 0));
+        state.activeSegment = Number(index) === TREND_NO_ACTIVE
+            ? TREND_NO_ACTIVE
+            : Math.max(0, Math.min(state.segments.length - 1, Number(index) || 0));
         this._updateTrendSelectionShapes(plot);
         this._renderTrendTable(panelId, plot, plot._trendResults || []);
         this._renderTrendDrawer(panelId, plot, plot._trendResults || []);
@@ -1029,28 +1042,43 @@ export function installPlotTrendMethods(TargetClass) {
         const state = this._ensureTrendState(plot);
         if (state.segments.length >= TREND_MAX_SEGMENTS) return;
         const segment = this._newTrendSegment(plot);
-        this._seedTrendSelection(plot, segment);
+        this._seedTrendSelection(plot, segment, { avoid: state.segments });
         state.segments.push(segment);
         state.activeSegment = state.segments.length - 1;
         this._updateTrendSelectionShapes(plot);
         this._scheduleTrendRecompute(panelId, { immediate: true });
     };
 
+    // The last segment stays: the panel always has one to show. (Remove is
+    // disabled then, and with None, where there is no segment to remove.)
     proto._removeTrendSegment = function(panelId, index) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
         const state = this._ensureTrendState(plot);
+        if (!Number.isInteger(index) || index < 0 || index >= state.segments.length || state.segments.length <= 1) return;
         const removed = state.segments.splice(index, 1)[0];
         if (removed) plot._trendCache?.delete(removed.id);
-        if (!state.segments.length) {
-            const segment = this._newTrendSegment(plot);
-            this._trendTraceFor(plot, segment);
-            this._seedTrendSelection(plot, segment);
-            state.segments.push(segment);
-        }
         state.activeSegment = Math.max(0, Math.min(state.segments.length - 1, index - (index > 0 ? 1 : 0)));
         this._updateTrendSelectionShapes(plot);
         this._scheduleTrendRecompute(panelId, { immediate: true });
+    };
+
+    // Zoom the time axis on the active segment, with a margin on each side so
+    // both of its edges can still be grabbed.
+    proto._zoomTrendSegment = function(panelId) {
+        const plot = this.plots.get(panelId);
+        const segment = plot ? this._trendActiveSegment(plot) : null;
+        if (!segment || !plot.div?._fullLayout) return Promise.resolve();
+        const [lo, hi] = this._trendRange(plot, segment);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return Promise.resolve();
+        const pad = (hi - lo) * 0.05;
+        const first = plot.traces?.[0];
+        const timeVar = first ? this._getTimeVar(first.fileId) : null;
+        const toX = (v) => (first ? this._plotlyTimeValue(first.fileId, v, timeVar) : v);
+        return Plotly.relayout(plot.div, {
+            'xaxis.range': [toX(lo - pad), toX(hi + pad)],
+            'xaxis.autorange': false,
+        });
     };
 
     proto._updateTrendSegment = function(panelId, patch) {
@@ -1142,7 +1170,6 @@ export function installPlotTrendMethods(TargetClass) {
         if (r.lazy) {
             if (r.lazyStatus === 'cancelled') return i18n.t(r.staleResult ? 'analysisCancelledKept' : 'analysisCancelled');
             if (r.lazyStatus === 'unsupported') return i18n.t('trendLazyOverviewOnly');
-            if (r.lazyStatus === 'generatedAxis') return i18n.t('trendLazyGeneratedAxis');
             if (r.lazyStatus === 'error') return i18n.t('trendLazyError');
             return i18n.t(r.inMemory ? 'trendCalculating' : 'trendLazyPending');
         }
@@ -1341,7 +1368,7 @@ export function installPlotTrendMethods(TargetClass) {
             return;
         }
         const segment = this._trendActiveSegment(plot);
-        const trace = this._trendTraceFor(plot, segment);
+        const trace = segment ? this._trendTraceFor(plot, segment) : null;
         const field = (labelKey, control, extra = null) => {
             const wrap = document.createElement('div');
             wrap.className = 'phase2d-fit-field';
@@ -1376,6 +1403,13 @@ export function installPlotTrendMethods(TargetClass) {
         const segmentSelect = document.createElement('select');
         segmentSelect.className = 'phase2d-fit-pair-select curve-fit-select trend-segment-select';
         segmentSelect.setAttribute('aria-label', i18n.t('trendSegment'));
+        // None: no segment active, every one in grey on the plot.
+        const noneOption = document.createElement('option');
+        noneOption.value = String(TREND_NO_ACTIVE);
+        noneOption.textContent = i18n.t('trendSegmentNone');
+        noneOption.title = i18n.t('trendSegmentNoneTip');
+        noneOption.selected = !segment;
+        segmentSelect.appendChild(noneOption);
         state.segments.forEach((candidate, index) => {
             const option = document.createElement('option');
             option.value = String(index);
@@ -1383,7 +1417,7 @@ export function installPlotTrendMethods(TargetClass) {
             const signal = segTrace ? this._traceName(segTrace.varName, segTrace.fileId, { units: false }) : '—';
             option.textContent = `T${index + 1} · ${signal}`;
             option.title = option.textContent;
-            option.selected = index === state.activeSegment;
+            option.selected = !!segment && index === state.activeSegment;
             segmentSelect.appendChild(option);
         });
         segmentSelect.addEventListener('change', () => this._setTrendActive(panelId, Number(segmentSelect.value)));
@@ -1400,15 +1434,34 @@ export function installPlotTrendMethods(TargetClass) {
         removeButton.type = 'button';
         removeButton.className = 'fft-tool-btn trend-remove-btn';
         removeButton.textContent = i18n.t('trendRemove');
-        removeButton.title = i18n.t('trendRemoveTip');
+        removeButton.disabled = !segment || state.segments.length <= 1;
+        removeButton.title = i18n.t(segment && state.segments.length <= 1 ? 'trendRemoveLastTip' : 'trendRemoveTip');
         removeButton.addEventListener('click', () => this._removeTrendSegment(panelId, state.activeSegment));
-        segmentButtons.append(addButton, removeButton);
-        const swatch = document.createElement('span');
-        swatch.className = 'phase2d-fit-swatch curve-fit-swatch';
-        swatch.style.background = trendColor(state.activeSegment);
+        const zoomButton = document.createElement('button');
+        zoomButton.type = 'button';
+        zoomButton.className = 'fft-tool-btn trend-zoom-btn';
+        zoomButton.textContent = i18n.t('trendZoom');
+        zoomButton.title = i18n.t('trendZoomTip');
+        zoomButton.disabled = !segment;
+        zoomButton.addEventListener('click', () => this._zoomTrendSegment(panelId));
+        segmentButtons.append(addButton, removeButton, zoomButton);
         const segmentField = field('trendSegment', segmentSelect, segmentButtons);
-        segmentField.querySelector('.phase2d-fit-field-label').prepend(swatch);
+        if (segment) {
+            const swatch = document.createElement('span');
+            swatch.className = 'phase2d-fit-swatch curve-fit-swatch';
+            swatch.style.background = trendColor(state.activeSegment);
+            segmentField.querySelector('.phase2d-fit-field-label').prepend(swatch);
+        }
         drawer.appendChild(segmentField);
+        // With None there is no segment to set up: the rest of the drawer is
+        // a segment's, so it waits for one to be picked.
+        if (!segment) {
+            const hint = document.createElement('p');
+            hint.className = 'phase2d-fit-empty trend-none-hint';
+            hint.textContent = i18n.t('trendSegmentNoneHint');
+            drawer.appendChild(hint);
+            return;
+        }
 
         // 2) Signal
         const signalSelect = document.createElement('select');
@@ -1428,33 +1481,24 @@ export function installPlotTrendMethods(TargetClass) {
         });
         drawer.appendChild(field('trendSignal', signalSelect));
 
-        // 3) Range — the shared block (analysis-range-methods.js), as every
-        // analysis has it: Full / Selection, and the two bounds with sliders.
+        // 3) Range — the shared block (analysis-range-methods.js): the two
+        // bounds with sliders. No Full / Selection here: a segment IS a
+        // stretch of the signal, and a segment over all of it is one whose
+        // bounds are the signal's ends.
         const usesCalendar = !!trace && this._canonicalFftKind(trace.fileId) === 'datetime';
         const [lo, hi] = this._trendRange(plot, segment);
         const boundPatch = (key, value) => {
             const [curLo, curHi] = this._trendRange(plot, segment);
-            return key === 'x1' ? { x1: value, x2: curHi } : { x1: curLo, x2: value };
+            return key === 'x1' ? { rangeFull: false, x1: value, x2: curHi } : { rangeFull: false, x1: curLo, x2: value };
         };
         drawer.appendChild(this._buildAnalysisRangeSection({
             prefix: 'trend',
-            rangeFull: segment.rangeFull,
+            showMode: false,
+            rangeFull: false,
             lo,
             hi,
             domain: this._trendTraceDomain(trace) || this._trendDomain(plot),
             calendar: usesCalendar,
-            fullTooltipKey: 'trendRangeFullTooltip',
-            selectionTooltipKey: 'trendRangeSelectionTooltip',
-            onMode: (isFull) => {
-                const patch = { rangeFull: isFull };
-                if (!isFull && (segment.x1 === null || segment.x2 === null)) {
-                    const probe = { ...segment };
-                    this._seedTrendSelection(plot, probe);
-                    patch.x1 = probe.x1;
-                    patch.x2 = probe.x2;
-                }
-                this._updateTrendSegment(panelId, patch);
-            },
             onType: (key, value) => {
                 if (value === null) return;
                 this._updateTrendSegment(panelId, boundPatch(key, value));
@@ -1855,7 +1899,7 @@ export function installPlotTrendMethods(TargetClass) {
         // control under the pointer is not an exception to them.
         this._syncAnalysisRangeSection(drawer, {
             prefix: 'trend',
-            rangeFull: segment.rangeFull,
+            rangeFull: false,
             lo,
             hi,
             domain: this._trendTraceDomain(trace) || this._trendDomain(plot),

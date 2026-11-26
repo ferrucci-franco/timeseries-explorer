@@ -138,7 +138,7 @@ More detail: [docs/architecture.md](docs/architecture.md)
 
 ## Animated guide
 
-**Menu → Animated guide** plays short demos of features that are easy to miss
+**Menu → Animated guide** (or the Animated guide button on the welcome screen) plays short demos of features that are easy to miss
 (re-reading a CSV, the seven plot types of a panel, FFT, temporal profile,
 working with OpenModelica/Dymola and with PyPSA). They are not recordings: the real app runs in a frame and a script
 drives it, so the demos follow the app's language and theme. `npm run e2e:guide`
