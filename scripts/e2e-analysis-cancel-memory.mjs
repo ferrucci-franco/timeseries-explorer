@@ -465,6 +465,149 @@ try {
     }, twoDId);
     assert.equal(fitsComputed, 1, 'a change of model fits the pair once');
 
+    // Cancel after the RANGE was changed, through the block itself: the bound
+    // of the result on screen comes back, and the block shows it again.
+    // Changing the range wipes the auto-range notice, and that status line
+    // counted as a settled result — so the settings of the request only now
+    // starting were noted as the ones on screen, Cancel found "nothing
+    // changed", and the panel kept the bound that had just been typed while
+    // showing the previous fit.
+    {
+        const panel = `.layout-panel[data-id="${twoDId}"]`;
+        const rangeState = () => page.evaluate((id) => {
+            const state = window.app.plotManager.plots.get(id).phase2d;
+            const root = document.querySelector(`.layout-panel[data-id="${id}"]`);
+            const visible = [...root.querySelectorAll('[data-analysis-range-full]')].filter(node => node.offsetParent !== null);
+            const pressed = visible.find(node => node.getAttribute('aria-pressed') === 'true');
+            const num = value => (Number.isFinite(Number(value)) ? Number(value) : null);
+            const field = (key) => [...root.querySelectorAll(`[data-analysis-range-key="${key}"][data-analysis-range-role="input"]`)]
+                .find(node => node.offsetParent !== null);
+            // What the two fields SHOW: the defect is a panel that says one
+            // thing and draws another, so the state alone does not settle it.
+            const shown = (key) => {
+                const node = field(key);
+                if (!node) return null;
+                return node.type === 'datetime-local' ? Date.parse(`${node.value}Z`) : Number(node.value);
+            };
+            return {
+                rangeFull: !!state.rangeFull,
+                x1: num(state.x1),
+                x2: num(state.x2),
+                shownX1: shown('x1'),
+                shownX2: shown('x2'),
+                focused: document.activeElement?.dataset?.analysisRangeKey || null,
+                pressed: pressed ? pressed.dataset.analysisRangeFull : null,
+                status: root.querySelector('.fft-status')?.textContent || '',
+            };
+        }, twoDId);
+        // The block is the one every analysis has (analysis-range-methods.js).
+        const clickMode = (full) => page.evaluate(([id, wantFull]) => {
+            const root = document.querySelector(`.layout-panel[data-id="${id}"]`);
+            const button = [...root.querySelectorAll(`[data-analysis-range-full="${wantFull}"]`)].find(node => node.offsetParent !== null);
+            if (!button) return false;
+            button.click();
+            return true;
+        }, [twoDId, full]);
+        // The field of a calendar axis is a datetime-local, to the second, so
+        // what the state ends up with is given back rather than assumed.
+        const typeBound = (key, value) => page.evaluate(([id, boundKey, boundValue]) => {
+            const root = document.querySelector(`.layout-panel[data-id="${id}"]`);
+            const field = [...root.querySelectorAll(`[data-analysis-range-key="${boundKey}"][data-analysis-range-role="input"]`)]
+                .find(node => node.offsetParent !== null);
+            if (!field || field.disabled) return null;
+            const calendar = field.type === 'datetime-local';
+            // Typed, so the field keeps the focus the way it does for a user:
+            // a focused control is the one case the shared sync leaves alone.
+            field.focus();
+            field.value = calendar ? new Date(boundValue).toISOString().slice(0, 19) : String(boundValue);
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            return calendar ? Date.parse(`${field.value}Z`) : Number(field.value);
+        }, [twoDId, key, value]);
+
+        const pill = page.locator(`${panel} .analysis-computing-indicator.active`);
+        const settled = () => page.waitForFunction((id) => {
+            const p = window.app.plotManager.plots.get(id);
+            return p?._phase2dFits?.[0]?.fit?.status === 'ok' && !p._analysisPill;
+        }, twoDId, { timeout: 60000 });
+
+        // A fit over a selection, asked for through the block, with the jobs
+        // answering: this is the result on screen from here on.
+        await page.evaluate(() => { window.__jobs.hang = false; });
+        assert.equal(await clickMode(false), true, '2D fit: Selection is on screen');
+        await settled();
+        const before = await rangeState();
+        assert.equal(before.rangeFull, false, '2D fit: the result on screen is over a selection');
+        assert.equal(before.pressed, 'false', '2D fit: and the block says Selection');
+        assert.ok(Number.isFinite(before.x1) && Number.isFinite(before.x2) && before.x2 > before.x1,
+            `2D fit: with both bounds (${before.x1}, ${before.x2})`);
+
+        // A narrower end typed in the field, with the jobs hanging.
+        await page.evaluate(() => { window.__jobs.hang = true; window.__jobs.started = 0; window.__jobs.aborted = 0; });
+        const typed = await typeBound('x2', before.x1 + (before.x2 - before.x1) * 0.5);
+        assert.ok(Number.isFinite(typed) && typed !== before.x2, `2D fit: its End field takes a value (${typed})`);
+        await pill.waitFor({ timeout: 15000 });
+        await page.waitForFunction(() => window.__jobs.started >= 1, null, { timeout: 15000 });
+        assert.equal((await rangeState()).x2, typed, '2D fit: the state took the typed end');
+        await pill.locator('.analysis-cancel-btn').click();
+        await page.waitForFunction(() => window.__jobs.aborted >= 1 && window.__jobs.aborted === window.__jobs.started, null, { timeout: 15000 });
+        await pill.waitFor({ state: 'detached', timeout: 15000 });
+        let after = await rangeState();
+        assert.equal(after.x2, before.x2, '2D fit: Cancel puts the end of the result on screen back, not the one typed');
+        assert.equal(after.x1, before.x1, '2D fit: and leaves its start');
+        assert.equal(after.pressed, 'false', '2D fit: the block shows the range it computed');
+        assert.match(after.status, /cancel/i, `2D fit: the status says it was cancelled (${after.status})`);
+        // And the field itself, which is where the defect showed: the bound
+        // typed into it stayed there, under a status saying it was back.
+        assert.equal(after.shownX2, before.x2, `2D fit: the End field shows it too (typed ${typed})`);
+        assert.equal(after.shownX1, before.x1, '2D fit: and the Start field its own');
+
+        // The same for the Full / Selection buttons: pressed, then cancelled.
+        await page.evaluate(() => { window.__jobs.started = 0; window.__jobs.aborted = 0; });
+        assert.equal(await clickMode(true), true, '2D fit: Full is on screen');
+        await pill.waitFor({ timeout: 15000 });
+        await page.waitForFunction(() => window.__jobs.started >= 1, null, { timeout: 15000 });
+        await pill.locator('.analysis-cancel-btn').click();
+        await page.waitForFunction(() => window.__jobs.aborted >= 1 && window.__jobs.aborted === window.__jobs.started, null, { timeout: 15000 });
+        await pill.waitFor({ state: 'detached', timeout: 15000 });
+        after = await rangeState();
+        assert.equal(after.rangeFull, false, '2D fit: a cancelled Full leaves the selection that was computed');
+        assert.equal(after.pressed, 'false', '2D fit: and the block says Selection again');
+        assert.equal(after.x2, before.x2, '2D fit: with its bounds');
+
+        // And for Reset view, which is the path the defect was reported on:
+        // it widens the range back to the whole file BEFORE the fit has run,
+        // so the line that wipes the notice there describes a result that does
+        // not exist yet. Taken for a settled one, Cancel found "nothing
+        // changed" and left the panel on Full over the selection's curve.
+        await page.evaluate(() => { window.__jobs.started = 0; window.__jobs.aborted = 0; });
+        const reset = await page.evaluate((id) => {
+            const root = document.querySelector(`.layout-panel[data-id="${id}"]`);
+            const button = [...root.querySelectorAll('.fft-tool-btn')]
+                .find(node => /reset/i.test(node.title) && node.offsetParent !== null);
+            if (!button) return false;
+            button.click();
+            return true;
+        }, twoDId);
+        assert.equal(reset, true, '2D fit: Reset view is on screen');
+        await pill.waitFor({ timeout: 15000 });
+        await page.waitForFunction(() => window.__jobs.started >= 1, null, { timeout: 15000 });
+        assert.equal((await rangeState()).rangeFull, true, '2D fit: Reset view asked for the whole range');
+        await pill.locator('.analysis-cancel-btn').click();
+        await page.waitForFunction(() => window.__jobs.aborted >= 1 && window.__jobs.aborted === window.__jobs.started, null, { timeout: 15000 });
+        await pill.waitFor({ state: 'detached', timeout: 15000 });
+        after = await rangeState();
+        assert.equal(after.rangeFull, false, '2D fit: a cancelled Reset view leaves the selection that was computed');
+        assert.equal(after.pressed, 'false', '2D fit: with the block on Selection');
+        assert.equal(after.shownX2, before.x2, '2D fit: and its end in the field');
+        assert.match(after.status, /cancel/i, `2D fit: the status says it was cancelled (${after.status})`);
+
+        // Back to the whole range, computed, for whatever runs next.
+        await page.evaluate(() => { window.__jobs.hang = false; });
+        assert.equal(await clickMode(true), true, '2D fit: Full is on screen');
+        await settled();
+        console.log('  2D curve fit: a cancelled range change leaves the range of the result on screen');
+    }
+
     // The pair Correlation, on the same 2D panel: the range is what a
     // recompute changes.
     {

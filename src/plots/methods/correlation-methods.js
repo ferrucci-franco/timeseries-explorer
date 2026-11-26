@@ -501,7 +501,9 @@ export function installPlotCorrelationMethods(TargetClass) {
     };
 
     proto._updateCorrelationSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
-        if (!plot?.div || plot.mode !== 'correlation') return;
+        // `_fullLayout` is Plotly still owning this div: a relayout on one it
+        // has already torn down throws inside Plotly (#399, as in the FFT).
+        if (!plot?.div?._fullLayout || plot.mode !== 'correlation') return;
         Plotly.relayout(plot.div, { shapes: this._correlationSelectionShapes(plot) });
     };
 

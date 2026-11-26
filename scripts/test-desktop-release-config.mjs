@@ -28,6 +28,10 @@ assert.match(constants, new RegExp(`APP_VERSION = '${dotted}'`), 'the in-app ver
 // stale version there mislabels every archived release.
 assert.match(await readText('CITATION.cff'), new RegExp(`^version: ${dotted}$`, 'm'), 'CITATION.cff version matches package.json');
 assert.equal(JSON.parse(await readText('codemeta.json')).version, version, 'codemeta.json version matches package.json');
+// PUBLICATION.md is what a reader cites until the paper has a DOI, and it sat
+// on 0.1.0 for six releases because nothing checked it.
+assert.match(await readText('PUBLICATION.md'), new RegExp(`\\*\\. Version ${dotted}\\.`),
+    'the citation in PUBLICATION.md names the released version');
 assert.deepEqual(pkg.build.win.target, ['nsis', 'portable']);
 assert.equal(pkg.build.nsis.oneClick, false);
 assert.equal(pkg.build.nsis.allowToChangeInstallationDirectory, true);

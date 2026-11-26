@@ -3110,6 +3110,10 @@ proto._reconsiderAutoLimitedRange = function(panelId, plot, elapsedMs) {
     // the view has to open back up with it.
     state.autoRangeFocusPending = true;
     if (Array.isArray(state.warnings)) state.warnings = [];
+    // The range changed with nobody touching the controls: the block would go
+    // on showing *Selection* and the two sliders on the preview's block, a
+    // panel saying one thing and drawing another (#387).
+    this._syncAnalysisRangeControls?.(panelId, plot, mode);
     this._rescheduleAnalysisRecompute(panelId, mode);
     return true;
 };

@@ -1194,7 +1194,9 @@ proto._temporalProfileSelectionShapes = function(plot) {
 };
 
 proto._updateTemporalProfileSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
-    if (!plot?.div || plot.mode !== 'temporal-profile') return;
+    // `_fullLayout` is Plotly still owning this div: a relayout on one it
+    // has already torn down throws inside Plotly (#399, as in the FFT).
+    if (!plot?.div?._fullLayout || plot.mode !== 'temporal-profile') return;
     Plotly.relayout(plot.div, { shapes: this._temporalProfileSelectionShapes(plot) });
     this._syncTemporalProfileOptionsPanel(plot);
 };

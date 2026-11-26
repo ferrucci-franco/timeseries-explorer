@@ -196,8 +196,10 @@ class PlotManager {
             dataEpoch: 0,
         });
         this.activeFileId = fileId;
-        // If going 1→2 files, rebuild all panels so legend labels gain [filename]
-        if (wasOne && !options.deferRebuild) this._rebuildAllPanels();
+        // If going 1→2 files, rebuild all panels so legend labels gain
+        // [filename]. Nothing is drawn that was not drawn before, so the view
+        // each panel is showing stays.
+        if (wasOne && !options.deferRebuild) this._rebuildAllPanels({ preserveView: true });
     }
 
     setActiveFile(fileId) {
@@ -241,7 +243,11 @@ class PlotManager {
         // from it) rebuilds once, at the end: back-to-back rebuilds of the same
         // panel race inside Plotly.
         if (options.deferRebuild) return;
-        // If going 2→1, rebuild all (legend labels lose [filename]); else rebuild affected only
+        // If going 2→1, rebuild all (legend labels lose [filename]); else
+        // rebuild affected only. No view is preserved here: a panel may have
+        // lost traces, and with `rebuildAll` (a cascaded close) the panels the
+        // earlier, deferred removals emptied are not in `affectedPanels`, so
+        // there is no telling which ones still describe their data.
         if (goingToOne || options.rebuildAll) {
             this._rebuildAllPanels();
         } else {
@@ -772,7 +778,8 @@ class PlotManager {
         if (this.hoverRunParameters === next) return;
         this.hoverRunParameters = next;
         this._runParameterCache = null;
-        this._rebuildAllPanels();
+        // What a hover says, nothing else: the view stays as it was.
+        this._rebuildAllPanels({ preserveView: true });
     }
 
     setHoverProximity(v) {
@@ -804,12 +811,14 @@ class PlotManager {
     // Units in the legend are a display choice, so the panels are rebuilt
     // rather than restyled: several modes fold the trace name into hovers,
     // exports and legend-click identity, and a restyle would desynchronise them.
+    // A rebuild starts from the data's own extent, though, so the zoom the user
+    // was reading used to vanish with the tick: the view is kept.
     setLegendUnits(enabled) {
         const next = !!enabled;
         if (this.legendUnits === next) return;
         this.legendUnits = next;
         resetLegendToggles();
-        this._rebuildAllPanels();
+        this._rebuildAllPanels({ preserveView: true });
     }
 
     _getPlotlyConfig(overrides = {}) {
@@ -5119,8 +5128,11 @@ class PlotManager {
         }
     }
 
-    _rebuildAllPanels() {
-        for (const [id] of this.plots) this._rebuildPanel(id);
+    // `options` are each panel's (`preserveView: true` for a rebuild that only
+    // changes how something is labelled: the zoom the user is reading must not
+    // be thrown away by a checkbox).
+    _rebuildAllPanels(options = {}) {
+        for (const [id] of this.plots) this._rebuildPanel(id, options);
     }
 
     _makeState() {
