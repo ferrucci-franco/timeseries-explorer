@@ -8,6 +8,59 @@ marcado como tal.
 
 ---
 
+## 0. Dónde estamos y qué queda (26 de noviembre de 2026)
+
+Esta sección es el punto de entrada para retomar el trabajo: qué está cerrado,
+qué queda y por dónde seguir. El detalle de cada cosa está más abajo, en la
+sección que se nombra.
+
+**Cerrado.** Para CSV, Parquet y los resultados `.mat` de OpenModelica / Dymola
+el modo lazy está completo en lo importante: todas las herramientas de datos,
+todos los análisis del menú, las estadísticas del panel, las marcas (muestras,
+timestamps repetidos), las exportaciones, las vistas guardadas y los resultados
+conservados en disco trabajan sobre todas las filas del archivo, con los mismos
+números que en memoria. Ningún análisis retiene la página más de 250 ms, y el
+CI lo comprueba (`npm run e2e:analysis-responsive`,
+`docs/analysis-responsiveness.md`). El plan de cuatro pasos de noviembre de
+2026 está fusionado: #397 (el proyecto de un archivo lazy es su vista), #398
+(marcas en lazy), #400–#403 (análisis fuera del hilo principal y su chequeo),
+#404 (resultados `.mat` en lazy).
+
+**Lo que queda**, de mayor a menor peso. Nada de esto es un bloque grande; son
+bordes conocidos, la mayoría dichos en la interfaz.
+
+| # | Qué | Estado hoy | Por dónde seguir |
+|---|---|---|---|
+| 1 | **`.mat` de MATLAB** (v5/v7 y v7.3) en lazy | se cargan siempre enteros; issue #396 | escribir un "lector por columnas" con la forma que describe `src/parsers/mat-v4-stream.js`; `src/data/columnar-ingest.js` lo abre en lazy sin más cambios. Enganchar en `_lazyMatReader` (`src/app/methods/file-methods.js`). Modelo de prueba: `scripts/test-lazy-mat.mjs` |
+| 2 | **pickle, netCDF de series, audio** | solo cargan enteros (Excel entra por conversión a Parquet) | el mismo camino que 1: un lector por columnas por formato. Solo si hace falta |
+| 3 | **Fórmulas sin forma SQL** (las que el traductor de `src/expr/sql.js` no escribe) | en lazy existen solo sobre el resumen; la app lo avisa al crearlas (`derivedLazyOverviewOnly`) y los análisis las rechazan (`statsLazyOverviewOnly`, `trendLazyOverviewOnly`) | ampliar el traductor función por función, o calcularlas con el ejecutor por trozos (`src/data/chunk-executor.js`) |
+| 4 | **Eje de tiempo generado** (archivo sin columna de tiempo) | el análisis de tendencia lo rechaza en lazy y dice por qué (`trendLazyGeneratedAxis`) | "Implementado: análisis de tendencia exacto", huecos conocidos |
+| 5 | **Límites del `.mat` lazy** | la copia ocupa disco del orden de `data_2`; recargar copia todo de nuevo; un archivo corto y muy ancho ahorra poca memoria (su resumen son casi todas sus filas) | "Implementado: resultados `.mat` en lazy", huecos conocidos. Para el último: un lector eager con arreglos tipados, o el resumen por demanda |
+| 6 | **Huecos de más de 4 M de muestras seguidas** | el relleno y la integral no los cruzan y lo informan | "Implementado (fase 4b-3)". Caso muy raro |
+
+**Sin medir con archivos reales.** Todo lo del `.mat` lazy se midió con archivos
+sintéticos (288 MB, 3 000 series, 12 000 pasos: ~20 s, ~260 MB de heap). Falta
+probar con resultados reales del dueño: con su tamaño, cantidad de variables y
+pasos se ajustan `INGEST_GROUP_COLUMNS` e `INGEST_OVERVIEW_VALUES`
+(`src/data/columnar-ingest.js`).
+
+**Fuera del modo lazy, abiertos:** #387 (el bloque de rango del perfil temporal
+en memoria), #399 (un error de página intermitente en
+`scripts/e2e-analysis-range-mode.mjs`, no reproducido), y la velocidad en
+memoria: se arregló que la página no se congele, no el tiempo hasta el
+resultado.
+
+**Para quien retome** (reglas en `CLAUDE.md`): todo cambio termina en un PR
+fusionado a `main` con los dos jobs de CI en verde; lo que lee valores de una
+señal funciona también en lazy, con prueba de paridad; los textos van en los
+cinco idiomas de `src/i18n/translations.js`. En una sesión en la nube:
+`npm ci --ignore-scripts`, y siete pruebas (`test:csv`,
+`test:csv-robust-duckdb`, `test:csv-to-parquet`, `test:missing-lazy`,
+`test:state-band`, `test:temporal-profile-lazy`, `test:time-axis-fixtures`)
+necesitan el DuckDB nativo y solo corren en el CI.
+
+---
+
 ## 1. Qué significa "cualquier tamaño"
 
 La pregunta que lo originó fue *"¿podría leer un CSV de 5 GB entero, sin
