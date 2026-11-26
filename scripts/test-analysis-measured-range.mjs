@@ -50,6 +50,7 @@ const FULL = 26460000;
 
 function makeApp(stateOverrides = {}) {
     const rescheduled = [];
+    const synced = [];
     const state = {
         rangeFull: false,
         x1: 0,
@@ -66,17 +67,18 @@ function makeApp(stateOverrides = {}) {
     const app = {
         _analysisStateForMode: () => state,
         _rescheduleAnalysisRecompute: (panelId, mode) => rescheduled.push({ panelId, mode }),
+        _syncAnalysisRangeControls: (panelId, plot, mode) => synced.push({ panelId, mode }),
         _reconsiderAutoLimitedRange: reconsider,
         _measureAnalysisKernel: measureKernel,
     };
-    return { app, state, rescheduled, plot: { mode: 'histogram' } };
+    return { app, state, rescheduled, synced, plot: { mode: 'histogram' } };
 }
 
 // ── The projection decides, and it decides conservatively ──────────────────
 
 // A kernel fast enough that even the pessimistic projection fits: re-open.
 {
-    const { app, state, rescheduled, plot } = makeApp();
+    const { app, state, rescheduled, synced, plot } = makeApp();
     // 10 ms over the sample projects to ~1 s over the full range.
     const widened = reconsider.call(app, 'p1', plot, 10);
     assert.equal(widened, true, 'an affordable full range must be restored');
@@ -90,18 +92,24 @@ function makeApp(stateOverrides = {}) {
     assert.equal(state.warnings.length, 0, 'and so does the warning list');
     assert.equal(state.autoRangeFocusPending, true, 'the view must re-open with the range');
     assert.deepEqual(rescheduled, [{ panelId: 'p1', mode: 'histogram' }], 'the analysis recomputes over everything');
+    // #387: the state is not the panel. Nobody touched the range block, so it
+    // would go on showing *Selection* and the sliders on the cut block unless
+    // the widening tells it.
+    assert.deepEqual(synced, [{ panelId: 'p1', mode: 'histogram' }],
+        'the range block is put back in step with the range');
 }
 
 // A kernel slow enough that the full range would blow the budget: keep the cut,
 // and say nothing about how long it would take.
 {
-    const { app, state, rescheduled, plot } = makeApp();
+    const { app, state, rescheduled, synced, plot } = makeApp();
     const before = state.autoRangeWarning;
     const widened = reconsider.call(app, 'p1', plot, 500);
     assert.equal(widened, false, 'an unaffordable full range stays cut');
     assert.equal(state.autoRangeLimited, true, 'the limit holds');
     assert.equal(state.autoRangeWarning, before, 'the warning is left as it was');
     assert.deepEqual(rescheduled, [], 'nothing is recomputed');
+    assert.deepEqual(synced, [], 'and the range block, which still describes the range, is left alone');
 }
 
 // The threshold itself, from both sides, at the exact budget.

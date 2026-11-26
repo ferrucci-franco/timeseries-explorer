@@ -42,7 +42,7 @@ means, and a suggested model and effort for the session that takes it.
 | #384 | **Lazy SQL analyses: the superseded query is not stopped** (heatmap, temporal profile, pair correlation: the result takes twice as long), and **Trend does not report a Cancel** (DuckDB's interrupt is not an `AbortError`) | "A request in flight when a newer one arrives"; "Other defects" 3 | independent | Opus, high |
 | #385 | **Lazy integral**: out of memory at 10 M rows, refused on a numeric axis, superseded query not stopped | "Other defects" 1, 2; "Integral" | independent | Opus, high |
 | #386 | **Borderline, 200–400 ms** on 10 M rows in memory: FFT of 2¹⁸ samples or fewer, the cross-correlation panel's axis, building a time pane | "Offenders, ranked", the borderline list | independent | Sonnet, medium |
-| #387 | **Temporal profile in memory**: the range block keeps showing the preview after it is widened to the whole file | "Other defects" 5 | with #381 (same code path) | Sonnet, medium |
+| #387 | **Temporal profile in memory**: the range block keeps showing the preview after it is widened to the whole file — and so do the histogram, the heatmap and the integral | "Other defects" 5; "#387: Temporal profile's range block" | landed on its own | Sonnet, medium |
 | #388 | **Cross-correlation tool on a lazy file past its budget**: 14 s of queries with no cancel signal, then the refusal | "Other defects" 6 | independent | Sonnet, medium |
 | #389 | **A CI check** that no analysis holds the page more than 250 ms, from this harness | "Running it" | last | Sonnet, medium |
 
@@ -364,37 +364,62 @@ residuals together; at the 2 M rows this path serves, twice that.
 
 ## Other defects found on the way
 
-Not long tasks, but seen while measuring. Nothing here was fixed.
+Not long tasks, but seen while measuring. Nothing here was fixed when the list
+was written; all of it is now, and what is left of the sixth is a documented
+limit rather than a defect. Each entry says what closed it, since this list is
+the record of them.
 
-1. **Integral on a lazy file of 10 M rows fails.** `getDefiniteIntegralByDay`
-   ends, after 12–16 s, in *"Out of Memory Error: could not allocate block of
-   size 256.0 KiB (1.4 GiB/1.4 GiB used)"*; the panel says *"the file could
-   not be queried for this total"*. At 1.2 M rows it answers, in 3.6–5.1 s.
-2. **Integral on a lazy file with a numeric time axis is refused**
-   (`integralLazyUnsupported`). The panel says so; the gap has no row in the
-   table of `docs/any-size-files.md`.
-3. **Trend, lazy: after Cancel the status line does not say cancelled.** The
-   query is interrupted and the range is put back, but DuckDB's interrupt
-   reaches `_runTrendLazyBatch` as a plain `Error`, not an `AbortError`
-   (`_interactiveQueryUnlocked` does not turn it into one, as `_streamSql`
-   does); the batch logs *"[trend] lazy query failed"* and repaints, and the
-   repaint writes *"Segments: 1"* over *"Calculation cancelled…"*.
-   `scripts/e2e-analysis-cancel.mjs` does not see it: its hung queries reject
-   with an `AbortError` of their own.
-4. **2D curve fit, in memory: Cancel does not put the range back.** The status
-   says *"the previous result and its settings are back"* and the curve is the
-   previous one, but the bound that was typed stays typed: the settings of the
-   new request had already been noted as those of the result on screen
+1. **Integral on a lazy file of 10 M rows failed.** `getDefiniteIntegralByDay`
+   ended, after 12–16 s, in *"Out of Memory Error: could not allocate block of
+   size 256.0 KiB (1.4 GiB/1.4 GiB used)"* — the query ordered the whole file
+   for its `LAG` and its median — and the panel said *"the file could not be
+   queried for this total"*. **Closed** with #385 (`72e753e`): a lazy file runs
+   the same kernel as memory, written as passes over a stream.
+   `docs/any-size-files.md`, "Implementado: el análisis Integral sobre todas
+   las filas, en cualquier eje".
+2. **Integral on a lazy file with a numeric time axis was refused**
+   (`integralLazyUnsupported`). **Closed** with the same change: any axis is
+   integrated now (calendar, numeric, row number). The string stayed for the
+   one case that remains, a signal with no source column in its file.
+3. **Trend, lazy: after Cancel the status line did not say cancelled.** The
+   query was interrupted and the range put back, but DuckDB's interrupt
+   reached `_runTrendLazyBatch` as a plain `Error`, and the repaint wrote
+   *"Segments: 1"* over *"Calculation cancelled…"*. **Closed** with #384
+   (`6ea5773`): the interrupt reaches the caller as an `AbortError`, and Trend
+   reports a Cancel.
+4. **2D curve fit, in memory: Cancel did not put the range back.** The curve
+   was the previous one, but the bound that had been typed stayed typed: the
+   settings of the new request had been noted as those of the result on screen
    (`_rememberAnalysisSettings`, from a status line written before the fit
-   ran). The cancel e2e covers lazy files only.
-5. **Temporal profile, in memory: after the automatic preview is widened back
-   to the whole file, the range block still shows the preview.** The state is
-   `rangeFull: true` and the profile is of the whole file, but *Selection*
-   stays pressed and the two sliders stay on the 262 144-sample block.
+   ran). **No longer reproduces**: since the in-memory fits moved to the
+   compute worker (#381) a pair of any size is deferred, so `_analysisSettled`
+   is false while its fit is pending and a status line written then notes
+   nothing. `scripts/e2e-analysis-cancel-memory.mjs` now drives the three ways
+   the range changes — a bound typed into the field, Full pressed, Reset view —
+   with the jobs hanging, and checks that Cancel leaves the range of the result
+   on screen, in the state and in the block. `_resetPhase2dFitView` wipes its
+   auto-range notice before it changes the range, as the other two paths
+   already did.
+5. **Temporal profile, in memory: after the automatic preview was widened back
+   to the whole file, the range block still showed the preview** (#387): the
+   state was `rangeFull: true` and the profile was of the whole file, but
+   *Selection* stayed pressed and the two sliders stayed on the 262 144-sample
+   block. The histogram, the heatmap and the integral did the same — the gap
+   was in the widening, not in the profile. **Closed**:
+   `_reconsiderAutoLimitedRange` puts the block and the band back in step
+   through `_syncAnalysisRangeControls` (`analysis-range-methods.js`), with one
+   line per analysis; `scripts/e2e-analysis-range-mode.mjs` widens a preview in
+   every analysis that has one and checks the block follows,
+   `scripts/test-analysis-measured-range.mjs` checks the call itself, and
+   `scripts/test-analysis-range.mjs` fails for an analysis that is not listed.
 6. **The Cross-correlation tool refuses a lazy file past 8 M rows**
-   (`LAZY_XCORR_MAX_ROWS`), as documented; picking the tool on the 10 M file
-   first spends 14 s measuring its time axis (four aggregate queries, none
-   with a cancel signal).
+   (`LAZY_XCORR_MAX_ROWS`), as documented — that refusal stands, and it has a
+   row of its own in the table of `docs/any-size-files.md` now. The 14 s that
+   picking the tool on the 10 M file spent measuring the time axis first is
+   **closed**: the queries carry a signal, a measurement another tool has in
+   flight is waited for instead of repeated, leaving the tool stops it
+   (`_abortXcorrAxis`), and a file past the budget is refused before the axis
+   is measured at all.
 
 ## Not measured
 
@@ -412,8 +437,10 @@ Not long tasks, but seen while measuring. Nothing here was fixed.
 - **Files past 10 M rows**, and the sizes in between — in particular where the
   automatic preview of an in-memory analysis stops being widened back (its
   projection passes 5 s).
-- **Integral on a lazy file with a numeric axis** (refused) **and on the lazy
-  10 M calendar file** (fails): there is no computation to time.
+- **Integral on a lazy file**, since #385 rewrote it: the numbers above are of
+  the SQL-per-day path it replaced, which refused a numeric axis and ran out of
+  memory at 10 M rows (defects 1 and 2 below). The streaming kernel that
+  answers now has not been measured here.
 - **The Cross-correlation tool on the lazy 10 M file** (refused past 8 M rows).
 - **The panel's statistics (Σ), the exports (CSV, WAV), the dashboard, the
   state band, the 3D and animated plots, the phone layout**: not analyses of
@@ -561,7 +588,7 @@ What held the thread:
 | 10.0 M | lazy | param: period: day → week | 0 | 0 | 0 | 0 | 0 | 17102 |  |  |
 | 10.0 M | lazy | drag | 0 | 0 | 0 | 0 | 0 | 32968 | no: 1 of 1 read ran to its end | slider events waited ≤ 4 ms |
 | 10.0 M | lazy | cancel | 0 | 0 | 0 | 0 | 0 | 3 |  | cancelled; 1 of 1 read aborted, 0 still running; the range is back |
-| 10.0 M | eager | open | **2809** | 149 | 5 | **2834** | 2821 | 3293 |  | the whole file: the automatic preview was widened back (the range block still shows the preview: “Other defects”, 5) |
+| 10.0 M | eager | open | **2809** | 149 | 5 | **2834** | 2821 | 3293 |  | the whole file: the automatic preview was widened back (the range block still showed the preview then: “Other defects”, 5, closed since) |
 | 10.0 M | eager | type | **2812** | 21 | 7 | **2839** | 2825 | 2984 |  |  |
 | 10.0 M | eager | param: period: day → week | **3359** | 44 | 4 | **3407** | 3394 | 3521 |  |  |
 | 10.0 M | eager | drag | **3757** | 21 | 10 | **3788** | 3775 | 3921 | no: on the main thread, which it held 3461 ms | slider events waited ≤ 3461 ms |
@@ -1399,7 +1426,35 @@ is the paint (no JavaScript running), as before.
 
 ### #387: Temporal profile's range block
 
-Not landed yet.
+What was done:
+
+- **The widening tells the panel.** `_reconsiderAutoLimitedRange`
+  (`src/plots/methods/data-methods.js`) put the range back in the state and
+  rescheduled the recompute, and nothing told the controls: the block kept
+  *Selection* pressed with its two sliders on the 262 144-sample block, over a
+  result of the whole file. It now calls `_syncAnalysisRangeControls`.
+- **One refresh for every analysis** (`analysis-range-methods.js`, beside the
+  builder and the sync of the block): one line per analysis, naming its options
+  sync and its band update — the same pair Cancel's own, richer path
+  (`_restoreAnalysisSettings`) calls. The automatic preview reaches seven of
+  the nine; Curve fit and Trend keep a range per fit and per segment, and
+  `_analysisStateForMode` has no state for them.
+- **It was not only the profile.** With the call removed, the check below fails
+  for the histogram, the heatmap, the temporal profile and the integral: four
+  analyses, not one. The FFT, the pair correlation and the 2D fit rebuild their
+  options panel on the recompute and so looked right already.
+
+Checked by:
+
+- `scripts/e2e-analysis-range-mode.mjs`: for every analysis with the preview it
+  sets up the state a cut leaves behind, lets the measured pass widen it, and
+  asserts the block lands on **Full** with its bounds locked. A file big enough
+  to be cut for real (over 8 M rows) has no place in that check, so the state
+  is set up rather than provoked.
+- `scripts/test-analysis-measured-range.mjs`: the widening calls the refresh,
+  and a pass too slow to widen does not touch the block.
+- `scripts/test-analysis-range.mjs`: an analysis missing from the refresh fails
+  the build, as does a name in it that no longer exists.
 
 ### #388: Cross-correlation tool past its budget
 

@@ -30,6 +30,10 @@ function makeCsv() {
 
 const TIME_ANALYSES = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'curve-fit', 'trend'];
 const PLANE_ANALYSES = ['correlation', 'phase2d-fit'];
+// Curve fit and Trend keep a range per fit and per segment rather than one for
+// the panel (_analysisStateForMode has none for them), so the automatic
+// preview, and the widening checked below, never reach them.
+const NO_PREVIEW = new Set(['curve-fit', 'trend']);
 
 // The Full / Selection buttons of a panel that are on screen (an analysis may
 // keep a block per fit or per segment; the first visible one is pressed).
@@ -77,6 +81,47 @@ async function expectMode(page, index, full, message) {
         return fields.length ? fields.every(node => node.disabled) : null;
     }, index);
     if (locked !== null) assert.equal(locked, full, `${message}: the bounds are ${full ? 'locked' : 'free'}`);
+}
+
+// The other way the mode changes: nobody presses anything. A big file opens an
+// analysis on an automatic preview — a cut selection — and the pass over it is
+// itself the measurement that decides the whole file was affordable after all,
+// so the range is widened back behind the panel's back
+// (_reconsiderAutoLimitedRange). The block used to be left as the cut had made
+// it: *Selection* pressed, its sliders on the preview's block, over a result of
+// the whole file (#387). The state the cut leaves is set up here, since a file
+// large enough to be cut for real (over 8 M rows) has no place in this check.
+async function widenedPreview(page, index, name) {
+    const outcome = await page.evaluate((i) => {
+        const pm = window.app.plotManager;
+        const panel = document.querySelectorAll('.layout-panel')[i];
+        const id = panel.dataset.id;
+        const plot = pm.plots.get(id);
+        const state = pm._analysisStateForMode(plot, plot.mode);
+        if (!state) return 'no state for this mode';
+        const trace = (plot.traces || []).find(t => pm._isVisible(t)) || (plot.phaseTraces || [])[0];
+        const times = pm._getTransformedTimeDataForVariable(trace.fileId, trace.varName || trace.x);
+        const lo = Number(times[0]);
+        const hi = Number(times[times.length - 1]);
+        Object.assign(state, {
+            rangeFull: false,
+            x1: lo,
+            x2: lo + (hi - lo) * 0.1,
+            autoRangeLimited: true,
+            autoRangeMeasured: false,
+            autoRangeSampleCount: 262144,
+            autoRangeFullCount: 1000000,
+            autoRangePrevious: { rangeFull: true, x1: null, x2: null },
+            autoRangeWarning: 'a preview of the signal',
+        });
+        // The block as the cut leaves it: on Selection, over the cut bounds.
+        pm._syncAnalysisRangeControls(id, plot, plot.mode);
+        // 1 ms over 262 144 rows projects to ~4 s over a million: inside the
+        // budget, so the cut was unnecessary and the range goes back.
+        return pm._reconsiderAutoLimitedRange(id, plot, 1) ? 'widened' : 'left cut';
+    }, index);
+    assert.equal(outcome, 'widened', `${name}: the measured pass widens the preview back`);
+    await expectMode(page, index, true, `${name}: the block follows the widening`);
 }
 
 async function roundTrip(page, index, name) {
@@ -130,7 +175,8 @@ try {
     const attempt = async (name, index) => {
         try {
             await roundTrip(page, index, name);
-            console.log(`  ${name}: Full ⇄ Selection, twice round`);
+            if (!NO_PREVIEW.has(name)) await widenedPreview(page, index, name);
+            console.log(`  ${name}: Full ⇄ Selection twice round${NO_PREVIEW.has(name) ? '' : ', and the widened preview'}`);
         } catch (error) {
             failures.push(error.message);
             console.log(`  ${name}: FAILED — ${error.message}`);

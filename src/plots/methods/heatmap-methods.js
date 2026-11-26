@@ -769,7 +769,9 @@ proto._calendarHeatmapSelectionShapes = function(plot) {
 };
 
 proto._updateCalendarHeatmapSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
-    if (!plot?.div || plot.mode !== 'heatmap') return;
+    // `_fullLayout` is Plotly still owning this div: a relayout on one it
+    // has already torn down throws inside Plotly (#399, as in the FFT).
+    if (!plot?.div?._fullLayout || plot.mode !== 'heatmap') return;
     Plotly.relayout(plot.div, { shapes: this._calendarHeatmapSelectionShapes(plot) });
     this._syncCalendarHeatmapOptionsPanel(plot);
 };

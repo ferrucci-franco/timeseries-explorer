@@ -972,7 +972,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     proto._updatePhase2dFitSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
         const timeDiv = plot?.phase2dFitTimeDiv;
-        if (timeDiv) Plotly.relayout(timeDiv, { shapes: this._phase2dFitSelectionShapes(plot) });
+        // `_fullLayout` is Plotly still owning this div: a relayout on one it
+        // has already torn down throws inside Plotly (#399, as in the FFT).
+        if (timeDiv?._fullLayout) Plotly.relayout(timeDiv, { shapes: this._phase2dFitSelectionShapes(plot) });
     };
 
     proto._installPhase2dFitSelectionHandlers = function(panelId, plot) {
@@ -1128,10 +1130,15 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot?.phase2dFitContainer) return;
         const state = this._ensurePhase2dState(plot);
+        // The notice goes first, as it does when a bound is typed or Full is
+        // pressed: wiping it writes a status line, and a status line notes the
+        // settings of the result it reports. Written after the new range was
+        // already in the state, it would report that range as the one on
+        // screen before anything had been fitted over it.
+        this._clearPhase2dAutoRangeNotice(plot, state);
         state.rangeFull = true;
         state.x1 = null;
         state.x2 = null;
-        this._clearPhase2dAutoRangeNotice(plot, state);
         this._autoScalePhase2dFitTime(plot);
         // 2D pane back to autoscale (respecting 1:1) + recompute over all rows.
         if (plot.div) Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
