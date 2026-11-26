@@ -46,6 +46,15 @@ const EXAMPLES = [
         projectFileName: 'correlated_signals_example.zip',
         getDataB64: () => null,
     },
+    {
+        // One file, opened the way a drop on the window is: real ERA5 over
+        // Argentina, which opens on its map. See docs/era5-argentina-example.md.
+        id: 'era5-argentina',
+        nameKey: 'exampleEra5Argentina',
+        filePath: `${PUBLIC_BASE}examples/era5-argentina-august-2024.nc`,
+        fileName: 'era5-argentina-august-2024.nc',
+        getDataB64: () => null,
+    },
 ];
 
 // `arity` is the exact operand count; `minArity` marks a variadic function, which

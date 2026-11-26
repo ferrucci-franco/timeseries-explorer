@@ -1855,7 +1855,36 @@ try {
         await context.close();
     }
 
-    console.log('Gridded netCDF e2e passed: map, point and box extractions, slider, plotting, CDS ZIP, series files untouched, GRIB on the map, desktop path, projects that keep the map.');
+    // 8. The Examples menu offers the ERA5 file, and it opens on its map.
+    //    The row is found by its example id, not by its name, which every
+    //    language translates.
+    {
+        const { context, page, errors } = await openApp();
+        await page.click('#load-example-btn');
+        await page.waitForSelector('#example-menu [data-example-id="era5-argentina"]');
+        assert.equal(
+            await page.locator('#example-menu [data-example-id="era5-argentina"]').evaluate(el => el.classList.contains('disabled')),
+            false, 'the ERA5 example is offered, not greyed out');
+        await page.click('#example-menu [data-example-id="era5-argentina"] .example-load-btn');
+        await mapShown(page);
+        const opened = await page.evaluate(() => {
+            const entry = [...window.app.files.values()][0];
+            return {
+                name: entry.name,
+                gridded: !!entry.gridded,
+                steps: document.querySelector('#gridded-view [data-role="time-label"]').textContent.trim(),
+                variables: [...document.querySelectorAll('#gridded-view [data-role="variable"] option')].map(option => option.value).sort(),
+            };
+        });
+        assert.equal(opened.gridded, true, 'the example opens as a gridded dataset');
+        assert.match(opened.name, /era5-argentina/);
+        assert.match(opened.steps, /^2024-08-01 00:00 +\(1\/248\)$/, 'the whole month is there');
+        assert.deepEqual(opened.variables, ['/d2m', '/msl', '/t2m', '/tcc', '/u10', '/v10']);
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
+    console.log('Gridded netCDF e2e passed: map, point and box extractions, slider, plotting, CDS ZIP, series files untouched, GRIB on the map, desktop path, projects that keep the map, the ERA5 example from the menu.');
 } finally {
     await browser.close();
     await server.close();
