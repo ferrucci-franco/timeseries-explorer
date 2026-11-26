@@ -161,24 +161,33 @@ body.theme-dark .guide {
 /* The caption of the step: under the screen, not over it — a plot keeps its
    axis at the bottom, and that is often what the step is about. */
 .guide-capline { flex: none; min-height: 40px; display: flex; align-items: center; justify-content: center; margin-top: -4px; }
+/* The caption of a step. It is the one thing a viewer reads while the demo
+   plays, so it is the brightest thing under the screen — a marker-pen amber
+   with near-black text, which stands out over the window's background in
+   either theme without the glare of a pure yellow. */
 .guide-cap {
     max-width: min(94%, 680px);
-    padding: 8px 16px;
+    padding: 8px 18px;
     border-radius: 11px;
-    background: rgba(15, 20, 36, 0.92);
-    color: #fff;
+    background: #ffd24a;
+    color: #1d1503;
     font-size: 15px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1.35;
     text-align: center;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+    box-shadow: 0 2px 0 rgba(120, 84, 0, 0.35), 0 8px 22px rgba(0, 0, 0, 0.22);
     opacity: 0;
     transform: translateY(-6px);
     transition: opacity 0.2s, transform 0.2s;
     pointer-events: none;
 }
 .guide-cap.on { opacity: 1; transform: none; }
-.guide-cap b { color: #9cc0ff; }
+/* The part of the caption that names a control: darker, not lighter. */
+.guide-cap b { color: #7a2f00; font-weight: 800; }
+body.theme-dark .guide-cap {
+    background: #f3c13c;
+    box-shadow: 0 2px 0 rgba(90, 62, 0, 0.5), 0 8px 22px rgba(0, 0, 0, 0.45);
+}
 .guide-keys { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; pointer-events: none; }
 .guide-keys kbd {
     min-width: 36px;
