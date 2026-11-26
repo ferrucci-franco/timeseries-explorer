@@ -56,6 +56,18 @@ try {
     assert.equal(await page.locator('.help-backdrop').count(), 0, 'the Help window makes room for the guide');
     await page.click('.guide-x');
 
+    // The welcome screen offers it too, beside Select File and Examples.
+    assert.equal(await page.locator('#welcome-guide-btn').isVisible(), true, 'the welcome screen shows the guide button');
+    await page.click('#welcome-guide-btn');
+    await page.waitForSelector('.guide-back.open');
+    await page.click('.guide-x');
+    // Its Examples button opens the example menu (the 🧪 one), and closes it.
+    await page.click('#welcome-examples-btn');
+    await page.waitForSelector('#example-menu:not([hidden]) .example-menu-item-row');
+    assert.equal(await page.getAttribute('#welcome-examples-btn', 'aria-expanded'), 'true');
+    await page.click('#welcome-examples-btn');
+    assert.equal(await page.locator('#example-menu').isHidden(), true, 'a second click closes the example menu');
+
     const storageBefore = await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort()));
 
     // ── Every demo, to its end ──
@@ -121,6 +133,7 @@ try {
     await inner.waitForFunction(() => window.app?.plotManager, null, { timeout: 60000 });
     await inner.click('#extra-menu-btn');
     assert.equal(await inner.locator('#extra-menu [data-action="extraGuide"]').count(), 0, 'no guide inside the guide');
+    assert.equal(await inner.locator('#welcome-guide-btn').isHidden(), true, 'no guide button on the welcome screen inside the guide');
     await inner.close();
 
     assert.deepEqual(errors, [], 'no page errors');

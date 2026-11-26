@@ -1252,7 +1252,14 @@
                     <span class="icon">📁</span>
                     <h2 data-i18n="dragFile">Drag & drop a result or text file here</h2>
                     <p data-i18n="or">or</p>
-                    <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
+                    <!-- What a first visit can do: open a file, try an example (the
+                         same menu as 🧪 in the top bar) or watch the animated guide
+                         (the same as its entry in ☰). -->
+                    <div class="welcome-actions">
+                        <button id="file-select-btn" class="primary-btn welcome-btn" type="button"><span class="welcome-btn-icon" aria-hidden="true">📂</span><span data-i18n="selectFile">Select File</span></button>
+                        <button id="welcome-examples-btn" class="welcome-btn welcome-secondary-btn" type="button" data-i18n-title="loadExample" aria-haspopup="true" aria-expanded="false"><span class="welcome-btn-icon" aria-hidden="true">🧪</span><span data-i18n="welcomeExamples">Examples</span><span class="welcome-btn-caret" aria-hidden="true">▾</span></button>
+                        <button id="welcome-guide-btn" class="welcome-btn welcome-guide-btn" type="button" data-i18n-title="extraGuideTooltip" hidden><span class="welcome-btn-icon" aria-hidden="true">▶</span><span data-i18n="extraGuide">Animated guide</span></button>
+                    </div>
                     <div id="light-version-notice" class="light-version-notice" hidden></div>
                     <div id="drop-zone-status" class="drop-zone-status">Loading application...</div>
                     <!-- No `accept` on purpose: it is what turns the browser's
