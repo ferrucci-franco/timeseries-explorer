@@ -876,10 +876,13 @@ proto._renderExampleMenu = function() {
     const menu = document.getElementById('example-menu');
     menu.innerHTML = '';
     for (const ex of EXAMPLES) {
-        const available = ex.getDataB64() != null || !!ex.script || !!ex.projectPath;
+        const available = ex.getDataB64() != null || !!ex.script || !!ex.projectPath || !!ex.filePath;
         const item = document.createElement('div');
         item.className = `example-menu-item example-menu-item-row${available ? '' : ' disabled'}`;
         item.setAttribute('role', 'group');
+        // The row says which example it is, so a test can find it without its
+        // name, which every language translates.
+        item.dataset.exampleId = ex.id;
 
         const loadBtn = document.createElement('button');
         loadBtn.className = 'example-load-btn';
@@ -3282,6 +3285,21 @@ proto.loadExample = async function(exampleId = 'pendulum') {
             return;
         }
 
+        // One file under public/, opened the way a drop on the window is: the
+        // reader, the map and the variable tree are the ones a file of that
+        // kind always gets, so there is no layout of panels to build here.
+        if (ex.filePath) {
+            if (useNewTab) {
+                await this.addTab();
+                const tabs = this._ensureTabsState();
+                this.renameTab(tabs.activeIndex, i18n.t(ex.nameKey));
+                if (isCancelled()) return;
+            }
+            this._commitExampleLoad(token);
+            await this._loadFileExample(ex);
+            return;
+        }
+
         await this._ensureExampleData(ex);
         if (isCancelled()) return;
 
@@ -3365,6 +3383,19 @@ proto._loadProjectExample = async function(example, options = {}) {
     const name = example.projectFileName || example.projectPath.split('/').pop() || `${example.id}.zip`;
     const file = new File([bytes], name, { type: 'application/zip' });
     return this.loadSessionOrProjectFile(file, options);
+};
+
+/**
+ * An example that is a single file shipped under public/ — a netCDF, a result
+ * file — opened through the same path a dropped file takes, so it is read,
+ * sniffed and presented exactly as the user's own copy of it would be.
+ */
+proto._loadFileExample = async function(example) {
+    const response = await fetch(example.filePath, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Cannot load example file: ${response.status}`);
+    const bytes = await response.arrayBuffer();
+    const name = example.fileName || example.filePath.split('/').pop() || `${example.id}.nc`;
+    return this.loadFile(new File([bytes], name));
 };
 
 proto._setExampleLoading = function(loading, exampleName = '') {

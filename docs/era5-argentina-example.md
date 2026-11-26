@@ -13,10 +13,12 @@ watching step by step.
 They are three cuts of one dataset, so they can be told apart by what they are
 for, not by what they say:
 
-- **the month** is the one to explore. A point extracted from it is a series of
-  248 steps: several fronts, and a daily cycle at eight samples a day, so an
-  FFT of it still shows the 24-hour peak. Over Buenos Aires it runs from
-  26.1 °C on the afternoon of 2 August to 4.7 °C on the morning of the 12th.
+- **the month** is the one to explore, and the one the **Examples** menu
+  offers ("ERA5 Reanalysis over Argentina"). A point extracted from it is a
+  series of 248 steps: several fronts, and a daily cycle at eight samples a
+  day, so an FFT of it still shows the 24-hour peak. Over Buenos Aires it runs
+  from 26.1 °C on the afternoon of 2 August to 4.7 °C on the morning of the
+  12th.
 - **the day** is the one to look at. Full 0.25° resolution and one map an hour
   through the sharpest hours of the front.
 - **the demo** is the one the animated guide fetches: the first week of August,
@@ -124,6 +126,22 @@ month about eight. `--cache` names a directory where each file's fetched window
 is kept as an `.npz`, so writing it again costs nothing. The box, the month and
 the three files' shapes are constants at the top of the script.
 
+## In the Examples menu
+
+The month is the sixth entry of **Examples**. It is a third kind of example,
+beside the ones that carry their data as base64 (`script`) and the ones that
+restore a saved project (`projectPath`): a single file under `public/`
+(`filePath`), fetched and handed to `loadFile` — the path a dropped file
+takes — so it is read, sniffed and presented exactly as the user's own copy
+would be, and lands on its map without a layout of panels to build. It opens
+in a tab of its own when there is work on screen, like the other single-file
+examples (`loadExample` and `_loadFileExample` in
+`src/app/methods/ui-methods.js`, the entry in `src/app/constants.js`, the name
+in `src/i18n/translations.js` in the five languages).
+
+Each row of the menu carries its `data-example-id`, so a test can find one
+without its name.
+
 ## Tests
 
 `npm run test:era5-example` (in the release suite) opens the three files with
@@ -131,3 +149,7 @@ the app's own gridded engine and checks the layout, the grid, the sizes they
 ship under, the values over Buenos Aires, that the cold outbreak is still in
 the two short files and the month's warmest and coldest hours are still where
 they were, and that the files agree on every cell they share.
+
+`npm run e2e:gridded-netcdf` ends by opening the month from the Examples menu
+in a real browser: the row is offered and not greyed out, and the file lands
+on its map with its 248 steps and its six variables.

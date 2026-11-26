@@ -2855,6 +2855,7 @@ const translations = {
             examplePowergridTimeseries: 'Power Grid Timeseries',
             exampleNoisyChirpFourierTransform: 'Noisy Chirp Fourier Transform',
             exampleCorrelationCurveFitting: 'Correlation and Curve Fitting',
+            exampleEra5Argentina: 'ERA5 Reanalysis over Argentina',
 
             // Panel modes
             modeTimeseries: 'Time series',
@@ -6041,6 +6042,7 @@ const translations = {
             examplePowergridTimeseries: 'Séries temporelles réseau électrique',
             exampleNoisyChirpFourierTransform: 'Transformée de Fourier d’un chirp bruité',
             exampleCorrelationCurveFitting: 'Corrélation et ajustement de courbes',
+            exampleEra5Argentina: 'Réanalyse ERA5 sur l’Argentine',
 
             // Panel modes
             modeTimeseries: 'Série temporelle',
@@ -9204,6 +9206,7 @@ const translations = {
             examplePowergridTimeseries: 'Series temporales de red eléctrica',
             exampleNoisyChirpFourierTransform: 'Transformada de Fourier de chirp con ruido',
             exampleCorrelationCurveFitting: 'Correlación y ajuste de curvas',
+            exampleEra5Argentina: 'Reanálisis ERA5 sobre Argentina',
             modeTimeseries: 'Serie temporal',
             modePhase2d: 'Gráfico de fase 2D',
             modePhase2dt: 'Gráfico de fase 2D + tiempo',
@@ -12359,6 +12362,7 @@ const translations = {
             examplePowergridTimeseries: 'Serie temporale rete elettrica',
             exampleNoisyChirpFourierTransform: 'Trasformata di Fourier di chirp rumoroso',
             exampleCorrelationCurveFitting: 'Correlazione e fitting di curve',
+            exampleEra5Argentina: 'Rianalisi ERA5 sull’Argentina',
             modeTimeseries: 'Serie temporale',
             modePhase2d: 'Grafico di fase 2D',
             modePhase2dt: 'Grafico di fase 2D + tempo',
@@ -15528,6 +15532,7 @@ const translations = {
             examplePowergridTimeseries: '电网时间序列',
             exampleNoisyChirpFourierTransform: '含噪啁啾信号的傅里叶变换',
             exampleCorrelationCurveFitting: '相关性与曲线拟合',
+            exampleEra5Argentina: '阿根廷 ERA5 再分析',
 
             // Panel modes
             modeTimeseries: '时间序列',
