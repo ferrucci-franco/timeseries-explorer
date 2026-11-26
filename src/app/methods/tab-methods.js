@@ -305,6 +305,15 @@ proto._afterTabChange = function() {
     this.plotManager?.renderDashboardTimeMarks?.();
 };
 
+// Make a tab blink for a moment, so a change of tab the app made is seen.
+proto.flashTab = function(index) {
+    const tabs = this._ensureTabsState();
+    const item = tabs.items[index];
+    if (!item) return;
+    item.flashUntil = Date.now() + 1600;
+    this._renderTabs();
+};
+
 proto.addTab = async function() {
     if (this._tabSwitching) await this._tabSwitching;
     // An index asked for before the tabs changed names another tab now.
@@ -449,6 +458,8 @@ proto._renderTabs = function() {
         const active = index === tabs.activeIndex;
         const tab = document.createElement('div');
         tab.className = `workspace-tab${active ? ' active' : ''}`;
+        // Opened for the user a moment ago (flashTab): it blinks until then.
+        if (item.flashUntil && item.flashUntil > Date.now()) tab.classList.add('workspace-tab-flash');
         tab.setAttribute('role', 'tab');
         tab.setAttribute('aria-selected', String(active));
         tab.tabIndex = active ? 0 : -1;

@@ -547,6 +547,28 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
 }
 
+/* A tab just opened by the app for you (a map's extractions plotted in a
+   new tab): it blinks a few times, so the change of tab is seen. */
+.workspace-tab.workspace-tab-flash {
+    animation: workspace-tab-flash 0.5s ease-in-out 3;
+}
+
+@keyframes workspace-tab-flash {
+    0%, 100% { box-shadow: none; }
+    50% {
+        background: #0d9488;
+        color: #fff;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.9), 0 0 16px rgba(20, 184, 166, 0.8);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .workspace-tab.workspace-tab-flash {
+        animation: none;
+        box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.9);
+    }
+}
+
 .workspace-tab {
     display: inline-flex;
     align-items: center;

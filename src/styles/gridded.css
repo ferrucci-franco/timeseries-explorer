@@ -1528,3 +1528,104 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 .gridded-help-dialog .gridded-help-body p:last-child {
     margin-bottom: 0;
 }
+
+/* ── Beside a desktop map (_griddedPlaceControls): no toolbar. The variable
+   and its level open "1 · Extract a time series"; the colour range, the
+   download and Close map end the map's own title line. */
+.gridded-map-head,
+.gridded-what {
+    display: none;
+}
+
+.gridded-view.is-side-controls .gridded-toolbar {
+    display: none;
+}
+
+.gridded-view.is-side-controls .gridded-map-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.35rem 0.6rem 0;
+    font-size: 0.8rem;
+}
+
+.gridded-map-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+.gridded-map-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+
+.gridded-map-tools .gridded-toolbar-end {
+    margin-left: 0;
+}
+
+.gridded-view.is-side-controls .gridded-what {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.35rem 0.5rem;
+    align-items: center;
+    margin: 0 0 0.6rem;
+}
+
+.gridded-what .gridded-field,
+.gridded-what .gridded-dims {
+    display: contents;
+}
+
+.gridded-what select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+}
+
+/* The panel never scrolls sideways: a long label wraps instead (French,
+   Spanish and Italian ones are the longest). */
+.gridded-panel {
+    overflow-x: hidden;
+}
+
+.gridded-panel button {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* "+ another variable here", under a place: the way to extract the variable
+   now chosen at a place already in the list, in one click. */
+.gridded-view .gridded-reuse-var {
+    margin: 0.15rem 0 0.1rem 1.9rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px dashed color-mix(in srgb, var(--primary-color) 70%, transparent);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--primary-color);
+    font-size: 0.75rem;
+    text-align: left;
+}
+
+.gridded-view .gridded-reuse-var:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+}
+
+/* A row just extracted lights up once. */
+.gridded-result.is-new {
+    animation: gridded-new-row 1.2s ease-out 1;
+}
+
+@keyframes gridded-new-row {
+    0%, 40% { background: color-mix(in srgb, var(--primary-color) 28%, var(--bg-primary)); }
+    100% { background: var(--bg-primary); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gridded-result.is-new { animation: none; }
+}
