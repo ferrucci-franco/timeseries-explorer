@@ -34,7 +34,7 @@ bordes conocidos, la mayoría dichos en la interfaz.
 | 1 | **`.mat` de MATLAB** (v5/v7 y v7.3) en lazy | se cargan siempre enteros; issue #396 | escribir un "lector por columnas" con la forma que describe `src/parsers/mat-v4-stream.js`; `src/data/columnar-ingest.js` lo abre en lazy sin más cambios. Enganchar en `_lazyMatReader` (`src/app/methods/file-methods.js`). Modelo de prueba: `scripts/test-lazy-mat.mjs` |
 | 2 | **pickle, netCDF de series, audio** | solo cargan enteros (Excel entra por conversión a Parquet) | el mismo camino que 1: un lector por columnas por formato. Solo si hace falta |
 | 3 | **Fórmulas sin forma SQL** (las que el traductor de `src/expr/sql.js` no escribe) | en lazy existen solo sobre el resumen; la app lo avisa al crearlas (`derivedLazyOverviewOnly`) y los análisis las rechazan (`statsLazyOverviewOnly`, `trendLazyOverviewOnly`) | ampliar el traductor función por función, o calcularlas con el ejecutor por trozos (`src/data/chunk-executor.js`) |
-| 4 | **Eje de tiempo generado** (archivo sin columna de tiempo) | el análisis de tendencia lo rechaza en lazy y dice por qué (`trendLazyGeneratedAxis`) | "Implementado: análisis de tendencia exacto", huecos conocidos |
+| ~~4~~ | ~~**Eje de tiempo generado** (archivo sin columna de tiempo)~~ | **cerrado** (#413): el eje que dibuja el panel es la **fila del archivo**, no la posición de la muestra en el resumen, y la tendencia lo lee como cualquier otro | "Implementado: el eje de un archivo lazy sin columna de tiempo" |
 | 5 | **Límites del `.mat` lazy** | la copia ocupa disco del orden de `data_2`; recargar copia todo de nuevo; un archivo corto y muy ancho ahorra poca memoria (su resumen son casi todas sus filas) | "Implementado: resultados `.mat` en lazy", huecos conocidos. Para el último: un lector eager con arreglos tipados, o el resumen por demanda |
 | 6 | **Huecos de más de 4 M de muestras seguidas** | el relleno y la integral no los cruzan y lo informan | "Implementado (fase 4b-3)". Caso muy raro |
 
@@ -131,7 +131,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Heatmap calendario | exacto en SQL desde la 3a para las columnas; las señales derivadas con SQL (derivada, media móvil, integral, fórmulas) ya entraban; **resuelto** lo que faltaba (sección "Implementado: heatmap y perfil temporal exactos"): un eje calendario generado desde una fecha de origen o un eje numérico promovido a calendario se agregan por el eje que el panel muestra, en vez de dibujarse desde el resumen o rechazarse como "aún no disponible"; solo se deja fuera, con aviso, una señal que existe únicamente en el resumen | `heatmapLazyDerivedUnsupported` |
 | Perfil temporal | exacto en SQL desde la 3a; **resuelto** lo mismo que el heatmap, más *fines de semana combinados* (que la consulta lazy ignoraba) y los períodos cortados por la selección, que los dos modos cuentan ahora igual | `temporalProfileLazyDerivedUnsupported` |
 | Derivadas del eje de tiempo (`index`, `delta`) | ~~calculadas sobre el overview~~ **SQL sobre el archivo desde la 4a** (el número de fila y la diferencia de filas consecutivas, `rowIndexWindow` y `timeAxisDeltaWindows`); esta fila había quedado vieja | — |
-| Análisis de tendencia | **exacto sobre todas las filas de cada tramo** (sección "Implementado: análisis de tendencia exacto"): los agregados de las dos pasadas en una consulta por pasada para todos los tramos; se rechaza, diciéndolo, una señal que solo está en el resumen y un eje generado del número de fila | `trendLazyOverviewOnly`, `trendLazyGeneratedAxis` |
+| Análisis de tendencia | **exacto sobre todas las filas de cada tramo** (sección "Implementado: análisis de tendencia exacto"): los agregados de las dos pasadas en una consulta por pasada para todos los tramos; un eje generado del número de fila se lee por trozos, con los mismos números que en memoria (#413); se rechaza, diciéndolo, solo una señal que existe únicamente en el resumen | `trendLazyOverviewOnly` |
 | FFT | filas crudas hasta `_fftHardMaxNfft`, leídas por trozos con `streamColumns` (antes `getRawColumnsRange`, que congelaba la página: sección "Implementado: la FFT lazy no congela la página") | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Estadísticas del panel (Σ) | ~~calculadas sobre el resumen, sin aviso~~ **exactas sobre todas las filas** (sección "Implementado: estadísticas del panel exactas"); una señal que existe solo en el resumen se nombra debajo de la tabla, sin cifras | `statsLazyOverviewOnly` |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
@@ -1867,7 +1867,7 @@ rango**, nunca del resumen, y el usuario arrastra el rango y los ve cambiar.
 | Caso | Qué hace | Cadena |
 |---|---|---|
 | Una señal que en lazy existe **solo en el resumen** (una fórmula que el traductor no escribe) | el tramo no da números: no hay filas que leer, y el resumen daría una respuesta equivocada que parece correcta | `trendLazyOverviewOnly` |
-| Un archivo lazy cuyo **eje de tiempo se genera del número de fila** | el tramo se rechaza y dice por qué: en lazy ese eje numera las filas del *resumen*, no las del archivo, así que el tramo que se ve en pantalla y las filas que el archivo tiene en esas posiciones no son las mismas filas. Con una columna de tiempo propia, o cargado entero, es exacto | `trendLazyGeneratedAxis` |
+| ~~Un archivo lazy cuyo **eje de tiempo se genera del número de fila**~~ | **resuelto** (#413, sección "Implementado: el eje de un archivo lazy sin columna de tiempo"): ese eje numeraba las filas del *resumen*, así que el tramo en pantalla y las filas del archivo no eran las mismas; ahora el eje es la fila del archivo y el tramo se lee por trozos, bit a bit lo que da en memoria | — |
 
 Pruebas:
 - `scripts/test-trend-analysis.mjs`: el kernel contra `linearFit` y
@@ -1889,6 +1889,59 @@ Pruebas:
 - `scripts/e2e-analysis-cancel.mjs` (Chromium): el análisis de tendencia es uno
   de los nueve que prueba la píldora, el Cancelar, el resultado que queda y los
   ajustes que vuelven.
+
+### Implementado: el eje de un archivo lazy sin columna de tiempo es la fila del archivo (#413)
+
+Un CSV sin columna de tiempo usable abre con un **eje generado**: la fila. En
+memoria la fila de un valor y su posición en los arreglos son la misma cosa. En
+lazy no lo son: los arreglos son una muestra del archivo (un reservoir), y el
+eje se construía con la **posición en la muestra**. Un archivo de 50 021 filas
+se dibujaba entonces con un eje de 0…299, y cualquier rango sobre él nombraba
+las primeras 300 filas del archivo. El análisis de tendencia era el único que lo
+decía (se negaba, con `trendLazyGeneratedAxis`); el ajuste de curvas, la FFT y
+todo lo demás que lee filas para un rango de pantalla leían filas equivocadas
+sin avisar.
+
+Lo que la proyección guarda como tiempo de cada fila **ya es** su número de fila
+en el archivo (`_generatedIndexProjectionSql`: `ROW_NUMBER() OVER () - 1` sobre
+todas las filas, antes de muestrear). De ahí las cuatro piezas:
+
+- **El eje es el valor guardado**, no el contador del bucle
+  (`_getTransformIndexData`, `src/plots/methods/data-methods.js`). En memoria no
+  cambia nada —los dos coinciden—; en lazy cada muestra queda en la fila de la
+  que vino y el eje recorre el archivo. Un eje *detectado* que se muestra como
+  índice sigue mapeando tiempo → fila aproximada (`_approxRowIndexFromSourceTime`),
+  y una columna numérica mostrada como índice sigue usando el contador: su valor
+  guardado son segundos, no una fila.
+- **El rango de pantalla a filas, sin proporción**
+  (`_sourceRangeForDisplayRange`): el tiempo fuente de una fila es su número, así
+  que el rango es él mismo, recortado a 0…N−1. La proporción anterior iba entre
+  la primera y la última fila que la muestra tuviera (28 y 49 893 en la prueba),
+  lo que encogía el archivo entero a sus primeras filas.
+- **El archivo se cuenta al abrirlo**: en un eje de fila *todas* las filas
+  tienen tiempo, así que el conteo del escaneo de carga es el total del archivo
+  (`_loadIntoLegacy`). El dominio del eje (`metadata.timeStart/timeEnd`) es
+  0…N−1 desde el primer dibujo, y no hace falta el `COUNT` aparte que
+  `_ensureLazyRowCount` pedía para este caso.
+- **La tendencia no rechaza nada**: el tramo se lee por trozos con el kernel en
+  memoria (SQL no puede filtrar, en la misma pasada que agrega, una ventana
+  calculada sobre todas las filas), y da **los mismos números que en memoria,
+  bit a bit**. `trendLazyGeneratedAxis` ya no existe en ningún idioma.
+
+Hueco conocido: la ruta de agregados (una consulta por pasada para todos los
+tramos) no se usa en este eje; se lee por trozos, que es exacto y más lento.
+Cerrarlo es escribir la ventana del número de fila en el `FROM` de
+`getTrendStats`, como ya hace el heatmap con un eje calendario generado
+(`timeSqlWithWindows` + `_fromSql`).
+
+Pruebas:
+
+- `scripts/test-lazy-trend.mjs` (DuckDB-WASM real, el Node del paquete que
+  embarca la app): el eje del panel es 0…N−1 y el mismo que el del archivo en
+  memoria; las muestras del resumen llevan la fila de la que vinieron; el
+  tramo completo cubre todas las filas (`nScope`); y la tendencia de un rango
+  y de todo el archivo es **bit a bit** la de los arreglos en memoria, con y
+  sin banda de valores.
 
 ### Implementado: el análisis Integral sobre todas las filas, en cualquier eje (#385)
 

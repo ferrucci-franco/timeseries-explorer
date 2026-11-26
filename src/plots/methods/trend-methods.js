@@ -1142,7 +1142,6 @@ export function installPlotTrendMethods(TargetClass) {
         if (r.lazy) {
             if (r.lazyStatus === 'cancelled') return i18n.t(r.staleResult ? 'analysisCancelledKept' : 'analysisCancelled');
             if (r.lazyStatus === 'unsupported') return i18n.t('trendLazyOverviewOnly');
-            if (r.lazyStatus === 'generatedAxis') return i18n.t('trendLazyGeneratedAxis');
             if (r.lazyStatus === 'error') return i18n.t('trendLazyError');
             return i18n.t(r.inMemory ? 'trendCalculating' : 'trendLazyPending');
         }
