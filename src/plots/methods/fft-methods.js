@@ -2815,7 +2815,11 @@ proto._fftSelectionShapes = function(plot) {
 };
 
 proto._updateFftSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
-    if (!plot?.div || plot.mode !== 'fft') return;
+    // `_fullLayout` is how Plotly says it still owns this div. A relayout on
+    // one it has already torn down — the panel redrawn under a range-mode
+    // click, which is what Full ⇄ Selection does — throws inside Plotly
+    // ("Cannot read properties of undefined (reading '_guiEditing')").
+    if (!plot?.div?._fullLayout || plot.mode !== 'fft') return;
     Plotly.relayout(plot.div, { shapes: this._fftTimePaneShapes(plot) });
     this._syncFftOptionsPanel(plot);
 };

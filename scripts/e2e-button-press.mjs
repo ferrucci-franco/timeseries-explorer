@@ -61,13 +61,25 @@ async function sweep(page, label) {
         if (!still) continue;
         await page.mouse.move(x, y);
         await page.mouse.down();
-        // The press animates (40 ms): read once it has.
-        await page.waitForTimeout(90);
-        const pressed = await page.evaluate(id => {
+        // The press animates (40 ms). Wait for the look, not for a length of
+        // time: a loaded machine can let 90 ms pass without painting a frame,
+        // and the button then reads as :active with its scale still 1 — which
+        // is how this check failed in CI while every button was fine.
+        const pressed = await page.evaluate(async id => {
             const el = document.querySelector(`[data-press-probe="${id}"]`);
             if (!el) return null;
-            const style = getComputedStyle(el);
-            return { scale: style.scale, active: el.matches(':active') };
+            const look = () => {
+                const style = getComputedStyle(el);
+                return { scale: style.scale, active: el.matches(':active') };
+            };
+            const sunk = seen => Number(seen.scale === 'none' ? 1 : String(seen.scale).split(' ')[0]) < 1;
+            let seen = look();
+            const deadline = performance.now() + 2000;
+            while (!sunk(seen) && performance.now() < deadline) {
+                await new Promise(requestAnimationFrame);
+                seen = look();
+            }
+            return seen;
         }, id);
         // Let go away from any button: nothing is clicked.
         await page.mouse.move(1, 1);

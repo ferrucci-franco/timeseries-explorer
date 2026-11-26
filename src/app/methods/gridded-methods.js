@@ -13,6 +13,7 @@ import Plotly from '../../vendor/plotly.js';
 import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import { griddedClient, nextDatasetId } from '../../gridded/gridded-client.js';
 import { GRIB_EXTENSIONS } from '../constants.js';
+import { readLocal, removeLocal, writeLocal } from '../demo-mode.js';
 import { extractZipEntry, isNetcdfEntryName, listZipEntries } from '../../gridded/zip-reader.js';
 import { NETCDF_READABLE_KINDS, sniffNetcdfContainer } from '../../parsers/netcdf-sniff.js';
 import { formatUnitPowers } from '../../utils/unit-superscripts.js';
@@ -811,7 +812,7 @@ export function installGriddedMethods(TargetClass) {
             selected: null,
             groups: [],
             resultsHidden: (() => {
-                try { return localStorage.getItem('omv.gridded.resultsHidden') === '1'; } catch { return false; }
+                return readLocal('omv.gridded.resultsHidden') === '1';
             })(),
             groupCount: 0,
             playing: false,
@@ -1118,7 +1119,7 @@ export function installGriddedMethods(TargetClass) {
             if (main) observer.observe(main);
         }
         let panelHidden = false;
-        try { panelHidden = localStorage.getItem('omv.gridded.panelHidden') === '1'; } catch { /* shown */ }
+        panelHidden = readLocal('omv.gridded.panelHidden') === '1';
         this._griddedTogglePanel(!panelHidden, root);
         root.querySelector('.gridded-main')?.addEventListener('scroll', () => this._griddedSyncPeek(), { passive: true });
         this._griddedPlacePreview(root);
@@ -1139,7 +1140,7 @@ export function installGriddedMethods(TargetClass) {
         root.classList.toggle('is-panel-hidden', !shown);
         root.querySelector('[data-action="toggle-panel"]')?.setAttribute('aria-pressed', String(shown));
         if (show === undefined) {
-            try { localStorage.setItem('omv.gridded.panelHidden', shown ? '0' : '1'); } catch { /* not kept */ }
+            writeLocal('omv.gridded.panelHidden', shown ? '0' : '1');
         }
     };
 
@@ -1159,7 +1160,7 @@ export function installGriddedMethods(TargetClass) {
         const top = peek.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
         const down = peek.getAttribute('aria-expanded') !== 'true';
         main.scrollTo({ top: down ? top : 0, behavior: 'smooth' });
-        try { localStorage.setItem('omv.gridded.peekSeen', '1'); } catch { /* not kept */ }
+        writeLocal('omv.gridded.peekSeen', '1');
         peek.classList.remove('is-new');
     };
 
@@ -1182,11 +1183,11 @@ export function installGriddedMethods(TargetClass) {
         peek.title = i18n.t(open ? 'griddedPeekBack' : 'griddedPeekShow');
         if (open) {
             peek.classList.remove('is-new');
-            try { localStorage.setItem('omv.gridded.peekSeen', '1'); } catch { /* not kept */ }
+            writeLocal('omv.gridded.peekSeen', '1');
         } else if (!peek.dataset.nudged) {
             peek.dataset.nudged = '1';
             let seen = false;
-            try { seen = localStorage.getItem('omv.gridded.peekSeen') === '1'; } catch { /* nod */ }
+            seen = readLocal('omv.gridded.peekSeen') === '1';
             peek.classList.toggle('is-new', !seen);
         }
     };
@@ -1483,11 +1484,11 @@ export function installGriddedMethods(TargetClass) {
             return clamped;
         };
         try {
-            const saved = Number(localStorage.getItem(storageKey));
+            const saved = Number(readLocal(storageKey));
             if (saved > 0) preview.style.height = `${saved}px`;
         } catch { /* storage unavailable: default height */ }
         const save = height => {
-            try { localStorage.setItem(storageKey, String(height)); } catch { /* ignore */ }
+            writeLocal(storageKey, height);
         };
         splitter.addEventListener('pointerdown', event => {
             event.preventDefault();
@@ -1508,7 +1509,7 @@ export function installGriddedMethods(TargetClass) {
         });
         splitter.addEventListener('dblclick', () => {
             preview.style.height = '';
-            try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
+            removeLocal(storageKey);
         });
         splitter.addEventListener('keydown', event => {
             if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
@@ -4132,7 +4133,7 @@ export function installGriddedMethods(TargetClass) {
      */
     proto._griddedToggleResults = function(view) {
         view.resultsHidden = !view.resultsHidden;
-        try { localStorage.setItem('omv.gridded.resultsHidden', view.resultsHidden ? '1' : '0'); } catch { /* storage unavailable */ }
+        writeLocal('omv.gridded.resultsHidden', view.resultsHidden ? '1' : '0');
         this._griddedRenderResults(view);
         this._griddedDrawPreview(view);
     };

@@ -21,3 +21,28 @@ export const DEMO_MODE = params.has('demo');
 export function demoParam(name) {
     return DEMO_MODE ? params.get(name) : null;
 }
+
+/**
+ * A per-viewer convenience kept in the browser's storage — a collapsed
+ * section, a panel's height, a hint already seen.
+ *
+ * In demo mode these do nothing and read nothing: the frame shares its origin
+ * with the app around it, so a write here would be a trace left in the real
+ * app's storage, and a read would make the demo depend on what that person
+ * happened to do before (`scripts/e2e-guide.mjs` checks both). Storage can
+ * also be unavailable or full, so every call is guarded.
+ */
+export function readLocal(key) {
+    if (DEMO_MODE) return null;
+    try { return globalThis.localStorage?.getItem(key) ?? null; } catch (_) { return null; }
+}
+
+export function writeLocal(key, value) {
+    if (DEMO_MODE) return;
+    try { globalThis.localStorage?.setItem(key, String(value)); } catch (_) { /* not kept */ }
+}
+
+export function removeLocal(key) {
+    if (DEMO_MODE) return;
+    try { globalThis.localStorage?.removeItem(key); } catch (_) { /* not kept */ }
+}

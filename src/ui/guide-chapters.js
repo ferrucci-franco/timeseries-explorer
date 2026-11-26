@@ -99,6 +99,19 @@ function plotPoint(gd, x, y) {
     return [r.left + xa._offset + xa.l2p(xa.d2l(x)), r.top + ya._offset + ya.l2p(ya.d2l(y))];
 }
 
+/**
+ * The pixel of a longitude and a latitude on the gridded map, so that a demo
+ * can point at a place and not at a corner of the drawing area. Like
+ * `plotArea`, it mixes the element's rectangle with Plotly's own layout, so it
+ * is read with the camera at rest.
+ */
+function mapPoint(gd, lon, lat) {
+    const r = gd.getBoundingClientRect();
+    const xa = gd._fullLayout.xaxis;
+    const ya = gd._fullLayout.yaxis;
+    return [r.left + xa._offset + xa.l2p(lon), r.top + ya._offset + ya.l2p(lat)];
+}
+
 /** A point of a plot's drawing area, as fractions of it (0,0 = top left). */
 function plotArea(gd, fx, fy) {
     const r = gd.getBoundingClientRect();
@@ -800,6 +813,268 @@ export const GUIDE_CHAPTERS = [
             await d.folder('Battery');
             await d.plot('pypsa:storage_units/Battery/state_of_charge', 1, { label: 'Battery · state_of_charge' });
             await d.wait(2200);
+        },
+    },
+
+    {
+        id: 'era5-maps', g: 'tools', icon: '⊞', est: 72000,
+        t: say('With ERA5 and other grids', 'Avec ERA5 et autres grilles', 'Con ERA5 y otras grillas', 'Con ERA5 e altre griglie', '配合 ERA5 等网格数据'),
+        d: say(
+            'A netCDF of a model or a reanalysis — ERA5 from the Copernicus CDS, WRF, a CMIP run — opens on a <b>map</b>, not as ten thousand loose series. Choose the variable, play the time, and take the series of a point, or the average of a box, into the plots where the FFT, the fits and the cursors are.',
+            'Un netCDF de modèle ou de réanalyse — ERA5 du CDS Copernicus, WRF, une simulation CMIP — s’ouvre sur une <b>carte</b>, et non en dix mille séries éparses. Choisissez la variable, lancez le temps, puis emportez la série d’un point, ou la moyenne d’une zone, vers les graphiques où sont la FFT, les ajustements et les curseurs.',
+            'Un netCDF de un modelo o de un reanálisis — ERA5 del CDS de Copernicus, WRF, una corrida CMIP — abre en un <b>mapa</b>, no en diez mil series sueltas. Elija la variable, reproduzca el tiempo y lleve la serie de un punto, o el promedio de una zona, a los gráficos donde están la FFT, los ajustes y los cursores.',
+            'Un netCDF di un modello o di una rianalisi — ERA5 dal CDS di Copernicus, WRF, una corsa CMIP — si apre su una <b>mappa</b>, non in diecimila serie sparse. Scegli la variabile, avvia il tempo e porta la serie di un punto, o la media di un’area, nei grafici dove stanno FFT, fit e cursori.',
+            '模式或再分析的 netCDF——Copernicus CDS 的 ERA5、WRF、CMIP 试验——会打开为一张<b>地图</b>，而不是上万条零散序列。选择变量、播放时间，再把某一点的序列或某片区域的平均值送进图表，那里有 FFT、拟合和游标。',
+        ),
+        async setup(d) {
+            await d.loadPublic('examples/guide/era5_argentina.nc');
+            await d.until(() => d.$('#gridded-view:not([hidden]) .gridded-map .main-svg'), 20000);
+        },
+        async run(d) {
+            const map = () => d.$('#gridded-view .gridded-map');
+            // The map view names an extraction's series in the order they are
+            // made, so the first point's series is this one.
+            const POINT_SERIES = 'grid:x1';
+            // The place of an extraction is written in coordinates, which no
+            // language translates: the way to find its row, and its folder,
+            // without naming them.
+            const placeRow = () => d.$$('#variables-tree .tree-item')
+                .find((e) => /34\.5°S 58\.5°W/.test(e.textContent));
+            const seriesRow = () => d.$$('#variables-tree .tree-item')
+                .find((e) => e.dataset.varName === POINT_SERIES);
+            // A row of a closed folder is in the tree but not on screen, and a
+            // drag has to start where the pointer can be seen: open the folder
+            // this row sits in (its node's parent node is that folder).
+            const onScreen = (row) => !!row?.getClientRects().length;
+            const openFolderOf = async (row) => {
+                const folder = row?.closest('.tree-node')?.parentElement?.closest('.tree-node');
+                const head = folder?.querySelector('.tree-item');
+                if (head) await d.tap({ el: head.querySelector('.tree-label') || head });
+            };
+
+            await d.cam(['#files-section'], 1.4, 600);
+            d.say(say(
+                'ERA5 over Argentina, as the Copernicus CDS writes it',
+                'ERA5 sur l’Argentine, tel que l’écrit le CDS Copernicus',
+                'ERA5 sobre Argentina, tal como lo escribe el CDS de Copernicus',
+                'ERA5 sull’Argentina, come lo scrive il CDS di Copernicus',
+                '阿根廷上空的 ERA5，正是 Copernicus CDS 写出的样子',
+            ));
+            await d.move({ sel: '.file-entry.active .file-entry-name' });
+            await d.wait(1600);
+
+            await d.cam(null, null, 700);
+            d.say(say(
+                'It opens on a map: no series to pick first',
+                'Il s’ouvre sur une carte : aucune série à choisir d’abord',
+                'Abre en un mapa: no hay que elegir series primero',
+                'Si apre su una mappa: nessuna serie da scegliere prima',
+                '它直接打开为地图：无需先挑选序列',
+            ));
+            await d.wait(1500);
+
+            d.say(say(
+                'Every variable of the file, in the toolbar',
+                'Toutes les variables du fichier, dans la barre',
+                'Todas las variables del archivo, en la barra',
+                'Tutte le variabili del file, nella barra',
+                '文件里的每个变量，都在工具栏中',
+            ));
+            await d.choose('#gridded-view [data-role="variable"]', '/t2m');
+            await d.wait(700);
+
+            // ── The week, played and then scrubbed by hand ──
+            d.say(say(
+                'A week of maps, eight a day: <b>▶</b>',
+                'Une semaine de cartes, huit par jour : <b>▶</b>',
+                'Una semana de mapas, ocho por día: <b>▶</b>',
+                'Una settimana di mappe, otto al giorno: <b>▶</b>',
+                '一周的地图，每天八张：<b>▶</b>',
+            ));
+            await d.choose('#gridded-view [data-role="speed"]', '8');
+            await d.tap('#gridded-view [data-step="play"]');
+            await d.wait(3000);
+            d.say(say(
+                'On the 2nd the cold air climbs from Patagonia',
+                'Le 2, l’air froid remonte de Patagonie',
+                'El día 2 el aire frío sube desde la Patagonia',
+                'Il giorno 2 l’aria fredda risale dalla Patagonia',
+                '2 日，冷空气自巴塔哥尼亚北上',
+            ));
+            await d.wait(5000);
+            if (d.$('#gridded-view [data-step="play"]')?.dataset.icon === 'pause') {
+                await d.tap('#gridded-view [data-step="play"]');
+            }
+            d.say(say(
+                'Or slide the time by hand',
+                'Ou faites glisser le temps à la main',
+                'O deslice el tiempo a mano',
+                'Oppure scorri il tempo a mano',
+                '也可以手动拖动时间',
+            ));
+            await d.slide('#gridded-view [data-role="time"]', 12, { ms: 1500 });
+            await d.wait(900);
+
+            // ── A point ──
+            d.say(say(
+                'The <b>Point</b> tool reads one cell: here, Buenos Aires',
+                'L’outil <b>Point</b> lit une maille : ici, Buenos Aires',
+                'La herramienta <b>Punto</b> lee una celda: acá, Buenos Aires',
+                'Lo strumento <b>Punto</b> legge una cella: qui, Buenos Aires',
+                '<b>点</b>工具读取一个网格单元：这里是布宜诺斯艾利斯',
+            ));
+            await d.tap('#gridded-view [data-mode="point"]');
+            await d.wait(400);
+            await d.tap(mapPoint(map(), -58.5, -34.5));
+            await d.wait(1600);
+
+            d.say(say(
+                'Extract it: every step of that cell becomes a series',
+                'Extrayez-la : chaque pas de cette maille devient une série',
+                'Extraerla: cada paso de esa celda se vuelve una serie',
+                'Estraila: ogni passo di quella cella diventa una serie',
+                '提取之后，该单元的每个时次就构成一条序列',
+            ));
+            await d.tap('#gridded-view [data-action="extract-point"]');
+            // `until` only reports, so the demo says out loud what it could not
+            // do: e2e:guide fails on a throw, not on a caption that lies.
+            const extracted = await d.until(() => /34\.5°S 58\.5°W/.test(
+                d.$('#gridded-view [data-role="results-body"]')?.textContent || ''), 15000);
+            if (!extracted) throw new Error('guide: the point over Buenos Aires was not extracted');
+
+            // ── Its curve, without leaving the map ──
+            const preview = await d.until(() => !d.$('#gridded-view [data-role="preview"]')?.hidden, 10000);
+            if (!preview) throw new Error('guide: the preview of the extracted series did not open');
+            d.say(say(
+                'Its curve is right there, under the map',
+                'Sa courbe est là, sous la carte',
+                'Su curva queda ahí, bajo el mapa',
+                'La sua curva è lì, sotto la mappa',
+                '它的曲线就在地图下方',
+            ));
+            await d.move({ sel: '#gridded-view [data-role="preview-chart"]', ax: 0.45 });
+            await d.wait(2000);
+
+            // Hiding it gives the map its height back — which is what the box
+            // about to be drawn needs.
+            const toggle = '#gridded-view .gridded-panel [data-action="toggle-results"]';
+            d.say(say(
+                '<b>Hide</b> gives the map its height back',
+                '<b>Masquer</b> rend à la carte sa hauteur',
+                '<b>Ocultar</b> le devuelve al mapa su altura',
+                '<b>Nascondi</b> restituisce alla mappa la sua altezza',
+                '<b>隐藏</b>后地图恢复原来的高度',
+            ));
+            await d.tap(toggle);
+            await d.wait(1100);
+
+            // ── A box ──
+            d.say(say(
+                'The <b>Region</b> tool: a box over the Pampa',
+                'L’outil <b>Zone</b> : un rectangle sur la Pampa',
+                'La herramienta <b>Región</b>: un rectángulo sobre la Pampa',
+                'Lo strumento <b>Regione</b>: un rettangolo sulla Pampa',
+                '<b>区域</b>工具：在潘帕草原上框一个矩形',
+            ));
+            await d.tap('#gridded-view [data-mode="region"]');
+            await d.wait(400);
+            await d.drag(mapPoint(map(), -66, -31), mapPoint(map(), -58, -38), { ms: 1300 });
+            await d.wait(700);
+            d.say(say(
+                'Its mean, minimum and maximum, weighted by cos(latitude)',
+                'Sa moyenne, son minimum et son maximum, pondérés par cos(latitude)',
+                'Su media, su mínimo y su máximo, ponderados por cos(latitud)',
+                'La sua media, il minimo e il massimo, pesati per cos(latitudine)',
+                '它的平均、最小与最大值，按 cos(纬度) 加权',
+            ));
+            await d.tap('#gridded-view [data-action="extract-region"]');
+            const region = await d.until(() => d.$$('#gridded-view .gridded-result').length >= 2, 30000);
+            if (!region) throw new Error('guide: the region was not extracted');
+            await d.wait(1200);
+
+            d.say(say(
+                '<b>Show</b>: the point and the box, still on the map',
+                '<b>Afficher</b> : le point et la zone, toujours sur la carte',
+                '<b>Mostrar</b>: el punto y la caja, sin salir del mapa',
+                '<b>Mostra</b>: il punto e l’area, sempre sulla mappa',
+                '<b>显示</b>：点与区域，仍在地图上',
+            ));
+            await d.tap(toggle);
+            await d.wait(2600);
+
+            // ── Both of them in the tree ──
+            d.say(say(
+                'Both are in the tree, under <b>Extractions</b>',
+                'Les deux sont dans l’arbre, sous <b>Extractions</b>',
+                'Las dos están en el árbol, bajo <b>Extracciones</b>',
+                'Entrambe sono nell’albero, sotto <b>Estrazioni</b>',
+                '两者都在左侧的树里，位于<b>提取</b>之下',
+            ));
+            await d.cam(['#files-section', '#variables-tree'], 1.35, 700);
+            if (!onScreen(placeRow())) await openFolderOf(placeRow());
+            if (!onScreen(placeRow())) throw new Error('guide: the extractions are not in the tree');
+            await d.move({ el: placeRow() });
+            await d.wait(1800);
+
+            d.say(say(
+                'Each place is a folder: open it for its series',
+                'Chaque lieu est un dossier : ouvrez-le pour ses séries',
+                'Cada lugar es una carpeta: ábrala para ver sus series',
+                'Ogni luogo è una cartella: aprila per le sue serie',
+                '每个地点都是一个文件夹：打开它就能看到序列',
+            ));
+            if (!onScreen(seriesRow())) await openFolderOf(seriesRow());
+            if (!onScreen(seriesRow())) throw new Error('guide: the extracted series is not on screen');
+            await d.move({ el: seriesRow() });
+            await d.wait(2000);
+            await d.cam(null, null, 700);
+
+            // ── Out of the map, into the plots ──
+            d.say(say(
+                '<b>Close map</b>: the file stays, and so do they',
+                '<b>Fermer la carte</b> : le fichier reste, elles aussi',
+                '<b>Cerrar mapa</b>: el archivo queda, y ellas también',
+                '<b>Chiudi mappa</b>: il file resta, e anche loro',
+                '<b>关闭地图</b>：文件还在，它们也在',
+            ));
+            await d.tap('#gridded-view [data-action="close"]');
+            const closed = await d.until(() => d.$('#gridded-view')?.hidden, 10000);
+            if (!closed) throw new Error('guide: the map did not close');
+            await d.wait(900);
+
+            d.say(say(
+                'Drag one onto a panel, like any other series',
+                'Glissez-en une sur un panneau, comme toute autre série',
+                'Arrastre una a un panel, como cualquier otra serie',
+                'Trascinane una su un pannello, come ogni altra serie',
+                '把其中一条拖到面板上，和普通序列一样',
+            ));
+            // Closing the map redraws the tree, so the folder may be shut again.
+            if (!onScreen(seriesRow())) await openFolderOf(seriesRow());
+            if (!onScreen(seriesRow())) throw new Error('guide: nothing visible to drag onto the panel');
+            await d.plot(POINT_SERIES, 0, { label: 'P1 · t2m' });
+            const drawn = await d.until(() => d.$('.layout-panel .js-plotly-plot'), 20000);
+            if (!drawn) throw new Error('guide: the extracted series did not reach the plots');
+            await d.wait(1600);
+
+            // ── And an analysis on it ──
+            d.say(say(
+                'And a <b>temporal profile</b> over it',
+                'Et un <b>profil temporel</b> dessus',
+                'Y encima un <b>perfil temporal</b>',
+                'E sopra un <b>profilo temporale</b>',
+                '再对它做一个<b>时间廓线</b>',
+            ));
+            await d.analysis('temporal-profile', 0);
+            await d.wait(2600);
+            d.say(say(
+                'Seven days folded into one: the daily cycle',
+                'Sept jours repliés en un seul : le cycle diurne',
+                'Siete días plegados en uno: el ciclo diario',
+                'Sette giorni ripiegati in uno: il ciclo diurno',
+                '七天叠成一天：日变化',
+            ));
+            await d.wait(2800);
         },
     },
 ];
