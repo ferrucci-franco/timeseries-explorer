@@ -340,9 +340,10 @@ html:not(.compact) .gridded-menu input[type="checkbox"]:focus-visible {
     cursor: crosshair !important;
 }
 
-/* Navigate drags the map: an open hand, closed while it is pressed. */
+/* Navigate: the arrow, whose tip is the very point the inspector reads (an
+   open hand said "drag" but not where); a closed hand while it drags. */
 .gridded-map.gridded-cursor-navigate .nsewdrag {
-    cursor: grab !important;
+    cursor: default !important;
 }
 
 .gridded-map.gridded-cursor-navigate.gridded-pressed .nsewdrag {
@@ -1692,5 +1693,20 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 }
 
 .gridded-add-hint-actions [hidden] {
+    display: none;
+}
+
+/* The grid cell the inspector reads, outlined under the pointer
+   (_griddedOutlineCell): the reading is a cell, not a pixel. */
+.gridded-cell-outline {
+    position: absolute;
+    z-index: 4;
+    pointer-events: none;
+    box-sizing: border-box;
+    border: 1.5px solid #14b8a6;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.gridded-cell-outline[hidden] {
     display: none;
 }

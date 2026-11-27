@@ -2020,6 +2020,54 @@ export function installGriddedMethods(TargetClass) {
      * level the map is showing. The reading stays when the pointer leaves the
      * map, so "Copy" can still take it; it is copied as one line.
      */
+    /**
+     * Outline the grid cell the inspector reads, under the pointer: the
+     * value shown is a cell's, and on a coarse grid a cell is many pixels
+     * wide. Drawn in pixels over the plot, clipped to its area; hidden with
+     * nothing read (off the grid, the pointer gone, the map moving).
+     */
+    proto._griddedOutlineCell = function(div, view, at) {
+        let box = div.querySelector(':scope > .gridded-cell-outline');
+        const cell = view?.inspect;
+        const layout = div._fullLayout;
+        const map = view?.map;
+        if (!cell || !at || !map || !layout?.xaxis?.d2p || !layout?.yaxis?.d2p) {
+            if (box) box.hidden = true;
+            return;
+        }
+        const halfStep = (values, index) => (values.length < 2
+            ? 0.5
+            : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
+        // The cell's longitude as the map draws it (a grid in 0…360 on a map
+        // in −180…180): next to the pointer.
+        const lon = at.lon + ((((map.lon[cell.column] - at.lon) % 360) + 540) % 360 - 180);
+        const dLon = halfStep(map.lon, cell.column);
+        const dLat = halfStep(map.lat, cell.row);
+        const x = layout.xaxis;
+        const y = layout.yaxis;
+        const xs = [x.d2p(lon - dLon), x.d2p(lon + dLon)].map(value => value + x._offset);
+        const ys = [y.d2p(cell.lat + dLat), y.d2p(cell.lat - dLat)].map(value => value + y._offset);
+        const left = Math.max(Math.min(...xs), x._offset);
+        const right = Math.min(Math.max(...xs), x._offset + x._length);
+        const top = Math.max(Math.min(...ys), y._offset);
+        const bottom = Math.min(Math.max(...ys), y._offset + y._length);
+        if (!(right - left > 1 && bottom - top > 1)) {
+            if (box) box.hidden = true;
+            return;
+        }
+        if (!box) {
+            box = document.createElement('div');
+            box.className = 'gridded-cell-outline';
+            box.setAttribute('aria-hidden', 'true');
+            div.appendChild(box);
+        }
+        box.hidden = false;
+        box.style.left = `${left}px`;
+        box.style.top = `${top}px`;
+        box.style.width = `${right - left}px`;
+        box.style.height = `${bottom - top}px`;
+    };
+
     proto._griddedInspect = function(view, at) {
         const map = view.map;
         if (!map || !Number.isFinite(at?.lat) || !Number.isFinite(at?.lon)) return null;
@@ -3183,7 +3231,13 @@ export function installGriddedMethods(TargetClass) {
         };
         window.addEventListener('pointerup', release, { capture: true });
         window.addEventListener('pointercancel', release, { capture: true });
+        // The outline of the cell read goes with the pointer, and while the
+        // map moves under it (a drag, a zoom): the next move draws it again.
+        div.addEventListener('mouseleave', () => this._griddedOutlineCell(div, null, null));
+        div.on?.('plotly_relayouting', () => this._griddedOutlineCell(div, null, null));
+        div.on?.('plotly_relayout', () => this._griddedOutlineCell(div, null, null));
         div.addEventListener('pointerdown', event => {
+            this._griddedOutlineCell(div, null, null);
             interaction.down = { x: event.clientX, y: event.clientY };
             if (!event.target.closest?.('.gridded-context-menu')) this._griddedCloseMenu();
         }, { capture: true });
@@ -3195,6 +3249,7 @@ export function installGriddedMethods(TargetClass) {
             const view = this._griddedVisibleView();
             const at = view && !interaction.pressed && this._griddedEventCoords(div, event);
             if (view && at) this._griddedInspect(view, at);
+            this._griddedOutlineCell(div, view, interaction.pressed ? null : at);
             let over = null;
             if (at) {
                 const target = this._griddedEditTarget(view, at, 'mouse');
