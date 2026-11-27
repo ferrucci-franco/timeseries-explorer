@@ -2,10 +2,22 @@ import i18n from '../../i18n/index.js';
 import { createAnalysisSide } from '../analysis-side.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
+    CALENDAR_HEATMAP_DAY_MS,
+    CALENDAR_HEATMAP_HOUR_MS,
+    CALENDAR_HEATMAP_MINUTE_MS,
     buildCalendarHeatmap,
     calendarHeatmapCellValue,
+    calendarHeatmapRowLabel,
     densifyCalendarHeatmap,
+    formatCalendarHeatmapRowStep,
+    normalizeCalendarHeatmapRowStepMs,
 } from '../../utils/calendar-heatmap.js';
+import {
+    AXIS_TICK_LABEL_HEIGHT_PX,
+    AXIS_TICK_LABEL_WIDTH_PX,
+    AXIS_TICK_LABEL_WIDTH_ROTATED_PX,
+    fitAxisTicks,
+} from '../../utils/axis-ticks.js';
 // Shared with the Integral analysis so the two never disagree about how an
 // undeclared unit is written.
 import { UNKNOWN_UNIT } from '../../utils/integral-presentation.js';
@@ -73,7 +85,18 @@ const fallbackText = {
     heatmapWeekDay: 'Week × day',
     heatmapWeekDayTooltip: 'Columns are ISO weeks, rows are Monday to Sunday. Each cell aggregates one calendar day. Good for weekly patterns',
     heatmapDayHour: 'Day × hour',
-    heatmapDayHourTooltip: 'Columns are calendar days, rows are hours 00:00 to 23:00. Each cell aggregates one hour. Good for daily patterns',
+    heatmapDayHourTooltip: 'Columns are calendar days, rows follow the sampling step, from 00:00. Each cell aggregates one row of one day. Good for daily patterns',
+    heatmapDayStep: 'Day × {step}',
+    heatmapRowStep: 'Row height',
+    heatmapRowStepTooltip: 'How much time one row of the Day × hour grid covers. Only a height that divides the day is offered, so the rows of a day tile it exactly',
+    heatmapRowStepAuto: 'Auto',
+    heatmapRowStepAutoTooltip: 'Follow the sampling step of the signal: a file written every 3 hours gets rows 3 h tall, so no row is left empty for want of a finer instrument',
+    heatmapRowStepCustom: 'Custom',
+    heatmapRowStepCustomTooltip: 'Give the height yourself, in minutes',
+    heatmapRowStepMinutes: 'Minutes',
+    heatmapRowStepMinutesTooltip: 'Minutes per row. A value that does not divide the day is rounded to the nearest one that does',
+    heatmapRowStepHelp: 'Rows follow the sampling step so the grid draws no empty row the data was never going to fill. Set a height yourself to compare files on one grid.',
+    heatmapCoarseSampling: 'The samples are further apart than one cell, so some cells have no data to show.',
     heatmapAggregation: 'Aggregation',
     heatmapAggregationTooltip: 'How the samples inside each cell are reduced to a single color value. Switching it reuses the computed cells and does not re-read the data',
     heatmapMean: 'Mean',
@@ -278,6 +301,12 @@ proto._defaultCalendarHeatmapState = function() {
         x1: null,
         x2: null,
         calendarMode: 'week-day',
+        // How tall one Day x hour row is. 'auto' follows the sampling step of
+        // the signal (a file written every 3 h gets rows 3 h tall, so no row
+        // of the grid is empty for want of a finer instrument); 'fixed' uses
+        // rowStepMinutes, which must divide the day.
+        rowStepMode: 'auto',
+        rowStepMinutes: 60,
         aggregation: 'mean',
         timeZone: 'UTC',
         colorScale: 'Viridis',
@@ -308,6 +337,10 @@ proto._normalizeCalendarHeatmapState = function(raw = {}) {
         x1: finiteOrNull(raw.x1),
         x2: finiteOrNull(raw.x2),
         calendarMode: HEATMAP_CALENDAR_MODES.has(raw.calendarMode) ? raw.calendarMode : defaults.calendarMode,
+        rowStepMode: raw.rowStepMode === 'fixed' ? 'fixed' : defaults.rowStepMode,
+        rowStepMinutes: normalizeCalendarHeatmapRowStepMs(
+            Number(raw.rowStepMinutes) * CALENDAR_HEATMAP_MINUTE_MS,
+        ) / CALENDAR_HEATMAP_MINUTE_MS,
         aggregation: HEATMAP_AGGREGATIONS.has(raw.aggregation) ? raw.aggregation : defaults.aggregation,
         timeZone: 'UTC',
         colorScale: HEATMAP_COLOR_SCALES.has(raw.colorScale) ? raw.colorScale : defaults.colorScale,
@@ -335,6 +368,27 @@ proto._ensureCalendarHeatmapState = function(plot) {
     }
     Object.assign(plot.heatmap, this._normalizeCalendarHeatmapState(plot.heatmap));
     return plot.heatmap;
+};
+
+/**
+ * The row height to compute with: null where it is to be counted from the data
+ * (both paths count it the same way), the height in ms where it was asked for.
+ * A week's rows are its seven days, so Week x day never has one.
+ */
+proto._calendarHeatmapRowStepMs = function(state) {
+    if (state.calendarMode !== 'day-hour' || state.rowStepMode !== 'fixed') return null;
+    return normalizeCalendarHeatmapRowStepMs(state.rowStepMinutes * CALENDAR_HEATMAP_MINUTE_MS);
+};
+
+// The row height the drawn grids are actually on, for the labels and the
+// options panel: what the models came back with, or what was asked for.
+proto._calendarHeatmapGridRowStepMs = function(plot, state = this._ensureCalendarHeatmapState(plot)) {
+    const models = plot?._calendarHeatmapModels || [];
+    for (const model of models) {
+        const step = Number(model?.grid?.meta?.rowStepMs);
+        if (Number.isFinite(step) && step > 0) return step;
+    }
+    return this._calendarHeatmapRowStepMs(state) ?? CALENDAR_HEATMAP_HOUR_MS;
 };
 
 proto._calendarHeatmapTraceEligibility = function(trace) {
@@ -1005,6 +1059,8 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
     const densifyOptions = {
         calendarMode: state.calendarMode,
         aggregation: state.aggregation,
+        // null asks both paths to count the row height from the data.
+        rowStepMs: this._calendarHeatmapRowStepMs(state),
         domainStart: state.rangeFull ? domain.min : rangeStart,
         domainEnd: state.rangeFull ? domain.max : rangeEnd,
         traceCount: retainedTraceCount,
@@ -1015,7 +1071,13 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
         if (!Array.isArray(grid?.warnings)) return;
         for (const item of grid.warnings) {
             if ((item === 'dataGaps' || item === 'integralUnavailable') && state.aggregation !== 'integral') continue;
-            const message = { dataGaps: text('heatmapDataGaps'), integralUnavailable: text('heatmapIntegralUnsorted') }[item] || item;
+            const message = {
+                dataGaps: text('heatmapDataGaps'),
+                integralUnavailable: text('heatmapIntegralUnsorted'),
+                // A cell shorter than the signal's own step cannot be filled;
+                // said here rather than left to be guessed from the picture.
+                coarseSampling: text('heatmapCoarseSampling'),
+            }[item] || item;
             warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${message}`);
         }
     };
@@ -1060,6 +1122,7 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
                         rangeEnd: null,
                         // Transformed arrays already include crop and timeShift.
                         timeShiftMs: 0,
+                        rowStepMs: densifyOptions.rowStepMs,
                         domainStart: densifyOptions.domainStart,
                         domainEnd: densifyOptions.domainEnd,
                         traceCount: retainedTraceCount,
@@ -1122,6 +1185,8 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
             const ready = `${text('heatmapReady')} · ${models.length} × ${i18n.formatNumber(cells)} cells`;
             this._setCalendarHeatmapStatus(plot, warnings.length ? `${ready} — ${warnings.join(' | ')}` : ready, warnings.length ? 'warning' : 'ready');
             this._syncCalendarHeatmapSummary(plot);
+            // An automatic row height is only known once it has been counted.
+            this._syncCalendarHeatmapRowStepControl(plot, state);
         });
     }).catch((error) => {
         // Stopped: Cancel, or a newer run that takes over.
@@ -1182,6 +1247,7 @@ proto._runLazyCalendarHeatmapQueries = async function(panelId, plot, token, lazy
             const result = await source.getCalendarHeatmapAggregates(data, traces.map(t => t.varName), {
                 calendarMode: densifyOptions.calendarMode,
                 aggregation: densifyOptions.aggregation,
+                rowStepMs: densifyOptions.rowStepMs,
                 timeShiftMs,
                 cropRange,
                 selectionRange: ctx.rangeFull ? null : [ctx.rangeStart, ctx.rangeEnd],
@@ -1216,6 +1282,15 @@ proto._runLazyCalendarHeatmapQueries = async function(panelId, plot, token, lazy
                     {
                         accumulators: cells,
                         calendarMode: densifyOptions.calendarMode,
+                        // The height the query bucketed by: counted there when
+                        // it is automatic, so the dense grid must use the same
+                        // one or the cells would land in the wrong rows.
+                        rowStepMs: entry.rowStepMs ?? result.rowStepMs ?? densifyOptions.rowStepMs,
+                        rowStepAuto: result.rowStepAuto ?? (densifyOptions.rowStepMs == null),
+                        // The kernel reports it among the sparse result's
+                        // warnings; the query reports it as a flag, so it
+                        // joins the same list and reads the same.
+                        warnings: result.samplingIsCoarse ? ['coarseSampling'] : [],
                         rangeActive: !ctx.rangeFull,
                         rangeStartMs: ctx.rangeFull ? null : ctx.rangeStart,
                         rangeEndMs: ctx.rangeFull ? null : ctx.rangeEnd,
@@ -1263,13 +1338,16 @@ proto._calendarHeatmapGridHoverText = function(grid, trace, z, aggregation) {
     const name = escapeHtml(this._traceName(trace.varName, trace.fileId));
     const rawUnit = unitForAggregation(this._varUnit(trace.varName, trace.fileId), aggregation);
     const aggregationLabel = escapeHtml(text(aggregationLabelKey[aggregation] || aggregation));
+    // A Day x hour row is as tall as the grid says; it is only an hour while
+    // the sampling step is one (see _calendarHeatmapRowStepMs).
+    const rowStepMs = Number(grid?.meta?.rowStepMs) || CALENDAR_HEATMAP_HOUR_MS;
     return z.map((row, rowIndex) => row.map((value, columnIndex) => {
         const cell = customdata?.[rowIndex]?.[columnIndex];
         const fallbackStart = grid?.meta?.calendarMode === 'day-hour'
-            ? Number(x[columnIndex]) + Number(y[rowIndex]) * 3600000
-            : Number(x[columnIndex]) + (Number(y[rowIndex]) - 1) * 86400000;
+            ? Number(x[columnIndex]) + Number(y[rowIndex]) * rowStepMs
+            : Number(x[columnIndex]) + (Number(y[rowIndex]) - 1) * CALENDAR_HEATMAP_DAY_MS;
         const start = Number(cellValue(cell, 'cellStartMs', fallbackStart));
-        const duration = grid?.meta?.calendarMode === 'day-hour' ? 3600000 : 86400000;
+        const duration = grid?.meta?.calendarMode === 'day-hour' ? rowStepMs : CALENDAR_HEATMAP_DAY_MS;
         const end = Number(cellValue(cell, 'cellEndMs', start + duration));
         const nScope = Number(cellValue(cell, 'nScope', 0));
         const nFinite = Number(cellValue(cell, 'nFinite', 0));
@@ -1281,7 +1359,7 @@ proto._calendarHeatmapGridHoverText = function(grid, trace, z, aggregation) {
             : '—';
         const title = `<b>${name}</b>`;
         const calendarLabel = grid?.meta?.calendarMode === 'day-hour'
-            ? `${utcDateLabel(x[columnIndex])} · ${String(y[rowIndex]).padStart(2, '0')}:00 UTC`
+            ? `${utcDateLabel(x[columnIndex])} · ${calendarHeatmapRowLabel(y[rowIndex], rowStepMs)} UTC`
             : `${isoWeekLabel(x[columnIndex])} · ${escapeHtml(localizedWeekdays()[Math.max(0, Number(y[rowIndex]) - 1)] || '')} · ${utcDateLabel(start)} (week starts ${utcDateLabel(x[columnIndex])})`;
         return [
             title,
@@ -1426,6 +1504,16 @@ proto._buildCalendarHeatmapPlot = function(plot, models) {
     return { traces, layout: this._buildCalendarHeatmapLayout(plot, visibleModels, matrices, sharedBounds) };
 };
 
+// What the grid is, for the X axis title: "Week × day", or "Day × hour" with
+// the height its rows actually have — "Day × 3 h" on a file written every
+// three hours, so the axis never claims a resolution the grid does not have.
+proto._calendarHeatmapGeometryLabel = function(plot, state = this._ensureCalendarHeatmapState(plot)) {
+    if (state.calendarMode === 'week-day') return text('heatmapWeekDay');
+    const rowStepMs = this._calendarHeatmapGridRowStepMs(plot, state);
+    if (rowStepMs === CALENDAR_HEATMAP_HOUR_MS) return text('heatmapDayHour');
+    return text('heatmapDayStep').replace('{step}', formatCalendarHeatmapRowStep(rowStepMs));
+};
+
 proto._buildCalendarHeatmapLayout = function(plot, models = [], matrices = [], sharedBounds = [null, null]) {
     const { bg, gridColor, fontColor } = this._colors();
     const state = this._ensureCalendarHeatmapState(plot);
@@ -1438,6 +1526,11 @@ proto._buildCalendarHeatmapLayout = function(plot, models = [], matrices = [], s
         autosize: true,
         hovermode: 'closest',
         showlegend: false,
+        // Not keyed on the row height: the Y axes are fixedrange, so there is
+        // no user-driven range to keep and the explicit one below always
+        // wins, while a changed revision would throw away the X zoom of
+        // someone who only asked for taller rows
+        // (scripts/e2e-heatmap-rows.mjs checks every row is drawn).
         uirevision: `calendar-heatmap-${state.calendarMode}`,
         annotations: [],
     };
@@ -1454,32 +1547,35 @@ proto._buildCalendarHeatmapLayout = function(plot, models = [], matrices = [], s
 
     const firstGrid = models[0].grid;
     const xValues = (firstGrid.x || []).map(utcIso);
-    const stride = Math.max(1, Math.ceil(xValues.length / 12));
-    const tickValues = [];
-    const tickText = [];
-    for (let index = 0; index < xValues.length; index += stride) {
-        tickValues.push(xValues[index]);
-        tickText.push(state.calendarMode === 'week-day'
-            ? isoWeekLabel(firstGrid.x[index])
-            : utcDateLabel(firstGrid.x[index]));
-    }
+    const xLabels = (firstGrid.x || []).map(value => (state.calendarMode === 'week-day'
+        ? isoWeekLabel(value)
+        : utcDateLabel(value)));
+    const rotated = xValues.length > 8;
+    // A column per day over a year is 365 labels: only as many are drawn as
+    // the pane is wide enough to read (axis-ticks.js).
+    const xTicks = fitAxisTicks(xValues, xLabels, {
+        sizePx: Math.max(0, (plot?.heatmapDiv?.clientWidth || 0) - layout.margin.l - layout.margin.r),
+        labelPx: rotated ? AXIS_TICK_LABEL_WIDTH_ROTATED_PX : AXIS_TICK_LABEL_WIDTH_PX,
+        // The figure is built before the pane has a width on the first paint;
+        // a dozen dates is what this axis showed before it was measured.
+        fallbackCapacity: 12,
+    });
     layout.xaxis = {
         type: 'date',
         domain: [0, 1],
         anchor: count === 1 ? 'y' : `y${count}`,
         tickmode: 'array',
-        tickvals: tickValues,
-        ticktext: tickText,
-        tickangle: xValues.length > 8 ? -35 : 0,
+        tickvals: xTicks.tickvals,
+        ticktext: xTicks.ticktext,
+        tickangle: rotated ? -35 : 0,
         gridcolor: gridColor,
         linecolor: gridColor,
         tickcolor: gridColor,
         zeroline: false,
-        title: { text: state.calendarMode === 'week-day' ? text('heatmapWeekDay') : text('heatmapDayHour'), font: { size: 10 } },
+        title: { text: this._calendarHeatmapGeometryLabel(plot, state), font: { size: 10 } },
     };
 
     const weekdays = localizedWeekdays();
-    const hourLabels = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, '0')}:00`);
     // The title of each small multiple sits in the gap above its own plot, so the
     // gap has to clear both the label and some air below the previous heatmap.
     // Expressed in pixels: a paper fraction would shrink the gap in the shorter
@@ -1498,13 +1594,26 @@ proto._buildCalendarHeatmapLayout = function(plot, models = [], matrices = [], s
         const rows = model.grid.y || [];
         const firstRow = rows.length ? Math.min(...rows) : 0;
         const lastRow = rows.length ? Math.max(...rows) : 1;
+        const rowStepMs = Number(model.grid.meta?.rowStepMs) || CALENDAR_HEATMAP_HOUR_MS;
+        const rowLabels = state.calendarMode === 'week-day'
+            ? weekdays
+            : rows.map(rowIndex => calendarHeatmapRowLabel(rowIndex, rowStepMs));
+        // Two stacked heatmaps leave each subplot a few hundred pixels: 24
+        // labels (or 96 on a quarter-hour row) would be drawn one over the
+        // other, so only as many are kept as there is height to read them.
+        const subplotHeightPx = Math.max(0, (top - bottom) * figureHeight);
+        const yTicks = fitAxisTicks(rows, rowLabels, {
+            sizePx: subplotHeightPx,
+            labelPx: AXIS_TICK_LABEL_HEIGHT_PX,
+            fallbackCapacity: 12,
+        });
         layout[`yaxis${suffix}`] = {
             domain: [bottom, top],
             anchor: 'x',
             range: [lastRow + 0.5, firstRow - 0.5],
             tickmode: 'array',
-            tickvals: rows,
-            ticktext: state.calendarMode === 'week-day' ? weekdays : hourLabels,
+            tickvals: yTicks.tickvals,
+            ticktext: yTicks.ticktext,
             gridcolor: gridColor,
             linecolor: gridColor,
             tickcolor: gridColor,
@@ -1543,9 +1652,28 @@ proto._applyCalendarHeatmapMinHeight = function(plot) {
         plot.heatmapDiv.style.minHeight = '';
         return;
     }
-    const dayHour = this._ensureCalendarHeatmapState(plot).calendarMode === 'day-hour';
-    const preferred = dayHour ? HEATMAP_PREFERRED_PLOT_HEIGHT_DAY_HOUR : HEATMAP_PREFERRED_PLOT_HEIGHT_WEEK_DAY;
-    const legible = dayHour ? HEATMAP_MIN_PLOT_HEIGHT_DAY_HOUR : HEATMAP_MIN_PLOT_HEIGHT_WEEK_DAY;
+    const state = this._ensureCalendarHeatmapState(plot);
+    const dayHour = state.calendarMode === 'day-hour';
+    // A Day x hour grid is not always 24 rows tall any more: eight 3 h rows
+    // need a third of the room, and asking for the full height would put a
+    // scrollbar on a figure that fits. The height asked for follows the rows
+    // the grids actually have, between what a week needs and what 24 rows do.
+    const rowCount = dayHour
+        ? Math.max(1, Math.round(CALENDAR_HEATMAP_DAY_MS / this._calendarHeatmapGridRowStepMs(plot, state)))
+        : 7;
+    const scale = dayHour ? Math.min(1, Math.max(0.3, rowCount / 24)) : 1;
+    const preferred = dayHour
+        ? Math.max(
+            HEATMAP_PREFERRED_PLOT_HEIGHT_WEEK_DAY,
+            Math.round(HEATMAP_PREFERRED_PLOT_HEIGHT_DAY_HOUR * scale),
+        )
+        : HEATMAP_PREFERRED_PLOT_HEIGHT_WEEK_DAY;
+    const legible = dayHour
+        ? Math.max(
+            HEATMAP_MIN_PLOT_HEIGHT_WEEK_DAY,
+            Math.round(HEATMAP_MIN_PLOT_HEIGHT_DAY_HOUR * scale),
+        )
+        : HEATMAP_MIN_PLOT_HEIGHT_WEEK_DAY;
     const paneHeight = plot.heatmapDiv.parentElement?.clientHeight || 0;
     const fits = paneHeight > 0 && paneHeight / visibleCount >= legible;
     plot.heatmapDiv.style.minHeight = fits ? '' : `${visibleCount * preferred}px`;
@@ -1908,8 +2036,65 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
     ], state.calendarMode, (mode) => {
         if (!HEATMAP_CALENDAR_MODES.has(mode)) return;
         state.calendarMode = mode;
+        this._renderCalendarHeatmapOptionsPanel(panelId, plot);
         this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
     }));
+
+    // How tall one row of a Day x hour grid is. A week's rows are its seven
+    // days, so the control only belongs to the other geometry.
+    if (state.calendarMode === 'day-hour') {
+        const gridStepMs = this._calendarHeatmapGridRowStepMs(plot, state);
+        const autoLabel = state.rowStepMode === 'auto'
+            ? `${text('heatmapRowStepAuto')} (${formatCalendarHeatmapRowStep(gridStepMs)})`
+            : text('heatmapRowStepAuto');
+        const presets = [1, 2, 3, 4, 6, 8, 12, 24].map(hours => ({
+            value: String(hours * 60),
+            label: formatCalendarHeatmapRowStep(hours * CALENDAR_HEATMAP_HOUR_MS),
+        }));
+        const fixedMinutes = this._calendarHeatmapRowStepMs(state) == null
+            ? 60
+            : normalizeCalendarHeatmapRowStepMs(state.rowStepMinutes * CALENDAR_HEATMAP_MINUTE_MS) / CALENDAR_HEATMAP_MINUTE_MS;
+        const isPreset = presets.some(item => Number(item.value) === fixedMinutes);
+        const current = state.rowStepMode === 'auto'
+            ? 'auto'
+            : (isPreset ? String(fixedMinutes) : 'custom');
+        const rowStepSelect = select([
+            { value: 'auto', label: autoLabel, title: text('heatmapRowStepAutoTooltip') },
+            ...presets,
+            { value: 'custom', label: text('heatmapRowStepCustom'), title: text('heatmapRowStepCustomTooltip') },
+        ], current, (value) => {
+            if (value === 'auto') state.rowStepMode = 'auto';
+            else {
+                state.rowStepMode = 'fixed';
+                if (value !== 'custom') state.rowStepMinutes = Number(value);
+            }
+            this._renderCalendarHeatmapOptionsPanel(panelId, plot);
+            this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
+        });
+        rowStepSelect.dataset.heatmapRowStep = 'true';
+        row(text('heatmapRowStep'), rowStepSelect, text('heatmapRowStepTooltip'));
+        if (current === 'custom') {
+            // Only a height that divides the day tiles it, so a typed value is
+            // snapped to the nearest one that does and written back: the box
+            // never says one thing while the grid draws another.
+            const minutesInput = numberInput(fixedMinutes, (value) => {
+                const typed = Number(value) * CALENDAR_HEATMAP_MINUTE_MS;
+                const minutes = normalizeCalendarHeatmapRowStepMs(typed) / CALENDAR_HEATMAP_MINUTE_MS;
+                state.rowStepMode = 'fixed';
+                state.rowStepMinutes = minutes;
+                minutesInput.value = String(minutes);
+                this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
+            });
+            minutesInput.min = '1';
+            minutesInput.step = '1';
+            minutesInput.dataset.heatmapRowStepMinutes = 'true';
+            row(text('heatmapRowStepMinutes'), minutesInput, text('heatmapRowStepMinutesTooltip'));
+        }
+        const rowHint = document.createElement('p');
+        rowHint.className = 'heatmap-help heatmap-row-step-hint';
+        rowHint.textContent = text('heatmapRowStepHelp');
+        options.appendChild(rowHint);
+    }
 
     section(text('heatmapAggregation'), text('heatmapAggregationTooltip'));
     const aggregationHint = document.createElement('p');
@@ -2027,15 +2212,63 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
 proto._syncCalendarHeatmapOptionsPanel = function(plot) {
     const options = this._calendarHeatmapOptionsPanel(plot);
     if (!options) return;
+    const state = this._ensureCalendarHeatmapState(plot);
     const [lower, upper] = this._activeCalendarHeatmapRange(plot);
     this._syncAnalysisRangeSection(options, {
         prefix: 'heatmap',
-        rangeFull: this._ensureCalendarHeatmapState(plot).rangeFull,
+        rangeFull: state.rangeFull,
         lo: lower,
         hi: upper,
         domain: this._calendarHeatmapDomain(plot),
         calendar: true,
     });
+    this._syncCalendarHeatmapRowStepControl(plot, state);
+};
+
+/**
+ * Keep the row-height control telling the truth.
+ *
+ * Two things move it without a click: a recompute, which is when an automatic
+ * height becomes known ("Auto (3 h)"), and Cancel, which puts back the
+ * settings of the result on screen — including a height the cancelled run had
+ * changed. The first only rewrites one label; the second can need the whole
+ * control back (a custom height brings its minutes box with it), and only
+ * then is the panel rebuilt, so nothing is torn out from under a user who is
+ * typing in it.
+ */
+proto._syncCalendarHeatmapRowStepControl = function(plot, state = this._ensureCalendarHeatmapState(plot)) {
+    const options = this._calendarHeatmapOptionsPanel(plot);
+    const control = options?.querySelector('[data-heatmap-row-step]');
+    if (!options) return;
+    const panelId = this._panelIdForPlot?.(plot);
+    if (!control) {
+        // The geometry changed under the panel (Week x day has no such row).
+        if (state.calendarMode === 'day-hour' && panelId) this._renderCalendarHeatmapOptionsPanel(panelId, plot);
+        return;
+    }
+    if (state.calendarMode !== 'day-hour') {
+        if (panelId) this._renderCalendarHeatmapOptionsPanel(panelId, plot);
+        return;
+    }
+    const fixedMs = this._calendarHeatmapRowStepMs(state);
+    const expected = fixedMs == null
+        ? 'auto'
+        : String(fixedMs / CALENDAR_HEATMAP_MINUTE_MS);
+    const hasOption = [...control.options].some(option => option.value === expected);
+    if (control.value !== (hasOption ? expected : 'custom')) {
+        if (panelId) this._renderCalendarHeatmapOptionsPanel(panelId, plot);
+        return;
+    }
+    const minutesInput = options.querySelector('[data-heatmap-row-step-minutes]');
+    if (minutesInput && fixedMs != null) {
+        const minutes = String(fixedMs / CALENDAR_HEATMAP_MINUTE_MS);
+        if (minutesInput.value !== minutes) minutesInput.value = minutes;
+    }
+    const autoOption = [...control.options].find(option => option.value === 'auto');
+    if (!autoOption) return;
+    autoOption.textContent = state.rowStepMode === 'auto'
+        ? `${text('heatmapRowStepAuto')} (${formatCalendarHeatmapRowStep(this._calendarHeatmapGridRowStepMs(plot, state))})`
+        : text('heatmapRowStepAuto');
 };
 
 proto._syncCalendarHeatmapSummary = function(plot) {

@@ -39,6 +39,12 @@ import {
     csvTimeInfoFromProfile,
     csvTimeOutputSql,
 } from './csv-sql-schema.js';
+import {
+    CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS,
+    CALENDAR_HEATMAP_DAY_MS,
+    CALENDAR_HEATMAP_HOUR_MS,
+    normalizeCalendarHeatmapRowStepMs,
+} from '../utils/calendar-heatmap.js';
 import { buildCsvTree, resolveCsvGrouping } from '../parsers/csv-tree-grouping.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import {
@@ -3510,6 +3516,12 @@ export default class DuckDbSource {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getCalendarHeatmapAggregates: data is not DuckDB-backed (eager mode)');
         const calendarMode = options.calendarMode === 'day-hour' ? 'day-hour' : 'week-day';
+        // The height of a Day x hour row: asked for by hand, or counted from
+        // the axis inside the query (rowStepSql below) exactly as the kernel
+        // counts it in memory. A week's rows are its seven days.
+        const rowStepMs = calendarMode === 'day-hour' && options.rowStepMs != null
+            ? normalizeCalendarHeatmapRowStepMs(options.rowStepMs)
+            : (calendarMode === 'day-hour' ? null : CALENDAR_HEATMAP_DAY_MS);
         const timeSql = this._calendarTimeSql(legacyData, options);
         if (!timeSql) {
             return { ok: false, reason: 'notDatetime', calendarMode, blocked: [], traces: [] };
@@ -3537,16 +3549,62 @@ export default class DuckDbSource {
         const integral = options.aggregation === 'integral';
 
         const cacheKey = this._calendarHeatmapCacheKey(meta, usable, {
-            calendarMode, shiftMs, cropRange, selectionRange, transforms, integral, timeSql,
+            calendarMode, shiftMs, cropRange, selectionRange, transforms, integral, timeSql, rowStepMs,
         });
         // Shared with any other caller asking the same (_sharedQuery): this
         // caller's signal lets go of it, and stops it if nobody else waits.
         return this._sharedQuery(this._heatmapCache, cacheKey, signal, (querySignal) => {
-            const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql, signal: querySignal };
+            const queryOpts = { calendarMode, rowStepMs, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql, signal: querySignal };
             return integral
                 ? this._queryCalendarHeatmapIntegral(meta, legacyData, usable, queryOpts)
                 : this._queryCalendarHeatmapAggregates(meta, legacyData, usable, queryOpts);
         }, { limit: 16 });
+    }
+
+    /**
+     * The one-row CTE that carries the height of a Day x hour row, `row_ms`.
+     *
+     * Given by hand, or counted here: how many inter-sample steps fit inside
+     * each candidate row, and how many steps there are. The shortest candidate
+     * holding at least half of them wins — the bucket the median step falls
+     * in, reached with counters instead of a sort, so this and the in-memory
+     * kernel (chooseCalendarHeatmapRowStepMs) always choose the same row for
+     * the same rows, whatever their number. `source` is the CTE that already
+     * holds the in-scope `t_ms`.
+     */
+    _calendarHeatmapRowStepCte(calendarMode, rowStepMs, source) {
+        const auto = calendarMode === 'day-hour' && rowStepMs == null;
+        const fixedCellMs = calendarMode === 'day-hour'
+            ? Math.round(rowStepMs ?? CALENDAR_HEATMAP_HOUR_MS)
+            : CALENDAR_HEATMAP_DAY_MS;
+        // Where the height is counted it is the first candidate half the steps
+        // fit in, so only the coarsest candidate can fail; where it is given,
+        // the steps are counted against it directly. Same rule as the kernel's
+        // calendarHeatmapSamplingIsCoarse.
+        const fitSql = auto
+            ? `COUNT(*) FILTER (WHERE dt > 0 AND dt <= ${CALENDAR_HEATMAP_DAY_MS})`
+            : `COUNT(*) FILTER (WHERE dt > 0 AND dt <= ${fixedCellMs})`;
+        const rowMsSql = auto
+            ? `CASE
+                         WHEN COUNT(*) FILTER (WHERE dt > 0) = 0 THEN ${CALENDAR_HEATMAP_HOUR_MS}
+                         ${CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS
+        .map(step => `WHEN 2 * COUNT(*) FILTER (WHERE dt > 0 AND dt <= ${step}) >= COUNT(*) FILTER (WHERE dt > 0)`
+                             + ` THEN ${step}`)
+        .join('\n                         ')}
+                         ELSE ${CALENDAR_HEATMAP_DAY_MS} END`
+            : String(fixedCellMs);
+        // LAG without ORDER BY reads the rows in the order the file has them,
+        // which is the order the in-memory kernel walks (and the order the
+        // integral's monotonicity check already relies on).
+        return {
+            sql: `heat_dif AS (SELECT t_ms - LAG(t_ms) OVER () AS dt FROM ${source}),
+                 heat_row AS (
+                     SELECT CAST(${rowMsSql} AS BIGINT) AS row_ms,
+                         (COUNT(*) FILTER (WHERE dt > 0) > 0
+                             AND 2 * ${fitSql} < COUNT(*) FILTER (WHERE dt > 0)) AS coarse
+                     FROM heat_dif
+                 )`,
+        };
     }
 
     _normalizeMsRange(range) {
@@ -3578,6 +3636,7 @@ export default class DuckDbSource {
             Number(meta.appendRows) || 0,
             opts.timeSql?.sql || '',
             opts.calendarMode,
+            opts.rowStepMs == null ? 'auto' : String(opts.rowStepMs),
             opts.shiftMs,
             opts.cropRange ? opts.cropRange.join('_') : '',
             opts.selectionRange ? opts.selectionRange.join('_') : '',
@@ -3603,11 +3662,15 @@ export default class DuckDbSource {
         }
 
         const dayStart = `(t_ms - (((t_ms % 86400000) + 86400000) % 86400000))`;
+        // Integer arithmetic throughout: the offset into the day is exact, so
+        // the row index is the same whole number the kernel computes.
+        const dayOffset = `(t_ms - ${dayStart})`;
         const colRowSql = calendarMode === 'day-hour'
             ? `${dayStart} AS col_start,
-               ((t_ms - (((t_ms % 3600000) + 3600000) % 3600000)) - ${dayStart}) / 3600000 AS row_idx`
+               ((${dayOffset} - ((${dayOffset}) % row_ms)) / row_ms) AS row_idx`
             : `(${dayStart} - (((((${dayStart}) / 86400000) + 3) % 7 + 7) % 7) * 86400000) AS col_start,
                (((((${dayStart}) / 86400000) + 3) % 7 + 7) % 7 + 1) AS row_idx`;
+        const rowStepCte = this._calendarHeatmapRowStepCte(calendarMode, opts.rowStepMs, 'base');
 
         const valueSelect = usable.map(({ variable, varName }, index) => {
             const t = transforms[varName] || {};
@@ -3635,13 +3698,17 @@ export default class DuckDbSource {
                 FROM ${tableName}
                 WHERE ${where.join(' AND ')}
             ),
+            ${rowStepCte.sql},
             bucketed AS (
                 SELECT ${colRowSql},
+                       row_ms, coarse,
                        ${usable.map((_, i) => `v${i}`).join(', ')}
-                FROM base
+                FROM base, heat_row
             )
             SELECT col_start::DOUBLE AS col_start,
                    row_idx::BIGINT AS row_idx,
+                   MAX(row_ms)::BIGINT AS row_ms,
+                   BOOL_OR(coarse) AS coarse,
                    COUNT(*)::BIGINT AS n_scope,
                    ${aggSelect}
             FROM bucketed
@@ -3649,6 +3716,12 @@ export default class DuckDbSource {
 
         const result = await this._interactiveQuery(sql, { signal: opts?.signal || null });
         const rows = this._arrowRowsToObjects(result);
+        // The row the query actually bucketed by, so the dense grid is built
+        // on the same one (a counted height is only known once it is counted).
+        const usedRowStepMs = rows.length && rows[0].row_ms != null
+            ? Number(rows[0].row_ms)
+            : (opts.rowStepMs ?? CALENDAR_HEATMAP_HOUR_MS);
+        const samplingIsCoarse = rows.length ? rows[0].coarse === true : false;
         const traces = usable.map(({ varName }, index) => {
             const cells = [];
             for (const row of rows) {
@@ -3674,7 +3747,15 @@ export default class DuckDbSource {
             return { varName, cells };
         });
 
-        return { ok: true, calendarMode, blocked, traces };
+        return {
+            ok: true,
+            calendarMode,
+            rowStepMs: usedRowStepMs,
+            rowStepAuto: opts.rowStepMs == null && calendarMode === 'day-hour',
+            samplingIsCoarse,
+            blocked,
+            traces,
+        };
     }
 
     // Exact trapezoidal integral per cell for lazy files. Runs one query per var
@@ -3686,7 +3767,12 @@ export default class DuckDbSource {
     async _queryCalendarHeatmapIntegral(meta, legacyData, usable, opts) {
         const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked, timeSql } = opts;
         const tableName = this._fromSql(legacyData, [...usable.map(item => item.variable), { _duckdbWindows: timeSql.windows }]);
-        const cm = calendarMode === 'day-hour' ? 3600000 : 86400000;
+        // How tall a cell is. On Day x hour it is the row height — given, or
+        // counted from this variable's own in-scope axis by the same rule the
+        // other aggregations use, so both land on the same grid. Read as a
+        // one-row scalar so every boundary below splits at the real cell edge.
+        const rowStepCte = this._calendarHeatmapRowStepCte(calendarMode, opts.rowStepMs, 'src');
+        const cm = `(SELECT row_ms FROM heat_row)`;
         const baseMsExpr = `CAST((${timeSql.sql}) AS HUGEINT)`;
         const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
 
@@ -3706,7 +3792,7 @@ export default class DuckDbSource {
         const colRowFromCellStart = calendarMode === 'day-hour'
             ? {
                 col: `(cell_start - (((cell_start % 86400000) + 86400000) % 86400000))`,
-                row: `((cell_start - (cell_start - (((cell_start % 86400000) + 86400000) % 86400000))) / 3600000)`,
+                row: `((cell_start - (cell_start - (((cell_start % 86400000) + 86400000) % 86400000))) / ${cm})`,
             }
             : {
                 col: `(cell_start - (((((cell_start / 86400000)) + 3) % 7 + 7) % 7) * 86400000)`,
@@ -3714,6 +3800,8 @@ export default class DuckDbSource {
             };
 
         const traces = [];
+        let usedRowStepMs = opts.rowStepMs ?? CALENDAR_HEATMAP_HOUR_MS;
+        let samplingIsCoarse = false;
         for (const { varName, variable } of usable) {
             const t = transforms[varName] || {};
             const gain = Number(t.gain ?? 1);
@@ -3728,6 +3816,7 @@ export default class DuckDbSource {
                     FROM ${tableName}
                     WHERE ${whereSql}
                 ),
+                ${rowStepCte.sql},
                 mono AS (
                     SELECT COALESCE(SUM(CASE WHEN prev_t IS NOT NULL AND t_ms < prev_t THEN 1 ELSE 0 END), 0) AS violations
                     FROM (SELECT t_ms, LAG(t_ms) OVER () AS prev_t FROM src)
@@ -3789,6 +3878,8 @@ export default class DuckDbSource {
                     covered_ms::DOUBLE AS covered_ms,
                     missing_ms::DOUBLE AS missing_ms,
                     has_gap::BIGINT AS has_gap,
+                    ${cm}::BIGINT AS row_ms,
+                    (SELECT coarse FROM heat_row) AS coarse,
                     (SELECT violations FROM mono)::BIGINT AS violations,
                     (SELECT m FROM med)::DOUBLE AS median_step
                 FROM joined`;
@@ -3796,6 +3887,8 @@ export default class DuckDbSource {
             const rows = this._arrowRowsToObjects(await this._interactiveQuery(sql, { signal: opts?.signal || null }));
             const violations = rows.length ? Number(rows[0].violations) : 0;
             const medianStep = rows.length ? rows[0].median_step : null;
+            if (rows.length && rows[0].row_ms != null) usedRowStepMs = Number(rows[0].row_ms);
+            if (rows.length && rows[0].coarse === true) samplingIsCoarse = true;
             // Mirror the eager kernel: unsorted input or fewer than two finite
             // samples means no trustworthy integral.
             const integralAvailable = violations === 0 && medianStep != null;
@@ -3819,10 +3912,18 @@ export default class DuckDbSource {
                     hasGap,
                 });
             }
-            traces.push({ varName, cells, integralAvailable });
+            traces.push({ varName, cells, integralAvailable, rowStepMs: usedRowStepMs });
         }
 
-        return { ok: true, calendarMode, blocked, traces };
+        return {
+            ok: true,
+            calendarMode,
+            rowStepMs: usedRowStepMs,
+            rowStepAuto: opts.rowStepMs == null && calendarMode === 'day-hour',
+            samplingIsCoarse,
+            blocked,
+            traces,
+        };
     }
 
     /**

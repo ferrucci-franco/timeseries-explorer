@@ -85,6 +85,16 @@ Owns plot state and every Plotly-driven behavior.
 - `methods/analysis-busy-methods.js`
   - the computing pill every analysis shows, its Cancel, and the settings
     Cancel puts back; `_analysisPool()` is where an analysis asks for workers
+- `../utils/axis-ticks.js`
+  - the tick thinning Plotly does for an automatic axis but not for one given
+    its own `tickvals`/`ticktext`. An axis that names its own ticks — the
+    Heatmap's rows and dates, the Temporal profile's days and months — draws
+    every label it is handed, however little room there is, and they run into
+    each other on a short subplot or a narrow panel. `fitAxisTicks` keeps
+    every nth so what is drawn fits what there is to draw it in. Any new axis
+    with `tickmode: 'array'` goes through it, or writes a small bounded list
+    of its own (`_durationTickValues`, `periodTickValues`);
+    `scripts/test-axis-ticks.mjs` fails for one that does neither
 - `analysis-side.js`
   - an analysis' side panel: its own buttons (V/H, hide the time series,
     Reset, Options, status) as the header of its options drawer, rather than

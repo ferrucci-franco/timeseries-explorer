@@ -122,6 +122,14 @@ derived from this app, but this repo keeps **its own** implementation: `src/ui/p
 
 ## Other standing rules
 
+- **An axis that names its own ticks is thinned.** Plotly thins the labels of
+  an automatic axis; one given `tickmode: 'array'` with its own
+  `tickvals`/`ticktext` draws every label it is handed, and on a short subplot
+  or a narrow panel they land on top of each other. Pass them through
+  `fitAxisTicks` (`src/utils/axis-ticks.js`) with the pixels the axis has, or
+  build a small bounded list of round values for the span the way
+  `_durationTickValues` and `periodTickValues` do.
+  `scripts/test-axis-ticks.mjs` fails for a plot that does neither.
 - Every piece of work ends with a pull request merged to `main`, with CI green
   (both jobs: tests and build, and the browser checks).
 - User-visible text goes in `src/i18n/translations.js`, in every language there
