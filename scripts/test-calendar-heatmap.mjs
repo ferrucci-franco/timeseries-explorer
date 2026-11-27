@@ -8,10 +8,14 @@ import {
     CALENDAR_HEATMAP_MAX_CELLS_WEB,
     CALENDAR_HEATMAP_SOFT_CELLS,
     CALENDAR_HEATMAP_WEEK_MS,
+    CALENDAR_HEATMAP_ROW_MINUTES,
     aggregateCalendarHeatmap,
     buildCalendarHeatmap,
     calendarHeatmapCellValue,
+    calendarHeatmapRowLabel,
     densifyCalendarHeatmap,
+    formatCalendarHeatmapRowStep,
+    normalizeCalendarHeatmapRowStepMs,
     floorUtcDay,
     floorUtcHour,
     floorUtcIsoWeek,
@@ -263,6 +267,10 @@ assert.equal(formatUtcIsoWeek(NaN), '');
         values: [0, 2],
         calendarMode: 'day-hour',
         aggregation: 'sum',
+        // The grid itself is what is under test here, so the row is pinned to
+        // the hour; left to itself this two-sample axis would pick a row a day
+        // tall (see "The row height follows the sampling step" below).
+        rowStepMs: 3_600_000,
     });
     assert.equal(day.meta.columnCount, 3, 'missing intermediate day remains on the axis');
     assert.deepEqual(day.x, [
@@ -448,6 +456,7 @@ assert.equal(formatUtcIsoWeek(NaN), '');
         values: [1, 2, 3, 4],
         calendarMode: 'day-hour',
         aggregation: 'sum',
+        rowStepMs: 3_600_000,
     });
     assert.deepEqual(result.z[1], [6, 4]);
 }
@@ -643,6 +652,9 @@ assert.equal(formatUtcIsoWeek(NaN), '');
         values: [0, 60],
         calendarMode: 'day-hour',
         aggregation: 'integral',
+        // What is under test is the area an hour gets from a ramp crossing it,
+        // so the row stays an hour; the automatic rule would make it 6 h here.
+        rowStepMs: hour,
     });
     // Hours 0..5 are all covered by the single 6h ramp 0->60; each is a full
     // hour with linear values, integrating to the midpoint value in unit-hours.
@@ -653,6 +665,130 @@ assert.equal(formatUtcIsoWeek(NaN), '');
     }
     // The endpoint cell at exactly +6h has a sample but zero coverage -> null.
     assert.equal(cellAt(coarse, 6).z, null, 'the endpoint-boundary cell has no coverage');
+}
+
+// ---------------------------------------------------------------------------
+// The row height follows the sampling step (Day x hour).
+//
+// A row an hour tall on a file sampled every three hours draws two empty rows
+// for every row of data. The grid's row follows the axis instead, and every
+// row it offers divides the day so the rows of a column tile it exactly.
+// ---------------------------------------------------------------------------
+{
+    // Every candidate row divides the day, in minutes and in milliseconds.
+    for (const minutes of CALENDAR_HEATMAP_ROW_MINUTES) {
+        assert.equal(1440 % minutes, 0, `${minutes} min divides the day`);
+    }
+
+    const series = (stepMs, count, from = utc('2024-08-01T00:00:00Z')) => {
+        const times = [];
+        const values = [];
+        for (let i = 0; i < count; i++) {
+            times.push(from + i * stepMs);
+            values.push(10 + i);
+        }
+        return { times, values };
+    };
+    const emptyRows = grid => grid.z.filter(row => row.every(value => value == null)).length;
+
+    // Three-hourly for a month (ERA5's own cadence): eight rows, none empty.
+    const threeHourly = series(3 * CALENDAR_HEATMAP_HOUR_MS, 248);
+    for (const aggregation of ['mean', 'min', 'max', 'sum', 'count']) {
+        const grid = buildCalendarHeatmap({ ...threeHourly, calendarMode: 'day-hour', aggregation });
+        assert.equal(grid.meta.rowStepMs, 3 * CALENDAR_HEATMAP_HOUR_MS, `${aggregation}: a row is the 3 h step`);
+        assert.equal(grid.meta.rowCount, 8, `${aggregation}: eight rows a day`);
+        assert.equal(grid.meta.rowStepAuto, true, `${aggregation}: the height was counted, not asked for`);
+        assert.equal(emptyRows(grid), 0, `${aggregation}: no row of the grid is empty`);
+        assert.equal(grid.z.flat().filter(value => value == null).length, 0, `${aggregation}: no empty cell`);
+        // Every sample is still counted exactly once, in one cell.
+        const counted = grid.customdata.flat().reduce((total, cell) => total + (cell?.nFinite || 0), 0);
+        assert.equal(counted, 248, `${aggregation}: every sample lands in exactly one cell`);
+    }
+
+    // Hourly and finer keep the hour the grid has always had.
+    for (const stepMs of [CALENDAR_HEATMAP_HOUR_MS, 15 * 60_000, 60_000]) {
+        const grid = buildCalendarHeatmap({ ...series(stepMs, 400), calendarMode: 'day-hour', aggregation: 'mean' });
+        assert.equal(grid.meta.rowStepMs, CALENDAR_HEATMAP_HOUR_MS, `a ${stepMs} ms step keeps the hourly row`);
+        assert.equal(grid.meta.rowCount, 24);
+    }
+
+    // A step that is not a divisor of the day rounds up to one that is, so
+    // every row still holds at least one sample.
+    const ninety = buildCalendarHeatmap({ ...series(90 * 60_000, 200), calendarMode: 'day-hour', aggregation: 'mean' });
+    assert.equal(ninety.meta.rowStepMs, 2 * CALENDAR_HEATMAP_HOUR_MS, '90 min rows up to 2 h');
+    assert.equal(emptyRows(ninety), 0, '90 min sampling leaves no empty row');
+
+    // Daily or coarser: a day is one row, and the grid says the step is
+    // coarser than a cell rather than drawing holes without explanation.
+    const daily = buildCalendarHeatmap({ ...series(CALENDAR_HEATMAP_DAY_MS, 40), calendarMode: 'day-hour', aggregation: 'mean' });
+    assert.equal(daily.meta.rowStepMs, CALENDAR_HEATMAP_DAY_MS, 'daily data gives a row a day tall');
+    assert.equal(daily.meta.rowCount, 1);
+    assert.equal(emptyRows(daily), 0);
+    assert.ok(!daily.warnings.includes('coarseSampling'), 'a day-tall row holds a daily step');
+    const everyTwoDays = buildCalendarHeatmap({ ...series(2 * CALENDAR_HEATMAP_DAY_MS, 20), calendarMode: 'day-hour', aggregation: 'mean' });
+    assert.ok(everyTwoDays.warnings.includes('coarseSampling'), 'a step coarser than the cell is reported');
+    const weeklyOnWeekDay = buildCalendarHeatmap({ ...series(7 * CALENDAR_HEATMAP_DAY_MS, 12), calendarMode: 'week-day', aggregation: 'mean' });
+    assert.equal(weeklyOnWeekDay.meta.rowStepMs, CALENDAR_HEATMAP_DAY_MS, 'a week keeps its seven day rows');
+    assert.equal(weeklyOnWeekDay.meta.rowCount, 7);
+    assert.ok(weeklyOnWeekDay.warnings.includes('coarseSampling'), 'weekly data on Week x day is reported as coarse');
+
+    // Asked for by hand: the height is used as given and nothing is counted.
+    const forced = buildCalendarHeatmap({
+        ...threeHourly, calendarMode: 'day-hour', aggregation: 'mean', rowStepMs: CALENDAR_HEATMAP_HOUR_MS,
+    });
+    assert.equal(forced.meta.rowStepMs, CALENDAR_HEATMAP_HOUR_MS);
+    assert.equal(forced.meta.rowCount, 24);
+    assert.equal(forced.meta.rowStepAuto, false, 'a height given by hand is not automatic');
+    assert.equal(emptyRows(forced), 16, 'an hourly row on 3 h data is the striped grid, as asked');
+    // Sub-hour rows are reachable by hand, and the day still tiles exactly.
+    const quarter = buildCalendarHeatmap({
+        ...series(15 * 60_000, 96 * 2), calendarMode: 'day-hour', aggregation: 'mean', rowStepMs: 15 * 60_000,
+    });
+    assert.equal(quarter.meta.rowCount, 96);
+    assert.equal(emptyRows(quarter), 0);
+
+    // A height that does not divide the day snaps to the nearest one that does.
+    assert.equal(normalizeCalendarHeatmapRowStepMs(5 * CALENDAR_HEATMAP_HOUR_MS), 288 * 60_000);
+    assert.equal(normalizeCalendarHeatmapRowStepMs(7 * CALENDAR_HEATMAP_HOUR_MS), 480 * 60_000);
+    assert.equal(normalizeCalendarHeatmapRowStepMs(0), CALENDAR_HEATMAP_HOUR_MS, 'nothing usable falls back to the hour');
+    assert.equal(normalizeCalendarHeatmapRowStepMs(NaN), CALENDAR_HEATMAP_HOUR_MS);
+    assert.equal(normalizeCalendarHeatmapRowStepMs(5 * CALENDAR_HEATMAP_DAY_MS), CALENDAR_HEATMAP_DAY_MS, 'never longer than a day');
+    for (const minutes of CALENDAR_HEATMAP_ROW_MINUTES) {
+        assert.equal(normalizeCalendarHeatmapRowStepMs(minutes * 60_000), minutes * 60_000, `${minutes} min is kept as it is`);
+    }
+
+    // The labels read the clock time of the row, not its index.
+    assert.equal(calendarHeatmapRowLabel(0, 3 * CALENDAR_HEATMAP_HOUR_MS), '00:00');
+    assert.equal(calendarHeatmapRowLabel(2, 3 * CALENDAR_HEATMAP_HOUR_MS), '06:00');
+    assert.equal(calendarHeatmapRowLabel(7, 3 * CALENDAR_HEATMAP_HOUR_MS), '21:00');
+    assert.equal(calendarHeatmapRowLabel(5, 15 * 60_000), '01:15');
+    assert.equal(calendarHeatmapRowLabel(23, CALENDAR_HEATMAP_HOUR_MS), '23:00');
+    assert.equal(formatCalendarHeatmapRowStep(3 * CALENDAR_HEATMAP_HOUR_MS), '3 h');
+    assert.equal(formatCalendarHeatmapRowStep(30 * 60_000), '30 min');
+    assert.equal(formatCalendarHeatmapRowStep(CALENDAR_HEATMAP_DAY_MS), '24 h');
+
+    // The cell bounds are the row's own span: the integral and the hover read
+    // them, so a 3 h row must report three hours, not one.
+    const cell = getCalendarHeatmapCell(utc('2024-08-01T07:30:00Z'), 'day-hour', { rowStepMs: 3 * CALENDAR_HEATMAP_HOUR_MS });
+    assert.equal(cell.rowIndex, 2);
+    assert.equal(cell.cellStartMs, utc('2024-08-01T06:00:00Z'));
+    assert.equal(cell.cellEndMs, utc('2024-08-01T09:00:00Z'));
+
+    // A coarse row is an exact merge of the hours inside it: the same samples,
+    // reduced the same way.
+    const hourlyGrid = buildCalendarHeatmap({
+        ...threeHourly, calendarMode: 'day-hour', aggregation: 'sum', rowStepMs: CALENDAR_HEATMAP_HOUR_MS,
+    });
+    const coarseGrid = buildCalendarHeatmap({ ...threeHourly, calendarMode: 'day-hour', aggregation: 'sum' });
+    const totalOf = grid => grid.z.flat().reduce((total, value) => total + (value || 0), 0);
+    close(totalOf(coarseGrid), totalOf(hourlyGrid), 1e-9, 'a coarser row sums the same samples');
+    // The integral is split at the cell boundaries of whichever row is in use,
+    // so the total area over the month matches to the last bit of rounding.
+    const hourlyIntegral = buildCalendarHeatmap({
+        ...threeHourly, calendarMode: 'day-hour', aggregation: 'integral', rowStepMs: CALENDAR_HEATMAP_HOUR_MS,
+    });
+    const coarseIntegral = buildCalendarHeatmap({ ...threeHourly, calendarMode: 'day-hour', aggregation: 'integral' });
+    close(totalOf(coarseIntegral), totalOf(hourlyIntegral), 1e-6, 'a coarser row integrates the same area');
 }
 
 console.log('Calendar heatmap kernel tests passed.');

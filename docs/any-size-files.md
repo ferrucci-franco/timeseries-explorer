@@ -1732,6 +1732,54 @@ Pruebas:
   reindexado desde 2024-01-01 a 1 min pone las filas de enero a julio de 2024
   en los dos paneles; sin errores de página.
 
+### Implementado: la fila del heatmap sigue el paso de muestreo
+
+La geometría *Día × hora* tenía la fila fijada en una hora. Sobre un archivo
+escrito cada tres horas —el ejemplo ERA5 que viene con la app, y cualquier
+reanálisis— eso deja **dos filas vacías de cada tres**: el lector ve unas
+rayas que no están en la señal, y que no vienen de un hueco de datos sino de
+la rejilla. Ahora la fila sigue el paso del eje.
+
+La altura se decide con **contadores, no con una mediana ordenada**: cuántos
+saltos entre muestras caben en cada altura candidata (1, 2, 3, 4, 6, 8, 12 y
+24 h, las horas enteras que dividen el día) y cuántos saltos hay. Gana la más
+corta en la que entra al menos la mitad —el bucket en el que cae la mediana—.
+Esa regla es la misma en los dos caminos y **se puede escribir igual en los
+dos**: una pasada de contadores en `aggregateCalendarHeatmap`
+(`chooseCalendarHeatmapRowStepMs`) y ocho `COUNT(*) FILTER` en la consulta
+(`_calendarHeatmapRowStepCte`), sin ordenar, sin tope de muestreo y sin
+depender de nada más que del orden en que vienen las filas. Con un paso
+regular, ninguna fila de la rejilla queda vacía por culpa de la rejilla.
+
+Lo que importa para lazy:
+
+- La consulta **devuelve la altura con la que agrupó** (`row_ms`, y
+  `rowStepMs` en el resultado). El panel densifica con esa, no con la suya: si
+  los dos caminos no coincidieran, las mismas muestras caerían en filas
+  distintas y el dibujo seguiría pareciendo razonable.
+- La integral lazy parte sus trapecios en los bordes de la celda, así que su
+  `cm` dejó de ser una constante y pasa a ser ese mismo `row_ms`.
+- Quien la fija a mano (el control **Altura de fila**: Auto, las horas que
+  dividen el día, o un valor propio en minutos) la manda a los dos caminos y
+  no se cuenta nada.
+- Un valor que no divide el día se redondea al más cercano que sí lo hace y
+  **se devuelve a la casilla**, para que el control no diga una cosa mientras
+  la rejilla dibuja otra.
+- Cuando el paso es más largo que una celda (datos diarios en *Semana × día*,
+  o una altura fijada a mano más fina que el instrumento), la celda no se
+  puede llenar y el panel lo dice: `heatmapCoarseSampling`. También ahí los
+  dos caminos coinciden —la consulta trae la bandera (`coarse`) calculada con
+  la misma regla—, para que un archivo lazy y el mismo archivo en memoria no
+  avisen cosas distintas.
+
+Pruebas: `scripts/test-calendar-heatmap.mjs` (la regla, el redondeo, las
+etiquetas, y que una fila más gruesa suma exactamente lo mismo que las horas
+que la componen), el bloque de tres horas de
+`scripts/test-lazy-heatmap-profile.mjs` (50 comparaciones celda a celda sobre
+DuckDB-WASM: las seis agregaciones, contada y fijada a 1 h, 4 h y 15 min, con
+y sin selección) y `scripts/e2e-heatmap-rows.mjs` (Chromium: 8 filas llenas,
+el título del eje, y las etiquetas legibles con 8, 15, 24 y 96 filas).
+
 ### Implementado: ajuste de curvas exacto sobre todas las filas
 
 Los dos análisis de ajuste (el de pares del gráfico 2D y el de series

@@ -112,6 +112,22 @@ for (let i = 0; i < ROWS; i++) {
     lines.push(`${new Date(t).toISOString()},${aText},${b}`);
 }
 const numericLines = ['t,a,b', ...lines.slice(1).map((line, i) => line.replace(/^[^,]*/, String(i * 300)))];
+
+// A second file sampled every three hours, which is what a reanalysis grid
+// (ERA5) writes: the Heatmap's row follows that step instead of leaving two
+// rows of every three empty, and the query must pick the same row the kernel
+// does — a grid the two disagreed about would still look plausible.
+const COARSE_ROWS = 900;
+const COARSE_STEP_MS = 3 * 3600000;
+const COARSE_START = Date.UTC(2024, 7, 1, 0, 0, 0);
+const coarseLines = ['time,a,b'];
+for (let i = 0; i < COARSE_ROWS; i++) {
+    const t = COARSE_START + i * COARSE_STEP_MS;
+    const hour = ((t / 3600000) % 24 + 24) % 24;
+    const a = 275 + 8 * Math.sin((hour / 24) * 2 * Math.PI) + random() * 1.5;
+    const aText = i % 97 === 5 ? '' : String(Math.round(a * 1e6) / 1e6);
+    coarseLines.push(`${new Date(t).toISOString()},${aText},${(i / 100).toFixed(4)}`);
+}
 const generatedProfile = {
     delimiter: ',',
     decimalSeparator: '.',
@@ -137,6 +153,7 @@ await db.instantiate();
 db.open({});
 db.registerFileText('cal.csv', lines.join('\n') + '\n');
 db.registerFileText('num.csv', numericLines.join('\n') + '\n');
+db.registerFileText('coarse.csv', coarseLines.join('\n') + '\n');
 const duck = new DuckDbSource();
 duck._db = db;
 duck._conn = db.connect();
@@ -232,13 +249,13 @@ const close = (a, b, label) => {
 };
 
 // ── Heatmap ─────────────────────────────────────────────────────────────────
-async function compareHeatmaps(h, lazy, rows, names, { calendarMode, aggregation, range }, label) {
+async function compareHeatmaps(h, lazy, rows, names, { calendarMode, aggregation, range, rowStepMs = null }, label) {
     const ref = reference(h, rows, names, range);
     const domainStart = range ? range[0] : Math.min(...ref.times);
     const domainEnd = range ? range[1] : Math.max(...ref.times);
     const densify = { calendarMode, aggregation, domainStart, domainEnd, traceCount: names.length, runtime: 'web' };
     const result = await duck.getCalendarHeatmapAggregates(lazy, names, {
-        calendarMode, aggregation, ...lazyOptions(h, names), selectionRange: range,
+        calendarMode, aggregation, rowStepMs, ...lazyOptions(h, names), selectionRange: range,
     });
     assert.equal(result.ok, true, `${label}: the lazy query answers (${result.reason})`);
     assert.deepEqual(result.blocked, [], `${label}: nothing left out`);
@@ -248,15 +265,26 @@ async function compareHeatmaps(h, lazy, rows, names, { calendarMode, aggregation
         // As _runLazyCalendarHeatmap: no row in scope is the in-memory "no rows".
         const dense = !entry.cells.some(cell => Number(cell.nScope) > 0) ? { ok: false, reason: 'noRows' } : densifyCalendarHeatmap({
             accumulators: entry.cells, calendarMode, rangeActive: !!range,
+            rowStepMs: entry.rowStepMs ?? result.rowStepMs ?? rowStepMs,
+            rowStepAuto: result.rowStepAuto,
             rangeStartMs: range ? range[0] : null, rangeEndMs: range ? range[1] : null,
             domainStartMs: domainStart, domainEndMs: domainEnd,
         }, densify);
         const want = buildCalendarHeatmap({
-            times: ref.times, values: ref.valuesByVar.get(name), calendarMode, aggregation,
+            times: ref.times, values: ref.valuesByVar.get(name), calendarMode, aggregation, rowStepMs,
             rangeStart: null, rangeEnd: null, timeShiftMs: 0, domainStart, domainEnd, traceCount: names.length, runtime: 'web',
         });
         assert.equal(dense.ok, want.ok, `${label}: ${name} both built (${dense.reason} / ${want.reason})`);
         if (!want.ok) continue;
+        // The row height the query bucketed by is the one the kernel counted:
+        // a grid the two paths disagreed about would put the same samples in
+        // different rows and still look plausible.
+        assert.equal(dense.meta.rowStepMs, want.meta.rowStepMs, `${label}: ${name} row height`);
+        assert.equal(
+            result.samplingIsCoarse === true,
+            want.warnings.includes('coarseSampling'),
+            `${label}: ${name} agrees on whether the step is coarser than a cell`,
+        );
         assert.equal(dense.z.length, want.z.length, `${label}: ${name} rows`);
         for (let r = 0; r < want.z.length; r++) {
             assert.equal(dense.z[r].length, want.z[r].length, `${label}: ${name} columns`);
@@ -461,6 +489,47 @@ assert.equal(rows.time.length, ROWS, 'every row of the file is read for the refe
     }
     await duck.release(generated);
     console.log(`lazy heatmap/profile: a file with no time column, its axis generated from an origin date, is bucketed as in memory (${checks} checks)`);
+}
+
+// ── Three-hourly data: the row height follows the step, there and here ──────
+{
+    const coarse = await loadLazy('coarse.csv');
+    const coarseRows = await rowsOf(coarse, ['a', 'b']);
+    const h = panels(coarse);
+    let checks = 0;
+    for (const range of [null, [Date.UTC(2024, 7, 10, 6), Date.UTC(2024, 8, 20, 18)]]) {
+        for (const aggregation of ['mean', 'min', 'max', 'sum', 'count', 'integral']) {
+            // Counted: both paths must land on rows 3 h tall.
+            await compareHeatmaps(h, coarse, coarseRows, ['a', 'b'], { calendarMode: 'day-hour', aggregation, range }, `3 h sampling, ${aggregation}, range ${JSON.stringify(range)}`);
+            checks++;
+            // Asked for: an hour (the grid that leaves the stripes), a height
+            // that does not divide the day, and one finer than the step.
+            for (const rowStepMs of [3600000, 4 * 3600000, 15 * 60000]) {
+                await compareHeatmaps(h, coarse, coarseRows, ['a', 'b'], { calendarMode: 'day-hour', aggregation, range, rowStepMs }, `3 h sampling, ${aggregation}, ${rowStepMs} ms rows, range ${JSON.stringify(range)}`);
+                checks++;
+            }
+        }
+        // Week x day keeps its seven day rows whatever the step.
+        await compareHeatmaps(h, coarse, coarseRows, ['a', 'b'], { calendarMode: 'week-day', aggregation: 'mean', range }, `3 h sampling, week-day, range ${JSON.stringify(range)}`);
+        checks++;
+    }
+    // What the grid came out as, for the record: eight rows a day, all filled.
+    const counted = await duck.getCalendarHeatmapAggregates(coarse, ['a'], {
+        calendarMode: 'day-hour', aggregation: 'mean', ...lazyOptions(h, ['a']),
+    });
+    assert.equal(counted.rowStepMs, 3 * 3600000, 'the query counted a 3 h row');
+    assert.equal(counted.rowStepAuto, true);
+    assert.equal(counted.samplingIsCoarse, false, '3 h samples fit inside a 3 h cell');
+    const rowIndexes = new Set(counted.traces[0].cells.map(cell => cell.rowIndex));
+    assert.deepEqual([...rowIndexes].sort((x, y) => x - y), [0, 1, 2, 3, 4, 5, 6, 7], 'every row of the day is occupied');
+    const forced = await duck.getCalendarHeatmapAggregates(coarse, ['a'], {
+        calendarMode: 'day-hour', aggregation: 'mean', rowStepMs: 3600000, ...lazyOptions(h, ['a']),
+    });
+    assert.equal(forced.rowStepMs, 3600000, 'a height given by hand is used as given');
+    assert.equal(forced.rowStepAuto, false);
+    assert.equal(forced.samplingIsCoarse, true, 'an hourly cell cannot hold a 3 h step');
+    await duck.release(coarse);
+    console.log(`lazy heatmap/profile: three-hourly data gets rows three hours tall, there and in memory (${checks} checks)`);
 }
 
 // ── A numeric axis promoted to a calendar ───────────────────────────────────

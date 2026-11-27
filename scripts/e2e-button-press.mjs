@@ -128,9 +128,31 @@ try {
         await page.locator('.modal-dialog-plot-export .modal-btn-cancel').click();
         await page.waitForFunction(() => !document.querySelector('.modal-dialog-plot-export'));
 
-        // The file's time axis: Apply leaves its ✓ on the redrawn panel.
-        await page.locator('.file-entry-transform').first().click();
+        // The file's time axis. Its button is a toggle, so what it looks like
+        // open has to differ from what it looks like closed — on the selected
+        // row an outlined "pressed" state was indistinguishable from the
+        // normal one, and nothing on screen said how to close the panel.
+        const timeAxisButton = page.locator('.file-entry-transform').first();
+        const buttonLook = () => timeAxisButton.evaluate((node) => {
+            const style = getComputedStyle(node);
+            const caret = node.querySelector('.file-entry-transform-caret');
+            return {
+                expanded: node.getAttribute('aria-expanded'),
+                title: node.title,
+                background: style.backgroundColor,
+                caret: caret ? getComputedStyle(caret).transform : '',
+            };
+        });
+        const closedLook = await buttonLook();
+        assert.equal(closedLook.expanded, 'false');
+        assert.ok(closedLook.title, 'the button says what it opens');
+        await timeAxisButton.click();
         await page.waitForSelector('.file-transform-panel [data-transform-action="apply"]');
+        const openLook = await buttonLook();
+        assert.equal(openLook.expanded, 'true');
+        assert.notEqual(openLook.background, closedLook.background, 'open does not look like closed');
+        assert.notEqual(openLook.caret, closedLook.caret, 'and the caret turns over');
+        assert.notEqual(openLook.title, closedLook.title, 'the tooltip names the way out');
         total += await sweep(page, 'desktop, the time axis panel');
         await page.locator('.file-transform-panel [data-transform-action="apply"]').click();
         await page.waitForSelector('.file-transform-panel [data-transform-action="apply"].is-done', { timeout: 3000 });

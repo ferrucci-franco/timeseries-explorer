@@ -716,14 +716,20 @@
     line-height: 1;
 }
 
+/* The file's time axis: a clock, and a caret that says the button opens a
+   panel below the row. Closed it is a quiet outline; open it is filled solid
+   in the accent colour with the caret turned up — on a selected (blue) row an
+   outlined "pressed" state was indistinguishable from the normal one, and the
+   way back out was invisible. */
 .file-entry-transform {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 1.6rem;
+    gap: 0.1rem;
+    min-width: 1.9rem;
     height: 1.45rem;
-    padding: 0 0.2rem;
-    border: 1px solid transparent;
+    padding: 0 0.22rem;
+    border: 1px solid color-mix(in srgb, var(--text-secondary) 28%, transparent);
     border-radius: 0.4rem;
     background: color-mix(in srgb, var(--bg-secondary) 78%, var(--border-color));
     color: var(--text-primary);
@@ -734,10 +740,46 @@
     transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
 }
 
+.file-entry-transform-icon {
+    width: 0.92rem;
+    height: 0.92rem;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+}
+
+.file-entry-transform-caret {
+    width: 0.52rem;
+    height: 0.52rem;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    transition: transform 0.15s;
+}
+
+.file-entry-transform[aria-expanded="true"] .file-entry-transform-caret {
+    transform: rotate(180deg);
+}
+
 .file-entry-transform[aria-expanded="true"] {
-    background: color-mix(in srgb, var(--primary-color) 12%, var(--bg-primary));
-    border-color: color-mix(in srgb, var(--primary-color) 48%, var(--border-color));
-    color: var(--text-primary);
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+/* On the selected row the accent is the row's own colour, so the open button
+   is inverted instead: white, with the row's blue as its icon. */
+.file-entry.active .file-entry-transform[aria-expanded="true"] {
+    background: #fff;
+    border-color: #fff;
+    color: var(--primary-color);
+}
+
+.file-entry.active .file-entry-transform:not([aria-expanded="true"]) {
+    border-color: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
 }
 
 .file-entry.transformed .file-entry-transform {
@@ -807,9 +849,15 @@
 }
 
 .file-entry-transform[aria-expanded="true"]:hover {
-    background: color-mix(in srgb, var(--primary-color) 18%, var(--bg-primary));
-    border-color: color-mix(in srgb, var(--primary-color) 65%, var(--border-color));
-    color: var(--text-primary);
+    background: color-mix(in srgb, var(--primary-color) 85%, #000);
+    border-color: color-mix(in srgb, var(--primary-color) 85%, #000);
+    color: #fff;
+}
+
+.file-entry.active .file-entry-transform[aria-expanded="true"]:hover {
+    background: #fff;
+    border-color: #fff;
+    color: var(--primary-color);
 }
 
 .file-entry.transformed .file-entry-transform:hover {
