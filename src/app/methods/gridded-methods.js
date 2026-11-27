@@ -1400,6 +1400,8 @@ export function installGriddedMethods(TargetClass) {
             current.extractLevels = levels && levels.length ? levels : null;
             this._griddedSyncScope(current);
             this._griddedRenderResults(current);
+            // Picked for "+ Another variable at P1": read there now.
+            if (current.addTo) this._griddedAddToArmed(current);
         };
         levelsMenu.querySelector('[data-action="levels-map"]').addEventListener('click', () => setLevels(null));
         levelsMenu.querySelector('[data-action="levels-all"]').addEventListener('click', () => {
@@ -3528,8 +3530,14 @@ export function installGriddedMethods(TargetClass) {
         const at = view && this._griddedEventCoords(div, where);
         if (!at) return;
         const hit = this._griddedHitTest(view, at, where, { inside: true });
-        // The cell under the click is pinned: the menu copies its reading.
-        this._griddedPinAt(view, at, { toggle: false });
+        // In Navigate the cell under the click is pinned, and the menu copies
+        // its reading; Point and Region have only their places' menus.
+        const reading = view.mode === 'navigate';
+        if (!hit && !reading) {
+            this._griddedCloseMenu();
+            return;
+        }
+        if (reading) this._griddedPinAt(view, at, { toggle: false });
         if (hit) this._griddedSelect(view, hit);
         this._griddedShowMenu(view, hit, where.clientX, where.clientY);
     };
@@ -3764,7 +3772,7 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedShowMenu = function(view, target, x, y) {
         this._griddedCloseMenu();
         const items = [];
-        if (view.inspect) {
+        if (view.inspect && view.mode === 'navigate') {
             items.push([i18n.t('griddedCopyReading'), () => this._griddedCopyInspector(view)]);
             if (view.pinned) items.push([i18n.t('griddedUnpinCell'), () => this._griddedUnpin(view)]);
         }
