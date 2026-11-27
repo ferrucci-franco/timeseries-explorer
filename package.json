@@ -188,6 +188,7 @@
     "test:autoscale-axis": "node scripts/test-autoscale-axis.mjs",
     "test:axis-title-rename": "node scripts/test-axis-title-rename.mjs",
     "test:i18n-consistency": "node scripts/test-i18n-consistency.mjs",
+    "test:text-fit": "node scripts/test-text-fit.mjs",
     "test:source-encoding": "node scripts/test-source-encoding.mjs",
     "test:crlf-assumptions": "node scripts/test-crlf-assumptions.mjs",
     "test:time-axis-model": "node scripts/test-time-axis-model.mjs",
