@@ -2947,19 +2947,28 @@
 }
 
 /* After Close map: the file's Map button, where the map comes back from,
-   blinks a few times (_griddedPointAtMapButton). */
+   turns amber and back a few times (_griddedPointAtMapButton). It is
+   already teal: a teal glow on it did not show. */
 .file-entry-map.gridded-map-btn-flash {
-    animation: gridded-map-btn-flash 0.6s ease-in-out 4;
+    animation: gridded-map-btn-flash 0.7s ease-in-out 4;
 }
 
 @keyframes gridded-map-btn-flash {
-    0%, 100% { box-shadow: none; }
-    50% { box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.9), 0 0 14px rgba(20, 184, 166, 0.8); }
+    0%, 100% { transform: scale(1); }
+    45%, 55% {
+        background: #f59e0b;
+        border-color: #f59e0b;
+        color: #1f1300;
+        transform: scale(1.12);
+        box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45), 0 0 14px rgba(245, 158, 11, 0.75);
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .file-entry-map.gridded-map-btn-flash {
         animation: none;
-        box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.9);
+        background: #f59e0b;
+        border-color: #f59e0b;
+        color: #1f1300;
     }
 }
