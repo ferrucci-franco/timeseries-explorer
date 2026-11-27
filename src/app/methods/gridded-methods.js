@@ -1010,6 +1010,7 @@ export function installGriddedMethods(TargetClass) {
                             <span data-role="inspector-value-label"></span><span data-role="inspector-value">—</span>
                             <span data-role="inspector-when-label"></span><span data-role="inspector-when">—</span>
                         </div>
+                        <p class="gridded-inspector-pinned" data-role="inspector-pinned" hidden></p>
                         <button type="button" class="gridded-inspector-copy" data-action="copy-inspector"></button>
                     </section>
                     <section class="gridded-panel-section gridded-tools">
@@ -1294,8 +1295,10 @@ export function installGriddedMethods(TargetClass) {
             const current = view();
             if (!current) return;
             current.variableKey = event.target.value;
-            // Another variable may have other levels, or none.
+            // Another variable may have other levels, or none — and another
+            // grid: a pinned cell lets go.
             current.extractLevels = null;
+            this._griddedUnpin(current);
             current.zoom = null;
             this._griddedRenderControls(current);
             this._griddedRequestMap(current);
@@ -1549,8 +1552,9 @@ export function installGriddedMethods(TargetClass) {
         });
         document.addEventListener('keydown', event => {
             const current = view();
-            if (event.key !== 'Escape' || !current?.addTo || root.hidden || document.querySelector('.modal-overlay')) return;
-            this._griddedDisarmAdd(current);
+            if (event.key !== 'Escape' || root.hidden || document.querySelector('.modal-overlay, .gridded-context-menu')) return;
+            if (current?.addTo) this._griddedDisarmAdd(current);
+            else if (current?.pinned) this._griddedUnpin(current);
         });
         root.addEventListener('keydown', event => {
             if (event.target.closest('input, select, textarea')) return;
@@ -2021,37 +2025,95 @@ export function installGriddedMethods(TargetClass) {
      * map, so "Copy" can still take it; it is copied as one line.
      */
     /**
+     * Pin the cell at `at`: the inspector stays on it whatever the pointer
+     * does, so its reading can be copied (and it follows the time step while
+     * Play runs); its outline stays drawn. A click on the pinned cell again
+     * lets it go (`toggle`), as do Escape and a change of variable.
+     */
+    proto._griddedPinAt = function(view, at, { toggle = true } = {}) {
+        const cell = this._griddedInspect(view, at);
+        if (!cell) {
+            this._griddedUnpin(view);
+            return;
+        }
+        const same = view.pinned && view.pinned.row === cell.row && view.pinned.column === cell.column;
+        if (same && toggle) {
+            this._griddedUnpin(view);
+            this._griddedOutlineCell(this._griddedEl('map'), view, at);
+            return;
+        }
+        view.pinned = { ...cell };
+        this._griddedOutlineCell(this._griddedEl('map'), view, null);
+        this._griddedDrawPinned(this._griddedEl('map'), view);
+        this._griddedSyncInspector(view);
+    };
+
+    proto._griddedUnpin = function(view) {
+        if (!view?.pinned) return;
+        view.pinned = null;
+        this._griddedDrawPinned(this._griddedEl('map'), view);
+        this._griddedSyncInspector(view);
+    };
+
+    // The pinned cell's outline, placed again whenever the map is drawn (a
+    // zoom, a pan, a step).
+    proto._griddedDrawPinned = function(div, view) {
+        if (!div) return;
+        let box = div.querySelector(':scope > .gridded-cell-outline.is-pinned');
+        const cell = view?.pinned;
+        const rect = cell && view.map ? this._griddedCellRect(div, view, cell) : null;
+        if (!rect) {
+            if (box) box.hidden = true;
+            return;
+        }
+        if (!box) {
+            box = document.createElement('div');
+            box.className = 'gridded-cell-outline is-pinned';
+            box.setAttribute('aria-hidden', 'true');
+            div.appendChild(box);
+        }
+        box.hidden = false;
+        Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+    };
+
+    // A cell's rectangle in the plot's pixels, clipped to its area; its
+    // longitude taken next to `nearLon` (a grid in 0…360 on a map in
+    // −180…180), by default the middle of the view.
+    proto._griddedCellRect = function(div, view, cell, nearLon = null) {
+        const layout = div?._fullLayout;
+        const map = view?.map;
+        const x = layout?.xaxis;
+        const y = layout?.yaxis;
+        if (!map || !x?.d2p || !y?.d2p || map.lon?.[cell.column] === undefined || map.lat?.[cell.row] === undefined) return null;
+        const halfStep = (values, index) => (values.length < 2
+            ? 0.5
+            : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
+        const near = Number.isFinite(nearLon) ? nearLon : (Number(x.range[0]) + Number(x.range[1])) / 2;
+        const lon = near + ((((map.lon[cell.column] - near) % 360) + 540) % 360 - 180);
+        const dLon = halfStep(map.lon, cell.column);
+        const dLat = halfStep(map.lat, cell.row);
+        const xs = [x.d2p(lon - dLon), x.d2p(lon + dLon)].map(value => value + x._offset);
+        const ys = [y.d2p(map.lat[cell.row] + dLat), y.d2p(map.lat[cell.row] - dLat)].map(value => value + y._offset);
+        const left = Math.max(Math.min(...xs), x._offset);
+        const right = Math.min(Math.max(...xs), x._offset + x._length);
+        const top = Math.max(Math.min(...ys), y._offset);
+        const bottom = Math.min(Math.max(...ys), y._offset + y._length);
+        if (!(right - left > 1 && bottom - top > 1)) return null;
+        return { left, top, width: right - left, height: bottom - top };
+    };
+
+    /**
      * Outline the grid cell the inspector reads, under the pointer: the
      * value shown is a cell's, and on a coarse grid a cell is many pixels
      * wide. Drawn in pixels over the plot, clipped to its area; hidden with
      * nothing read (off the grid, the pointer gone, the map moving).
      */
     proto._griddedOutlineCell = function(div, view, at) {
-        let box = div.querySelector(':scope > .gridded-cell-outline');
+        if (!div) return;
+        let box = div.querySelector(':scope > .gridded-cell-outline:not(.is-pinned)');
         const cell = view?.inspect;
-        const layout = div._fullLayout;
-        const map = view?.map;
-        if (!cell || !at || !map || !layout?.xaxis?.d2p || !layout?.yaxis?.d2p) {
-            if (box) box.hidden = true;
-            return;
-        }
-        const halfStep = (values, index) => (values.length < 2
-            ? 0.5
-            : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
-        // The cell's longitude as the map draws it (a grid in 0…360 on a map
-        // in −180…180): next to the pointer.
-        const lon = at.lon + ((((map.lon[cell.column] - at.lon) % 360) + 540) % 360 - 180);
-        const dLon = halfStep(map.lon, cell.column);
-        const dLat = halfStep(map.lat, cell.row);
-        const x = layout.xaxis;
-        const y = layout.yaxis;
-        const xs = [x.d2p(lon - dLon), x.d2p(lon + dLon)].map(value => value + x._offset);
-        const ys = [y.d2p(cell.lat + dLat), y.d2p(cell.lat - dLat)].map(value => value + y._offset);
-        const left = Math.max(Math.min(...xs), x._offset);
-        const right = Math.min(Math.max(...xs), x._offset + x._length);
-        const top = Math.max(Math.min(...ys), y._offset);
-        const bottom = Math.min(Math.max(...ys), y._offset + y._length);
-        if (!(right - left > 1 && bottom - top > 1)) {
+        const rect = cell && at ? this._griddedCellRect(div, view, cell, at.lon) : null;
+        if (!rect) {
             if (box) box.hidden = true;
             return;
         }
@@ -2062,10 +2124,7 @@ export function installGriddedMethods(TargetClass) {
             div.appendChild(box);
         }
         box.hidden = false;
-        box.style.left = `${left}px`;
-        box.style.top = `${top}px`;
-        box.style.width = `${right - left}px`;
-        box.style.height = `${bottom - top}px`;
+        Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     };
 
     proto._griddedInspect = function(view, at) {
@@ -2136,6 +2195,11 @@ export function installGriddedMethods(TargetClass) {
         write('inspector-when', text.when);
         const copy = section.querySelector('[data-action="copy-inspector"]');
         if (copy) copy.disabled = !view.inspect;
+        const pinned = this._griddedEl('inspector-pinned');
+        if (pinned) {
+            pinned.hidden = !view.pinned;
+            pinned.textContent = view.pinned ? i18n.t('griddedInspectorPinned') : '';
+        }
     };
 
     proto._griddedCopyInspector = async function(view) {
@@ -3236,6 +3300,7 @@ export function installGriddedMethods(TargetClass) {
         div.addEventListener('mouseleave', () => this._griddedOutlineCell(div, null, null));
         div.on?.('plotly_relayouting', () => this._griddedOutlineCell(div, null, null));
         div.on?.('plotly_relayout', () => this._griddedOutlineCell(div, null, null));
+        div.on?.('plotly_afterplot', () => this._griddedDrawPinned(div, this._griddedVisibleView()));
         div.addEventListener('pointerdown', event => {
             this._griddedOutlineCell(div, null, null);
             interaction.down = { x: event.clientX, y: event.clientY };
@@ -3248,8 +3313,9 @@ export function installGriddedMethods(TargetClass) {
         div.addEventListener('mousemove', event => {
             const view = this._griddedVisibleView();
             const at = view && !interaction.pressed && this._griddedEventCoords(div, event);
-            if (view && at) this._griddedInspect(view, at);
-            this._griddedOutlineCell(div, view, interaction.pressed ? null : at);
+            // A pinned cell holds the inspector (and its outline) still.
+            if (view && at && !view.pinned) this._griddedInspect(view, at);
+            this._griddedOutlineCell(div, view, interaction.pressed || view?.pinned ? null : at);
             let over = null;
             if (at) {
                 const target = this._griddedEditTarget(view, at, 'mouse');
@@ -3371,8 +3437,11 @@ export function installGriddedMethods(TargetClass) {
                 this._griddedSyncInputs(view);
                 this._griddedRenderSelection(view);
                 this._griddedDrawMap(view);
-            } else if (view.selected) {
-                this._griddedSelect(view, null);
+            } else {
+                if (view.selected) this._griddedSelect(view, null);
+                // Navigate: a click pins the cell under it (the inspector
+                // stays on it, to be copied); a click on it again lets go.
+                if (view.mode === 'navigate') this._griddedPinAt(view, at);
             }
         }, true);
         // The right button drags the map, as on every plot; a right click
@@ -3458,11 +3527,9 @@ export function installGriddedMethods(TargetClass) {
         const at = view && this._griddedEventCoords(div, where);
         if (!at) return;
         const hit = this._griddedHitTest(view, at, where, { inside: true });
-        if (!hit) {
-            this._griddedCloseMenu();
-            return;
-        }
-        this._griddedSelect(view, hit);
+        // The cell under the click is pinned: the menu copies its reading.
+        this._griddedPinAt(view, at, { toggle: false });
+        if (hit) this._griddedSelect(view, hit);
         this._griddedShowMenu(view, hit, where.clientX, where.clientY);
     };
 
@@ -3692,7 +3759,13 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedShowMenu = function(view, target, x, y) {
         this._griddedCloseMenu();
         const items = [];
-        if (target.kind === 'pending-point') {
+        if (view.inspect) {
+            items.push([i18n.t('griddedCopyReading'), () => this._griddedCopyInspector(view)]);
+            if (view.pinned) items.push([i18n.t('griddedUnpinCell'), () => this._griddedUnpin(view)]);
+        }
+        if (!target) {
+            // Empty map: only the reading.
+        } else if (target.kind === 'pending-point') {
             items.push([i18n.t('griddedExtractPoint'), () => this._griddedExtractPoint(view)]);
             items.push([i18n.t('griddedDelete'), () => this._griddedDeleteSelected(view, target)]);
         } else if (target.kind === 'pending-box') {
@@ -3700,10 +3773,12 @@ export function installGriddedMethods(TargetClass) {
             items.push([i18n.t('griddedDelete'), () => this._griddedDeleteSelected(view, target)]);
         } else {
             const group = (view.groups || []).find(item => item.id === target.id);
-            if (!group) return;
-            items.push([i18n.t('griddedReuseHere'), () => this._griddedReusePlace(view, group.id)]);
-            items.push([i18n.t('griddedDeleteExtraction').replace('{tag}', group.tag), () => this._griddedDeleteSelected(view, target)]);
+            if (group) {
+                items.push([i18n.t('griddedReuseHere'), () => this._griddedReusePlace(view, group.id)]);
+                items.push([i18n.t('griddedDeleteExtraction').replace('{tag}', group.tag), () => this._griddedDeleteSelected(view, target)]);
+            }
         }
+        if (!items.length) return;
         const menu = document.createElement('div');
         menu.className = 'gridded-context-menu';
         menu.setAttribute('role', 'menu');

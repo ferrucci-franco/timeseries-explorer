@@ -1710,3 +1710,21 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 .gridded-cell-outline[hidden] {
     display: none;
 }
+
+/* A pinned cell (a click in Navigate): its outline stays, thicker, and the
+   inspector says how to let it go. */
+.gridded-cell-outline.is-pinned {
+    border-width: 2.5px;
+    border-color: #14b8a6;
+    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55), 0 0 8px rgba(20, 184, 166, 0.7);
+}
+
+.gridded-inspector-pinned {
+    margin: 0.35rem 0 0;
+    color: #14b8a6;
+    font-size: 0.75rem;
+}
+
+.gridded-inspector-pinned[hidden] {
+    display: none;
+}
