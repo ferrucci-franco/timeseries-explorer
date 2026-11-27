@@ -1,4 +1,3 @@
-import { fitText, wrapText } from '../../utils/text-fit.js';
 import i18n from '../../i18n/index.js';
 import { getCalendarDateTickFormat } from '../plotly-locale.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
@@ -2150,12 +2149,9 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             : (durationAxis ? 'duration' : (timeMode === 'elapsedSeconds' ? 's' : (primaryTimeVar ? this._extractUnit(primaryTimeVar.description) : 's'))));
     const unit     = this._extractUnit(variable.description);
     const name     = this._traceName(t.varName, t.fileId);
-    // Wrapped to the panel's width: a hover label does not wrap by itself,
-    // and a long name (an extraction's) ran off a phone's screen.
-    const hoverChars = Math.max(20, Math.floor(((plot?.div?.clientWidth || globalThis.innerWidth || 800) - 60) / 7.5));
-    const hoverName = wrapText(this._traceName(t.varName, t.fileId, { units: false }), hoverChars, { reserve: 14 })
-        .map(line => this._escapeHTML(line))
-        .join('</b><br><b>');
+    // A long name wraps to the plot's width on its way to Plotly
+    // (utils/plot-text-fit.js, src/vendor/plotly.js), as in every plot.
+    const hoverName = this._escapeHTML(this._traceName(t.varName, t.fileId, { units: false }));
     // What tells this run from the others on the panel. Empty unless two files
     // are loaded and something actually differs between them, so an ordinary
     // single-file hover is unchanged (#51).
@@ -2427,12 +2423,9 @@ proto._timeseriesAxisTitle = function(plot, axis = 'y') {
     const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
     const unit = variable ? this._extractUnit(variable.description) : '';
     const label = this._variableLabel(trace.varName, trace.fileId);
-    const title = unit ? `${label} [${unit}]` : label;
-    // Shortened to the axis' height: a title longer than its axis ran off
-    // the top of the panel (10 px text, at most about 7.5 px a character).
-    const length = plot?.div?._fullLayout?.[axis === 'y2' ? 'yaxis2' : 'yaxis']?._length
-        || (plot?.div?.clientHeight ? plot.div.clientHeight - 80 : 0);
-    return length > 0 ? fitText(title, Math.max(16, Math.floor(length / 7.5))) : title;
+    // A title too long for its axis is shortened on its way to Plotly
+    // (utils/plot-text-fit.js), as in every plot.
+    return unit ? `${label} [${unit}]` : label;
 };
 
 /**
