@@ -1547,7 +1547,8 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    padding: 0.35rem 0.6rem 0;
+    /* As much room under the buttons as over them: centred in the strip. */
+    padding: 0.35rem 0.6rem;
     font-size: 0.8rem;
 }
 
