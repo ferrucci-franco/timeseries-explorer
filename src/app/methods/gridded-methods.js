@@ -4639,7 +4639,10 @@ export function installGriddedMethods(TargetClass) {
             type: 'scatter',
             mode: 'lines',
             x,
-            y: Array.from(variable.data),
+            // The sign the tree's ± button set, as in every plot.
+            y: this.plotManager.isVariableSignInverted(view.fileId, variable.name)
+                ? Array.from(variable.data, value => (Number.isFinite(value) ? -value : value))
+                : Array.from(variable.data),
             yaxis: !mixed || unitOf(variable) === units[0] ? 'y' : 'y2',
             name: `${group.tag} ${set.short}${roleName(role)}${mixed && unitOf(variable) ? ` [${variable.units}]` : ''}`,
             line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: set.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
@@ -4953,6 +4956,13 @@ export function installGriddedMethods(TargetClass) {
         if (!tabs?.items || !fileId) return null;
         const index = tabs.items.findIndex((item, at) => at !== tabs.activeIndex && item.mapFileId === fileId);
         return index < 0 ? null : index;
+    };
+
+    // A series' sign changed (the tree's ± button): the preview of the map
+    // that extracted it follows, as the plots do.
+    proto._griddedSignChanged = function(fileId) {
+        const view = this._griddedVisibleView();
+        if (view?.fileId === fileId) this._griddedDrawPreview(view);
     };
 
     proto._griddedApplyTheme = function() {

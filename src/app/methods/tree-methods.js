@@ -649,6 +649,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
                 this.plotManager.setVariableSignInverted(leafFileId, variable.name, !currentInverted);
                 const nextInverted = this.plotManager.isVariableSignInverted(leafFileId, variable.name);
                 this._syncVariableSignToggle(signToggle, nextInverted);
+                this._griddedSignChanged?.(leafFileId);
             });
             signToggle.addEventListener('dragstart', event => event.preventDefault());
             itemDiv.appendChild(signToggle);
