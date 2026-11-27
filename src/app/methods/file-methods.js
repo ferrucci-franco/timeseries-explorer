@@ -512,7 +512,7 @@ proto.loadFiles = async function(items = []) {
     // map in it is now the active file, and the map of a file loaded before
     // comes down: it would otherwise stay over the new file's plots.
     const lastGridded = [...loaded].reverse().find(result => result.gridded);
-    if (lastGridded) this._showGriddedView(lastGridded.fileId);
+    if (lastGridded) this._openGriddedMap(lastGridded.fileId);
     else if (loaded.length && this._gridded?.visibleFileId) this._hideGriddedView();
 
     for (const result of loaded) {
@@ -4970,12 +4970,13 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0, options = {})
         mapBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (this._gridded?.visibleFileId === fileId) {
-                this._hideGriddedView();
+                // Pressed here: no need to point at it.
+                this._griddedCloseMap({ pointAtButton: false });
                 return;
             }
             // On a phone the Data sheet covers half the map: it gives way.
             if (this._compact?.sheet) this._closeCompactSheet();
-            this._showGriddedView(fileId);
+            this._openGriddedMap(fileId);
         });
 
         const closeBtn = document.createElement('button');

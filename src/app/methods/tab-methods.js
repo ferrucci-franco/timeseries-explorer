@@ -66,7 +66,10 @@ proto._newTabItem = function(name = '') {
 };
 
 proto._tabDisplayName = function(item) {
-    return item?.name || i18n.t('tabDefaultName').replace('{n}', String(item?.number || 1));
+    if (item?.name) return item.name;
+    // A map's own tab: "Map 1", "Map 2", in the language on screen.
+    if (item?.mapNumber) return i18n.t('tabMapName').replace('{n}', String(item.mapNumber));
+    return i18n.t('tabDefaultName').replace('{n}', String(item?.number || 1));
 };
 
 proto.initTabs = function() {
@@ -277,6 +280,7 @@ proto.switchTab = async function(index) {
             tabs.activeIndex = index;
             this._renderTabs();
             await this._showTab(tabs.items[index]);
+            this._restoreTabMap(tabs.items[index]);
             this._afterTabChange();
         } finally {
             this._tabSwitching = null;
@@ -294,15 +298,50 @@ proto._prepareTabLeave = function() {
     this.plotManager._closeDashboardCardEditor?.();
     // Nothing plays from a panel that is not on screen.
     this.plotManager.stopAudioPlayback?.();
-    // The map of a gridded dataset covers the panels: they are what is changing.
-    if (typeof this._griddedState === 'function' && this._griddedState().visibleFileId) this._hideGriddedView?.();
+    // The map of a gridded dataset covers the panels: they are what is
+    // changing. The tab keeps it: back on this tab, the map is back too.
+    const leaving = this._ensureTabsState().items[this.tabs.activeIndex];
+    const mapFileId = typeof this._griddedState === 'function' ? this._griddedState().visibleFileId : null;
+    if (leaving) leaving.mapFileId = mapFileId || null;
+    if (mapFileId) this._hideGriddedView?.();
+};
+
+// The map a tab was showing when it was left, shown again on it.
+proto._restoreTabMap = function(item) {
+    const fileId = item?.mapFileId;
+    if (!fileId || typeof this._griddedState !== 'function') return;
+    if (!this.files?.get(fileId)?.gridded || !this._griddedState().views.has(fileId)) {
+        item.mapFileId = null;
+        return;
+    }
+    this._showGriddedView?.(fileId);
 };
 
 proto._afterTabChange = function() {
     this._renderTabs();
+    this._griddedSyncReturnButton?.();
     this._updateActionButtons?.();
     // The dashboards held at an instant are this tab's now.
     this.plotManager?.renderDashboardTimeMarks?.();
+};
+
+// Make a tab blink for a moment, so a change of tab the app made is seen.
+proto.flashTab = function(index) {
+    const tabs = this._ensureTabsState();
+    const item = tabs.items[index];
+    if (!item) return;
+    item.flashUntil = Date.now() + 1600;
+    this._renderTabs();
+};
+
+// A new tab at the end of the strip (the map's tabs: where the newest is
+// looked for), and the app on it.
+proto.addTabAtEnd = async function() {
+    if (this._tabSwitching) await this._tabSwitching;
+    this._pendingTabIndex = null;
+    const tabs = this._ensureTabsState();
+    tabs.items.push(this._newTabItem());
+    await this.switchTab(tabs.items.length - 1);
 };
 
 proto.addTab = async function() {
@@ -380,6 +419,7 @@ proto.closeTab = async function(index, options = {}) {
     this._renderTabs();
     this._tabSwitching = this._showTab(tabs.items[tabs.activeIndex]);
     try { await this._tabSwitching; } finally { this._tabSwitching = null; }
+    this._restoreTabMap(tabs.items[tabs.activeIndex]);
     this._afterTabChange();
     // A switch asked for while the tab beside it was being put back.
     const pending = this._pendingTabIndex;
@@ -449,6 +489,8 @@ proto._renderTabs = function() {
         const active = index === tabs.activeIndex;
         const tab = document.createElement('div');
         tab.className = `workspace-tab${active ? ' active' : ''}`;
+        // Opened for the user a moment ago (flashTab): it blinks until then.
+        if (item.flashUntil && item.flashUntil > Date.now()) tab.classList.add('workspace-tab-flash');
         tab.setAttribute('role', 'tab');
         tab.setAttribute('aria-selected', String(active));
         tab.tabIndex = active ? 0 : -1;

@@ -110,13 +110,16 @@ try {
                 mode: document.querySelector('#gridded-view .gridded-mode.active')?.dataset.mode,
                 cursor: document.querySelector('#gridded-view .gridded-map').classList.contains('gridded-cursor-point'),
                 scope: document.querySelector('#gridded-view [data-role="scope"]').textContent,
-                toolbarRows: (() => {
-                    // Rows of the toolbar, by vertical centre (its items differ in height).
-                    const centres = [...document.querySelectorAll('#gridded-view .gridded-toolbar > *')]
-                        .filter(el => el.offsetParent)
-                        .map(el => { const rect = el.getBoundingClientRect(); return rect.top + rect.height / 2; });
-                    return Math.max(...centres) - Math.min(...centres) < 12 ? 1 : 2;
-                })(),
+                // Beside a desktop map: no toolbar; the variable first in the
+                // panel; the colour range, the download and Close on the
+                // map's title line, which names the file.
+                side: document.getElementById('gridded-view').classList.contains('is-side-controls'),
+                toolbarShown: !!document.querySelector('#gridded-view .gridded-toolbar').offsetParent,
+                variableFirst: document.querySelector('#gridded-view .gridded-panel > section:first-child [data-role="variable"]') !== null,
+                mapTools: [...document.querySelectorAll('#gridded-view [data-role="map-tools"] [data-action]')]
+                    .filter(el => el.offsetParent).map(el => el.dataset.action),
+                mapTitle: document.querySelector('#gridded-view [data-role="map-title"]').textContent,
+                tabs: [...document.querySelectorAll('.workspace-tab-label')].map(el => el.textContent),
             };
         });
         assert.equal(state.gridded, true, 'the ERA5 file opens as a gridded dataset');
@@ -128,16 +131,57 @@ try {
         assert.equal(state.mode, 'navigate', 'the map opens in Navigate: a click places nothing before a tool is picked');
         assert.equal(state.cursor, false);
         assert.match(state.scope, /t · 850 hPa · .*4/, 'the panel says which level and how many steps an extraction uses');
-        assert.equal(state.toolbarRows, 1, 'the toolbar is one row at this width');
+        assert.equal(state.side, true, 'beside a desktop map the controls are in the panel');
+        assert.equal(state.toolbarShown, false, 'and there is no toolbar');
+        assert.equal(state.variableFirst, true, 'the variable opens the panel, above the inspector');
+        assert.deepEqual(state.mapTools, ['autofit-menu', 'export-map', 'close'], 'colour range, download and Close on the map\'s title line');
+        assert.match(state.mapTitle, /^era5-like-new-cds · /, 'the title line names the file');
+        assert.deepEqual(state.tabs, ['Map 1'], 'the map opened on the empty tab, named Map 1');
 
         // In the point tool (a crosshair, not the move cursor) a click places
-        // a marker and fills the coordinates; nothing is read yet.
+        // a marker and fills the coordinates; nothing is read yet. The map is
+        // let settle first (its field read, its redraws done): a click on a
+        // map still without a field reads no cell, so pins none.
+        await page.waitForFunction(() => new Promise(resolve => {
+            const view = window.app._griddedVisibleView();
+            const drawn = view?.drawn;
+            setTimeout(() => resolve(!!view?.map && !!drawn && view.drawn === drawn && !view.job), 800);
+        }), null, { timeout: 60000, polling: 100 });
         const plot = await page.$eval('#gridded-view .gridded-map .nsewdrag', el => {
             const rect = el.getBoundingClientRect();
             return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
         });
         await page.mouse.click(plot.x + plot.w * 0.55, plot.y + plot.h * 0.35);
         assert.equal(await page.evaluate(() => window.app._griddedVisibleView().pendingPoint), null, 'Navigate places nothing');
+        // ... but pins the cell under the click: the inspector stays on it
+        // whatever the pointer does, its outline stays, and the menu of a
+        // right click copies its reading. Escape lets it go.
+        const pinState = () => page.evaluate(() => ({
+            pinned: !!window.app._griddedVisibleView().pinned,
+            cell: document.querySelector('#gridded-view [data-role="inspector-cell"]').textContent,
+            note: !document.querySelector('#gridded-view [data-role="inspector-pinned"]').hidden,
+            outline: !!document.querySelector('#gridded-view .gridded-cell-outline.is-pinned:not([hidden])'),
+        }));
+        const pinnedHere = await pinState();
+        assert.deepEqual([pinnedHere.pinned, pinnedHere.note, pinnedHere.outline], [true, true, true], 'a click in Navigate pins the cell');
+        await page.mouse.move(plot.x + plot.w * 0.2, plot.y + plot.h * 0.8, { steps: 4 });
+        assert.equal((await pinState()).cell, pinnedHere.cell, 'the pinned cell holds the inspector');
+        await page.mouse.click(plot.x + plot.w * 0.2, plot.y + plot.h * 0.8, { button: 'right' });
+        await page.waitForSelector('.gridded-context-menu');
+        assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.gridded-context-menu button')].map(button => button.textContent)),
+            ['Copy reading', 'Let go of this cell'], 'a right click on the map: copy its reading');
+        assert.equal(await page.evaluate(() => document.querySelector('#gridded-view .gridded-map').classList.contains('gridded-menu-open')), true,
+            'no hover label while the menu is open');
+        await page.keyboard.press('Escape');
+        assert.equal((await pinState()).pinned, true, 'Escape closes the menu only');
+        await page.keyboard.press('Escape');
+        assert.deepEqual(await pinState().then(state => [state.pinned, state.outline]), [false, false], 'a second Escape lets the cell go');
+        // Escape takes Point and Region back to Navigate.
+        for (const mode of ['point', 'region']) {
+            await page.click(`#gridded-view [data-mode="${mode}"]`);
+            await page.keyboard.press('Escape');
+            assert.equal(await page.evaluate(() => window.app._griddedVisibleView().mode), 'navigate', `Escape: ${mode} → Navigate`);
+        }
         await page.click('#gridded-view [data-mode="point"]');
         assert.equal(await page.evaluate(() => document.querySelector('#gridded-view .gridded-map').classList.contains('gridded-cursor-point')), true);
         await page.mouse.click(plot.x + plot.w * 0.55, plot.y + plot.h * 0.35);
@@ -256,29 +300,28 @@ try {
         await page.keyboard.press('Escape');
         await page.waitForSelector('.modal-dialog-plot-export', { state: 'detached', timeout: 10000 });
 
-        // Open in the plots: the map closes, the checked curves draw.
+        // "Plot selected in new tab": a new tab at the end, named after the
+        // places, the checked curves drawn there; the map keeps its tab.
+        const tabNames = () => page.evaluate(() => window.app.tabs.items.map(item => window.app._tabDisplayName(item)));
+        const backToMapTab = async () => {
+            await page.evaluate(() => window.app.switchTab(window.app.tabs.items.findIndex(item => item.mapFileId)));
+            await mapShown(page);
+        };
         await page.click('#gridded-view [data-action="plot"]');
         await page.waitForFunction(() => [...window.app.plotManager.plots.values()].some(plot => plot.traces.length === 4), null, { timeout: 30000 });
         assert.equal(await page.evaluate(() => document.getElementById('gridded-view').hidden), true);
-        // Over the plots, a button says the map is still there; it brings it back.
-        await page.waitForSelector('#gridded-return:not([hidden])');
-        await page.click('#gridded-return');
-        await mapShown(page);
-        assert.equal(await page.evaluate(() => document.getElementById('gridded-return').hidden), true);
-        // A second trip goes to the same panel, brought up to date (P2
-        // unchecked leaves it), instead of a new panel every time.
-        const extractionPanels = () => page.evaluate(() => [...window.app.plotManager.plots.values()]
-            .filter(plot => plot.traces.some(trace => String(trace.varName).startsWith('grid:x')))
-            .map(plot => plot.traces.length));
+        assert.deepEqual(await tabNames(), ['Map 1', 'P2, R1'], 'a new tab named after the places');
+        assert.equal(await page.evaluate(() => window.app.tabs.activeIndex), 1, 'and the app is on it');
+        assert.equal(await page.evaluate(() => document.getElementById('gridded-return')?.hidden !== false), true, 'no way-back button on a desktop');
+        await backToMapTab();
+        // A second trip opens another tab (a tab the user worked in is never
+        // changed): P2 unchecked leaves it out.
         const p2Box = '#gridded-view .gridded-result:first-child input[type="checkbox"]';
         await page.uncheck(p2Box);
         await page.click('#gridded-view [data-action="plot"]');
-        await page.waitForSelector('#gridded-return:not([hidden])');
         await page.waitForFunction(() => [...window.app.plotManager.plots.values()].some(plot => plot.traces.length === 3), null, { timeout: 30000 });
-        await page.waitForTimeout(500);
-        assert.deepEqual(await extractionPanels(), [3], 'the same panel, without the unchecked curve');
-        await page.click('#gridded-return');
-        await mapShown(page);
+        assert.deepEqual(await tabNames(), ['Map 1', 'P2, R1', 'R1'], 'another tab, at the end');
+        await backToMapTab();
         await page.check(p2Box);
         // The preview pans with the right button, like the explorer's plots.
         const previewRange = () => page.evaluate(() => [...document.querySelector('#gridded-view [data-role="preview-chart"]')._fullLayout.xaxis.range]);
@@ -324,10 +367,15 @@ try {
         // The "Map" button on the file row opens the map again. A map closed
         // with "Close map" does not put a button over the plots asking to
         // come back.
+        assert.match(await page.textContent('#gridded-view [data-action="close"]'), /Close tab/, 'on its own tab, among others, Close map closes the tab');
         await page.click('#gridded-view [data-action="close"]');
+        await page.waitForFunction(() => document.getElementById('gridded-view').hidden);
+        assert.deepEqual(await tabNames(), ['P2, R1', 'R1'], 'the map\'s tab is gone');
         assert.equal(await page.evaluate(() => document.getElementById('gridded-return')?.hidden !== false), true, 'no way-back button after Close map');
+        await page.waitForSelector('#sidebar .file-entry-map.gridded-map-btn-flash');
         await page.click('.file-entry-map');
         await mapShown(page);
+        assert.deepEqual(await tabNames(), ['P2, R1', 'R1', 'Map 1'], 'the Map button opens it again in a tab of its own, at the end');
         // The scale's controls explain themselves; the bounded "Open as
         // series" is gone.
         const tips = await page.evaluate(() => [
@@ -339,7 +387,7 @@ try {
         assert.equal(await page.$('#gridded-view [data-action="as-series"]'), null);
         // Text buttons beside icon buttons are as tall as they are.
         const heights = await page.evaluate(() => ['export-map', 'close', 'toggle-results', 'remove-all', 'export-series']
-            .map(action => Math.round(document.querySelector(`#gridded-view :is(.gridded-toolbar, .gridded-results-head) [data-action="${action}"]`).getBoundingClientRect().height)));
+            .map(action => Math.round(document.querySelector(`#gridded-view :is(.gridded-map-tools, .gridded-results-head) [data-action="${action}"]`).getBoundingClientRect().height)));
         assert.ok(heights.every(height => height === heights[0]), `one height for the toolbar and list buttons (${heights})`);
         // A wheel zoom only ever moves one way: no redraw between notches puts
         // back the ranges it started from, and a grid this small is drawn
@@ -409,8 +457,10 @@ try {
         await swipe(0, 40);
         const vertical = await ranges();
         assert.ok(span(vertical.x) > span(diagonal.x) * 1.05, `up or down zooms (${span(diagonal.x)} → ${span(vertical.x)})`);
-        // Navigate shows an open hand, closed while pressed (away from the
-        // region drawn above, which shows the pointer of what can be picked).
+        // Navigate shows a thin cross with a small hand (its centre is the
+        // point the inspector reads), a closed hand while pressed (away from
+        // the region drawn above, which shows the pointer of what can be
+        // picked).
         const corner = await page.$eval('#gridded-view .gridded-map .nsewdrag', el => {
             const rect = el.getBoundingClientRect();
             return { x: rect.x + rect.width * 0.03, y: rect.y + rect.height * 0.97 };
@@ -418,14 +468,15 @@ try {
         await page.mouse.move(corner.x, corner.y);
         await page.waitForFunction(() => ![...document.querySelector('#gridded-view .gridded-map').classList].some(name => name.startsWith('gridded-over-')));
         const cursorNow = () => page.$eval('#gridded-view .gridded-map .nsewdrag', el => getComputedStyle(el).cursor);
-        assert.equal(await cursorNow(), 'grab', 'Navigate shows a hand');
+        const crossWithHand = cursor => /^url\("data:image\/svg\+xml,.*"\) 16 16, crosshair$/.test(cursor);
+        assert.ok(crossWithHand(await cursorNow()), 'Navigate shows the cross with a small hand');
         // A short drag, not a click, which would select the region the
         // zoomed view may lie in.
         await page.mouse.down();
         assert.equal(await cursorNow(), 'grabbing', 'that closes while pressed');
         await page.mouse.move(corner.x + 20, corner.y - 10, { steps: 4 });
         await page.mouse.up();
-        assert.equal(await cursorNow(), 'grab');
+        assert.ok(crossWithHand(await cursorNow()), 'and back to the cross when let go');
         // Back to the view the checks below were written for.
         await page.evaluate(async restore => {
             const { default: Plotly } = await import('/src/vendor/plotly.js');
@@ -533,6 +584,8 @@ try {
         await page.mouse.click(...await toPage(-30, 20));
         let objectsNow = await objects();
         assert.ok(near(objectsNow.point?.lon, -30) && near(objectsNow.point?.lat, 20), `the ring lands where clicked (${JSON.stringify(objectsNow.point)})`);
+        await page.mouse.move(...await toPage(-30, 20));
+        assert.equal(await page.$eval('#gridded-view .gridded-map .nsewdrag', el => getComputedStyle(el).cursor), 'move', 'over the ring, the move cursor');
         await mouseDrag(await toPage(-30, 20), await toPage(10, -10));
         objectsNow = await objects();
         assert.ok(near(objectsNow.point?.lon, 10) && near(objectsNow.point?.lat, -10), `the ring follows a drag (${JSON.stringify(objectsNow.point)})`);
@@ -623,9 +676,10 @@ try {
         await page.click('.gridded-context-menu button:last-child');
         assert.ok(!(await objects()).groups.some(group => group.id === extracted.id), 'the menu removes the point and its series');
 
-        // A place is a folder. "+" puts it back on the map; another variable,
-        // at all its levels (read in one go), joins the same place; the same
-        // series asked again is not added twice; one series leaves alone.
+        // A place is a folder. "+ Another variable at P…" lights the Variable
+        // menu up, and the variable picked there (or the one already chosen,
+        // with "Use …"), at all its levels (read in one go), joins the same
+        // place; the same series is never added twice; one series leaves alone.
         const groupCount = (await objects()).groups.length;
         await page.click('#gridded-view [data-mode="point"]');
         await page.mouse.click(...await toPage(-90, -45));
@@ -635,24 +689,34 @@ try {
             const group = window.app._griddedVisibleView().groups.at(-1);
             return { id: group.id, tag: group.tag, geometry: group.geometry };
         });
-        await page.click(`#gridded-view .gridded-result[data-group="${place.id}"] [data-action="reuse-group"]`);
-        const reused = await page.evaluate(() => ({ mode: window.app._griddedVisibleView().mode, point: window.app._griddedVisibleView().pendingPoint }));
-        assert.deepEqual(reused, { mode: 'point', point: place.geometry }, '"+" puts the place back as the orange point');
         await page.selectOption('#gridded-view [data-role="variable"]', '/t');
+        await page.click('#gridded-view [data-mode="point"]');
         assert.equal(await page.isVisible('#gridded-view [data-role="levels-row"]'), true, 'a variable with levels offers the levels');
         await page.click('#gridded-view [data-action="levels-menu"]');
         await page.click('#gridded-view [data-action="levels-all"]');
         assert.match(await page.textContent('#gridded-view [data-role="scope"]'), /all 2 levels/);
-        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.keyboard.press('Escape');
+        await page.click(`#gridded-view .gridded-result[data-group="${place.id}"] [data-action="add-variable"]`);
+        const armed = await page.evaluate(() => ({
+            addTo: window.app._griddedVisibleView().addTo,
+            blinking: document.querySelector('#gridded-view [data-role="variable"]').classList.contains('gridded-attention'),
+            focused: document.activeElement?.dataset.role,
+            hint: !document.querySelector('#gridded-view [data-role="add-hint"]').hidden,
+            useCurrent: !document.querySelector('#gridded-view [data-action="add-current"]').hidden,
+        }));
+        assert.deepEqual(armed, { addTo: place.id, blinking: true, focused: 'variable', hint: true, useCurrent: true },
+            'the Variable menu lights up and takes the focus, with the line that says what for');
+        await page.click('#gridded-view [data-action="add-current"]');
         await page.waitForFunction(id => window.app._griddedVisibleView().groups.find(group => group.id === id).sets.length === 3, place.id, { timeout: 60000 });
         const placeSeries = (await extractions(page)).filter(item => item.folder.startsWith(`${place.tag} · `));
         assert.deepEqual(placeSeries.map(item => item.leaf), ['2 metre temperature (t2m)', 'Temperature (t) · 850 hPa', 'Temperature (t) · 500 hPa'], 'one folder, one series per variable and level');
         placeSeries.slice(1).forEach((series, level) => series.values.forEach((value, step) => {
             assert(Math.abs(value - field(-45, 270, step, 0, level)) < 1e-3, `level ${level}, step ${step}`);
         }));
-        await page.click(`#gridded-view .gridded-result[data-group="${place.id}"] [data-action="reuse-group"]`);
-        await page.click('#gridded-view [data-action="extract-point"]');
-        await page.waitForFunction(() => /already/.test(document.querySelector('#gridded-view [data-role="status"]').textContent), null, { timeout: 30000 });
+        await page.click(`#gridded-view .gridded-result[data-group="${place.id}"] [data-action="add-variable"]`);
+        assert.equal(await page.isHidden('#gridded-view [data-action="add-current"]'), true, 'nothing to add: the place has every series of the variable chosen');
+        await page.keyboard.press('Escape');
+        assert.equal(await page.evaluate(() => window.app._griddedVisibleView().addTo), null, 'Escape lets the place go');
         const setIds = await page.evaluate(id => window.app._griddedVisibleView().groups.find(group => group.id === id).sets.map(set => set.id), place.id);
         assert.equal(setIds.length, 3, 'the same series is not added twice');
         await page.click(`#gridded-view [data-set="${setIds[1]}"] [data-action="remove-set"]`);
@@ -1534,13 +1598,18 @@ try {
         await page.fill('#gridded-view [data-input="lon"]', '92');
         await page.click('#gridded-view [data-action="extract-point"]');
         await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 1, null, { timeout: 60000 });
-        // The same place again, with another variable at both its levels:
-        // one folder, three series.
-        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="reuse-group"]');
+        // The same place again, with another variable picked for it in the
+        // Variable menu (read at once), then at both its levels: one folder,
+        // three series.
+        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="add-variable"]');
         await page.selectOption('#gridded-view [data-role="variable"]', '/t');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups[0].sets.length === 2, null, { timeout: 60000 });
+        await page.click('#gridded-view [data-mode="point"]');
         await page.click('#gridded-view [data-action="levels-menu"]');
         await page.click('#gridded-view [data-action="levels-all"]');
-        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.keyboard.press('Escape');
+        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="add-variable"]');
+        await page.click('#gridded-view [data-action="add-current"]');
         await page.waitForFunction(() => window.app._griddedVisibleView().groups[0].sets.length === 3, null, { timeout: 60000 });
         // And a region, back on t2m (a surface field, so no levels to pick):
         // mean, minimum and maximum, three series.
@@ -1568,7 +1637,7 @@ try {
         // unchecked) and the three of R1. They are added one at a time, so
         // wait until the panel has stopped filling.
         await page.click('#gridded-view [data-action="plot"]');
-        await page.waitForSelector('#gridded-return:not([hidden])');
+        await page.waitForFunction(() => document.getElementById('gridded-view').hidden && window.app.tabs.activeIndex > 0);
         const extractionTraces = () => page.evaluate(() => [...window.app.plotManager.plots.values()]
             .filter(plot => plot.traces.some(trace => String(trace.varName).startsWith('grid:x')))
             .map(plot => plot.traces.length));
@@ -1579,7 +1648,7 @@ try {
             setTimeout(() => resolve(before > 0 && count() === before), 900);
         }), null, { timeout: 60000, polling: 300 });
         assert.deepEqual(await extractionTraces(), [5], 'the checked series are in one panel');
-        await page.click('#gridded-return');
+        await page.evaluate(() => window.app.switchTab(window.app.tabs.items.findIndex(item => item.mapFileId)));
         await mapShown(page);
         // Left mid-way: the point tool in hand, a place typed but not extracted.
         await page.click('#gridded-view [data-mode="point"]');
@@ -1781,9 +1850,8 @@ try {
         // The same place on the other variable, whose unit is not the same
         // (total precipitation in m against a temperature in K): the preview
         // gives it its own axis instead of reading it in kelvin.
-        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="reuse-group"]');
+        await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="add-variable"]');
         await page.selectOption('#gridded-view [data-role="variable"]', '/tp');
-        await page.click('#gridded-view [data-action="extract-point"]');
         await page.waitForFunction(() => window.app._griddedVisibleView().groups[0].sets.length === 2, null, { timeout: 60000 });
         await page.waitForTimeout(600);
         const axes = await page.evaluate(() => {

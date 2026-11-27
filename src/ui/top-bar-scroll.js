@@ -161,12 +161,29 @@ export function placeTopBarMenu(menu, anchor) {
     openMenus.set(menu, anchor);
 }
 
-// The brand (title, subtitle, runtime badge) shrinks first, its subtitle
-// ending in an ellipsis. When even that is too much the badge goes, then the
-// whole brand: a sliver of a clipped "T" next to the language buttons only
-// looks broken. A squeezed brand stays in the layout, invisible, so its title
-// can still be measured to decide when it fits again.
+// The brand (title, subtitle, runtime badge) gives way first. Whole, or not
+// at all: short of room for the title and subtitle, the app's logo stands in
+// for them (a subtitle cut by an ellipsis said less than the logo), then the
+// badge goes, then the logo. A brand out of sight stays in the layout,
+// invisible, so it can still be measured to decide when it fits again.
 let badgeWidth = 0;
+const LOGO_SIZE = 30;
+
+// What the title and the subtitle need, unclipped.
+function brandTextWidth(brand) {
+    const title = brand.querySelector('h1');
+    const range = document.createRange();
+    range.selectNodeContents(title);
+    const titleWidth = range.getBoundingClientRect().width;
+    const subtitle = brand.querySelector('.app-subtitle');
+    let subtitleWidth = 0;
+    if (subtitle) {
+        const parts = [...subtitle.children].filter(child => getComputedStyle(child).display !== 'none');
+        const gap = parseFloat(getComputedStyle(subtitle).columnGap) || 0;
+        subtitleWidth = parts.reduce((sum, child) => sum + child.scrollWidth, 0) + gap * Math.max(0, parts.length - 1);
+    }
+    return Math.ceil(Math.max(titleWidth, subtitleWidth));
+}
 
 function updateBrand(topBar, brand, row) {
     const title = brand.querySelector('h1');
@@ -180,7 +197,17 @@ function updateBrand(topBar, brand, row) {
     const tabsStyle = tabs ? getComputedStyle(tabs) : null;
     // Its natural width: the tabs it scrolls, plus + and the list button.
     const scroller = tabs?.querySelector('.workspace-tabs-scroll');
-    const tabsWanted = tabs ? tabs.scrollWidth - (scroller?.clientWidth || 0) + (scroller?.scrollWidth || 0) : 0;
+    // Measured from what it holds, not from its width: the strip grows into
+    // whatever is free, so its own width once the brand gave way would keep
+    // the brand away for good.
+    let tabsWanted = 0;
+    if (tabs) {
+        const parts = [...tabs.children].filter(child => !child.hidden && getComputedStyle(child).display !== 'none');
+        const tabsGap = parseFloat(tabsStyle.columnGap) || 0;
+        tabsWanted = parts.reduce((sum, child) => sum + (child === scroller ? child.scrollWidth : child.offsetWidth), 0)
+            + tabsGap * Math.max(0, parts.length - 1)
+            + (parseFloat(tabsStyle.paddingLeft) || 0) + (parseFloat(tabsStyle.paddingRight) || 0);
+    }
     const tabsReserve = tabsStyle
         ? Math.max(parseFloat(tabsStyle.minWidth) || 0, Math.min(tabsWanted, topBar.clientWidth / 2))
             + (parseFloat(tabsStyle.marginLeft) || 0) + (parseFloat(tabsStyle.marginRight) || 0)
@@ -188,12 +215,14 @@ function updateBrand(topBar, brand, row) {
     const room = topBar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
         - row.scrollWidth - tabsReserve;
     const gap = parseFloat(getComputedStyle(brand).columnGap) || 0;
-    // The text, not the heading: a block, it is as wide as the brand.
-    const range = document.createRange();
-    range.selectNodeContents(title);
-    const titleWidth = Math.ceil(range.getBoundingClientRect().width) + gap;
-    brand.classList.toggle('is-squeezed', room < titleWidth);
-    brand.classList.toggle('without-badge', room < titleWidth + badgeWidth + gap);
+    const text = brandTextWidth(brand) + gap;
+    const logo = LOGO_SIZE + gap;
+    const withBadge = badgeWidth + gap;
+    const whole = room >= text + withBadge;
+    const asLogo = !whole && room >= logo;
+    brand.classList.toggle('as-logo', asLogo);
+    brand.classList.toggle('is-squeezed', !whole && !asLogo);
+    brand.classList.toggle('without-badge', !whole && room < logo + withBadge);
 }
 
 /** Make the row scroll sideways when it does not fit. Call once. */
@@ -201,6 +230,8 @@ export function initTopBarScroll(row) {
     if (!row) return;
     const topBar = row.closest('.top-bar');
     const brand = topBar?.querySelector('.top-bar-left');
+    const logo = brand?.querySelector('.app-logo');
+    if (logo && !logo.getAttribute('src')) logo.src = `${globalThis.__OMV_PUBLIC_BASE__ || './'}icons/app-icon.svg`;
     const hints = topBar ? {
         track: createScrollbar(topBar, row),
         start: createFade(topBar, 'start'),

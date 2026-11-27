@@ -1194,9 +1194,10 @@ resumen de buscador):
        misma celda de grilla o el mismo recuadro van a la misma carpeta, en el
        panel y en el árbol (Extracciones › P1 · 45°N 90°E › Temperature (t) ·
        850 hPa). Una serie ya extraída no se lee dos veces.
-     - "+" en la fila del lugar (o "Extraer otra variable u otro nivel acá"
-       en su menú) lo vuelve a poner en el mapa como punto o recuadro
-       naranja.
+     - "+ Otra variable en P1", al pie de las series del lugar (o en su menú
+       del clic derecho), ilumina el menú Variable: la variable (o el nivel)
+       que se elija a continuación se lee en P1, de la misma forma que P1, y
+       se suma a su carpeta. "Usar …" toma la variable ya elegida.
      - **Niveles:** en Punto y Región, el selector de niveles toma el del mapa
        por defecto, o varios, o todos. Se leen en una sola pasada (el rango
        contiguo del eje de niveles): los bloques comprimidos de un reanálisis

@@ -2924,3 +2924,51 @@
 .data-tool-resample-info.busy {
     font-style: italic;
 }
+
+/* Where a new extraction of a map went (_griddedShowInTree): the folder,
+   then the new series, light up twice. */
+.tree-item.tree-flash {
+    animation: tree-flash 0.8s ease-in-out 4;
+}
+
+@keyframes tree-flash {
+    0%, 100% { background: transparent; box-shadow: none; }
+    50% {
+        background: color-mix(in srgb, #14b8a6 32%, transparent);
+        box-shadow: inset 0 0 0 1px #14b8a6;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tree-item.tree-flash {
+        animation: none;
+        background: color-mix(in srgb, #14b8a6 22%, transparent);
+    }
+}
+
+/* After Close map: the file's Map button, where the map comes back from,
+   turns amber and back a few times (_griddedPointAtMapButton). It is
+   already teal: a teal glow on it did not show. */
+.file-entry-map.gridded-map-btn-flash {
+    animation: gridded-map-btn-flash 0.7s ease-in-out 4;
+}
+
+@keyframes gridded-map-btn-flash {
+    0%, 100% { transform: scale(1); }
+    45%, 55% {
+        background: #f59e0b;
+        border-color: #f59e0b;
+        color: #1f1300;
+        transform: scale(1.12);
+        box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45), 0 0 14px rgba(245, 158, 11, 0.75);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .file-entry-map.gridded-map-btn-flash {
+        animation: none;
+        background: #f59e0b;
+        border-color: #f59e0b;
+        color: #1f1300;
+    }
+}
