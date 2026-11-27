@@ -2063,11 +2063,11 @@ export function installGriddedMethods(TargetClass) {
 
     // The pinned cell's outline, placed again whenever the map is drawn (a
     // zoom, a pan, a step).
-    proto._griddedDrawPinned = function(div, view) {
+    proto._griddedDrawPinned = function(div, view, ranges = null) {
         if (!div) return;
         let box = div.querySelector(':scope > .gridded-cell-outline.is-pinned');
         const cell = view?.pinned;
-        const rect = cell && view.map ? this._griddedCellRect(div, view, cell) : null;
+        const rect = cell && view.map ? this._griddedCellRect(div, view, cell, null, ranges) : null;
         if (!rect) {
             if (box) box.hidden = true;
             return;
@@ -2085,12 +2085,26 @@ export function installGriddedMethods(TargetClass) {
     // A cell's rectangle in the plot's pixels, clipped to its area; its
     // longitude taken next to `nearLon` (a grid in 0…360 on a map in
     // −180…180), by default the middle of the view.
-    proto._griddedCellRect = function(div, view, cell, nearLon = null) {
+    // `ranges` ({ x: [a, b], y: [c, d] }): the axes' ranges of a pan still
+    // under way, which Plotly only writes into its layout when it ends.
+    proto._griddedCellRect = function(div, view, cell, nearLon = null, ranges = null) {
         const layout = div?._fullLayout;
         const map = view?.map;
-        const x = layout?.xaxis;
-        const y = layout?.yaxis;
-        if (!map || !x?.d2p || !y?.d2p || map.lon?.[cell.column] === undefined || map.lat?.[cell.row] === undefined) return null;
+        const axes = layout && { x: layout.xaxis, y: layout.yaxis };
+        if (!map || !axes?.x?.d2p || !axes?.y?.d2p || map.lon?.[cell.column] === undefined || map.lat?.[cell.row] === undefined) return null;
+        // An axis that places values by `ranges` when given, as Plotly would.
+        const axis = (key) => {
+            const base = axes[key];
+            const range = ranges?.[key];
+            if (!range || !(Number(range[1]) !== Number(range[0]))) return base;
+            const [a, b] = range.map(Number);
+            const d2p = key === 'x'
+                ? value => (value - a) / (b - a) * base._length
+                : value => (b - value) / (b - a) * base._length;
+            return { ...base, range: [a, b], d2p, _offset: base._offset, _length: base._length };
+        };
+        const x = axis('x');
+        const y = axis('y');
         const halfStep = (values, index) => (values.length < 2
             ? 0.5
             : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
@@ -3308,7 +3322,18 @@ export function installGriddedMethods(TargetClass) {
         // The outline of the cell read goes with the pointer, and while the
         // map moves under it (a drag, a zoom): the next move draws it again.
         div.addEventListener('mouseleave', () => this._griddedOutlineCell(div, null, null));
-        div.on?.('plotly_relayouting', () => this._griddedOutlineCell(div, null, null));
+        div.on?.('plotly_relayouting', event => {
+            this._griddedOutlineCell(div, null, null);
+            // The pinned cell goes along with the map while it is dragged.
+            const pick = (key) => {
+                const pair = event?.[`${key}axis.range`];
+                const a = event?.[`${key}axis.range[0]`] ?? pair?.[0];
+                const b = event?.[`${key}axis.range[1]`] ?? pair?.[1];
+                return a !== undefined && b !== undefined ? [a, b] : null;
+            };
+            const ranges = { x: pick('x'), y: pick('y') };
+            if (ranges.x || ranges.y) this._griddedDrawPinned(div, this._griddedVisibleView(), ranges);
+        });
         div.on?.('plotly_relayout', () => this._griddedOutlineCell(div, null, null));
         div.on?.('plotly_afterplot', () => this._griddedDrawPinned(div, this._griddedVisibleView()));
         div.addEventListener('pointerdown', event => {
