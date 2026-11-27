@@ -406,6 +406,7 @@ proto.closeTab = async function(index, options = {}) {
     this._renderTabs();
     this._tabSwitching = this._showTab(tabs.items[tabs.activeIndex]);
     try { await this._tabSwitching; } finally { this._tabSwitching = null; }
+    this._restoreTabMap(tabs.items[tabs.activeIndex]);
     this._afterTabChange();
     // A switch asked for while the tab beside it was being put back.
     const pending = this._pendingTabIndex;

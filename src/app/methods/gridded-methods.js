@@ -776,7 +776,7 @@ export function installGriddedMethods(TargetClass) {
             this._clearVariableSelection();
             this.renderVariablesTree(data.tree);
             this._updateActionButtons();
-            this._showGriddedView(fileId);
+            this._openGriddedMap(fileId);
         }
         return { fileId, data, gridded: true };
     };
@@ -1499,11 +1499,7 @@ export function installGriddedMethods(TargetClass) {
             const action = target?.dataset.action;
             if (!action) return;
             const current = view();
-            if (action === 'close') {
-                // Closed on purpose: no button over the plots asks to come back.
-                this._griddedState().returnFileId = null;
-                this._hideGriddedView();
-            }
+            if (action === 'close') this._griddedCloseMap();
             else if (action === 'toggle-panel') this._griddedTogglePanel();
             else if (action === 'peek') this._griddedPeek();
             else if (!current) return;
@@ -1657,8 +1653,7 @@ export function installGriddedMethods(TargetClass) {
         set('[data-action="toggle-panel"]', 'griddedTogglePanel', 'ariaLabel');
         set('[data-action="export-map"]', 'griddedExportMapTitle', 'title');
         set('[data-action="export-map"]', 'griddedExportMapTitle', 'ariaLabel');
-        set('[data-action="close"]', 'griddedCloseMap');
-        set('[data-action="close"]', 'griddedCloseMapTitle', 'title');
+        this._griddedSyncCloseLabel(root);
         set('[data-action="cancel"]', 'griddedCancel');
         set('[data-role="inspector-heading"]', 'griddedInspector');
         set('[data-role="inspector"]', 'griddedInspectorTitle', 'title');
@@ -1728,6 +1723,7 @@ export function installGriddedMethods(TargetClass) {
         state.visibleFileId = fileId;
         state.returnFileId = null;
         root.hidden = false;
+        this._griddedSyncCloseLabel(root);
         document.body.classList.add('gridded-view-open');
         if (this.plotManager.activeFileId !== fileId) this.setActiveFile(fileId);
         this._griddedRenderControls(view);
@@ -1736,6 +1732,76 @@ export function installGriddedMethods(TargetClass) {
         else this._griddedRequestMap(view);
         if (!view.scale.range && !view.scale.follow && !view.scaleToken) this._griddedAutofit(view, 'sample');
         this._renderFilesList();
+    };
+
+    /**
+     * Open a file's map where it does not hide anything: on the tab that
+     * already has it; on the tab on screen when that tab is empty; otherwise
+     * on a new tab of its own, named after the file. The plots of the other
+     * tabs stay as they were, under no map. On a phone, where the tabs are
+     * not on screen, the map opens over the panels as before.
+     */
+    proto._openGriddedMap = async function(fileId) {
+        const state = this._griddedState();
+        if (!state.views.has(fileId)) return;
+        const phone = document.documentElement.classList.contains('compact');
+        if (phone || !this._tabsEnabled?.() || !this.addTab) {
+            this._showGriddedView(fileId);
+            return;
+        }
+        if (this._tabSwitching) await this._tabSwitching;
+        const tabs = this._ensureTabsState();
+        if (state.visibleFileId === fileId) return;
+        const there = tabs.items.findIndex((item, index) => index !== tabs.activeIndex
+            && (item.mapFileId === fileId || item.mapTabFor === fileId));
+        if (there >= 0) {
+            await this.switchTab(there);
+            if (state.visibleFileId !== fileId) this._showGriddedView(fileId);
+            return;
+        }
+        const empty = !state.visibleFileId && !this.plotManager.hasAnyTraces?.();
+        if (!empty) await this.addTab();
+        const index = tabs.activeIndex;
+        const item = tabs.items[index];
+        item.mapTabFor = fileId;
+        if (!item.name) this.renameTab(index, this._fileDisplayName?.(this.files.get(fileId)) || '');
+        this._showGriddedView(fileId);
+    };
+
+    // The map's own tab, with nothing under the map: closing the map closes it.
+    proto._griddedClosesTab = function() {
+        const tabs = this.tabs;
+        const item = tabs?.items?.[tabs.activeIndex];
+        const fileId = this._griddedState().visibleFileId;
+        return !!fileId && !!item && item.mapTabFor === fileId && tabs.items.length > 1
+            && !document.documentElement.classList.contains('compact')
+            && !this.plotManager.hasAnyTraces?.();
+    };
+
+    proto._griddedSyncCloseLabel = function(root = document.getElementById('gridded-view')) {
+        const button = root?.querySelector('[data-action="close"]');
+        if (!button) return;
+        const tab = this._griddedClosesTab();
+        button.textContent = i18n.t(tab ? 'griddedCloseTab' : 'griddedCloseMap');
+        button.title = i18n.t(tab ? 'griddedCloseTabTitle' : 'griddedCloseMapTitle');
+    };
+
+    // Close map — or, on the map's own tab, Close tab.
+    proto._griddedCloseMap = async function() {
+        const state = this._griddedState();
+        // Closed on purpose: no button over the plots asks to come back.
+        state.returnFileId = null;
+        if (this._griddedClosesTab()) {
+            const tabs = this.tabs;
+            const index = tabs.activeIndex;
+            this._hideGriddedView();
+            tabs.items[index].mapFileId = null;
+            await this.closeTab(index, { force: true });
+            return;
+        }
+        const item = this.tabs?.items?.[this.tabs.activeIndex];
+        if (item) item.mapTabFor = null;
+        this._hideGriddedView();
     };
 
     proto._hideGriddedView = function() {
