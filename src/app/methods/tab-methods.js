@@ -334,6 +334,16 @@ proto.flashTab = function(index) {
     this._renderTabs();
 };
 
+// A new tab at the end of the strip (the map's tabs: where the newest is
+// looked for), and the app on it.
+proto.addTabAtEnd = async function() {
+    if (this._tabSwitching) await this._tabSwitching;
+    this._pendingTabIndex = null;
+    const tabs = this._ensureTabsState();
+    tabs.items.push(this._newTabItem());
+    await this.switchTab(tabs.items.length - 1);
+};
+
 proto.addTab = async function() {
     if (this._tabSwitching) await this._tabSwitching;
     // An index asked for before the tabs changed names another tab now.

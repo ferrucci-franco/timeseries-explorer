@@ -1745,7 +1745,7 @@ export function installGriddedMethods(TargetClass) {
         const state = this._griddedState();
         if (!state.views.has(fileId)) return;
         const phone = document.documentElement.classList.contains('compact');
-        if (phone || !this._tabsEnabled?.() || !this.addTab) {
+        if (phone || !this._tabsEnabled?.() || !this.addTabAtEnd) {
             this._showGriddedView(fileId);
             return;
         }
@@ -1760,7 +1760,7 @@ export function installGriddedMethods(TargetClass) {
             return;
         }
         const empty = !state.visibleFileId && !this.plotManager.hasAnyTraces?.();
-        if (!empty) await this.addTab();
+        if (!empty) await this.addTabAtEnd();
         const index = tabs.activeIndex;
         const item = tabs.items[index];
         item.mapTabFor = fileId;
@@ -4721,7 +4721,7 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedPlotChecked = function(view) {
         const names = this._griddedCheckedSeries(view).map(item => item.variable.name);
         if (!names.length) return;
-        if (!document.documentElement.classList.contains('compact') && this._tabsEnabled?.() && this.addTab) {
+        if (!document.documentElement.classList.contains('compact') && this._tabsEnabled?.() && this.addTabAtEnd) {
             this._griddedPlotInNewTab(view, names);
             return;
         }
@@ -4771,7 +4771,7 @@ export function installGriddedMethods(TargetClass) {
         const name = this._griddedTabName(view);
         this._griddedState().returnFileId = view.fileId;
         // Not hidden here: leaving the tab hides it, and the tab keeps it.
-        await this.addTab();
+        await this.addTabAtEnd();
         const tabs = this._ensureTabsState();
         const index = tabs.activeIndex;
         this.renameTab(index, name);
