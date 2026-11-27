@@ -68,7 +68,9 @@ import {
 // Detrend methods the lazy path computes as SQL. The moving-average baseline,
 // a centred window of arbitrary width, runs in the chunked executor.
 const LAZY_SQL_DETREND_METHODS = new Set(['mean', 'linear', 'polynomial', 'firstSample']);
-// Every detrend method a lazy file offers.
+// Every detrend method a lazy file offers — which is every method the picker
+// offers. scripts/test-lazy-tool-coverage.mjs fails if one is added that is not,
+// so the panel neither greys a method out nor refuses one on a lazy file.
 export const LAZY_DETREND_METHODS = new Set([...LAZY_SQL_DETREND_METHODS, 'movingAverage']);
 // A stretch of a zero-phase filter up to this many samples is filtered in
 // memory; a longer one in two passes over the file (createZeroPhaseFilter).
