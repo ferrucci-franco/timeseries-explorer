@@ -3939,25 +3939,26 @@ export function installGriddedMethods(TargetClass) {
         const folder = findFolder();
         if (!folder || !folder.offsetParent) return;
         const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-        folder.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
-        flash(folder);
-        setTimeout(() => {
-            // The tree may have been drawn again meanwhile: look again.
-            const now = findFolder();
-            if (!now) return;
-            open(now);
-            const place = [...(now.nextElementSibling?.querySelectorAll(':scope > .tree-node > .tree-item') || [])]
-                .find(item => item.querySelector(':scope > .tree-label')?.textContent === group.tag
-                    || item.querySelector(':scope > .tree-label')?.textContent?.startsWith(`${group.tag} `));
-            open(place);
-            const leaves = names
-                .map(name => document.querySelector(`#sidebar .tree-item[data-var-name="${CSS.escape(name)}"]`))
-                .filter(Boolean);
-            if (leaves.length) {
-                leaves[leaves.length - 1].scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
-                leaves.forEach(flash);
-            }
-        }, reduce ? 0 : 1600);
+        // Opened first, then the folder and the new series blink together,
+        // in step: one signal, not two out of phase.
+        open(folder);
+        const place = [...(folder.nextElementSibling?.querySelectorAll(':scope > .tree-node > .tree-item') || [])]
+            .find(item => item.querySelector(':scope > .tree-label')?.textContent?.startsWith(`${group.tag} `));
+        open(place);
+        const leaves = names
+            .map(name => document.querySelector(`#sidebar .tree-item[data-var-name="${CSS.escape(name)}"]`))
+            .filter(Boolean);
+        // The folder and its new series in view: left alone when they
+        // already are, the folder at the top of the tree otherwise.
+        const last = leaves[leaves.length - 1] || folder;
+        let scroller = folder.parentElement;
+        while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) {
+            scroller = scroller.parentElement;
+        }
+        const frame = scroller?.getBoundingClientRect();
+        const inView = !frame || (folder.getBoundingClientRect().top >= frame.top && last.getBoundingClientRect().bottom <= frame.bottom);
+        if (!inView) folder.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+        requestAnimationFrame(() => [folder, ...leaves].forEach(flash));
     };
 
     proto._griddedCommitData = function(view, data) {
