@@ -350,18 +350,19 @@ html:not(.compact) .gridded-menu input[type="checkbox"]:focus-visible {
     cursor: grabbing !important;
 }
 
-/* Over something that can be picked (a point, a box's edge, the orange
-   ring), a hand; while the ring is dragged, a closed hand. */
+/* Over something that can be picked (a point, a box's edge), a hand; over
+   the orange ring, and while it is dragged, the four arrows of "move" (a
+   hand did not say it could be moved). */
 .gridded-map.gridded-over-item .nsewdrag {
     cursor: pointer !important;
 }
 
 .gridded-map.gridded-over-ring .nsewdrag {
-    cursor: grab !important;
+    cursor: move !important;
 }
 
 .gridded-map.gridded-dragging .nsewdrag {
-    cursor: grabbing !important;
+    cursor: move !important;
 }
 
 .gridded-status {
@@ -1733,3 +1734,13 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 .gridded-map.gridded-menu-open .hoverlayer {
     display: none;
 }
+
+/* While a box's edge or corner is dragged, its resize arrows stay. */
+.gridded-map.gridded-drag-n .nsewdrag,
+.gridded-map.gridded-drag-s .nsewdrag { cursor: ns-resize !important; }
+.gridded-map.gridded-drag-e .nsewdrag,
+.gridded-map.gridded-drag-w .nsewdrag { cursor: ew-resize !important; }
+.gridded-map.gridded-drag-ne .nsewdrag,
+.gridded-map.gridded-drag-sw .nsewdrag { cursor: nesw-resize !important; }
+.gridded-map.gridded-drag-nw .nsewdrag,
+.gridded-map.gridded-drag-se .nsewdrag { cursor: nwse-resize !important; }

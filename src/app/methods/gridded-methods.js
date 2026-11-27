@@ -1517,7 +1517,6 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'clear-region') this._griddedClearPending(current, 'region');
             else if (action === 'remove-group') this._griddedRemoveGroup(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'remove-set') this._griddedRemoveSet(current, target.closest('[data-group]')?.dataset.group, target.closest('[data-set]')?.dataset.set);
-            else if (action === 'reuse-group') this._griddedReusePlace(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'add-variable') this._griddedArmAdd(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'add-current') this._griddedAddToArmed(current);
             else if (action === 'add-cancel') this._griddedDisarmAdd(current);
@@ -1546,15 +1545,22 @@ export function installGriddedMethods(TargetClass) {
             if (event.key === 'Delete' || event.key === 'Backspace') {
                 event.preventDefault();
                 this._griddedDeleteSelected(current);
-            } else if (event.key === 'Escape') {
-                this._griddedSelect(current, null);
             }
         });
+        // Escape, one step back at a time: a place waiting for a variable;
+        // Point or Region, back to Navigate (what was placed stays); a
+        // pinned cell; a selection.
         document.addEventListener('keydown', event => {
             const current = view();
-            if (event.key !== 'Escape' || root.hidden || document.querySelector('.modal-overlay, .gridded-context-menu')) return;
-            if (current?.addTo) this._griddedDisarmAdd(current);
-            else if (current?.pinned) this._griddedUnpin(current);
+            if (event.key !== 'Escape' || !current || root.hidden || document.querySelector('.modal-overlay, .gridded-context-menu')) return;
+            if (current.addTo) {
+                this._griddedDisarmAdd(current);
+                return;
+            }
+            if (event.target.closest?.('input, select, textarea, [contenteditable="true"]')) return;
+            if (current.mode !== 'navigate') this._griddedSetMode(current, 'navigate');
+            else if (current.pinned) this._griddedUnpin(current);
+            else if (current.selected) this._griddedSelect(current, null);
         });
         root.addEventListener('keydown', event => {
             if (event.target.closest('input, select, textarea')) return;
@@ -2218,6 +2224,7 @@ export function installGriddedMethods(TargetClass) {
         if (mode !== 'navigate') this._griddedUnpin(view);
         this._griddedSyncMode(view);
         const div = this._griddedEl('map');
+        if (mode !== 'navigate') this._griddedOutlineCell(div, null, null);
         this._griddedDeactivateShape(div);
         if (div?._fullLayout) Plotly.relayout(div, { dragmode: mode === 'region' ? 'drawrect' : 'pan' });
         // A series is coming: on a large dataset the helper workers start
@@ -3320,7 +3327,9 @@ export function installGriddedMethods(TargetClass) {
             // open menu holds everything.
             const quiet = !!this._griddedMenu;
             if (view && at && !view.pinned && !quiet) this._griddedInspect(view, at);
-            this._griddedOutlineCell(div, view, interaction.pressed || view?.pinned || quiet ? null : at);
+            // Navigate only: in Point and Region the map has their own marks
+            // (the ring, the box and its handles) to show.
+            this._griddedOutlineCell(div, view, interaction.pressed || view?.pinned || quiet || view?.mode !== 'navigate' ? null : at);
             let over = null;
             if (at) {
                 const target = this._griddedEditTarget(view, at, 'mouse');
@@ -3574,6 +3583,10 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedBeginEdit = function(view, div, target, startAt) {
         view.editing = true;
         div.classList.add('gridded-dragging');
+        // The cursor of the grab, kept for the whole drag: move, or the
+        // resize arrows of the box's edge or corner held.
+        const dragClass = `gridded-drag-${target.kind === 'box' ? target.handle : 'move'}`;
+        div.classList.add(dragClass);
         let frame = 0;
         let pending = null;
         const flush = () => {
@@ -3591,7 +3604,7 @@ export function installGriddedMethods(TargetClass) {
                 flush();
             }
             view.editing = false;
-            div.classList.remove('gridded-dragging');
+            div.classList.remove('gridded-dragging', dragClass);
             view.selected = { kind };
             this._griddedSyncInputs(view);
             this._griddedRenderSelection(view);
@@ -3779,7 +3792,7 @@ export function installGriddedMethods(TargetClass) {
         } else {
             const group = (view.groups || []).find(item => item.id === target.id);
             if (group) {
-                items.push([i18n.t('griddedReuseHere'), () => this._griddedReusePlace(view, group.id)]);
+                items.push([i18n.t('griddedAddVariable').replace(/\{tag\}/g, group.tag), () => this._griddedArmAdd(view, group.id)]);
                 items.push([i18n.t('griddedDeleteExtraction').replace('{tag}', group.tag), () => this._griddedDeleteSelected(view, target)]);
             }
         }
@@ -4296,25 +4309,6 @@ export function installGriddedMethods(TargetClass) {
             icon: false,
             className: 'gridded-help-dialog',
         });
-    };
-
-    proto._griddedReusePlace = function(view, id) {
-        const group = (view.groups || []).find(item => item.id === id);
-        if (!group) return;
-        if (group.kind === 'point') {
-            view.pendingPoint = { ...group.geometry };
-            view.pointMethod = group.method === 'bilinear' ? 'bilinear' : 'nearest';
-            view.selected = { kind: 'pending-point' };
-            this._griddedSetMode(view, 'point');
-        } else {
-            view.pendingBox = { ...group.geometry };
-            view.selected = { kind: 'pending-box' };
-            this._griddedSetMode(view, 'region');
-        }
-        this._griddedSyncInputs(view);
-        this._griddedRenderSelection(view);
-        this._griddedDrawMap(view);
-        this._griddedSetStatus(i18n.t('griddedReuseStatus').replace(/\{tag\}/g, group.tag));
     };
 
     // ─── Sessions ─────────────────────────────────────────────────────────
