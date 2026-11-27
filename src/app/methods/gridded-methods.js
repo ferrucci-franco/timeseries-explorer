@@ -2045,11 +2045,9 @@ export function installGriddedMethods(TargetClass) {
         const same = view.pinned && view.pinned.row === cell.row && view.pinned.column === cell.column;
         if (same && toggle) {
             this._griddedUnpin(view);
-            this._griddedOutlineCell(this._griddedEl('map'), view, at);
             return;
         }
         view.pinned = { ...cell };
-        this._griddedOutlineCell(this._griddedEl('map'), view, null);
         this._griddedDrawPinned(this._griddedEl('map'), view);
         this._griddedSyncInspector(view);
     };
@@ -2120,31 +2118,6 @@ export function installGriddedMethods(TargetClass) {
         const bottom = Math.min(Math.max(...ys), y._offset + y._length);
         if (!(right - left > 1 && bottom - top > 1)) return null;
         return { left, top, width: right - left, height: bottom - top };
-    };
-
-    /**
-     * Outline the grid cell the inspector reads, under the pointer: the
-     * value shown is a cell's, and on a coarse grid a cell is many pixels
-     * wide. Drawn in pixels over the plot, clipped to its area; hidden with
-     * nothing read (off the grid, the pointer gone, the map moving).
-     */
-    proto._griddedOutlineCell = function(div, view, at) {
-        if (!div) return;
-        let box = div.querySelector(':scope > .gridded-cell-outline:not(.is-pinned)');
-        const cell = view?.inspect;
-        const rect = cell && at ? this._griddedCellRect(div, view, cell, at.lon) : null;
-        if (!rect) {
-            if (box) box.hidden = true;
-            return;
-        }
-        if (!box) {
-            box = document.createElement('div');
-            box.className = 'gridded-cell-outline';
-            box.setAttribute('aria-hidden', 'true');
-            div.appendChild(box);
-        }
-        box.hidden = false;
-        Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     };
 
     proto._griddedInspect = function(view, at) {
@@ -2238,7 +2211,6 @@ export function installGriddedMethods(TargetClass) {
         if (mode !== 'navigate') this._griddedUnpin(view);
         this._griddedSyncMode(view);
         const div = this._griddedEl('map');
-        if (mode !== 'navigate') this._griddedOutlineCell(div, null, null);
         this._griddedDeactivateShape(div);
         if (div?._fullLayout) Plotly.relayout(div, { dragmode: mode === 'region' ? 'drawrect' : 'pan' });
         // A series is coming: on a large dataset the helper workers start
@@ -3319,12 +3291,9 @@ export function installGriddedMethods(TargetClass) {
         };
         window.addEventListener('pointerup', release, { capture: true });
         window.addEventListener('pointercancel', release, { capture: true });
-        // The outline of the cell read goes with the pointer, and while the
-        // map moves under it (a drag, a zoom): the next move draws it again.
-        div.addEventListener('mouseleave', () => this._griddedOutlineCell(div, null, null));
+        // The pinned cell's outline goes along with the map while it is
+        // dragged, and is placed again whenever the map is drawn.
         div.on?.('plotly_relayouting', event => {
-            this._griddedOutlineCell(div, null, null);
-            // The pinned cell goes along with the map while it is dragged.
             const pick = (key) => {
                 const pair = event?.[`${key}axis.range`];
                 const a = event?.[`${key}axis.range[0]`] ?? pair?.[0];
@@ -3334,10 +3303,8 @@ export function installGriddedMethods(TargetClass) {
             const ranges = { x: pick('x'), y: pick('y') };
             if (ranges.x || ranges.y) this._griddedDrawPinned(div, this._griddedVisibleView(), ranges);
         });
-        div.on?.('plotly_relayout', () => this._griddedOutlineCell(div, null, null));
         div.on?.('plotly_afterplot', () => this._griddedDrawPinned(div, this._griddedVisibleView()));
         div.addEventListener('pointerdown', event => {
-            this._griddedOutlineCell(div, null, null);
             interaction.down = { x: event.clientX, y: event.clientY };
             if (!event.target.closest?.('.gridded-context-menu')) this._griddedCloseMenu();
         }, { capture: true });
@@ -3348,13 +3315,8 @@ export function installGriddedMethods(TargetClass) {
         div.addEventListener('mousemove', event => {
             const view = this._griddedVisibleView();
             const at = view && !interaction.pressed && this._griddedEventCoords(div, event);
-            // A pinned cell holds the inspector (and its outline) still; an
-            // open menu holds everything.
-            const quiet = !!this._griddedMenu;
-            if (view && at && !view.pinned && !quiet) this._griddedInspect(view, at);
-            // Navigate only: in Point and Region the map has their own marks
-            // (the ring, the box and its handles) to show.
-            this._griddedOutlineCell(div, view, interaction.pressed || view?.pinned || quiet || view?.mode !== 'navigate' ? null : at);
+            // A pinned cell holds the inspector still; so does an open menu.
+            if (view && at && !view.pinned && !this._griddedMenu) this._griddedInspect(view, at);
             let over = null;
             if (at) {
                 const target = this._griddedEditTarget(view, at, 'mouse');
@@ -3852,12 +3814,11 @@ export function installGriddedMethods(TargetClass) {
         window.addEventListener('wheel', close, { capture: true, passive: true });
         menu.focus?.();
         menu.querySelector('button')?.focus();
-        // While the menu is open the map is quiet: no hover label, no
-        // outline following the pointer on its way to the menu.
+        // While the menu is open the map is quiet: no hover label on the
+        // pointer's way to the menu.
         const mapDiv = this._griddedEl('map');
         mapDiv?.classList.add('gridded-menu-open');
         try { if (mapDiv?._fullLayout) Plotly.Fx.unhover(mapDiv); } catch (_) { /* nothing hovered */ }
-        this._griddedOutlineCell(mapDiv, null, null);
         this._griddedMenu = {
             menu,
             remove: () => {
