@@ -4692,16 +4692,19 @@ export function installGriddedMethods(TargetClass) {
      * Only curves of this map's extractions are touched there.
      */
     /**
-     * The name of a tab opened for a map's checked series: the places, then
-     * what was read there — "P1 · t 850 hPa", "P1, R1 · t, t2m".
+     * The name of a tab opened for a map's checked series: the places they
+     * were read at — "P1", "P1, R1" — and, when a tab already has that name,
+     * "P1-1", "P1-2"…
      */
     proto._griddedTabName = function(view) {
-        const checked = this._griddedCheckedSeries(view);
-        const unique = values => [...new Set(values)];
-        const tags = unique(checked.map(item => item.group.tag));
-        const what = unique(checked.map(item => item.set.short));
-        const name = `${tags.join(', ')} · ${what.join(', ')}`;
-        return name.length > 40 ? `${name.slice(0, 39)}…` : name;
+        const tags = [...new Set(this._griddedCheckedSeries(view).map(item => item.group.tag))];
+        let base = tags.join(', ');
+        if (base.length > 32) base = `${base.slice(0, 31)}…`;
+        const taken = new Set((this.tabs?.items || []).map(item => this._tabDisplayName(item)));
+        if (!taken.has(base)) return base;
+        let number = 1;
+        while (taken.has(`${base}-${number}`)) number += 1;
+        return `${base}-${number}`;
     };
 
     /**
@@ -4915,9 +4918,10 @@ export function installGriddedMethods(TargetClass) {
         const entry = activeId ? this.files.get(activeId) : null;
         // Only after the map handed its series to the plots: a map closed
         // with "Close map" stays closed (its file row's Map button opens it).
-        const mapTab = this._griddedMapTabIndex(activeId);
-        const show = !!entry?.gridded && state.visibleFileId !== activeId
-            && (state.returnFileId === activeId || mapTab !== null);
+        // On a phone only: on a desktop the series open in a tab of their
+        // own, the map keeps its tab, and the change of tab is seen.
+        const phone = document.documentElement.classList.contains('compact');
+        const show = phone && !!entry?.gridded && state.visibleFileId !== activeId && state.returnFileId === activeId;
         if (!show) {
             if (button) button.hidden = true;
             return;
