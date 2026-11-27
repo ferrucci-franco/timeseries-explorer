@@ -1115,11 +1115,11 @@ export const GUIDE_CHAPTERS = [
             await d.wait(1500);
 
             d.say(say(
-                'Every variable of the file, in the toolbar',
-                'Toutes les variables du fichier, dans la barre',
-                'Todas las variables del archivo, en la barra',
-                'Tutte le variabili del file, nella barra',
-                '文件里的每个变量，都在工具栏中',
+                'Every variable of the file, at the top of the panel',
+                'Toutes les variables du fichier, en haut du panneau',
+                'Todas las variables del archivo, arriba del panel',
+                'Tutte le variabili del file, in cima al pannello',
+                '文件里的每个变量，都在面板顶部',
             ));
             await d.choose('#gridded-view [data-role="variable"]', '/t2m');
             await d.wait(700);

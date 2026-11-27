@@ -27,6 +27,152 @@ const MAX_GAP_CELLS = 200_000;
 export const CALENDAR_HEATMAP_HOUR_MS = 60 * 60 * 1000;
 export const CALENDAR_HEATMAP_DAY_MS = 24 * CALENDAR_HEATMAP_HOUR_MS;
 export const CALENDAR_HEATMAP_WEEK_MS = 7 * CALENDAR_HEATMAP_DAY_MS;
+export const CALENDAR_HEATMAP_MINUTE_MS = 60 * 1000;
+
+// ── The height of a Day x hour row ─────────────────────────────────────────
+//
+// A row one hour tall on a file sampled every three hours draws two empty rows
+// for every row of data: the grid says "no data" where the instrument was
+// never going to write any. So the row follows the sampling step.
+//
+// A row must divide the day, or the rows of one column would not tile it, and
+// the last row of each day would aggregate a shorter span than its neighbours
+// — a lie the colour scale cannot show. These are the minute-counts that
+// divide 1440.
+export const CALENDAR_HEATMAP_ROW_MINUTES = [
+    1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 32, 36, 40, 45, 48,
+    60, 72, 80, 90, 96, 120, 144, 160, 180, 240, 288, 360, 480, 720, 1440,
+];
+// What the automatic rule may choose: the whole hours that divide the day.
+// Finer rows than an hour never remove a blank (an hour already holds every
+// sub-hourly sample), so they are only ever asked for by hand.
+export const CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS = [1, 2, 3, 4, 6, 8, 12, 24]
+    .map(hours => hours * CALENDAR_HEATMAP_HOUR_MS);
+
+/**
+ * The nearest row height that divides the day, in ms.
+ *
+ * Anything unusable (not a number, zero, longer than a day) becomes one hour,
+ * the grid's historical row. A value between two divisors snaps to the closer
+ * one, and ties go to the coarser: fewer, fuller rows.
+ */
+export function normalizeCalendarHeatmapRowStepMs(value) {
+    const ms = Number(value);
+    if (!Number.isFinite(ms) || ms <= 0) return CALENDAR_HEATMAP_HOUR_MS;
+    if (ms >= CALENDAR_HEATMAP_DAY_MS) return CALENDAR_HEATMAP_DAY_MS;
+    const minutes = ms / CALENDAR_HEATMAP_MINUTE_MS;
+    let best = CALENDAR_HEATMAP_ROW_MINUTES[0];
+    let bestDistance = Infinity;
+    for (const candidate of CALENDAR_HEATMAP_ROW_MINUTES) {
+        const distance = Math.abs(candidate - minutes);
+        if (distance < bestDistance || (distance === bestDistance && candidate > best)) {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+    return best * CALENDAR_HEATMAP_MINUTE_MS;
+}
+
+/**
+ * The counts the automatic row height is decided from: how many inter-sample
+ * steps are no longer than each candidate row, and how many steps there are.
+ *
+ * Counters rather than a sorted median: the same eight numbers can be counted
+ * in one pass here and by eight COUNT(...) FILTER in DuckDB
+ * (_queryCalendarHeatmapAggregates), so a file read lazily and the same file
+ * in memory always land on the same grid — no sorting, no sampling cap, and
+ * no order dependence beyond the order the rows come in.
+ */
+export function createCalendarHeatmapStepCounts(cellMs = null) {
+    return {
+        n: 0,
+        atMost: CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS.map(() => 0),
+        // Steps that fit inside a cell of a height known before counting (a
+        // height given by hand, or the day of a Week x day cell). Where the
+        // height is counted it is by construction the first one half the steps
+        // fit in, so only the coarsest candidate can fail — atMost's last.
+        cellMs: cellMs == null ? null : Number(cellMs),
+        fit: 0,
+    };
+}
+
+export function countCalendarHeatmapStep(counts, stepMs) {
+    if (!(stepMs > 0)) return counts;
+    counts.n++;
+    for (let i = 0; i < CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS.length; i++) {
+        if (stepMs <= CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS[i]) counts.atMost[i]++;
+    }
+    if (counts.cellMs != null && stepMs <= counts.cellMs) counts.fit++;
+    return counts;
+}
+
+/**
+ * Is the typical step longer than one cell? Then the grid cannot be filled:
+ * cells the instrument was never going to write into stay empty, and the
+ * picture is striped for a reason that is not in the data.
+ */
+export function calendarHeatmapSamplingIsCoarse(counts) {
+    const total = Math.max(0, Number(counts?.n) || 0);
+    if (!total) return false;
+    const fit = counts.cellMs == null
+        ? Number(counts.atMost?.[CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS.length - 1]) || 0
+        : Number(counts.fit) || 0;
+    return fit * 2 < total;
+}
+
+/**
+ * The automatic row height: the shortest candidate row that holds at least
+ * half of the steps — the bucket the median step falls in.
+ *
+ * With a regular step every row then holds at least one sample, so no row of
+ * the grid is empty for want of a finer instrument. With fewer than two
+ * samples, or an irregular axis whose median step is under an hour, the row
+ * stays the hour it has always been.
+ */
+export function chooseCalendarHeatmapRowStepMs(counts) {
+    const total = Math.max(0, Number(counts?.n) || 0);
+    if (!total) return CALENDAR_HEATMAP_HOUR_MS;
+    const atMost = counts.atMost || [];
+    for (let i = 0; i < CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS.length; i++) {
+        if ((Number(atMost[i]) || 0) * 2 >= total) return CALENDAR_HEATMAP_AUTO_ROW_STEPS_MS[i];
+    }
+    return CALENDAR_HEATMAP_DAY_MS;
+}
+
+/**
+ * The clock time a Day x hour row starts at, as HH:MM.
+ *
+ * The row index alone says nothing once a row is not an hour: row 2 of a 3 h
+ * grid starts at 06:00. Both the Y axis and the hover read the time from here
+ * so they can never disagree.
+ */
+export function calendarHeatmapRowLabel(rowIndex, rowStepMs = CALENDAR_HEATMAP_HOUR_MS) {
+    const step = normalizeCalendarHeatmapRowStepMs(rowStepMs);
+    const offsetMs = (Number(rowIndex) || 0) * step;
+    const minutes = Math.floor(offsetMs / CALENDAR_HEATMAP_MINUTE_MS);
+    const hour = Math.floor(minutes / 60);
+    return `${String(hour).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+/** A row height written for a person: "3 h", "90 min", "24 h". */
+export function formatCalendarHeatmapRowStep(rowStepMs) {
+    const step = normalizeCalendarHeatmapRowStepMs(rowStepMs);
+    if (step === CALENDAR_HEATMAP_DAY_MS) return '24 h';
+    if (step % CALENDAR_HEATMAP_HOUR_MS === 0) return `${step / CALENDAR_HEATMAP_HOUR_MS} h`;
+    return `${step / CALENDAR_HEATMAP_MINUTE_MS} min`;
+}
+
+// A row height for a mode: only Day x hour has one to choose. A week's rows
+// are its seven days and nothing else divides a week into days.
+function rowStepForMode(mode, rowStepMs) {
+    if (mode === 'week-day') return CALENDAR_HEATMAP_DAY_MS;
+    return normalizeCalendarHeatmapRowStepMs(rowStepMs);
+}
+
+// How much time one cell of the grid covers.
+function cellDurationMs(mode, rowStepMs) {
+    return mode === 'week-day' ? CALENDAR_HEATMAP_DAY_MS : rowStepForMode(mode, rowStepMs);
+}
 
 // ECMAScript Date's valid epoch range is +/- 100,000,000 days. Reject values
 // outside it before doing calendar arithmetic so invalid dates never become
@@ -144,7 +290,7 @@ export function formatUtcIsoWeek(timestampMs) {
     return `${year}-W${String(isoWeek).padStart(2, '0')}`;
 }
 
-function calendarHeatmapCellCore(value, mode) {
+function calendarHeatmapCellCore(value, mode, rowStepMs = CALENDAR_HEATMAP_HOUR_MS) {
     if (mode === 'week-day') {
         const iso = utcIsoDayParts(value);
         return {
@@ -157,22 +303,23 @@ function calendarHeatmapCellCore(value, mode) {
         };
     }
 
-    const cellStartMs = floorUtcHour(value);
     const columnStartMs = floorUtcDay(value);
+    const rowIndex = Math.floor((value - columnStartMs) / rowStepMs);
+    const cellStartMs = columnStartMs + rowIndex * rowStepMs;
     return {
         columnStartMs,
         bucketStartMs: columnStartMs,
-        rowIndex: Math.floor((cellStartMs - columnStartMs) / CALENDAR_HEATMAP_HOUR_MS),
+        rowIndex,
         cellStartMs,
-        cellEndMs: cellStartMs + CALENDAR_HEATMAP_HOUR_MS,
+        cellEndMs: cellStartMs + rowStepMs,
     };
 }
 
-export function getCalendarHeatmapCell(timestampMs, calendarMode = 'week-day') {
+export function getCalendarHeatmapCell(timestampMs, calendarMode = 'week-day', options = {}) {
     const value = epochMs(timestampMs);
     const mode = normalizeCalendarMode(calendarMode);
     if (!mode || !isFiniteEpochMs(value)) return null;
-    const cell = calendarHeatmapCellCore(value, mode);
+    const cell = calendarHeatmapCellCore(value, mode, rowStepForMode(mode, options.rowStepMs));
     if (mode !== 'week-day') return cell;
     const { isoYear, isoWeek } = getUtcIsoWeek(value);
     return { ...cell, isoYear, isoWeek };
@@ -223,13 +370,13 @@ function medianOfSteps(steps) {
 
 // Trapezoidal area of one inter-sample interval, split at every calendar
 // boundary it crosses so no energy leaks into the neighbouring cell.
-function integrateInterval(startMs, startValue, endMs, endValue, mode, ensure) {
+function integrateInterval(startMs, startValue, endMs, endValue, mode, ensure, rowStepMs) {
     const span = endMs - startMs;
     if (!(span > 0)) return;
     let segmentStartMs = startMs;
     let segmentStartValue = startValue;
     while (segmentStartMs < endMs) {
-        const cell = calendarHeatmapCellCore(segmentStartMs, mode);
+        const cell = calendarHeatmapCellCore(segmentStartMs, mode, rowStepMs);
         const segmentEndMs = Math.min(cell.cellEndMs, endMs);
         const segmentEndValue = startValue
             + (endValue - startValue) * ((segmentEndMs - startMs) / span);
@@ -244,11 +391,11 @@ function integrateInterval(startMs, startValue, endMs, endValue, mode, ensure) {
 
 // Every cell touched by a gap is flagged: its integral would be missing the
 // data that is not there, so it is reported as a gap rather than as a value.
-function markGapCells(startMs, endMs, mode, ensure) {
+function markGapCells(startMs, endMs, mode, ensure, rowStepMs) {
     let cursorMs = startMs;
     let guard = 0;
     while (cursorMs < endMs && guard++ < MAX_GAP_CELLS) {
-        const cell = calendarHeatmapCellCore(cursorMs, mode);
+        const cell = calendarHeatmapCellCore(cursorMs, mode, rowStepMs);
         const overlapEndMs = Math.min(cell.cellEndMs, endMs);
         const accumulator = ensure(cell);
         accumulator.hasGap = true;
@@ -269,6 +416,7 @@ export function aggregateCalendarHeatmap(options = {}) {
         rangeStart = null,
         rangeEnd = null,
         timeShiftMs = 0,
+        rowStepMs = null,
     } = options;
 
     const mode = normalizeCalendarMode(calendarMode);
@@ -279,6 +427,27 @@ export function aggregateCalendarHeatmap(options = {}) {
     if (!Number.isFinite(shift)) return { ok: false, reason: 'invalidTimeShift', warnings: [] };
 
     const nTime = Number.isFinite(times?.length) ? Math.max(0, Math.trunc(times.length)) : 0;
+    // The grid before any cell exists: a row cannot be filled until its height
+    // is known. Asked for by hand, or counted from the axis in one pass that
+    // touches the timestamps only (the same counts DuckDB makes, so the two
+    // paths always agree) — see chooseCalendarHeatmapRowStepMs.
+    const rowStepAuto = rowStepMs == null && mode !== 'week-day';
+    const counts = createCalendarHeatmapStepCounts(
+        rowStepAuto ? null : cellDurationMs(mode, rowStepMs),
+    );
+    let previousStepMs = null;
+    for (let i = 0; i < nTime; i++) {
+        const sourceTimeMs = epochMs(times[i]);
+        const timestampMs = sourceTimeMs + shift;
+        if (!isFiniteEpochMs(sourceTimeMs) || !isFiniteEpochMs(timestampMs)) continue;
+        if (range.active && (timestampMs < range.startMs || timestampMs > range.endMs)) continue;
+        if (previousStepMs != null) countCalendarHeatmapStep(counts, timestampMs - previousStepMs);
+        previousStepMs = timestampMs;
+    }
+    const gridRowStepMs = rowStepAuto
+        ? chooseCalendarHeatmapRowStepMs(counts)
+        : rowStepForMode(mode, rowStepMs);
+    const samplingIsCoarse = calendarHeatmapSamplingIsCoarse(counts);
     const nValues = Number.isFinite(values?.length) ? Math.max(0, Math.trunc(values.length)) : 0;
     const sparse = new Map();
     let nInvalidTimestamp = 0;
@@ -309,7 +478,7 @@ export function aggregateCalendarHeatmap(options = {}) {
         // The hot path only needs column/row/bounds. ISO labels are derived
         // once per dense column rather than recalculating ISO year/week for
         // every source sample.
-        const cell = calendarHeatmapCellCore(timestampMs, mode);
+        const cell = calendarHeatmapCellCore(timestampMs, mode, gridRowStepMs);
         if (!cell) {
             nInvalidTimestamp++;
             continue;
@@ -384,9 +553,9 @@ export function aggregateCalendarHeatmap(options = {}) {
             if (sample == null) continue;
             if (previousMs != null && timestampMs > previousMs) {
                 if (timestampMs - previousMs > gapThresholdMs) {
-                    gapCellsTruncated = markGapCells(previousMs, timestampMs, mode, ensure) || gapCellsTruncated;
+                    gapCellsTruncated = markGapCells(previousMs, timestampMs, mode, ensure, gridRowStepMs) || gapCellsTruncated;
                 } else {
-                    integrateInterval(previousMs, previousValue, timestampMs, sample, mode, ensure);
+                    integrateInterval(previousMs, previousValue, timestampMs, sample, mode, ensure, gridRowStepMs);
                 }
             }
             previousMs = timestampMs;
@@ -423,10 +592,16 @@ export function aggregateCalendarHeatmap(options = {}) {
     if (aggregateOverflow) warnings.push('aggregateOverflow');
     if (nGapCells > 0) warnings.push('dataGaps');
     if (gapCellsTruncated) warnings.push('gapCellsTruncated');
+    // A cell shorter than the instrument's step cannot be filled: the grid
+    // would draw holes the data was never going to cover. Said plainly rather
+    // than left for the reader to infer from a striped picture.
+    if (samplingIsCoarse) warnings.push('coarseSampling');
 
     return {
         ok: true,
         calendarMode: mode,
+        rowStepMs: gridRowStepMs,
+        rowStepAuto,
         timeZone: 'UTC',
         rangeStartMs: range.startMs,
         rangeEndMs: range.endMs,
@@ -489,10 +664,11 @@ export function getCalendarHeatmapGridShape(options = {}) {
     }
     const lo = Math.min(start, end);
     const hi = Math.max(start, end);
+    const rowStepMs = rowStepForMode(mode, options.rowStepMs);
     const firstColumnStartMs = mode === 'week-day' ? floorUtcIsoWeek(lo) : floorUtcDay(lo);
     const lastColumnStartMs = mode === 'week-day' ? floorUtcIsoWeek(hi) : floorUtcDay(hi);
     const columnStepMs = mode === 'week-day' ? CALENDAR_HEATMAP_WEEK_MS : CALENDAR_HEATMAP_DAY_MS;
-    const rowCount = mode === 'week-day' ? 7 : 24;
+    const rowCount = mode === 'week-day' ? 7 : Math.round(CALENDAR_HEATMAP_DAY_MS / rowStepMs);
     const columnCount = Math.floor((lastColumnStartMs - firstColumnStartMs) / columnStepMs) + 1;
     if (!Number.isSafeInteger(columnCount) || columnCount < 1) {
         return { ok: false, reason: 'invalidDomain' };
@@ -505,6 +681,7 @@ export function getCalendarHeatmapGridShape(options = {}) {
         firstColumnStartMs,
         lastColumnStartMs,
         columnStepMs,
+        rowStepMs,
         columnCount,
         rowCount,
         cellsPerTrace: columnCount * rowCount,
@@ -563,6 +740,8 @@ function resolveDenseSource(source) {
         return {
             cells: source,
             calendarMode: null,
+            rowStepMs: null,
+            rowStepAuto: null,
             rangeActive: false,
             rangeStartMs: null,
             rangeEndMs: null,
@@ -578,6 +757,8 @@ function resolveDenseSource(source) {
     return {
         cells,
         calendarMode: source.calendarMode || source.meta?.calendarMode || null,
+        rowStepMs: source.rowStepMs ?? source.meta?.rowStepMs ?? null,
+        rowStepAuto: source.rowStepAuto ?? source.meta?.rowStepAuto ?? null,
         rangeActive: source.rangeActive ?? source.meta?.rangeActive ?? false,
         rangeStartMs: source.rangeStartMs ?? source.meta?.rangeStartMs ?? null,
         rangeEndMs: source.rangeEndMs ?? source.meta?.rangeEndMs ?? null,
@@ -588,17 +769,11 @@ function resolveDenseSource(source) {
     };
 }
 
-function naturalCellBounds(calendarMode, columnStartMs, rowIndex) {
-    const offset = calendarMode === 'week-day'
-        ? (rowIndex - 1) * CALENDAR_HEATMAP_DAY_MS
-        : rowIndex * CALENDAR_HEATMAP_HOUR_MS;
+function naturalCellBounds(calendarMode, columnStartMs, rowIndex, rowStepMs = CALENDAR_HEATMAP_HOUR_MS) {
+    const step = calendarMode === 'week-day' ? CALENDAR_HEATMAP_DAY_MS : rowStepMs;
+    const offset = calendarMode === 'week-day' ? (rowIndex - 1) * step : rowIndex * step;
     const cellStartMs = columnStartMs + offset;
-    return {
-        cellStartMs,
-        cellEndMs: cellStartMs + (calendarMode === 'week-day'
-            ? CALENDAR_HEATMAP_DAY_MS
-            : CALENDAR_HEATMAP_HOUR_MS),
-    };
+    return { cellStartMs, cellEndMs: cellStartMs + step };
 }
 
 // Convert sparse eager or lazy accumulators into Plotly-ready dense matrices.
@@ -610,6 +785,10 @@ export function densifyCalendarHeatmap(source, options = {}) {
     if (!calendarMode) return { ok: false, reason: 'invalidCalendarMode', warnings: [] };
     const aggregation = normalizeAggregation(options.aggregation || 'mean');
     if (!aggregation) return { ok: false, reason: 'invalidAggregation', warnings: [] };
+    // The cells were already bucketed by a row height; densifying with another
+    // one would put them in the wrong rows, so the sparse source's own height
+    // wins and the option is only the fallback for a bare array of cells.
+    const rowStepMs = rowStepForMode(calendarMode, resolved.rowStepMs ?? options.rowStepMs);
 
     let domainStart = options.domainStart ?? options.domainStartMs;
     let domainEnd = options.domainEnd ?? options.domainEndMs;
@@ -627,7 +806,7 @@ export function densifyCalendarHeatmap(source, options = {}) {
                 const columnStartMs = Number(cell.columnStartMs ?? cell.bucketStartMs);
                 const rowIndex = Number(cell.rowIndex);
                 const natural = Number.isFinite(columnStartMs) && Number.isInteger(rowIndex)
-                    ? naturalCellBounds(calendarMode, columnStartMs, rowIndex)
+                    ? naturalCellBounds(calendarMode, columnStartMs, rowIndex, rowStepMs)
                     : { cellStartMs: NaN, cellEndMs: NaN };
                 const explicitStart = Number(cell.cellStartMs);
                 const explicitEnd = Number(cell.cellEndMs);
@@ -640,7 +819,7 @@ export function densifyCalendarHeatmap(source, options = {}) {
             domainEnd = maximum;
         }
     }
-    const shape = getCalendarHeatmapGridShape({ calendarMode, domainStart, domainEnd });
+    const shape = getCalendarHeatmapGridShape({ calendarMode, domainStart, domainEnd, rowStepMs });
     if (!shape.ok) return { ...shape, warnings: uniqueWarnings(resolved.warnings) };
     const limit = validateCalendarHeatmapCellLimit({
         columns: shape.columnCount,
@@ -668,9 +847,12 @@ export function densifyCalendarHeatmap(source, options = {}) {
         { length: shape.columnCount },
         (_, index) => shape.firstColumnStartMs + index * shape.columnStepMs,
     );
+    // Week x day: ISO weekday 1..7. Day x hour: the row index, which is the
+    // hour only while a row is an hour tall — the labels carry the clock time
+    // (calendarHeatmapRowLabel), so a 3 h or a 15 min row needs no other axis.
     const y = calendarMode === 'week-day'
         ? Array.from({ length: 7 }, (_, index) => index + 1)
-        : Array.from({ length: 24 }, (_, index) => index);
+        : Array.from({ length: shape.rowCount }, (_, index) => index);
     const z = Array.from({ length: shape.rowCount }, () => Array(shape.columnCount).fill(null));
     const customdata = Array.from({ length: shape.rowCount }, () => Array(shape.columnCount).fill(null));
     const warnings = [...resolved.warnings];
@@ -684,7 +866,7 @@ export function densifyCalendarHeatmap(source, options = {}) {
             || !Number.isInteger(rowOffset) || rowOffset < 0 || rowOffset >= shape.rowCount) {
             continue;
         }
-        const bounds = naturalCellBounds(calendarMode, columnStartMs, rowIndex);
+        const bounds = naturalCellBounds(calendarMode, columnStartMs, rowIndex, rowStepMs);
         const nScope = Math.max(0, Number(cell.nScope) || 0);
         const nFinite = Math.max(0, Number(cell.nFinite) || 0);
         const nInvalid = Number.isFinite(Number(cell.nInvalid))
@@ -741,6 +923,8 @@ export function densifyCalendarHeatmap(source, options = {}) {
         meta: {
             calendarMode,
             aggregation,
+            rowStepMs,
+            rowStepAuto: resolved.rowStepAuto ?? null,
             timeZone: 'UTC',
             rangeActive: resolved.rangeActive,
             rangeStartMs: resolved.rangeStartMs,
@@ -773,6 +957,7 @@ export function buildCalendarHeatmap(options = {}) {
         rangeStart: options.rangeStart ?? options.rangeStartMs ?? null,
         rangeEnd: options.rangeEnd ?? options.rangeEndMs ?? null,
         timeShiftMs: options.timeShiftMs ?? 0,
+        rowStepMs: options.rowStepMs ?? null,
     });
     if (!aggregate.ok) return aggregate;
     if (aggregate.stats.nScope === 0) {
@@ -783,6 +968,8 @@ export function buildCalendarHeatmap(options = {}) {
             meta: {
                 calendarMode,
                 aggregation,
+                rowStepMs: aggregate.rowStepMs,
+                rowStepAuto: aggregate.rowStepAuto,
                 timeZone: 'UTC',
                 rangeActive: aggregate.rangeActive,
                 rangeStartMs: aggregate.rangeStartMs,

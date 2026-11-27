@@ -340,27 +340,30 @@ html:not(.compact) .gridded-menu input[type="checkbox"]:focus-visible {
     cursor: crosshair !important;
 }
 
-/* Navigate drags the map: an open hand, closed while it is pressed. */
+/* Navigate: a thin cross, whose centre is the very point the inspector
+   reads, with a small hand that says the map can be dragged (a plain cross
+   is Point's and Region's); a closed hand while it drags. */
 .gridded-map.gridded-cursor-navigate .nsewdrag {
-    cursor: grab !important;
+    cursor: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22 viewBox=%220 0 32 32%22%3E%3Cg stroke=%22%23111%22 stroke-width=%223%22 stroke-linecap=%22round%22%3E%3Cpath d=%22M16 3v9M16 20v9M3 16h9M20 16h9%22/%3E%3C/g%3E%3Cg stroke=%22%23fff%22 stroke-width=%221.3%22 stroke-linecap=%22round%22%3E%3Cpath d=%22M16 3v9M16 20v9M3 16h9M20 16h9%22/%3E%3C/g%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%221.1%22 fill=%22%23fff%22 stroke=%22%23111%22 stroke-width=%22.6%22/%3E%3Cg transform=%22translate%2819 19%29 scale%28.48%29%22 fill=%22%23fff%22 stroke=%22%23111%22 stroke-width=%222.2%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M9 17V9.5a1.8 1.8 0 0 1 3.6 0V15V7a1.8 1.8 0 0 1 3.6 0v8V8a1.8 1.8 0 0 1 3.6 0v7.5V10a1.8 1.8 0 0 1 3.6 0v9c0 5-3 8.5-7.6 8.5c-3.4 0-5.2-1.6-7-4.3L6.3 18.6a1.7 1.7 0 0 1 2.7-2Z%22/%3E%3C/g%3E%3C/svg%3E") 16 16, crosshair !important;
 }
 
 .gridded-map.gridded-cursor-navigate.gridded-pressed .nsewdrag {
     cursor: grabbing !important;
 }
 
-/* Over something that can be picked (a point, a box's edge, the orange
-   ring), a hand; while the ring is dragged, a closed hand. */
+/* Over something that can be picked (a point, a box's edge), a hand; over
+   the orange ring, and while it is dragged, the four arrows of "move" (a
+   hand did not say it could be moved). */
 .gridded-map.gridded-over-item .nsewdrag {
     cursor: pointer !important;
 }
 
 .gridded-map.gridded-over-ring .nsewdrag {
-    cursor: grab !important;
+    cursor: move !important;
 }
 
 .gridded-map.gridded-dragging .nsewdrag {
-    cursor: grabbing !important;
+    cursor: move !important;
 }
 
 .gridded-status {
@@ -1528,3 +1531,218 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 .gridded-help-dialog .gridded-help-body p:last-child {
     margin-bottom: 0;
 }
+
+/* ── Beside a desktop map (_griddedPlaceControls): no toolbar. The variable
+   and its level open "1 · Extract a time series"; the colour range, the
+   download and Close map end the map's own title line. */
+.gridded-map-head,
+.gridded-what {
+    display: none;
+}
+
+.gridded-view.is-side-controls .gridded-toolbar {
+    display: none;
+}
+
+.gridded-view.is-side-controls .gridded-map-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    /* As much room under the buttons as over them: centred in the strip. */
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+}
+
+.gridded-map-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+.gridded-map-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+
+.gridded-map-tools .gridded-toolbar-end {
+    margin-left: 0;
+}
+
+/* The colour range's button as tall as the download and Close map. */
+.gridded-map-tools [data-action="autofit-menu"] {
+    height: 28px;
+    box-sizing: border-box;
+}
+
+.gridded-what-section {
+    display: none;
+}
+
+.gridded-view.is-side-controls .gridded-what-section {
+    display: block;
+}
+
+.gridded-view.is-side-controls .gridded-what {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.35rem 0.5rem;
+    align-items: center;
+}
+
+.gridded-what .gridded-field,
+.gridded-what .gridded-dims {
+    display: contents;
+}
+
+.gridded-what select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+}
+
+/* The panel never scrolls sideways: a long label wraps instead (French,
+   Spanish and Italian ones are the longest). */
+.gridded-panel {
+    overflow-x: hidden;
+}
+
+.gridded-panel button {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* "+ another variable here", under a place: the way to extract the variable
+   now chosen at a place already in the list, in one click. */
+.gridded-view .gridded-reuse-var {
+    align-self: flex-start;
+    margin: 0.1rem 0 0 0.15rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px dashed color-mix(in srgb, var(--primary-color) 70%, transparent);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--primary-color);
+    font-size: 0.75rem;
+    text-align: left;
+}
+
+.gridded-view .gridded-reuse-var:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+}
+
+/* A row just extracted lights up once. */
+.gridded-result.is-new {
+    animation: gridded-new-row 1.2s ease-out 1;
+}
+
+@keyframes gridded-new-row {
+    0%, 40% { background: color-mix(in srgb, var(--primary-color) 28%, var(--bg-primary)); }
+    100% { background: var(--bg-primary); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gridded-result.is-new { animation: none; }
+}
+
+/* "+ Another variable at P1" pressed: the button stays lit while P1 waits,
+   and the Variable menu blinks to say where to pick it. */
+.gridded-view .gridded-reuse-var.is-armed {
+    border-style: solid;
+    background: color-mix(in srgb, var(--primary-color) 18%, transparent);
+}
+
+.gridded-view select.gridded-attention {
+    animation: gridded-attention 0.6s ease-in-out 4;
+}
+
+@keyframes gridded-attention {
+    0%, 100% { box-shadow: none; }
+    50% {
+        border-color: #14b8a6;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.85), 0 0 14px rgba(20, 184, 166, 0.7);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gridded-view select.gridded-attention {
+        animation: none;
+        box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.85);
+    }
+}
+
+.gridded-add-hint {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid color-mix(in srgb, #14b8a6 60%, transparent);
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, #14b8a6 12%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.gridded-add-hint[hidden] {
+    display: none;
+}
+
+.gridded-add-hint-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.gridded-add-hint-actions [hidden] {
+    display: none;
+}
+
+/* The outline of a pinned cell (a click in Navigate, _griddedDrawPinned):
+   the reading is a cell, not a pixel. */
+.gridded-cell-outline {
+    position: absolute;
+    z-index: 4;
+    pointer-events: none;
+    box-sizing: border-box;
+    border: 1.5px solid #14b8a6;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.gridded-cell-outline[hidden] {
+    display: none;
+}
+
+/* A pinned cell (a click in Navigate): its outline stays, thicker, and the
+   inspector says how to let it go. */
+.gridded-cell-outline.is-pinned {
+    border-width: 2.5px;
+    border-color: #14b8a6;
+    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55), 0 0 8px rgba(20, 184, 166, 0.7);
+}
+
+.gridded-inspector-pinned {
+    margin: 0.35rem 0 0;
+    color: #14b8a6;
+    font-size: 0.75rem;
+}
+
+.gridded-inspector-pinned[hidden] {
+    display: none;
+}
+
+/* An open context menu: the map's hover label stays away. */
+.gridded-map.gridded-menu-open .hoverlayer {
+    display: none;
+}
+
+/* While a box's edge or corner is dragged, its resize arrows stay. */
+.gridded-map.gridded-drag-n .nsewdrag,
+.gridded-map.gridded-drag-s .nsewdrag { cursor: ns-resize !important; }
+.gridded-map.gridded-drag-e .nsewdrag,
+.gridded-map.gridded-drag-w .nsewdrag { cursor: ew-resize !important; }
+.gridded-map.gridded-drag-ne .nsewdrag,
+.gridded-map.gridded-drag-sw .nsewdrag { cursor: nesw-resize !important; }
+.gridded-map.gridded-drag-nw .nsewdrag,
+.gridded-map.gridded-drag-se .nsewdrag { cursor: nwse-resize !important; }

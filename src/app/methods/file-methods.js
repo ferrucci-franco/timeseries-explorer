@@ -512,7 +512,7 @@ proto.loadFiles = async function(items = []) {
     // map in it is now the active file, and the map of a file loaded before
     // comes down: it would otherwise stay over the new file's plots.
     const lastGridded = [...loaded].reverse().find(result => result.gridded);
-    if (lastGridded) this._showGriddedView(lastGridded.fileId);
+    if (lastGridded) this._openGriddedMap(lastGridded.fileId);
     else if (loaded.length && this._gridded?.visibleFileId) this._hideGriddedView();
 
     for (const result of loaded) {
@@ -4900,12 +4900,24 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0, options = {})
         lazyIndicator.setAttribute('aria-label', i18n.t('lazyFileIndicatorTooltip'));
         lazyIndicator.hidden = !this.plotManager.files.get(fileId)?.data?._duckdb;
 
+        // A clock, not a gear: what the panel under it changes is the file's
+        // TIME axis — shift it, scale it, reindex it. The caret says the
+        // button opens something and which way it will go, and the pressed
+        // state is a solid fill (see .file-entry-transform in content.css),
+        // because a framed outline on an already highlighted row read as "not
+        // pressed" and left no way back in sight. The phone layout names the
+        // same action with the same clock (compact-methods.js).
         const transformBtn = document.createElement('button');
+        transformBtn.type = 'button';
         transformBtn.className = 'file-entry-transform';
-        transformBtn.textContent = '⛭';
-        transformBtn.title = i18n.t('fileTransformTitle');
-        transformBtn.setAttribute('aria-label', i18n.t('fileTransformTitle'));
-        transformBtn.setAttribute('aria-expanded', String(this._expandedFileTransforms.has(fileId)));
+        transformBtn.innerHTML = '<svg class="file-entry-transform-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+            + '<circle cx="12" cy="12" r="8.6" fill="none" stroke-width="1.8"/>'
+            + '<path d="M12 6.8V12l3.4 2.2" fill="none" stroke-width="1.8" stroke-linecap="round"/>'
+            + '</svg>'
+            + '<svg class="file-entry-transform-caret" viewBox="0 0 10 10" aria-hidden="true" focusable="false">'
+            + '<path d="M1.6 3.4 5 6.8l3.4-3.4" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
+            + '</svg>';
+        this._syncFileTransformButton(transformBtn, this._expandedFileTransforms.has(fileId));
         transformBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this._toggleFileTransformPanel(fileId);
@@ -4970,12 +4982,13 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0, options = {})
         mapBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (this._gridded?.visibleFileId === fileId) {
-                this._hideGriddedView();
+                // Pressed here: no need to point at it.
+                this._griddedCloseMap({ pointAtButton: false });
                 return;
             }
             // On a phone the Data sheet covers half the map: it gives way.
             if (this._compact?.sheet) this._closeCompactSheet();
-            this._showGriddedView(fileId);
+            this._openGriddedMap(fileId);
         });
 
         const closeBtn = document.createElement('button');
@@ -5252,6 +5265,21 @@ proto._normalizeFileTransform = function(transform = null) {
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
     return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || (t.timeStepOriginMode === 'calendar' && t.timeStepOriginDate !== '') || t.numericTimeDisplay !== null || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+};
+
+/**
+ * The time-axis button, saying which of its two states it is in.
+ *
+ * Both halves of that: aria-expanded, which the stylesheet turns into a solid
+ * fill and a flipped caret, and the tooltip, which stops offering to open a
+ * panel that is already open and names the way out instead.
+ */
+proto._syncFileTransformButton = function(button, expanded) {
+    if (!button) return;
+    const label = expanded ? i18n.t('fileTransformClose') : i18n.t('fileTransformTitle');
+    button.setAttribute('aria-expanded', String(!!expanded));
+    button.title = label;
+    button.setAttribute('aria-label', label);
 };
 
 proto._toggleFileTransformPanel = function(fileId) {

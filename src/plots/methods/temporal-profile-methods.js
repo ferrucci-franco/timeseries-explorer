@@ -6,6 +6,11 @@ import { blockText } from '../../utils/clipboard.js';
 import Plotly from '../../vendor/plotly.js';
 import { HOVER_READOUT_TOKEN } from '../../utils/hover-readout.js';
 import {
+    AXIS_TICK_LABEL_WIDTH_PX,
+    AXIS_TICK_LABEL_WIDTH_SHORT_PX,
+    fitAxisTicks,
+} from '../../utils/axis-ticks.js';
+import {
     buildTemporalProfile,
     inferTemporalProfileStepMs,
     TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES,
@@ -1062,6 +1067,14 @@ proto._buildTemporalProfileLayout = function(plot, units = {}, models = []) {
         hovermode: 'closest',
         uirevision: `temporal-profile-${state.period}-${state.period === 'year' ? state.yearResolution : state.resolutionByPeriod[state.period]}`,
     };
+    // Every label the axis names has to fit the pane it is drawn in: 31 days
+    // of a month, or a tick per year over a long record, run into each other
+    // on a narrow panel otherwise (src/utils/axis-ticks.js).
+    const axisWidthPx = Math.max(0, (plot?.temporalProfileDiv?.clientWidth || 0) - layout.margin.l - layout.margin.r);
+    const namedTicks = (values, labels, labelPx = AXIS_TICK_LABEL_WIDTH_PX) => {
+        const fitted = fitAxisTicks(values, labels, { sizePx: axisWidthPx, labelPx, fallbackCapacity: 12 });
+        return { tickmode: 'array', tickvals: fitted.tickvals, ticktext: fitted.ticktext };
+    };
     if (state.period === 'multi-year') {
         // One tick per year, at the middle of the year's bin. The bins are
         // epoch hours, so the ticks have to be read off the bins themselves —
@@ -1071,29 +1084,25 @@ proto._buildTemporalProfileLayout = function(plot, units = {}, models = []) {
         const bins = reference?.result?.categories?.[0]?.bins || [];
         const axisWindow = profileAxisWindow('multi-year', models);
         Object.assign(layout.xaxis, {
-            tickmode: 'array',
-            tickvals: bins.map(bin => bin.centerHours),
-            ticktext: years.map(String),
+            ...namedTicks(bins.map(bin => bin.centerHours), years.map(String), AXIS_TICK_LABEL_WIDTH_SHORT_PX),
             title: { text: text('temporalProfileXAxisMultiYear'), font: { size: 10 } },
         });
         if (axisWindow) layout.xaxis.range = axisWindow;
     } else if (state.period === 'day') {
         const ticks = Array.from({ length: 13 }, (_, index) => index * 2);
-        Object.assign(layout.xaxis, { range: [0, 24], tickmode: 'array', tickvals: ticks, ticktext: ticks.map(hour => `${String(hour).padStart(2, '0')}:00`), title: { text: text('temporalProfileXAxisDay'), font: { size: 10 } } });
+        Object.assign(layout.xaxis, { range: [0, 24], ...namedTicks(ticks, ticks.map(hour => `${String(hour).padStart(2, '0')}:00`)), title: { text: text('temporalProfileXAxisDay'), font: { size: 10 } } });
     } else if (state.period === 'week') {
         const weekdays = localizedWeekdays();
-        Object.assign(layout.xaxis, { range: [0, 168], tickmode: 'array', tickvals: weekdays.map((_, index) => index * 24 + 12), ticktext: weekdays, title: { text: text('temporalProfileXAxisWeek'), font: { size: 10 } } });
+        Object.assign(layout.xaxis, { range: [0, 168], ...namedTicks(weekdays.map((_, index) => index * 24 + 12), weekdays), title: { text: text('temporalProfileXAxisWeek'), font: { size: 10 } } });
     } else if (state.period === 'month') {
         const days = Array.from({ length: 31 }, (_, index) => index + 1);
-        Object.assign(layout.xaxis, { range: [0, 31 * 24], tickmode: 'array', tickvals: days.map(day => (day - 0.5) * 24), ticktext: days.map(String), title: { text: text('temporalProfileXAxisMonth'), font: { size: 10 } } });
+        Object.assign(layout.xaxis, { range: [0, 31 * 24], ...namedTicks(days.map(day => (day - 0.5) * 24), days.map(String), AXIS_TICK_LABEL_WIDTH_SHORT_PX), title: { text: text('temporalProfileXAxisMonth'), font: { size: 10 } } });
     } else {
         const monthStarts = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
         const monthLengths = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
         Object.assign(layout.xaxis, {
             range: [0, 366 * 24],
-            tickmode: 'array',
-            tickvals: monthStarts.map((start, index) => (start + monthLengths[index] / 2) * 24),
-            ticktext: localizedMonths(),
+            ...namedTicks(monthStarts.map((start, index) => (start + monthLengths[index] / 2) * 24), localizedMonths()),
             title: { text: text('temporalProfileXAxisYear'), font: { size: 10 } },
         });
     }

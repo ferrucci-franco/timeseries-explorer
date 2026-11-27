@@ -243,9 +243,16 @@ colour scale is fitted to the whole period and stays fixed while the time
 moves, so colours compare across steps. One "Color range" button holds it all:
 the two ends (typed by hand), the palette, and the fits (whole period, exact
 period, current step, visible area; optional percentile clipping and centring
-on zero), with the one in use marked in blue. The map opens in **Navigate** (a hand: drag or right-drag to pan,
-wheel or pinch to zoom; on a trackpad, two fingers up or down zoom and in any
-other direction pan); an analysis panel next to it turns it into series:
+on zero), with the one in use marked in blue. On a desktop the map opens in a
+tab of its own ("Map 1", or the empty tab on screen), so the plots of the other
+tabs stay as they were; its variable and level open the side panel, and the
+colour range, the download and Close map end the map's title line (on the
+map's own tab, Close closes the tab, and the file's Map button blinks to show
+where the map comes back from). The map opens in **Navigate** (a thin cross
+with a small hand, its centre the point the inspector reads: drag or
+right-drag to pan, wheel or pinch to zoom; on a trackpad, two fingers up or
+down zoom and in any other direction pan; a click pins the cell under it);
+an analysis panel next to it turns it into series:
 
 - **Point**: click the map (or drag the orange ring, or type a latitude and
   longitude), then extract the time series of the nearest grid cell, or one
@@ -254,10 +261,12 @@ other direction pan); an analysis panel next to it turns it into series:
   the nearest cell, or the square joining the four cell centres); extracted
   bilinear points are drawn as diamonds, nearest-cell points as circles.
 - **Region**: draw a box or type its North/West/East/South limits (as in the
-  Copernicus CDS form), adjust it on the map, then compute the area-weighted
+  Copernicus CDS form), adjust it on the map, then extract the area-weighted
   (cos latitude, or cell area when the file has latitude bounds) mean, minimum
-  and maximum for every time step. The box moves from inside and resizes from
-  its edges.
+  and maximum for every time step: three series. The box moves from inside and
+  resizes from its edges.
+
+Escape goes back to Navigate from Point or Region.
 
 Large files are read by parts, never whole: a global hourly ERA5 month at
 0.25° (1.7 GB) opens in about 2 s, and a point or region series over its 744
@@ -270,22 +279,32 @@ the point, a finger draws or drags the box; once a point or a box is placed,
 "Extract" floats over the map, and holding a point or a box opens its menu
 (extract, reuse, remove).
 
-An **inspector** at the top of the panel reads the cell under the pointer: where
+An **inspector** in the panel reads the cell under the pointer: where
 it is, its row and column in the grid, its value with units, and the step and
-level on screen. "Copy" puts that reading on the clipboard as one line.
+level on screen. "Copy" puts that reading on the clipboard as one line. A click
+in Navigate pins the cell (its outline stays, and the inspector stays on it,
+following the time step while Play runs); a right click pins it and opens a
+menu with "Copy reading". A click on it again, or Escape, lets it go.
 
 A "?" next to the tools explains how a point's value and a region's mean,
 minimum and maximum are computed. Both tools read the level on the map, or any set of levels (all of them, say),
 in one pass: one series per level. Each place gets a colour and a tag (P1,
 R1…) shared by the map, the panel list and the preview, and is a folder of the
-variable tree: "+" on its row puts it back on the map, and whatever is
-extracted there (another variable, other levels) joins the same folder. A click on a point or a box's edge selects it (and its
+variable tree. "+ Another variable at P1", under the place's series (or in its
+right-click menu), lights the Variable menu up: the variable (or level) picked
+there next is read at P1, the same way P1 was read, and joins the same folder.
+After an extraction the tree scrolls to "Extractions", opens it, and the folder
+and the new series blink together. A click on a point or a box's edge selects it (and its
 row, and the other way round); a right click (without dragging) opens a menu
 to extract or remove it, Delete removes the selected one, and the trash icon empties the list.
 
 Extractions become variables of the file in the explorer, named by the
 quantity ("2 metre temperature (t2m) · 45°N 90°E"), where FFT, integrals,
-heatmaps and cursors work on them; sending them again updates the same panel.
+heatmaps and cursors work on them. "Plot selected in new tab" plots the checked
+ones in a new tab at the end, named after the places ("P1, R1"; "P1-1" when
+that name is taken), and moves to it; the map keeps its own tab, and comes
+back with it. On a phone the series are plotted in the panels, the map closing,
+with "Back to the map" over them.
 In the preview under the map, curves that do not share a unit do not share an
 axis either: the first unit keeps the left axis and the others go to a second
 one on the right, each axis titled with the units it carries.

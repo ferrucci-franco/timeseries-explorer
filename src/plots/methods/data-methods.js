@@ -2149,6 +2149,8 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             : (durationAxis ? 'duration' : (timeMode === 'elapsedSeconds' ? 's' : (primaryTimeVar ? this._extractUnit(primaryTimeVar.description) : 's'))));
     const unit     = this._extractUnit(variable.description);
     const name     = this._traceName(t.varName, t.fileId);
+    // A long name wraps to the plot's width on its way to Plotly
+    // (utils/plot-text-fit.js, src/vendor/plotly.js), as in every plot.
     const hoverName = this._escapeHTML(this._traceName(t.varName, t.fileId, { units: false }));
     // What tells this run from the others on the panel. Empty unless two files
     // are loaded and something actually differs between them, so an ordinary
@@ -2421,6 +2423,8 @@ proto._timeseriesAxisTitle = function(plot, axis = 'y') {
     const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
     const unit = variable ? this._extractUnit(variable.description) : '';
     const label = this._variableLabel(trace.varName, trace.fileId);
+    // A title too long for its axis is shortened on its way to Plotly
+    // (utils/plot-text-fit.js), as in every plot.
     return unit ? `${label} [${unit}]` : label;
 };
 

@@ -10,6 +10,12 @@
     <meta property="og:title" content="Time Series Explorer">
     <meta property="og:description" content="Free browser app to plot and explore time series: MATLAB .mat, OpenModelica and Dymola results, CSV, Excel, Parquet, netCDF and GRIB (ERA5, CMIP on a map), pandas pickle, Micro-Cap and audio files. Files stay on your computer; nothing is uploaded.">
     <meta property="og:url" content="https://www.unditas.com/">
+    <!-- The app's icon (build/icons), for the browser's tab, bookmarks and
+         shortcuts, and a phone's home screen. -->
+    <link rel="icon" href="icons/app-icon.svg" type="image/svg+xml">
+    <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="manifest" href="site.webmanifest">
     <link rel="stylesheet" href="styles.css">
     <script id="compact-boot">
         // The phone layout is decided here, before the first paint, so a phone
@@ -48,6 +54,9 @@
     <!-- Top Bar -->
     <div class="top-bar">
         <div class="top-bar-left">
+            <!-- In place of the title once the bar runs short of room
+                 (top-bar-scroll.js); its src is set there. -->
+            <img class="app-logo" alt="Time Series Explorer" title="Time Series Explorer" width="30" height="30">
             <div class="app-brand">
                 <h1 data-i18n="appTitle">Time Series Explorer</h1>
                 <div class="app-subtitle">

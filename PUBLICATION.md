@@ -6,7 +6,7 @@ have a public DOI or final bibliographic reference yet.
 
 Until the publication is available, please cite the software itself:
 
-> Ferrucci, Franco. *Time Series Explorer*. Version 0.7.0. GitHub repository:
+> Ferrucci, Franco. *Time Series Explorer*. Version 0.8.0. GitHub repository:
 > https://github.com/ferrucci-franco/timeseries-explorer
 
 The version above is the released one, as in `package.json`, `CITATION.cff` and

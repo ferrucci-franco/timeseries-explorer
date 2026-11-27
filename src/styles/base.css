@@ -251,6 +251,25 @@ textarea,
     display: none;
 }
 
+/* Short of room, the app's logo stands in for the title and subtitle; they
+   stay in the layout, invisible, to be measured (top-bar-scroll.js). */
+.app-logo {
+    display: none;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+}
+
+.top-bar-left.as-logo .app-logo {
+    display: block;
+}
+
+.top-bar-left.as-logo .app-brand {
+    position: absolute;
+    visibility: hidden;
+    pointer-events: none;
+}
+
 .top-bar-left.is-squeezed ~ .top-bar-right {
     margin-left: auto;
 }
@@ -545,6 +564,28 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 .workspace-tabs-scroll.more-before.more-after {
     -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
     mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+/* A tab just opened by the app for you (a map's extractions plotted in a
+   new tab): it blinks a few times, so the change of tab is seen. */
+.workspace-tab.workspace-tab-flash {
+    animation: workspace-tab-flash 0.5s ease-in-out 3;
+}
+
+@keyframes workspace-tab-flash {
+    0%, 100% { box-shadow: none; }
+    50% {
+        background: #0d9488;
+        color: #fff;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.9), 0 0 16px rgba(20, 184, 166, 0.8);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .workspace-tab.workspace-tab-flash {
+        animation: none;
+        box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.9);
+    }
 }
 
 .workspace-tab {

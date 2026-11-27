@@ -776,7 +776,7 @@ export function installGriddedMethods(TargetClass) {
             this._clearVariableSelection();
             this.renderVariablesTree(data.tree);
             this._updateActionButtons();
-            this._showGriddedView(fileId);
+            this._openGriddedMap(fileId);
         }
         return { fileId, data, gridded: true };
     };
@@ -950,6 +950,10 @@ export function installGriddedMethods(TargetClass) {
             </div>
             <div class="gridded-main">
                 <div class="gridded-map-column">
+                    <div class="gridded-map-head" data-role="map-head">
+                        <span class="gridded-map-title" data-role="map-title"></span>
+                        <span class="gridded-map-tools" data-role="map-tools"></span>
+                    </div>
                     <div class="gridded-body">
                         <div class="gridded-map" data-role="map"></div>
                         <button type="button" class="gridded-primary gridded-map-action" data-action="map-extract" hidden></button>
@@ -988,6 +992,16 @@ export function installGriddedMethods(TargetClass) {
                     </div>
                 </div>
                 <aside class="gridded-panel" data-role="panel">
+                    <section class="gridded-panel-section gridded-what-section">
+                        <div class="gridded-what" data-role="what"></div>
+                        <div class="gridded-add-hint" data-role="add-hint" hidden>
+                            <span data-role="add-hint-text"></span>
+                            <span class="gridded-add-hint-actions">
+                                <button type="button" class="gridded-primary" data-action="add-current"></button>
+                                <button type="button" data-action="add-cancel"></button>
+                            </span>
+                        </div>
+                    </section>
                     <section class="gridded-panel-section gridded-inspector" data-role="inspector">
                         <h3 data-role="inspector-heading"></h3>
                         <div class="gridded-inspector-rows">
@@ -996,6 +1010,7 @@ export function installGriddedMethods(TargetClass) {
                             <span data-role="inspector-value-label"></span><span data-role="inspector-value">—</span>
                             <span data-role="inspector-when-label"></span><span data-role="inspector-when">—</span>
                         </div>
+                        <p class="gridded-inspector-pinned" data-role="inspector-pinned" hidden></p>
                         <button type="button" class="gridded-inspector-copy" data-action="copy-inspector"></button>
                     </section>
                     <section class="gridded-panel-section gridded-tools">
@@ -1063,7 +1078,6 @@ export function installGriddedMethods(TargetClass) {
                             <p class="gridded-help" data-role="results-empty"></p>
                             <ul class="gridded-results-list" data-role="results"></ul>
                             <button type="button" class="gridded-primary gridded-plot-btn" data-action="plot"></button>
-                            <p class="gridded-help" data-role="plot-help"></p>
                         </div>
                     </section>
                 </aside>
@@ -1071,6 +1085,7 @@ export function installGriddedMethods(TargetClass) {
         const host = document.querySelector('.content-area') || document.body;
         host.appendChild(root);
         this._griddedBindDom(root);
+        this._griddedWatchControlsPlace(root);
         // The map shares the column with the preview, which comes and goes:
         // Plotly only follows window resizes on its own.
         if (typeof ResizeObserver === 'function') {
@@ -1134,6 +1149,63 @@ export function installGriddedMethods(TargetClass) {
      * Elsewhere the panel is always there (beside the map on a desktop,
      * under it on an upright phone).
      */
+    /**
+     * Where the map's controls live. Beside a desktop map, in the side panel
+     * and over the map: the variable and its level open "1 · Extract a time
+     * series", where the place is picked, and the colour range, the download
+     * and Close map sit on the map's own title line — there is no toolbar.
+     * On a phone, and in a window too narrow for the panel beside the map,
+     * the toolbar above the map holds them, as it always did.
+     */
+    proto._griddedSideControls = function() {
+        if (typeof window === 'undefined') return false;
+        if (document.documentElement.classList.contains('compact')) return false;
+        return !window.matchMedia?.('(max-width: 900px)')?.matches;
+    };
+
+    proto._griddedPlaceControls = function(root = document.getElementById('gridded-view')) {
+        if (!root) return;
+        const side = this._griddedSideControls();
+        if (root._griddedSide === side) return;
+        root._griddedSide = side;
+        root.classList.toggle('is-side-controls', side);
+        const toolbar = root.querySelector('.gridded-toolbar');
+        const field = root.querySelector('[data-role="variable"]')?.closest('.gridded-field');
+        const dims = root.querySelector('[data-role="dims"]');
+        const scale = root.querySelector('.gridded-scale');
+        const end = root.querySelector('.gridded-toolbar-end');
+        if (!toolbar || !field || !dims || !scale || !end) return;
+        if (side) {
+            root.querySelector('[data-role="what"]').append(field, dims);
+            root.querySelector('[data-role="map-tools"]').append(scale, end);
+        } else {
+            // Back after the title, in their first order.
+            toolbar.append(field, dims, scale, end);
+        }
+        this._griddedSyncPlotLabel(root);
+        const view = this._griddedVisibleView();
+        if (view) this._griddedSyncScope(view);
+        if (view && !root.hidden) this._griddedDrawMap(view);
+    };
+
+    // Beside a desktop map the checked series open in a new tab; on a phone
+    // they go to the panels, closing the map.
+    proto._griddedSyncPlotLabel = function(root = document.getElementById('gridded-view')) {
+        const button = root?.querySelector('[data-action="plot"]');
+        if (!button) return;
+        const side = root.classList.contains('is-side-controls');
+        button.textContent = i18n.t(side ? 'griddedPlotNewTab' : 'griddedPlotChecked');
+        button.title = i18n.t(side ? 'griddedPlotNewTabTitle' : 'griddedPlotHelp');
+    };
+
+    proto._griddedWatchControlsPlace = function(root) {
+        this._griddedPlaceControls(root);
+        if (typeof window === 'undefined') return;
+        const place = () => this._griddedPlaceControls(root);
+        new MutationObserver(place).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        window.matchMedia?.('(max-width: 900px)')?.addEventListener?.('change', place);
+    };
+
     proto._griddedTogglePanel = function(show, root = document.getElementById('gridded-view')) {
         if (!root) return;
         const shown = show ?? root.classList.contains('is-panel-hidden');
@@ -1223,12 +1295,16 @@ export function installGriddedMethods(TargetClass) {
             const current = view();
             if (!current) return;
             current.variableKey = event.target.value;
-            // Another variable may have other levels, or none.
+            // Another variable may have other levels, or none — and another
+            // grid: a pinned cell lets go.
             current.extractLevels = null;
+            this._griddedUnpin(current);
             current.zoom = null;
             this._griddedRenderControls(current);
             this._griddedRequestMap(current);
             this._griddedRefitScale(current);
+            // Picked for "+ Another variable at P1": read there now.
+            if (current.addTo) this._griddedAddToArmed(current);
         });
         root.querySelector('[data-role="palette"]').addEventListener('change', event => {
             const current = view();
@@ -1323,6 +1399,9 @@ export function installGriddedMethods(TargetClass) {
             if (!current) return;
             current.extractLevels = levels && levels.length ? levels : null;
             this._griddedSyncScope(current);
+            this._griddedRenderResults(current);
+            // Picked for "+ Another variable at P1": read there now.
+            if (current.addTo) this._griddedAddToArmed(current);
         };
         levelsMenu.querySelector('[data-action="levels-map"]').addEventListener('click', () => setLevels(null));
         levelsMenu.querySelector('[data-action="levels-all"]').addEventListener('click', () => {
@@ -1388,6 +1467,20 @@ export function installGriddedMethods(TargetClass) {
             event.currentTarget._touched = true;
             this._griddedStep('play');
         });
+        // Every other control answers a finger during Play too. A phone busy
+        // drawing the maps of a fast Play delivered the click of a tap late,
+        // or never: Close map, the download, the menus did nothing until
+        // Play was paused. So a finger landing on a control holds Play — no
+        // map drawn — until a moment after it lifts, and the tap's click
+        // comes through. The map itself holds Play its own way (a pan), and
+        // Play's button acts as the finger lands (above).
+        document.addEventListener('pointerdown', event => {
+            if (event.pointerType === 'mouse') return;
+            const current = view();
+            if (!current?.playing || root.hidden) return;
+            if (event.target.closest?.('[data-role="map"], [data-step="play"]')) return;
+            this._griddedHoldPlayForTap(current);
+        }, true);
         root.querySelector('[data-role="stride"]').addEventListener('change', event => {
             const current = view();
             if (current) current.stride = event.target.value || 'step';
@@ -1411,11 +1504,7 @@ export function installGriddedMethods(TargetClass) {
             const action = target?.dataset.action;
             if (!action) return;
             const current = view();
-            if (action === 'close') {
-                // Closed on purpose: no button over the plots asks to come back.
-                this._griddedState().returnFileId = null;
-                this._hideGriddedView();
-            }
+            if (action === 'close') this._griddedCloseMap();
             else if (action === 'toggle-panel') this._griddedTogglePanel();
             else if (action === 'peek') this._griddedPeek();
             else if (!current) return;
@@ -1430,7 +1519,9 @@ export function installGriddedMethods(TargetClass) {
             else if (action === 'clear-region') this._griddedClearPending(current, 'region');
             else if (action === 'remove-group') this._griddedRemoveGroup(current, target.closest('[data-group]')?.dataset.group);
             else if (action === 'remove-set') this._griddedRemoveSet(current, target.closest('[data-group]')?.dataset.group, target.closest('[data-set]')?.dataset.set);
-            else if (action === 'reuse-group') this._griddedReusePlace(current, target.closest('[data-group]')?.dataset.group);
+            else if (action === 'add-variable') this._griddedArmAdd(current, target.closest('[data-group]')?.dataset.group);
+            else if (action === 'add-current') this._griddedAddToArmed(current);
+            else if (action === 'add-cancel') this._griddedDisarmAdd(current);
             else if (action === 'remove-all') this._griddedRemoveAll(current);
             else if (action === 'toggle-results') this._griddedToggleResults(current);
             else if (action === 'methods-help') this._griddedShowMethodsHelp();
@@ -1456,9 +1547,22 @@ export function installGriddedMethods(TargetClass) {
             if (event.key === 'Delete' || event.key === 'Backspace') {
                 event.preventDefault();
                 this._griddedDeleteSelected(current);
-            } else if (event.key === 'Escape') {
-                this._griddedSelect(current, null);
             }
+        });
+        // Escape, one step back at a time: a place waiting for a variable;
+        // Point or Region, back to Navigate (what was placed stays); a
+        // pinned cell; a selection.
+        document.addEventListener('keydown', event => {
+            const current = view();
+            if (event.key !== 'Escape' || !current || root.hidden || document.querySelector('.modal-overlay, .gridded-context-menu')) return;
+            if (current.addTo) {
+                this._griddedDisarmAdd(current);
+                return;
+            }
+            if (event.target.closest?.('input, select, textarea, [contenteditable="true"]')) return;
+            if (current.mode !== 'navigate') this._griddedSetMode(current, 'navigate');
+            else if (current.pinned) this._griddedUnpin(current);
+            else if (current.selected) this._griddedSelect(current, null);
         });
         root.addEventListener('keydown', event => {
             if (event.target.closest('input, select, textarea')) return;
@@ -1561,8 +1665,7 @@ export function installGriddedMethods(TargetClass) {
         set('[data-action="toggle-panel"]', 'griddedTogglePanel', 'ariaLabel');
         set('[data-action="export-map"]', 'griddedExportMapTitle', 'title');
         set('[data-action="export-map"]', 'griddedExportMapTitle', 'ariaLabel');
-        set('[data-action="close"]', 'griddedCloseMap');
-        set('[data-action="close"]', 'griddedCloseMapTitle', 'title');
+        this._griddedSyncCloseLabel(root);
         set('[data-action="cancel"]', 'griddedCancel');
         set('[data-role="inspector-heading"]', 'griddedInspector');
         set('[data-role="inspector"]', 'griddedInspectorTitle', 'title');
@@ -1598,8 +1701,7 @@ export function installGriddedMethods(TargetClass) {
         set('[data-action="remove-all"]', 'griddedRemoveAll', 'ariaLabel');
         set('[data-action="export-series"]', 'griddedExportSeriesTitle', 'title');
         set('[data-action="export-series"]', 'griddedExportSeriesTitle', 'ariaLabel');
-        set('[data-action="plot"]', 'griddedPlotChecked');
-        set('[data-role="plot-help"]', 'griddedPlotHelp');
+        this._griddedSyncPlotLabel(root);
         set('[data-step="first"]', 'griddedFirstStep', 'title');
         set('[data-step="prev"]', 'griddedPrevStep', 'title');
         set('[data-step="play"]', 'griddedPlay', 'title');
@@ -1633,6 +1735,7 @@ export function installGriddedMethods(TargetClass) {
         state.visibleFileId = fileId;
         state.returnFileId = null;
         root.hidden = false;
+        this._griddedSyncCloseLabel(root);
         document.body.classList.add('gridded-view-open');
         if (this.plotManager.activeFileId !== fileId) this.setActiveFile(fileId);
         this._griddedRenderControls(view);
@@ -1641,6 +1744,114 @@ export function installGriddedMethods(TargetClass) {
         else this._griddedRequestMap(view);
         if (!view.scale.range && !view.scale.follow && !view.scaleToken) this._griddedAutofit(view, 'sample');
         this._renderFilesList();
+    };
+
+    /**
+     * Open a file's map where it does not hide anything: on the tab that
+     * already has it; on the tab on screen when that tab is empty; otherwise
+     * on a new tab of its own, named after the file. The plots of the other
+     * tabs stay as they were, under no map. On a phone, where the tabs are
+     * not on screen, the map opens over the panels as before.
+     */
+    proto._openGriddedMap = async function(fileId) {
+        const state = this._griddedState();
+        if (!state.views.has(fileId)) return;
+        const phone = document.documentElement.classList.contains('compact');
+        if (phone || !this._tabsEnabled?.() || !this.addTabAtEnd) {
+            this._showGriddedView(fileId);
+            return;
+        }
+        if (this._tabSwitching) await this._tabSwitching;
+        const tabs = this._ensureTabsState();
+        if (state.visibleFileId === fileId) return;
+        const there = tabs.items.findIndex((item, index) => index !== tabs.activeIndex
+            && (item.mapFileId === fileId || item.mapTabFor === fileId));
+        if (there >= 0) {
+            await this.switchTab(there);
+            if (state.visibleFileId !== fileId) this._showGriddedView(fileId);
+            return;
+        }
+        // The tab on screen is used only when it is empty and has no name of
+        // its own: a tab called "P1" with its plots taken out is still P1's.
+        const current = tabs.items[tabs.activeIndex];
+        const empty = !state.visibleFileId && !this.plotManager.hasAnyTraces?.() && !current?.name;
+        if (!empty) await this.addTabAtEnd();
+        const index = tabs.activeIndex;
+        const item = tabs.items[index];
+        item.mapTabFor = fileId;
+        // "Map 1", "Map 2"…: the lowest number no other tab of a map has.
+        if (!item.name && !item.mapNumber) {
+            const taken = new Set(tabs.items.map(other => other.mapNumber).filter(Boolean));
+            let number = 1;
+            while (taken.has(number)) number += 1;
+            item.mapNumber = number;
+            this._renderTabs();
+        }
+        this._showGriddedView(fileId);
+    };
+
+    // The map's own tab, with nothing under the map: closing the map closes it.
+    proto._griddedClosesTab = function() {
+        const tabs = this.tabs;
+        const item = tabs?.items?.[tabs.activeIndex];
+        const fileId = this._griddedState().visibleFileId;
+        return !!fileId && !!item && item.mapTabFor === fileId && tabs.items.length > 1
+            && !document.documentElement.classList.contains('compact')
+            && !this.plotManager.hasAnyTraces?.();
+    };
+
+    proto._griddedSyncCloseLabel = function(root = document.getElementById('gridded-view')) {
+        const button = root?.querySelector('[data-action="close"]');
+        if (!button) return;
+        const tab = this._griddedClosesTab();
+        button.textContent = i18n.t(tab ? 'griddedCloseTab' : 'griddedCloseMap');
+        button.title = i18n.t(tab ? 'griddedCloseTabTitle' : 'griddedCloseMapTitle');
+    };
+
+    // Close map — or, on the map's own tab, Close tab.
+    proto._griddedCloseMap = async function({ pointAtButton = true } = {}) {
+        const state = this._griddedState();
+        // Closed on purpose: no button over the plots asks to come back.
+        state.returnFileId = null;
+        const fileId = state.visibleFileId;
+        if (this._griddedClosesTab()) {
+            const tabs = this.tabs;
+            const index = tabs.activeIndex;
+            this._hideGriddedView();
+            tabs.items[index].mapFileId = null;
+            await this.closeTab(index, { force: true });
+        } else {
+            const item = this.tabs?.items?.[this.tabs.activeIndex];
+            if (item) {
+                item.mapTabFor = null;
+                item.mapNumber = null;
+                this._renderTabs();
+            }
+            this._hideGriddedView();
+        }
+        if (pointAtButton) this._griddedPointAtMapButton(fileId);
+    };
+
+    /**
+     * Where the map comes back from: the Map button of the file's row, in
+     * the sidebar, scrolled into view and blinking a few times. Not on a
+     * phone, nor with the sidebar folded away.
+     */
+    proto._griddedPointAtMapButton = function(fileId) {
+        if (!fileId || document.documentElement.classList.contains('compact')) return;
+        // The list is drawn again as the map closes: after that.
+        setTimeout(() => {
+            const button = [...document.querySelectorAll('#sidebar .file-entry-map')]
+                .find(element => element.closest('[data-file-id]')?.dataset.fileId === fileId)
+                || document.querySelector('#sidebar .file-entry-map:not([hidden])');
+            if (!button || !button.offsetParent) return;
+            const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+            button.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+            button.classList.remove('gridded-map-btn-flash');
+            void button.offsetWidth;
+            button.classList.add('gridded-map-btn-flash');
+            button.addEventListener('animationend', () => button.classList.remove('gridded-map-btn-flash'), { once: true });
+        }, 60);
     };
 
     proto._hideGriddedView = function() {
@@ -1700,6 +1911,8 @@ export function installGriddedMethods(TargetClass) {
                 dimSelect.addEventListener('change', () => {
                     view.selection[name] = Number(dimSelect.value);
                     this._griddedSyncScope(view);
+                    this._griddedRenderResults(view);
+                    if (view.addTo) this._griddedAddToArmed(view);
                     this._griddedRequestMap(view);
                     this._griddedRefitScale(view);
                 });
@@ -1743,7 +1956,8 @@ export function installGriddedMethods(TargetClass) {
             fixed = [this._griddedLevelsSummary(view, level, levels), ...others].filter(Boolean).join(', ');
         }
         const steps = variable.timeDim ? view.model.axes[variable.timeDim]?.size || 1 : 1;
-        element.textContent = i18n.t('griddedScope')
+        const side = !!document.getElementById('gridded-view')?.classList.contains('is-side-controls');
+        element.textContent = i18n.t(side ? 'griddedScopeSide' : 'griddedScope')
             .replace('{variable}', variable.name)
             .replace('{level}', fixed ? ` · ${fixed}` : '')
             .replace('{steps}', String(steps));
@@ -1818,6 +2032,96 @@ export function installGriddedMethods(TargetClass) {
      * level the map is showing. The reading stays when the pointer leaves the
      * map, so "Copy" can still take it; it is copied as one line.
      */
+    /**
+     * Pin the cell at `at`: the inspector stays on it whatever the pointer
+     * does, so its reading can be copied (and it follows the time step while
+     * Play runs); its outline stays drawn. A click on the pinned cell again
+     * lets it go (`toggle`), as do Escape and a change of variable.
+     */
+    proto._griddedPinAt = function(view, at, { toggle = true } = {}) {
+        const cell = this._griddedInspect(view, at);
+        if (!cell) {
+            this._griddedUnpin(view);
+            return;
+        }
+        const same = view.pinned && view.pinned.row === cell.row && view.pinned.column === cell.column;
+        if (same && toggle) {
+            this._griddedUnpin(view);
+            return;
+        }
+        view.pinned = { ...cell };
+        this._griddedDrawPinned(this._griddedEl('map'), view);
+        this._griddedSyncInspector(view);
+    };
+
+    proto._griddedUnpin = function(view) {
+        if (!view?.pinned) return;
+        view.pinned = null;
+        this._griddedDrawPinned(this._griddedEl('map'), view);
+        this._griddedSyncInspector(view);
+    };
+
+    // The pinned cell's outline, placed again whenever the map is drawn (a
+    // zoom, a pan, a step).
+    proto._griddedDrawPinned = function(div, view, ranges = null) {
+        if (!div) return;
+        let box = div.querySelector(':scope > .gridded-cell-outline.is-pinned');
+        const cell = view?.pinned;
+        const rect = cell && view.map ? this._griddedCellRect(div, view, cell, null, ranges) : null;
+        if (!rect) {
+            if (box) box.hidden = true;
+            return;
+        }
+        if (!box) {
+            box = document.createElement('div');
+            box.className = 'gridded-cell-outline is-pinned';
+            box.setAttribute('aria-hidden', 'true');
+            div.appendChild(box);
+        }
+        box.hidden = false;
+        Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+    };
+
+    // A cell's rectangle in the plot's pixels, clipped to its area; its
+    // longitude taken next to `nearLon` (a grid in 0…360 on a map in
+    // −180…180), by default the middle of the view.
+    // `ranges` ({ x: [a, b], y: [c, d] }): the axes' ranges of a pan still
+    // under way, which Plotly only writes into its layout when it ends.
+    proto._griddedCellRect = function(div, view, cell, nearLon = null, ranges = null) {
+        const layout = div?._fullLayout;
+        const map = view?.map;
+        const axes = layout && { x: layout.xaxis, y: layout.yaxis };
+        if (!map || !axes?.x?.d2p || !axes?.y?.d2p || map.lon?.[cell.column] === undefined || map.lat?.[cell.row] === undefined) return null;
+        // An axis that places values by `ranges` when given, as Plotly would.
+        const axis = (key) => {
+            const base = axes[key];
+            const range = ranges?.[key];
+            if (!range || !(Number(range[1]) !== Number(range[0]))) return base;
+            const [a, b] = range.map(Number);
+            const d2p = key === 'x'
+                ? value => (value - a) / (b - a) * base._length
+                : value => (b - value) / (b - a) * base._length;
+            return { ...base, range: [a, b], d2p, _offset: base._offset, _length: base._length };
+        };
+        const x = axis('x');
+        const y = axis('y');
+        const halfStep = (values, index) => (values.length < 2
+            ? 0.5
+            : Math.abs(values[index === 0 ? 1 : index - 1] - values[index]) / 2);
+        const near = Number.isFinite(nearLon) ? nearLon : (Number(x.range[0]) + Number(x.range[1])) / 2;
+        const lon = near + ((((map.lon[cell.column] - near) % 360) + 540) % 360 - 180);
+        const dLon = halfStep(map.lon, cell.column);
+        const dLat = halfStep(map.lat, cell.row);
+        const xs = [x.d2p(lon - dLon), x.d2p(lon + dLon)].map(value => value + x._offset);
+        const ys = [y.d2p(map.lat[cell.row] + dLat), y.d2p(map.lat[cell.row] - dLat)].map(value => value + y._offset);
+        const left = Math.max(Math.min(...xs), x._offset);
+        const right = Math.min(Math.max(...xs), x._offset + x._length);
+        const top = Math.max(Math.min(...ys), y._offset);
+        const bottom = Math.min(Math.max(...ys), y._offset + y._length);
+        if (!(right - left > 1 && bottom - top > 1)) return null;
+        return { left, top, width: right - left, height: bottom - top };
+    };
+
     proto._griddedInspect = function(view, at) {
         const map = view.map;
         if (!map || !Number.isFinite(at?.lat) || !Number.isFinite(at?.lon)) return null;
@@ -1886,6 +2190,11 @@ export function installGriddedMethods(TargetClass) {
         write('inspector-when', text.when);
         const copy = section.querySelector('[data-action="copy-inspector"]');
         if (copy) copy.disabled = !view.inspect;
+        const pinned = this._griddedEl('inspector-pinned');
+        if (pinned) {
+            pinned.hidden = !view.pinned;
+            pinned.textContent = view.pinned ? i18n.t('griddedInspectorPinned') : '';
+        }
     };
 
     proto._griddedCopyInspector = async function(view) {
@@ -1899,6 +2208,9 @@ export function installGriddedMethods(TargetClass) {
 
     proto._griddedSetMode = function(view, mode) {
         view.mode = mode;
+        // A cell pinned in Navigate is Navigate's: Point and Region place
+        // their own, and it lets go.
+        if (mode !== 'navigate') this._griddedUnpin(view);
         this._griddedSyncMode(view);
         const div = this._griddedEl('map');
         this._griddedDeactivateShape(div);
@@ -2074,6 +2386,8 @@ export function installGriddedMethods(TargetClass) {
 
     // After the last move of the map, how long Play waits to go on.
     const PLAY_HOLD_MS = 300;
+    // The longest a finger on a control holds Play (_griddedHoldPlayForTap).
+    const PLAY_TAP_HOLD_MAX_MS = 3000;
 
     /**
      * Play waits while the map is moved (a pan, a zoom, the whole map framed
@@ -2095,6 +2409,28 @@ export function installGriddedMethods(TargetClass) {
             view.held = false;
         };
         view.holdTimer = setTimeout(release, PLAY_HOLD_MS);
+    };
+
+    /**
+     * Hold Play while a finger is on a control, and for a moment after it
+     * lifts: the page draws no map then, so the click the tap makes is
+     * dispatched. Released by itself even if the lift never reaches the page.
+     */
+    proto._griddedHoldPlayForTap = function(view) {
+        clearTimeout(view.holdTimer);
+        view.held = true;
+        const release = () => {
+            document.removeEventListener('pointerup', lifted, true);
+            document.removeEventListener('pointercancel', lifted, true);
+            clearTimeout(view.holdTimer);
+            view.holdTimer = setTimeout(() => { view.held = false; }, PLAY_HOLD_MS);
+        };
+        const lifted = () => release();
+        document.addEventListener('pointerup', lifted, true);
+        document.addEventListener('pointercancel', lifted, true);
+        // A finger that stays (a long press, a menu opened by the system):
+        // Play goes on after a while all the same.
+        view.holdTimer = setTimeout(release, PLAY_TAP_HOLD_MAX_MS);
     };
 
     proto._griddedPlayLoop = async function(view) {
@@ -2609,7 +2945,7 @@ export function installGriddedMethods(TargetClass) {
         if (Math.abs(body.offsetHeight - height) > 2) body.style.height = `${height}px`;
     };
 
-    proto._griddedDrawMap = async function(view, { theme = this.theme, transparent = false, target = null } = {}) {
+    proto._griddedDrawMap = async function(view, { theme = this.theme, transparent = false, target = null, exporting = false } = {}) {
         const div = target || this._griddedEl('map');
         const map = view.map;
         if (!div || !map || (!target && this._griddedVisibleView() !== view)) return;
@@ -2697,9 +3033,21 @@ export function installGriddedMethods(TargetClass) {
         const overlays = this._griddedOverlays(target ? { ...view, selected: null } : view, colors);
         traces.push(...overlays.traces);
         const paper = transparent ? 'rgba(0,0,0,0)' : colors.bg;
-        const titleText = grid.stride > 1
-            ? `${this._griddedMapTitle(view)}  <span style="font-size:10px;opacity:0.7">(${i18n.t('griddedDecimatedShort').replace('{stride}', String(grid.stride))})</span>`
+        const decimated = grid.stride > 1 ? i18n.t('griddedDecimatedShort').replace('{stride}', String(grid.stride)) : '';
+        const titleText = decimated
+            ? `${this._griddedMapTitle(view)}  <span style="font-size:10px;opacity:0.7">(${decimated})</span>`
             : this._griddedMapTitle(view);
+        // Beside the panel the title is the map's own line, with its tools
+        // at the end of it; an image still carries it inside.
+        const headTitle = !target && !exporting && document.getElementById('gridded-view')?.classList.contains('is-side-controls');
+        if (headTitle) {
+            const head = this._griddedEl('map-title');
+            if (head) {
+                const text = [this.files.get(view.fileId)?.name, this._griddedMapTitle(view)].filter(Boolean).join(' · ');
+                head.textContent = decimated ? `${text}  (${decimated})` : text;
+                head.title = head.textContent;
+            }
+        }
         const layout = {
             // The size the ranges were fitted to, said: left to find it out,
             // Plotly kept the size before a phone was turned, drew the new
@@ -2709,10 +3057,10 @@ export function installGriddedMethods(TargetClass) {
             paper_bgcolor: paper,
             plot_bgcolor: paper,
             font: { color: colors.font, size: 11, family: 'system-ui, sans-serif' },
-            margin: this._griddedMapMargins(narrow),
+            margin: headTitle ? { ...this._griddedMapMargins(narrow), t: 12 } : this._griddedMapMargins(narrow),
             showlegend: false,
             dragmode: view.mode === 'region' ? 'drawrect' : 'pan',
-            title: { text: titleText, font: { size: 12 }, x: 0.01, xanchor: 'left' },
+            title: { text: headTitle ? '' : titleText, font: { size: 12 }, x: 0.01, xanchor: 'left' },
             xaxis: {
                 // Copies: Plotly writes into the range arrays it is given.
                 range: [...ranges.x],
@@ -2945,6 +3293,19 @@ export function installGriddedMethods(TargetClass) {
         };
         window.addEventListener('pointerup', release, { capture: true });
         window.addEventListener('pointercancel', release, { capture: true });
+        // The pinned cell's outline goes along with the map while it is
+        // dragged, and is placed again whenever the map is drawn.
+        div.on?.('plotly_relayouting', event => {
+            const pick = (key) => {
+                const pair = event?.[`${key}axis.range`];
+                const a = event?.[`${key}axis.range[0]`] ?? pair?.[0];
+                const b = event?.[`${key}axis.range[1]`] ?? pair?.[1];
+                return a !== undefined && b !== undefined ? [a, b] : null;
+            };
+            const ranges = { x: pick('x'), y: pick('y') };
+            if (ranges.x || ranges.y) this._griddedDrawPinned(div, this._griddedVisibleView(), ranges);
+        });
+        div.on?.('plotly_afterplot', () => this._griddedDrawPinned(div, this._griddedVisibleView()));
         div.addEventListener('pointerdown', event => {
             interaction.down = { x: event.clientX, y: event.clientY };
             if (!event.target.closest?.('.gridded-context-menu')) this._griddedCloseMenu();
@@ -2956,7 +3317,8 @@ export function installGriddedMethods(TargetClass) {
         div.addEventListener('mousemove', event => {
             const view = this._griddedVisibleView();
             const at = view && !interaction.pressed && this._griddedEventCoords(div, event);
-            if (view && at) this._griddedInspect(view, at);
+            // A pinned cell holds the inspector still; so does an open menu.
+            if (view && at && !view.pinned && !this._griddedMenu) this._griddedInspect(view, at);
             let over = null;
             if (at) {
                 const target = this._griddedEditTarget(view, at, 'mouse');
@@ -3078,8 +3440,11 @@ export function installGriddedMethods(TargetClass) {
                 this._griddedSyncInputs(view);
                 this._griddedRenderSelection(view);
                 this._griddedDrawMap(view);
-            } else if (view.selected) {
-                this._griddedSelect(view, null);
+            } else {
+                if (view.selected) this._griddedSelect(view, null);
+                // Navigate: a click pins the cell under it (the inspector
+                // stays on it, to be copied); a click on it again lets go.
+                if (view.mode === 'navigate') this._griddedPinAt(view, at);
             }
         }, true);
         // The right button drags the map, as on every plot; a right click
@@ -3165,11 +3530,15 @@ export function installGriddedMethods(TargetClass) {
         const at = view && this._griddedEventCoords(div, where);
         if (!at) return;
         const hit = this._griddedHitTest(view, at, where, { inside: true });
-        if (!hit) {
+        // In Navigate the cell under the click is pinned, and the menu copies
+        // its reading; Point and Region have only their places' menus.
+        const reading = view.mode === 'navigate';
+        if (!hit && !reading) {
             this._griddedCloseMenu();
             return;
         }
-        this._griddedSelect(view, hit);
+        if (reading) this._griddedPinAt(view, at, { toggle: false });
+        if (hit) this._griddedSelect(view, hit);
         this._griddedShowMenu(view, hit, where.clientX, where.clientY);
     };
 
@@ -3209,6 +3578,10 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedBeginEdit = function(view, div, target, startAt) {
         view.editing = true;
         div.classList.add('gridded-dragging');
+        // The cursor of the grab, kept for the whole drag: move, or the
+        // resize arrows of the box's edge or corner held.
+        const dragClass = `gridded-drag-${target.kind === 'box' ? target.handle : 'move'}`;
+        div.classList.add(dragClass);
         let frame = 0;
         let pending = null;
         const flush = () => {
@@ -3226,7 +3599,7 @@ export function installGriddedMethods(TargetClass) {
                 flush();
             }
             view.editing = false;
-            div.classList.remove('gridded-dragging');
+            div.classList.remove('gridded-dragging', dragClass);
             view.selected = { kind };
             this._griddedSyncInputs(view);
             this._griddedRenderSelection(view);
@@ -3399,7 +3772,13 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedShowMenu = function(view, target, x, y) {
         this._griddedCloseMenu();
         const items = [];
-        if (target.kind === 'pending-point') {
+        if (view.inspect && view.mode === 'navigate') {
+            items.push([i18n.t('griddedCopyReading'), () => this._griddedCopyInspector(view)]);
+            if (view.pinned) items.push([i18n.t('griddedUnpinCell'), () => this._griddedUnpin(view)]);
+        }
+        if (!target) {
+            // Empty map: only the reading.
+        } else if (target.kind === 'pending-point') {
             items.push([i18n.t('griddedExtractPoint'), () => this._griddedExtractPoint(view)]);
             items.push([i18n.t('griddedDelete'), () => this._griddedDeleteSelected(view, target)]);
         } else if (target.kind === 'pending-box') {
@@ -3407,10 +3786,12 @@ export function installGriddedMethods(TargetClass) {
             items.push([i18n.t('griddedDelete'), () => this._griddedDeleteSelected(view, target)]);
         } else {
             const group = (view.groups || []).find(item => item.id === target.id);
-            if (!group) return;
-            items.push([i18n.t('griddedReuseHere'), () => this._griddedReusePlace(view, group.id)]);
-            items.push([i18n.t('griddedDeleteExtraction').replace('{tag}', group.tag), () => this._griddedDeleteSelected(view, target)]);
+            if (group) {
+                items.push([i18n.t('griddedAddVariable').replace(/\{tag\}/g, group.tag), () => this._griddedArmAdd(view, group.id)]);
+                items.push([i18n.t('griddedDeleteExtraction').replace('{tag}', group.tag), () => this._griddedDeleteSelected(view, target)]);
+            }
         }
+        if (!items.length) return;
         const menu = document.createElement('div');
         menu.className = 'gridded-context-menu';
         menu.setAttribute('role', 'menu');
@@ -3432,6 +3813,8 @@ export function installGriddedMethods(TargetClass) {
         const close = event => {
             if (event.type === 'keydown' && event.key !== 'Escape') return;
             if (event.type === 'pointerdown' && menu.contains(event.target)) return;
+            // Escape closes the menu, and only the menu (not the pinned cell).
+            if (event.type === 'keydown') event.stopPropagation();
             this._griddedCloseMenu();
         };
         window.addEventListener('pointerdown', close, true);
@@ -3439,12 +3822,18 @@ export function installGriddedMethods(TargetClass) {
         window.addEventListener('wheel', close, { capture: true, passive: true });
         menu.focus?.();
         menu.querySelector('button')?.focus();
+        // While the menu is open the map is quiet: no hover label on the
+        // pointer's way to the menu.
+        const mapDiv = this._griddedEl('map');
+        mapDiv?.classList.add('gridded-menu-open');
+        try { if (mapDiv?._fullLayout) Plotly.Fx.unhover(mapDiv); } catch (_) { /* nothing hovered */ }
         this._griddedMenu = {
             menu,
             remove: () => {
                 window.removeEventListener('pointerdown', close, true);
                 window.removeEventListener('keydown', close, true);
                 window.removeEventListener('wheel', close, { capture: true, passive: true });
+                mapDiv?.classList.remove('gridded-menu-open');
                 menu.remove();
             },
         };
@@ -3711,6 +4100,7 @@ export function installGriddedMethods(TargetClass) {
         const level = this._griddedLevelAxis(view, variable);
         const quantity = this._griddedQuantity(variable);
         let added = 0;
+        const newNames = [];
         for (const set of sets) {
             const levelIndex = set.levelIndex ?? (level ? Number(view.selection[level.name]) || 0 : null);
             const suffix = this._griddedSelectionSuffix(view, variable, levelIndex);
@@ -3764,12 +4154,66 @@ export function installGriddedMethods(TargetClass) {
             }
             group.sets.push(entry);
             added += 1;
+            newNames.push(...entry.names);
         }
+        if (added) view.justAdded = { groupId: group.id };
         this._griddedCommitData(view, data);
         this._griddedRenderResults(view);
+        if (added) this._griddedShowInTree(view, group, newNames);
         this._griddedDrawPreview(view);
         this._griddedDrawMap(view);
         return { group, added };
+    };
+
+    /**
+     * Where a new extraction went, shown in the variable tree on the left:
+     * the tree scrolls to "Extractions", the folder lights up and opens, and
+     * then the new series light up. Only when the tree is on screen (not on
+     * a phone, not with the sidebar folded away), and still with
+     * "reduce motion" — then without the animation.
+     */
+    proto._griddedShowInTree = function(view, group, names) {
+        if (typeof document === 'undefined' || document.documentElement.classList.contains('compact')) return;
+        if (this.plotManager.activeFileId !== view.fileId) return;
+        const flash = (element) => {
+            if (!element) return;
+            element.classList.remove('tree-flash');
+            void element.offsetWidth;
+            element.classList.add('tree-flash');
+            element.addEventListener('animationend', () => element.classList.remove('tree-flash'), { once: true });
+        };
+        const open = (item) => {
+            const children = item?.nextElementSibling;
+            if (!children?.classList.contains('tree-children')) return;
+            children.classList.remove('collapsed');
+            item.querySelector('.tree-toggle')?.classList.add('expanded');
+        };
+        const folderLabel = i18n.t('griddedExtractionsNode');
+        const findFolder = () => [...document.querySelectorAll('#sidebar .tree-item')]
+            .find(item => item.querySelector(':scope > .tree-label')?.textContent === folderLabel);
+        const folder = findFolder();
+        if (!folder || !folder.offsetParent) return;
+        const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+        // Opened first, then the folder and the new series blink together,
+        // in step: one signal, not two out of phase.
+        open(folder);
+        const place = [...(folder.nextElementSibling?.querySelectorAll(':scope > .tree-node > .tree-item') || [])]
+            .find(item => item.querySelector(':scope > .tree-label')?.textContent?.startsWith(`${group.tag} `));
+        open(place);
+        const leaves = names
+            .map(name => document.querySelector(`#sidebar .tree-item[data-var-name="${CSS.escape(name)}"]`))
+            .filter(Boolean);
+        // The folder and its new series in view: left alone when they
+        // already are, the folder at the top of the tree otherwise.
+        const last = leaves[leaves.length - 1] || folder;
+        let scroller = folder.parentElement;
+        while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) {
+            scroller = scroller.parentElement;
+        }
+        const frame = scroller?.getBoundingClientRect();
+        const inView = !frame || (folder.getBoundingClientRect().top >= frame.top && last.getBoundingClientRect().bottom <= frame.bottom);
+        if (!inView) folder.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+        requestAnimationFrame(() => [folder, ...leaves].forEach(flash));
     };
 
     proto._griddedCommitData = function(view, data) {
@@ -3859,25 +4303,6 @@ export function installGriddedMethods(TargetClass) {
             icon: false,
             className: 'gridded-help-dialog',
         });
-    };
-
-    proto._griddedReusePlace = function(view, id) {
-        const group = (view.groups || []).find(item => item.id === id);
-        if (!group) return;
-        if (group.kind === 'point') {
-            view.pendingPoint = { ...group.geometry };
-            view.pointMethod = group.method === 'bilinear' ? 'bilinear' : 'nearest';
-            view.selected = { kind: 'pending-point' };
-            this._griddedSetMode(view, 'point');
-        } else {
-            view.pendingBox = { ...group.geometry };
-            view.selected = { kind: 'pending-box' };
-            this._griddedSetMode(view, 'region');
-        }
-        this._griddedSyncInputs(view);
-        this._griddedRenderSelection(view);
-        this._griddedDrawMap(view);
-        this._griddedSetStatus(i18n.t('griddedReuseStatus').replace(/\{tag\}/g, group.tag));
     };
 
     // ─── Sessions ─────────────────────────────────────────────────────────
@@ -4191,9 +4616,8 @@ export function installGriddedMethods(TargetClass) {
                 note.textContent = group.note;
                 text.appendChild(note);
             }
-            head.append(swatch, text,
-                button('reuse-group', '+', i18n.t('griddedReuseHere')),
-                button('remove-group', '✕', i18n.t('griddedRemoveExtraction')));
+            head.append(swatch, text, button('remove-group', '✕', i18n.t('griddedRemoveExtraction')));
+            if (view.justAdded?.groupId === group.id) item.classList.add('is-new');
             const sets = document.createElement('ul');
             sets.className = 'gridded-sets';
             for (const set of group.sets) {
@@ -4213,12 +4637,110 @@ export function installGriddedMethods(TargetClass) {
                 row.append(label, button('remove-set', '✕', i18n.t('griddedRemoveSet')));
                 sets.appendChild(row);
             }
-            item.append(head, sets);
+            item.append(head);
+            // Another variable at this place: the Variable menu lights up,
+            // and the variable picked there is read here, the same way.
+            const addRow = document.createElement('button');
+            addRow.type = 'button';
+            addRow.className = 'gridded-reuse-var';
+            addRow.dataset.action = 'add-variable';
+            addRow.textContent = i18n.t('griddedAddVariable').replace(/\{tag\}/g, group.tag);
+            addRow.title = i18n.t('griddedAddVariableTitle').replace(/\{tag\}/g, group.tag);
+            const armed = view.addTo === group.id;
+            addRow.classList.toggle('is-armed', armed);
+            addRow.setAttribute('aria-pressed', String(armed));
+            item.append(sets, addRow);
             list.appendChild(item);
         }
         const empty = this._griddedEl('results-empty');
         if (empty) empty.hidden = !!(view.groups || []).length;
+        view.justAdded = null;
+        this._griddedSyncAddHint(view);
         this._griddedSyncActions(view);
+    };
+
+    // Whether a place already holds the variable now chosen, at every level
+    // an extraction would read.
+    proto._griddedGroupHasVariable = function(view, group, variable) {
+        const levels = this._griddedExtractionLevels(view, variable);
+        const keys = (levels || [null]).map(index => `${variable.key}${this._griddedSelectionSuffix(view, variable, index)}`);
+        return keys.every(key => group.sets.some(set => set.key === key));
+    };
+
+    /**
+     * "+ Another variable at P1": the Variable menu lights up and takes the
+     * focus, a line under it says what it is for, and the variable picked
+     * there next (or its level) is read at P1, the same way P1 was read —
+     * without placing the point or box again. Escape or Cancel let go.
+     */
+    proto._griddedArmAdd = function(view, id) {
+        const group = (view.groups || []).find(item => item.id === id);
+        if (!group) return;
+        view.addTo = view.addTo === id ? null : id;
+        this._griddedRenderResults(view);
+        if (!view.addTo) return;
+        const select = this._griddedEl('variable');
+        // The panel (or, without one beside the map, the page of the map)
+        // goes all the way up: the menu and the line under it at the top.
+        const smooth = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth';
+        const root = document.getElementById('gridded-view');
+        const scroller = root?.classList.contains('is-side-controls')
+            ? this._griddedEl('panel')
+            : root?.querySelector('.gridded-main');
+        scroller?.scrollTo({ top: 0, behavior: smooth });
+        if (select) {
+            select.classList.remove('gridded-attention');
+            void select.offsetWidth;
+            select.classList.add('gridded-attention');
+            select.addEventListener('animationend', () => select.classList.remove('gridded-attention'), { once: true });
+            select.focus({ preventScroll: true });
+        }
+        this._griddedSetStatus(i18n.t('griddedAddHint').replace(/\{tag\}/g, group.tag));
+    };
+
+    proto._griddedDisarmAdd = function(view) {
+        if (!view?.addTo) return;
+        view.addTo = null;
+        this._griddedSetStatus('');
+        this._griddedRenderResults(view);
+    };
+
+    // The line under the Variable menu while a place waits for a variable.
+    proto._griddedSyncAddHint = function(view) {
+        const hint = this._griddedEl('add-hint');
+        if (!hint) return;
+        const group = view.addTo ? (view.groups || []).find(item => item.id === view.addTo) : null;
+        if (view.addTo && !group) view.addTo = null;
+        hint.hidden = !group;
+        if (!group) return;
+        hint.querySelector('[data-role="add-hint-text"]').textContent = i18n.t('griddedAddHint').replace(/\{tag\}/g, group.tag);
+        const variable = this._griddedVariable(view);
+        const usable = variable?.timeDim && variable.timeDim === view.model.primaryTimeDim && !this._griddedGroupHasVariable(view, group, variable);
+        const useCurrent = hint.querySelector('[data-action="add-current"]');
+        useCurrent.hidden = !usable;
+        if (usable) useCurrent.textContent = i18n.t('griddedAddCurrent').replace('{variable}', variable.longName || variable.name);
+        hint.querySelector('[data-action="add-cancel"]').textContent = i18n.t('griddedAddCancel');
+    };
+
+    // The variable now chosen, read at the place that waits for it.
+    proto._griddedAddToArmed = function(view) {
+        const group = (view.groups || []).find(item => item.id === view.addTo);
+        view.addTo = null;
+        this._griddedSyncAddHint(view);
+        if (!group) return;
+        const variable = this._griddedVariable(view);
+        if (variable && this._griddedGroupHasVariable(view, group, variable)) {
+            this._griddedSetStatus(i18n.t('griddedAlreadyExtracted').replace('{tag}', group.tag));
+            this._griddedRenderResults(view);
+            return;
+        }
+        if (group.kind === 'point') {
+            view.pointMethod = group.method === 'bilinear' ? 'bilinear' : 'nearest';
+            this._griddedExtractPoint(view, { ...group.geometry });
+        } else {
+            this._griddedExtractRegion(view, { ...group.geometry });
+        }
+        this._griddedRenderResults(view);
     };
 
     proto._griddedCheckedSeries = function(view) {
@@ -4276,7 +4798,10 @@ export function installGriddedMethods(TargetClass) {
             type: 'scatter',
             mode: 'lines',
             x,
-            y: Array.from(variable.data),
+            // The sign the tree's ± button set, as in every plot.
+            y: this.plotManager.isVariableSignInverted(view.fileId, variable.name)
+                ? Array.from(variable.data, value => (Number.isFinite(value) ? -value : value))
+                : Array.from(variable.data),
             yaxis: !mixed || unitOf(variable) === units[0] ? 'y' : 'y2',
             name: `${group.tag} ${set.short}${roleName(role)}${mixed && unitOf(variable) ? ` [${variable.units}]` : ''}`,
             line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: set.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
@@ -4328,9 +4853,37 @@ export function installGriddedMethods(TargetClass) {
      * instead of a new panel for every trip between the map and the plots.
      * Only curves of this map's extractions are touched there.
      */
+    /**
+     * The name of a tab opened for a map's checked series: the places they
+     * were read at — "P1", "P1, R1" — and, when a tab already has that name,
+     * "P1-1", "P1-2"…
+     */
+    proto._griddedTabName = function(view) {
+        const tags = [...new Set(this._griddedCheckedSeries(view).map(item => item.group.tag))];
+        let base = tags.join(', ');
+        if (base.length > 32) base = `${base.slice(0, 31)}…`;
+        const taken = new Set((this.tabs?.items || []).map(item => this._tabDisplayName(item)));
+        if (!taken.has(base)) return base;
+        let number = 1;
+        while (taken.has(`${base}-${number}`)) number += 1;
+        return `${base}-${number}`;
+    };
+
+    /**
+     * Beside a desktop map, the checked series go to a tab of their own,
+     * new at every press: a tab where the user went on to add a 2D plot or
+     * an FFT is theirs, and a later press never changes it. The app moves to
+     * the new tab, which blinks a few times so the change is seen; "Back to
+     * the map" is there to return. On a phone, where the tabs are not on
+     * screen, the series are plotted in the panels as before.
+     */
     proto._griddedPlotChecked = function(view) {
         const names = this._griddedCheckedSeries(view).map(item => item.variable.name);
         if (!names.length) return;
+        if (!document.documentElement.classList.contains('compact') && this._tabsEnabled?.() && this.addTabAtEnd) {
+            this._griddedPlotInNewTab(view, names);
+            return;
+        }
         this._griddedState().returnFileId = view.fileId;
         this._hideGriddedView();
         const manager = this.plotManager;
@@ -4373,6 +4926,25 @@ export function installGriddedMethods(TargetClass) {
         })();
     };
 
+    proto._griddedPlotInNewTab = async function(view, names) {
+        const name = this._griddedTabName(view);
+        this._griddedState().returnFileId = view.fileId;
+        // Not hidden here: leaving the tab hides it, and the tab keeps it.
+        await this.addTabAtEnd();
+        const tabs = this._ensureTabsState();
+        const index = tabs.activeIndex;
+        this.renameTab(index, name);
+        this.flashTab(index);
+        const settle = () => new Promise(resolve => setTimeout(() => requestAnimationFrame(() => resolve()), 120));
+        await settle();
+        this._plotDerivedDatasetVariable?.(view.fileId, names[0]);
+        const first = { fileId: view.fileId, name: names[0] };
+        for (const other of names.slice(1)) {
+            await settle();
+            this._plotDerivedDatasetVariable?.(view.fileId, other, { alongside: first });
+        }
+    };
+
     // ─── Export ───────────────────────────────────────────────────────────
     // The same dialog as every plot panel's download button: CSV for the
     // numbers, PNG or SVG for the figure, with quality and theme.
@@ -4393,7 +4965,8 @@ export function installGriddedMethods(TargetClass) {
             this._griddedExportMapCsv(view, result.fileName);
             return;
         }
-        await this._griddedExportImage(div, result, theme => this._griddedDrawMap(view, theme), () => this._griddedDrawMap(view));
+        await this._griddedExportImage(div, result, theme => this._griddedDrawMap(view, { ...theme, exporting: true }), () => this._griddedDrawMap(view),
+            { redraw: !!document.getElementById('gridded-view')?.classList.contains('is-side-controls') });
     };
 
     proto._griddedExportSeries = async function(view) {
@@ -4423,14 +4996,16 @@ export function installGriddedMethods(TargetClass) {
         }, redraw);
     };
 
-    proto._griddedExportImage = async function(div, { format, scale, theme, fileName }, drawAs, restore) {
+    proto._griddedExportImage = async function(div, { format, scale, theme, fileName }, drawAs, restore, { redraw = false } = {}) {
         const preset = {
             current: { theme: this.theme, transparent: false },
             light: { theme: 'light', transparent: false },
             dark: { theme: 'dark', transparent: false },
             'light-transparent': { theme: 'light', transparent: true },
         }[theme] || { theme: this.theme, transparent: false };
-        const changed = preset.theme !== this.theme || preset.transparent;
+        // `redraw`: what is on screen is not the image (the map beside the
+        // panel draws its title outside the plot), so it is drawn for it.
+        const changed = redraw || preset.theme !== this.theme || preset.transparent;
         try {
             if (changed) await drawAs({ theme: preset.theme, transparent: preset.transparent });
             const dataUrl = await Plotly.toImage(div, {
@@ -4505,7 +5080,10 @@ export function installGriddedMethods(TargetClass) {
         const entry = activeId ? this.files.get(activeId) : null;
         // Only after the map handed its series to the plots: a map closed
         // with "Close map" stays closed (its file row's Map button opens it).
-        const show = !!entry?.gridded && state.returnFileId === activeId && state.visibleFileId !== activeId;
+        // On a phone only: on a desktop the series open in a tab of their
+        // own, the map keeps its tab, and the change of tab is seen.
+        const phone = document.documentElement.classList.contains('compact');
+        const show = phone && !!entry?.gridded && state.visibleFileId !== activeId && state.returnFileId === activeId;
         if (!show) {
             if (button) button.hidden = true;
             return;
@@ -4517,7 +5095,11 @@ export function installGriddedMethods(TargetClass) {
             button.className = 'gridded-return';
             button.addEventListener('click', () => {
                 const fileId = this.plotManager.activeFileId;
-                if (this.files.get(fileId)?.gridded) this._showGriddedView(fileId);
+                if (!this.files.get(fileId)?.gridded) return;
+                // Back to the tab the map is on, where it shows again.
+                const index = this._griddedMapTabIndex(fileId);
+                if (index !== null) this.switchTab(index);
+                else this._showGriddedView(fileId);
             });
             host.appendChild(button);
         }
@@ -4525,6 +5107,21 @@ export function installGriddedMethods(TargetClass) {
         button.querySelector('span').textContent = i18n.t('griddedReturnToMap').replace('{file}', this._fileDisplayName(entry));
         button.title = i18n.t('griddedReturnToMapTitle');
         button.hidden = false;
+    };
+
+    // The tab, other than the one on screen, that keeps this file's map.
+    proto._griddedMapTabIndex = function(fileId) {
+        const tabs = this.tabs;
+        if (!tabs?.items || !fileId) return null;
+        const index = tabs.items.findIndex((item, at) => at !== tabs.activeIndex && item.mapFileId === fileId);
+        return index < 0 ? null : index;
+    };
+
+    // A series' sign changed (the tree's ± button): the preview of the map
+    // that extracted it follows, as the plots do.
+    proto._griddedSignChanged = function(fileId) {
+        const view = this._griddedVisibleView();
+        if (view?.fileId === fileId) this._griddedDrawPreview(view);
     };
 
     proto._griddedApplyTheme = function() {
