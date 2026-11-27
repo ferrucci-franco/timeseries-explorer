@@ -64,6 +64,9 @@ const readHeatmap = page => page.evaluate(() => {
             .map(range => range.slice()),
         subplots,
         status: plot.heatmapContainer?.querySelector('.heatmap-status, .fft-status')?.textContent || '',
+        // The warnings themselves live in the options drawer's message box;
+        // the status line under the plot only points at it.
+        message: plot.heatmapContainer?.querySelector('.heatmap-message')?.textContent || '',
     };
 });
 
@@ -194,6 +197,16 @@ try {
     assertEveryRowDrawn(hourly, 24, '24 hourly rows');
     assertNoOverlap(hourly.yTicks, 'y', '24 hourly row labels');
     assert.ok(hourly.yTicks.length < 24, 'not all 24 are drawn in a short subplot');
+    // The cells the data cannot fill are reported once for the grid, not once
+    // per signal: behind each signal's name (an extraction carries its
+    // coordinates) the same sentence three times was a paragraph nobody reads.
+    const coarseLine = 'Some cells are empty';
+    const coarseCount = hourly.message.split(coarseLine).length - 1;
+    assert.equal(coarseCount, 1, `the empty cells are reported once, not per signal (${hourly.message})`);
+    assert.ok(
+        !new RegExp(`d2m[^|]*${coarseLine}`).test(hourly.message),
+        'and with no signal name in front of it',
+    );
 
     // Finer than the step: 96 rows of a quarter of an hour.
     await setRowStep(page, { rowStepMode: 'fixed', rowStepMinutes: 15 });

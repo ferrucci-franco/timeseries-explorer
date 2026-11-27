@@ -96,7 +96,7 @@ const fallbackText = {
     heatmapRowStepMinutes: 'Minutes',
     heatmapRowStepMinutesTooltip: 'Minutes per row. A value that does not divide the day is rounded to the nearest one that does',
     heatmapRowStepHelp: 'Rows follow the sampling step so the grid draws no empty row the data was never going to fill. Set a height yourself to compare files on one grid.',
-    heatmapCoarseSampling: 'The samples are further apart than one cell, so some cells have no data to show.',
+    heatmapCoarseSampling: 'Some cells are empty: the samples are further apart than one cell.',
     heatmapAggregation: 'Aggregation',
     heatmapAggregationTooltip: 'How the samples inside each cell are reduced to a single color value. Switching it reuses the computed cells and does not re-read the data',
     heatmapMean: 'Mean',
@@ -1067,16 +1067,22 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
         runtime,
     };
     const modelByTrace = new Map();
+    // A cell shorter than the step cannot be filled, and it is the grid that
+    // is coarse, not any one signal: on a panel of three extractions the same
+    // sentence behind three long names was a paragraph nobody reads. Noted
+    // once here and said once below, without a name in front of it.
+    let coarseSampling = false;
     const noteGridWarnings = (trace, grid) => {
         if (!Array.isArray(grid?.warnings)) return;
         for (const item of grid.warnings) {
             if ((item === 'dataGaps' || item === 'integralUnavailable') && state.aggregation !== 'integral') continue;
+            if (item === 'coarseSampling') {
+                coarseSampling = true;
+                continue;
+            }
             const message = {
                 dataGaps: text('heatmapDataGaps'),
                 integralUnavailable: text('heatmapIntegralUnsorted'),
-                // A cell shorter than the signal's own step cannot be filled;
-                // said here rather than left to be guessed from the picture.
-                coarseSampling: text('heatmapCoarseSampling'),
             }[item] || item;
             warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${message}`);
         }
@@ -1159,6 +1165,7 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
         if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
         // Preserve original trace order across the eager/lazy split.
         const models = allTraces.map(trace => modelByTrace.get(trace)).filter(Boolean);
+        if (coarseSampling) warnings.push(text('heatmapCoarseSampling'));
         if (models.filter(model => this._isVisible(model.trace)).length > HEATMAP_MANY_TRACES_WARNING) {
             warnings.push(text('heatmapManyTraces'));
         }
