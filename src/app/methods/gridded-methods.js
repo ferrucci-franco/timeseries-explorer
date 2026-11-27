@@ -3313,9 +3313,11 @@ export function installGriddedMethods(TargetClass) {
         div.addEventListener('mousemove', event => {
             const view = this._griddedVisibleView();
             const at = view && !interaction.pressed && this._griddedEventCoords(div, event);
-            // A pinned cell holds the inspector (and its outline) still.
-            if (view && at && !view.pinned) this._griddedInspect(view, at);
-            this._griddedOutlineCell(div, view, interaction.pressed || view?.pinned ? null : at);
+            // A pinned cell holds the inspector (and its outline) still; an
+            // open menu holds everything.
+            const quiet = !!this._griddedMenu;
+            if (view && at && !view.pinned && !quiet) this._griddedInspect(view, at);
+            this._griddedOutlineCell(div, view, interaction.pressed || view?.pinned || quiet ? null : at);
             let over = null;
             if (at) {
                 const target = this._griddedEditTarget(view, at, 'mouse');
@@ -3800,6 +3802,8 @@ export function installGriddedMethods(TargetClass) {
         const close = event => {
             if (event.type === 'keydown' && event.key !== 'Escape') return;
             if (event.type === 'pointerdown' && menu.contains(event.target)) return;
+            // Escape closes the menu, and only the menu (not the pinned cell).
+            if (event.type === 'keydown') event.stopPropagation();
             this._griddedCloseMenu();
         };
         window.addEventListener('pointerdown', close, true);
@@ -3807,12 +3811,19 @@ export function installGriddedMethods(TargetClass) {
         window.addEventListener('wheel', close, { capture: true, passive: true });
         menu.focus?.();
         menu.querySelector('button')?.focus();
+        // While the menu is open the map is quiet: no hover label, no
+        // outline following the pointer on its way to the menu.
+        const mapDiv = this._griddedEl('map');
+        mapDiv?.classList.add('gridded-menu-open');
+        try { if (mapDiv?._fullLayout) Plotly.Fx.unhover(mapDiv); } catch (_) { /* nothing hovered */ }
+        this._griddedOutlineCell(mapDiv, null, null);
         this._griddedMenu = {
             menu,
             remove: () => {
                 window.removeEventListener('pointerdown', close, true);
                 window.removeEventListener('keydown', close, true);
                 window.removeEventListener('wheel', close, { capture: true, passive: true });
+                mapDiv?.classList.remove('gridded-menu-open');
                 menu.remove();
             },
         };

@@ -1728,3 +1728,8 @@ html.compact.compact-landscape .gridded-panel .gridded-preview.is-folded {
 .gridded-inspector-pinned[hidden] {
     display: none;
 }
+
+/* An open context menu: the map's hover label stays away. */
+.gridded-map.gridded-menu-open .hoverlayer {
+    display: none;
+}
