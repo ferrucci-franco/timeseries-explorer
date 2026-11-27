@@ -251,6 +251,25 @@ textarea,
     display: none;
 }
 
+/* Short of room, the app's logo stands in for the title and subtitle; they
+   stay in the layout, invisible, to be measured (top-bar-scroll.js). */
+.app-logo {
+    display: none;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+}
+
+.top-bar-left.as-logo .app-logo {
+    display: block;
+}
+
+.top-bar-left.as-logo .app-brand {
+    position: absolute;
+    visibility: hidden;
+    pointer-events: none;
+}
+
 .top-bar-left.is-squeezed ~ .top-bar-right {
     margin-left: auto;
 }

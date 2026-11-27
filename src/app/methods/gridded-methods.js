@@ -1764,7 +1764,14 @@ export function installGriddedMethods(TargetClass) {
         const index = tabs.activeIndex;
         const item = tabs.items[index];
         item.mapTabFor = fileId;
-        if (!item.name) this.renameTab(index, this._fileDisplayName?.(this.files.get(fileId)) || '');
+        // "Map 1", "Map 2"…: the lowest number no other tab of a map has.
+        if (!item.name && !item.mapNumber) {
+            const taken = new Set(tabs.items.map(other => other.mapNumber).filter(Boolean));
+            let number = 1;
+            while (taken.has(number)) number += 1;
+            item.mapNumber = number;
+            this._renderTabs();
+        }
         this._showGriddedView(fileId);
     };
 
@@ -1800,7 +1807,11 @@ export function installGriddedMethods(TargetClass) {
             return;
         }
         const item = this.tabs?.items?.[this.tabs.activeIndex];
-        if (item) item.mapTabFor = null;
+        if (item) {
+            item.mapTabFor = null;
+            item.mapNumber = null;
+            this._renderTabs();
+        }
         this._hideGriddedView();
     };
 

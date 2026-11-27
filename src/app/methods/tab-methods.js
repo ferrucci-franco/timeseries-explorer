@@ -66,7 +66,10 @@ proto._newTabItem = function(name = '') {
 };
 
 proto._tabDisplayName = function(item) {
-    return item?.name || i18n.t('tabDefaultName').replace('{n}', String(item?.number || 1));
+    if (item?.name) return item.name;
+    // A map's own tab: "Map 1", "Map 2", in the language on screen.
+    if (item?.mapNumber) return i18n.t('tabMapName').replace('{n}', String(item.mapNumber));
+    return i18n.t('tabDefaultName').replace('{n}', String(item?.number || 1));
 };
 
 proto.initTabs = function() {
