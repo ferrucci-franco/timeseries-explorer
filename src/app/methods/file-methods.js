@@ -4970,7 +4970,8 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0, options = {})
         mapBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (this._gridded?.visibleFileId === fileId) {
-                this._griddedCloseMap();
+                // Pressed here: no need to point at it.
+                this._griddedCloseMap({ pointAtButton: false });
                 return;
             }
             // On a phone the Data sheet covers half the map: it gives way.

@@ -1759,7 +1759,10 @@ export function installGriddedMethods(TargetClass) {
             if (state.visibleFileId !== fileId) this._showGriddedView(fileId);
             return;
         }
-        const empty = !state.visibleFileId && !this.plotManager.hasAnyTraces?.();
+        // The tab on screen is used only when it is empty and has no name of
+        // its own: a tab called "P1" with its plots taken out is still P1's.
+        const current = tabs.items[tabs.activeIndex];
+        const empty = !state.visibleFileId && !this.plotManager.hasAnyTraces?.() && !current?.name;
         if (!empty) await this.addTabAtEnd();
         const index = tabs.activeIndex;
         const item = tabs.items[index];
@@ -1794,25 +1797,49 @@ export function installGriddedMethods(TargetClass) {
     };
 
     // Close map — or, on the map's own tab, Close tab.
-    proto._griddedCloseMap = async function() {
+    proto._griddedCloseMap = async function({ pointAtButton = true } = {}) {
         const state = this._griddedState();
         // Closed on purpose: no button over the plots asks to come back.
         state.returnFileId = null;
+        const fileId = state.visibleFileId;
         if (this._griddedClosesTab()) {
             const tabs = this.tabs;
             const index = tabs.activeIndex;
             this._hideGriddedView();
             tabs.items[index].mapFileId = null;
             await this.closeTab(index, { force: true });
-            return;
+        } else {
+            const item = this.tabs?.items?.[this.tabs.activeIndex];
+            if (item) {
+                item.mapTabFor = null;
+                item.mapNumber = null;
+                this._renderTabs();
+            }
+            this._hideGriddedView();
         }
-        const item = this.tabs?.items?.[this.tabs.activeIndex];
-        if (item) {
-            item.mapTabFor = null;
-            item.mapNumber = null;
-            this._renderTabs();
-        }
-        this._hideGriddedView();
+        if (pointAtButton) this._griddedPointAtMapButton(fileId);
+    };
+
+    /**
+     * Where the map comes back from: the Map button of the file's row, in
+     * the sidebar, scrolled into view and blinking a few times. Not on a
+     * phone, nor with the sidebar folded away.
+     */
+    proto._griddedPointAtMapButton = function(fileId) {
+        if (!fileId || document.documentElement.classList.contains('compact')) return;
+        // The list is drawn again as the map closes: after that.
+        setTimeout(() => {
+            const button = [...document.querySelectorAll('#sidebar .file-entry-map')]
+                .find(element => element.closest('[data-file-id]')?.dataset.fileId === fileId)
+                || document.querySelector('#sidebar .file-entry-map:not([hidden])');
+            if (!button || !button.offsetParent) return;
+            const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+            button.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+            button.classList.remove('gridded-map-btn-flash');
+            void button.offsetWidth;
+            button.classList.add('gridded-map-btn-flash');
+            button.addEventListener('animationend', () => button.classList.remove('gridded-map-btn-flash'), { once: true });
+        }, 60);
     };
 
     proto._hideGriddedView = function() {
