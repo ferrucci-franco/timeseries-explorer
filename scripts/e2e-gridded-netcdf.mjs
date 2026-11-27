@@ -139,7 +139,14 @@ try {
         assert.deepEqual(state.tabs, ['Map 1'], 'the map opened on the empty tab, named Map 1');
 
         // In the point tool (a crosshair, not the move cursor) a click places
-        // a marker and fills the coordinates; nothing is read yet.
+        // a marker and fills the coordinates; nothing is read yet. The map is
+        // let settle first (its field read, its redraws done): a click on a
+        // map still without a field reads no cell, so pins none.
+        await page.waitForFunction(() => new Promise(resolve => {
+            const view = window.app._griddedVisibleView();
+            const drawn = view?.drawn;
+            setTimeout(() => resolve(!!view?.map && !!drawn && view.drawn === drawn && !view.job), 800);
+        }), null, { timeout: 60000, polling: 100 });
         const plot = await page.$eval('#gridded-view .gridded-map .nsewdrag', el => {
             const rect = el.getBoundingClientRect();
             return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
