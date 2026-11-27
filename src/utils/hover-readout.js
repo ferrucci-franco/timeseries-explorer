@@ -32,10 +32,13 @@
 // Pure: no DOM, no Plotly.
 
 import { readoutFormatter } from './readout-format.js';
+import { markupLength, wrapMarkup } from './text-fit.js';
 import { formatNaturalDuration } from './fft.js';
 
 export const HOVER_READOUT_POINT_LIMIT = 100_000;
 export const HOVER_READOUT_TOKEN = '%{hovertext}';
+// What " = 277.8 K" takes after a label, in characters.
+const LABEL_VALUE_ROOM = 14;
 
 // Called for every line of every point on each redraw (4 000 strings per zoom
 // of a two-signal plot), and a number almost never holds one of the four: the
@@ -100,7 +103,14 @@ export function buildHoverReadoutText(spec, arrays, format) {
         const shared = local ? null : readoutFormatter({
             unit: line.unit, digits: line.digits, resolution: fixedResolution, format,
         });
-        const prefix = line.label ? `${line.label} = ` : '';
+        // A label too long for the plot's width (`format.maxChars`, from
+        // src/vendor/plotly.js) wraps, with room left on its last line for
+        // the value that follows it.
+        const max = Number(format?.maxChars);
+        const label = line.label && Number.isFinite(max) && markupLength(line.label) > max - LABEL_VALUE_ROOM
+            ? wrapMarkup(line.label, Math.max(12, max - LABEL_VALUE_ROOM))
+            : line.label;
+        const prefix = label ? `${label} = ` : '';
         return { array, map, suffix, local, shared, prefix, line };
     });
     const length = hoverReadoutLength(spec, arrays);
@@ -179,7 +189,9 @@ export function fillHoverReadout(trace, format) {
     const arrays = { x: trace.x, y: trace.y, z: trace.z, customdata: trace.customdata };
     const tooMany = hoverReadoutLength(spec, arrays) > HOVER_READOUT_POINT_LIMIT;
     trace.hovertext = tooMany ? undefined : buildHoverReadoutText(spec, arrays, format);
-    trace.hovertemplate = hoverReadoutTemplate(spec.template ?? trace.hovertemplate, spec, tooMany);
+    const template = hoverReadoutTemplate(spec.template ?? trace.hovertemplate, spec, tooMany);
+    // Its own lines (a name over the readout) wrap to the plot's width too.
+    trace.hovertemplate = Number.isFinite(Number(format?.maxChars)) ? wrapMarkup(template, Number(format.maxChars)) : template;
     return trace;
 }
 

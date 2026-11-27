@@ -178,7 +178,10 @@ const NARROW_SPACE = ' ';
 
     const vendor = readFileSync(new URL('../src/vendor/plotly.js', import.meta.url), 'utf8');
     ok(vendor.includes('export function setPlotNumberSeparators'), 'the vendor wrapper exposes the seam');
-    ok(/layoutFor = layout => withSeparators\(/.test(vendor),
+    ok(/const layoutFor = \(layout, div\) => fitLayoutTitles\(\s*withSeparators\(/.test(vendor),
+        'every layout gets the separators (then its titles fitted)');
+    ok(/Plotly\.newPlot = \(div, data, layout, \.\.\.rest\) => nativeNewPlot\(div, fillReadouts\(data, div\), layoutFor\(layout, div\)/.test(vendor)
+        && /Plotly\.react = \(div, data, layout, \.\.\.rest\) => nativeReact\(div, fillReadouts\(data, div\), layoutFor\(layout, div\)/.test(vendor),
         'and every newPlot and react goes through it, rather than seventeen layout builders');
     ok(/layout\.separators !== undefined\) return layout/.test(vendor),
         'a layout that names its own separators is left alone');

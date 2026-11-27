@@ -8,6 +8,13 @@ import { install3DSceneGestures } from '../ui/plot-3d-gestures.js';
 import { compactPlotLayout, compactPlotRelayout } from '../utils/compact-plot-layout.js';
 import { keepOverlayLegendsFromPushing } from '../utils/overlay-legend-margins.js';
 import { fillHoverReadout, hoverReadoutRestyle } from '../utils/hover-readout.js';
+import {
+    fitLayoutTitles,
+    fitRelayoutTitles,
+    fitRestyleHoverTemplates,
+    fitTraceHoverTemplate,
+    hoverCharsFor,
+} from '../utils/plot-text-fit.js';
 
 const Plotly = globalThis.Plotly;
 
@@ -70,20 +77,35 @@ const withSeparators = (layout) => {
     return { ...layout, separators };
 };
 
-const layoutFor = layout => withSeparators(largerFonts() ? compactPlotLayout(layout) : layout);
+// Long names fitted to the plot's room (utils/plot-text-fit.js): a hover
+// label's lines wrap, an axis title is shortened. The room is the div's, as
+// it is when the plot is drawn.
+const plotSize = div => ({ width: div?.clientWidth || 0, height: div?.clientHeight || 0 });
+const hoverChars = div => hoverCharsFor(div?.clientWidth || 0);
+
+const layoutFor = (layout, div) => fitLayoutTitles(
+    withSeparators(largerFonts() ? compactPlotLayout(layout) : layout),
+    plotSize(div),
+);
 
 // Hover readouts (utils/hover-readout.js): a trace that declares
 // `_hoverReadout` gets its `hovertext` written here from the x/y/z it is drawn
 // with, by every call that hands Plotly new data. Kept out of the trace
 // builders because a time series reaches Plotly by half a dozen restyle paths,
 // and one of them forgetting would show the previous window's numbers.
-const readoutFormat = () => ({ decimal: plotSeparators()[0] || '.' });
-const fillReadouts = (data) => {
-    if (Array.isArray(data)) data.forEach(trace => fillHoverReadout(trace, readoutFormat()));
-    else if (data && typeof data === 'object') fillHoverReadout(data, readoutFormat());
+const readoutFormat = div => ({ decimal: plotSeparators()[0] || '.', maxChars: hoverChars(div) });
+const fillTrace = (trace, div) => (trace?._hoverReadout
+    ? fillHoverReadout(trace, readoutFormat(div))
+    : fitTraceHoverTemplate(trace, hoverChars(div)));
+const fillReadouts = (data, div) => {
+    if (Array.isArray(data)) data.forEach(trace => fillTrace(trace, div));
+    else if (data && typeof data === 'object') fillTrace(data, div);
     return data;
 };
-const withReadoutRestyle = (div, update, traces) => hoverReadoutRestyle(div?.data, update, traces, readoutFormat());
+const withReadoutRestyle = (div, update, traces) => fitRestyleHoverTemplates(
+    hoverReadoutRestyle(div?.data, update, traces, readoutFormat(div)),
+    hoverChars(div),
+);
 
 const nativeNewPlot = Plotly.newPlot.bind(Plotly);
 const nativeRelayout = Plotly.relayout.bind(Plotly);
@@ -94,11 +116,11 @@ const nativeRelayout = Plotly.relayout.bind(Plotly);
 const unsqueeze = (drawn, div) => (keepOverlayLegendsFromPushing(drawn || div)
     ? nativeRelayout(drawn || div, { 'margin.autoexpand': true }).then(() => drawn, () => drawn)
     : drawn);
-Plotly.newPlot = (div, data, layout, ...rest) => nativeNewPlot(div, fillReadouts(data), layoutFor(layout), ...rest)
+Plotly.newPlot = (div, data, layout, ...rest) => nativeNewPlot(div, fillReadouts(data, div), layoutFor(layout, div), ...rest)
     .then(drawn => unsqueeze(drawn, div))
     .then(drawn => withTouchGestures(drawn, div));
 const nativeReact = Plotly.react.bind(Plotly);
-Plotly.react = (div, data, layout, ...rest) => nativeReact(div, fillReadouts(data), layoutFor(layout), ...rest)
+Plotly.react = (div, data, layout, ...rest) => nativeReact(div, fillReadouts(data, div), layoutFor(layout, div), ...rest)
     .then(drawn => unsqueeze(drawn, div))
     .then(drawn => withTouchGestures(drawn, div));
 const nativeRestyle = Plotly.restyle.bind(Plotly);
@@ -110,10 +132,10 @@ Plotly.restyle = (div, update, ...rest) => {
 };
 const nativeUpdate = Plotly.update.bind(Plotly);
 Plotly.update = (div, traceUpdate, layoutUpdate, traces, ...rest) => nativeUpdate(div,
-    withReadoutRestyle(div, traceUpdate, traces), layoutUpdate, traces, ...rest);
+    withReadoutRestyle(div, traceUpdate, traces), fitRelayoutTitles(layoutUpdate, plotSize(div)), traces, ...rest);
 const nativeAddTraces = Plotly.addTraces.bind(Plotly);
-Plotly.addTraces = (div, traces, ...rest) => nativeAddTraces(div, fillReadouts(traces), ...rest);
+Plotly.addTraces = (div, traces, ...rest) => nativeAddTraces(div, fillReadouts(traces, div), ...rest);
 Plotly.relayout = (div, update, ...rest) => nativeRelayout(div,
-    largerFonts() && update && typeof update === 'object' ? compactPlotRelayout(update) : update, ...rest);
+    fitRelayoutTitles(largerFonts() && update && typeof update === 'object' ? compactPlotRelayout(update) : update, plotSize(div)), ...rest);
 
 export default Plotly;
