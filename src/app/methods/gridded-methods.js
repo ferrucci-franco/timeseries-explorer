@@ -4443,8 +4443,15 @@ export function installGriddedMethods(TargetClass) {
         this._griddedRenderResults(view);
         if (!view.addTo) return;
         const select = this._griddedEl('variable');
+        // The panel (or, without one beside the map, the page of the map)
+        // goes all the way up: the menu and the line under it at the top.
+        const smooth = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth';
+        const root = document.getElementById('gridded-view');
+        const scroller = root?.classList.contains('is-side-controls')
+            ? this._griddedEl('panel')
+            : root?.querySelector('.gridded-main');
+        scroller?.scrollTo({ top: 0, behavior: smooth });
         if (select) {
-            select.scrollIntoView({ block: 'nearest' });
             select.classList.remove('gridded-attention');
             void select.offsetWidth;
             select.classList.add('gridded-attention');
