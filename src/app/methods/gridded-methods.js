@@ -2213,6 +2213,9 @@ export function installGriddedMethods(TargetClass) {
 
     proto._griddedSetMode = function(view, mode) {
         view.mode = mode;
+        // A cell pinned in Navigate is Navigate's: Point and Region place
+        // their own, and it lets go.
+        if (mode !== 'navigate') this._griddedUnpin(view);
         this._griddedSyncMode(view);
         const div = this._griddedEl('map');
         this._griddedDeactivateShape(div);
