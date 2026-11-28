@@ -80,7 +80,8 @@ Built:
   the sound back, the strip says to tap ▶ again and that tap is a new try. The chart
   follows the strip's height when its note line comes and goes (`_heightObserver`,
   which also fixes the desktop strip covering the axis);
-- the More sheet: layout, language, theme, examples and menu;
+- the More sheet: layout, full screen (where the browser has a page full screen),
+  language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
   zoom of §6.1 (a slow double tap);
@@ -646,7 +647,11 @@ measurements. Only how they are reached and read changes.
 - On iOS, measure with `visualViewport` and `screen` as described in the MINI
   document's "iOS traps". An on-screen keyboard may shrink the content but must not
   re-fit the whole app.
-- iPhone Safari has no element fullscreen and no orientation lock. Neither is used.
+- iPhone Safari has no element fullscreen and no orientation lock. Neither is used
+  there: the More sheet's **Full screen** row (`src/ui/app-fullscreen.js`, the
+  desktop top bar's button) is listed only where `document.fullscreenEnabled` is
+  true — Android Chrome, an iPad — and reads **Exit full screen** while on, since a
+  finger cannot point at the top edge to bring the exit pill back.
 - **Backgrounding.** If the browser discards the tab, the next visit restores
   preferences, the layout and the last plot configuration. It then asks for the files
   again: in-memory data cannot survive. It must say so plainly and must not show

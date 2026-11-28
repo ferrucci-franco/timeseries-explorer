@@ -1238,6 +1238,37 @@ try {
     await page.locator('.compact-switch-row input').click();
     // Examples and the menu are phone lists, not the desktop dropdowns.
     assert.equal(await page.locator('.compact-sheet #example-menu, .compact-sheet #extra-menu').count(), 0, 'the desktop menus are not lent');
+    // Full screen, the desktop top bar's button: one row here, which goes
+    // both ways (a finger cannot point at the top edge for the exit pill).
+    {
+        const entry = page.locator('.compact-page-more .compact-fullscreen-entry');
+        assert.equal(await page.evaluate(() => document.fullscreenEnabled), true, 'this browser has a page full screen');
+        assert.equal(await entry.count(), 1, 'so More offers it');
+        assert.equal((await entry.innerText()).trim(), 'Full screen');
+        assert.equal(await entry.getAttribute('aria-pressed'), 'false');
+        assert.ok((await entry.boundingBox()).height >= 44, 'at a finger\'s size');
+        await entry.tap();
+        await page.waitForFunction(() => document.fullscreenElement === document.documentElement);
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.getAttribute('aria-pressed') === 'true');
+        assert.equal((await entry.innerText()).trim(), 'Exit full screen', 'the same row now leaves it');
+        assert.equal(await page.evaluate(() => document.querySelector('.app-fullscreen-pill').classList.contains('show')), true,
+            'and the exit pill shows on entering');
+        assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact')), true, 'still the phone layout');
+        await entry.tap();
+        await page.waitForFunction(() => !document.fullscreenElement);
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.getAttribute('aria-pressed') === 'false');
+        assert.equal((await entry.innerText()).trim(), 'Full screen', 'and back');
+        // Left another way (the pill, Esc, the system's Back): the row follows.
+        await entry.tap();
+        await page.waitForFunction(() => !!document.fullscreenElement);
+        await page.evaluate(() => document.exitFullscreen());
+        await page.waitForFunction(() => !document.fullscreenElement);
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.getAttribute('aria-pressed') === 'false');
+        await page.evaluate(() => window.app.setLanguage('fr'));
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.textContent.trim() === 'Plein écran');
+        await page.evaluate(() => window.app.setLanguage('en'));
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.textContent.trim() === 'Full screen');
+    }
     assert.equal(await page.locator('.compact-sheet .compact-menu-btn', { hasText: 'Lorenz Attractor' }).isVisible(), true, 'the examples stay listed after a tap elsewhere in the sheet');
     for (const title of ['Project', 'Tools', 'Help and feedback']) {
         assert.equal(await page.locator('.compact-page-more .compact-section-title', { hasText: title }).count(), 1, `the menu has its ${title} group`);
@@ -1764,6 +1795,42 @@ try {
     if (shots) await ipage.screenshot({ path: `${shots}/compact-ios-lorenz.png` });
     assert.deepEqual(ierrors, [], 'no page errors on iOS');
     await ios.close();
+
+    // ── No page full screen (iPhone Safari): no dead entry in More ──────────
+    {
+        const noFs = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        await noFs.addInitScript(() => {
+            for (const name of ['fullscreenEnabled', 'webkitFullscreenEnabled']) {
+                Object.defineProperty(Document.prototype, name, { configurable: true, get: () => false });
+            }
+        });
+        const noFsPage = await noFs.newPage();
+        await noFsPage.goto(baseUrl);
+        await noFsPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+        assert.equal(await noFsPage.evaluate(() => document.fullscreenEnabled), false);
+        await noFsPage.locator('.compact-nav-btn[data-sheet="more"]').click();
+        await noFsPage.waitForSelector('.compact-page-more .compact-segmented');
+        assert.equal(await noFsPage.locator('.compact-fullscreen-entry').count(), 0, 'More does not offer a full screen the browser lacks');
+        assert.equal(await noFsPage.evaluate(() => document.getElementById('fullscreen-btn').hidden), true, 'as the top bar\'s button hides');
+        await noFs.close();
+    }
+
+    // ── A tablet with the desktop layout: the top bar's button takes a tap ──
+    {
+        const tablet = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: true });
+        const tabletPage = await tablet.newPage();
+        await tabletPage.goto(baseUrl);
+        await tabletPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+        assert.equal(await tabletPage.evaluate(() => document.documentElement.classList.contains('compact')), false, 'a tablet sideways keeps the desktop layout');
+        const fsButton = tabletPage.locator('#fullscreen-btn');
+        assert.equal(await fsButton.isVisible(), true);
+        await fsButton.tap();
+        await tabletPage.waitForFunction(() => document.fullscreenElement === document.documentElement);
+        await tabletPage.waitForFunction(() => document.getElementById('fullscreen-btn').getAttribute('aria-pressed') === 'true');
+        await fsButton.tap();
+        await tabletPage.waitForFunction(() => !document.fullscreenElement);
+        await tablet.close();
+    }
 
     // ── Desktop: untouched ──────────────────────────────────────────────────
     const desktop = await browser.newContext({ viewport: { width: 1400, height: 900 } });

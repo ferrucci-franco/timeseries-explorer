@@ -631,6 +631,11 @@ html.compact.compact-landscape .compact-sheet-size {
     border-top: 1px solid var(--border-color);
 }
 
+/* More → Layout: the full-screen row under the layout choice. */
+.compact-segmented + .compact-menu-list {
+    margin-top: 10px;
+}
+
 .compact-menu-row {
     display: flex;
     align-items: center;
