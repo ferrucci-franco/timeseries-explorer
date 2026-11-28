@@ -130,6 +130,7 @@
     "test:concat-csv-export": "node scripts/test-timeseries-concat-export.mjs",
     "test:formula-sql": "node scripts/test-formula-sql.mjs",
     "test:lazy-data-tools": "node scripts/test-lazy-data-tools.mjs",
+    "test:lazy-tool-coverage": "node scripts/test-lazy-tool-coverage.mjs",
     "test:lazy-number-format": "node scripts/test-lazy-number-format.mjs",
     "test:csv-sql-datetime": "node scripts/test-csv-sql-datetime.mjs",
     "test:csv-duckdb-parity": "node scripts/test-csv-duckdb-parity.mjs",

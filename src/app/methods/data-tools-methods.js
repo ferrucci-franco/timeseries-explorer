@@ -40,7 +40,6 @@ import { computeInterarrival, normalizeInterarrivalParams } from '../../compute/
 import { FILTER_DESIGN_FIELD_IDS, formatCoefficientBox } from './filter-methods.js';
 import { XCORR_FIELD_IDS } from './xcorr-methods.js';
 import { COLLAPSE_FIELD_IDS } from './collapse-methods.js';
-import { LAZY_DETREND_METHODS } from './lazy-data-tools-methods.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
@@ -67,6 +66,9 @@ const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 // What a lazy file offers (see _isDataToolAvailableForData).
 // Every tool: the ones over one variable as SQL or in the chunked executor, and
 // the file tools as lazy datasets of their own (lazy-dataset-methods.js).
+// Every tool the picker offers is in here, and scripts/test-lazy-tool-coverage.mjs
+// fails if one is added that is not — which is why nothing in the panel greys a
+// tool out or says a tool is unavailable on a lazy file.
 const LAZY_DATA_TOOLS = new Set([
     'removeOutliers', 'derivative', 'integrate', 'movingAverage', 'interpolate', 'detrend', 'filter',
     'interarrival', 'resample', 'xcorr', 'collapse',
@@ -378,7 +380,6 @@ proto._syncDataTools = function() {
 
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
-    const lazy = this._isDataToolLazyData(data);
     // An edit and its preview belong to the file they were started from; switching
     // files abandons both. Without this the placeholder variable would be stranded
     // in the file the user just left.
@@ -400,7 +401,6 @@ proto._syncDataTools = function() {
         this._exitDerivedDatasetEditing?.();
     }
     const editing = this._dataToolEditing || null;
-    this._syncDataToolPickerOptions(lazy);
     this._syncDataToolGallery?.();
 
     const tool = this._getSelectedDataTool();
@@ -416,7 +416,6 @@ proto._syncDataTools = function() {
     document.querySelectorAll('.data-tool-controls').forEach(el => {
         el.classList.toggle('collapsed', el.dataset.toolKind !== tool);
     });
-    this._syncDetrendMethodOptions(lazy && tool === 'detrend');
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
@@ -439,11 +438,6 @@ proto._syncDataTools = function() {
         const option = document.createElement('option');
         option.value = '';
         option.textContent = i18n.t('outlierSelectVariable');
-        sourceSelect.appendChild(option);
-    } else if (lazy && !allowed) {
-        const option = document.createElement('option');
-        option.value = '';
-        option.textContent = i18n.t('dataToolLazyToolUnavailable');
         sourceSelect.appendChild(option);
     } else if (!entries.length) {
         const option = document.createElement('option');
@@ -555,10 +549,6 @@ proto._syncDataTools = function() {
     this._syncDataToolActions(editing, blocker);
     this._syncDataToolLiveChainToggle(editing, fileId);
     this._renderDataToolTable();
-
-    if (hasTool && lazy && !allowed) {
-        this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
-    }
 };
 
 // Why the commit buttons are disabled, as an i18n key — or '' when the draft is
@@ -666,27 +656,6 @@ proto._syncDataToolLiveChainToggle = function(editing, fileId) {
     // "Live-update chain" says nothing on its own; the tooltip names the actual
     // variables that ride along with each parameter change.
     wrap.title = emphasizedToPlain(i18n.t('dataToolLiveChainHelp').replace('{names}', emphasizeList(dependents)));
-};
-
-proto._syncDataToolPickerOptions = function(lazy) {
-    const toolSelect = document.getElementById('data-tool-select');
-    if (!toolSelect) return;
-    for (const option of toolSelect.options) {
-        if (!option.value) continue;
-        option.disabled = !!lazy && !LAZY_DATA_TOOLS.has(option.value);
-    }
-    if (toolSelect.value && toolSelect.options[toolSelect.selectedIndex]?.disabled) {
-        toolSelect.value = '';
-    }
-};
-
-proto._syncDetrendMethodOptions = function(lazy) {
-    const methodSelect = document.getElementById('detrend-method');
-    if (!methodSelect) return;
-    for (const option of methodSelect.options) {
-        option.disabled = !!lazy && !LAZY_DETREND_METHODS.has(option.value);
-    }
-    if (lazy && !LAZY_DETREND_METHODS.has(methodSelect.value)) methodSelect.value = 'linear';
 };
 
 proto._syncOutlierMethodControls = function() {
@@ -2964,7 +2933,6 @@ proto._getOutlierConfig = function() {
 
 proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context = null) {
     const data = context?.data || (this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null);
-    const lazy = this._isDataToolLazyData(data);
     if (tool === 'derivative') {
         const method = document.getElementById('derivative-method')?.value || 'centered';
         return { tool, params: { method: DERIVATIVE_METHODS.has(method) ? method : 'centered' } };
@@ -3001,7 +2969,6 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     }
     if (tool === 'detrend') {
         const method = document.getElementById('detrend-method')?.value;
-        if (lazy && !LAZY_DETREND_METHODS.has(method)) throw new Error(i18n.t('dataToolLazyDetrendMethod'));
         return {
             tool,
             params: normalizeDetrendParams({
