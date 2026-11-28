@@ -96,9 +96,12 @@ async function drawn(page, state, variable) {
     }, { panelId: state.panelId });
 }
 
-const server = await createServer({ configFile: false, root: process.cwd(), server: { port: 5190 } });
+// The project's vite.config.js, as every other e2e server loads it: the build
+// SHA the version check compares, `base`, the worker format. A server without
+// it is a different app.
+const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
 await server.listen();
-const baseUrl = `http://localhost:${server.config.server.port}`;
+const baseUrl = `http://127.0.0.1:${server.httpServer.address().port}/`;
 const browser = await chromium.launch();
 try {
     const pages = {};
