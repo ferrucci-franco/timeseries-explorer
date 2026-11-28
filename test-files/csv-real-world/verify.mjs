@@ -8,6 +8,8 @@
 // Entries marked "optional" (files over ~6 MB, kept in _large/, which git ignores) are skipped
 // while absent unless --fetch is given. Entries with "archive_member" came out of a zip: their
 // source_url is the archive, so --fetch cannot rebuild them and only reports them.
+// Entries marked "synthetic" were written by synthesize.py and have no source_url: only their
+// sha256 is checked, and --fetch reports them instead of downloading anything.
 //
 // The corpus is only useful if the bytes are exactly what the instrument wrote, so a
 // checkout that rewrote line endings or re-encoded a file shows up here as a mismatch.
@@ -38,6 +40,10 @@ for (const entry of entries) {
     if (state === 'ok') { ok++; continue; }
     if (state === 'missing' && entry.optional && !fetchMissing) { skipped++; continue; }
     if (!fetchMissing) { problems.push(`${state}: ${entry.path}`); continue; }
+    if (entry.synthetic) {
+        problems.push(`${state}: ${entry.path} (synthetic: restore it from git, or run synthesize.py on the original)`);
+        continue;
+    }
     if (entry.archive_member) {
         problems.push(`${state}: ${entry.path} (extract "${entry.archive_member}" from ${entry.source_url})`);
         continue;
