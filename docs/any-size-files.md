@@ -1,6 +1,12 @@
-# Archivos de cualquier tamaño: qué falta y cómo cerrarlo
+# Archivos de cualquier tamaño: lo que se cerró y los límites que quedan
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); la escucha (🔊), que lee del archivo cada fila del rango que suena, y la exportación WAV de ese rango, por trozos ("Implementado: escuchar un archivo lazy"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). La fase 5 se cerró con una decisión, no con código nuevo: el proyecto de un archivo lazy es su vista ("Decidido (fase 5)"). De la fase 6 queda MAT: OpenModelica primero, MATLAB anotado como hueco (#396); el netCDF de series abre en lazy, con las mismas series que en memoria ("Implementado: las series de un netCDF por trozos").** Continúa `docs/file-size-limits.md`.
+**Estado: cerrado.** Las fases 1 a 5 están implementadas, y la 6 lo está para
+los resultados `.mat` de OpenModelica / Dymola y para el netCDF de series; del
+`.mat` de MATLAB se decidió no hacerlo por ahora (#396). El modo lazy está
+completo para CSV, Parquet, esos `.mat` y el netCDF: todas las filas, los mismos
+números que en memoria. Lo que queda son **límites declarados**, no deuda. La
+sección 0 es el registro: qué cerró cada tramo, cada límite con su número, y
+dónde está dicho cada uno. Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -8,63 +14,100 @@ marcado como tal.
 
 ---
 
-## 0. Dónde estamos y qué queda (26 de noviembre de 2026)
+## 0. Dónde estamos: el registro final (28 de noviembre de 2026)
 
-Esta sección es el punto de entrada para retomar el trabajo: qué está cerrado,
-qué queda y por dónde seguir. El detalle de cada cosa está más abajo, en la
-sección que se nombra.
+Esta sección era una lista de pendientes. Ya no: el trabajo que el documento
+planteaba está hecho, así que ahora dice qué quedó cerrado, qué es un **límite
+declarado** —una decisión, no una deuda— y qué formatos elegimos no hacer. El
+detalle de cada cosa está más abajo, en la sección que se nombra.
 
-**Cerrado.** Para CSV, Parquet y los resultados `.mat` de OpenModelica / Dymola
-el modo lazy está completo en lo importante: todas las herramientas de datos,
-todos los análisis del menú, las estadísticas del panel, las marcas (muestras,
-timestamps repetidos), las exportaciones, las vistas guardadas y los resultados
-conservados en disco trabajan sobre todas las filas del archivo, con los mismos
-números que en memoria. Ningún análisis retiene la página más de 250 ms, y el
-CI lo comprueba (`npm run e2e:analysis-responsive`,
-`docs/analysis-responsiveness.md`). El plan de cuatro pasos de noviembre de
-2026 está fusionado: #397 (el proyecto de un archivo lazy es su vista), #398
-(marcas en lazy), #400–#403 (análisis fuera del hilo principal y su chequeo),
-#404 (resultados `.mat` en lazy).
+### Cerrado
 
-**Lo que queda**, de mayor a menor peso. Nada de esto es un bloque grande; son
-bordes conocidos, la mayoría dichos en la interfaz.
+Para **CSV, Parquet, los resultados `.mat` de OpenModelica / Dymola y el netCDF
+de series**, el modo lazy está completo: todas las herramientas de datos, todos
+los análisis del menú, las estadísticas del panel, las marcas (muestras,
+timestamps repetidos), las exportaciones, las vistas guardadas, la escucha y
+los resultados conservados en disco trabajan sobre **todas las filas del
+archivo**, con los mismos números que en memoria. Ningún análisis retiene la
+página más de 250 ms, y el CI lo comprueba
+(`npm run e2e:analysis-responsive`, `docs/analysis-responsiveness.md`).
 
-| # | Qué | Estado hoy | Por dónde seguir |
-|---|---|---|---|
-| 1 | **`.mat` de MATLAB** (v5/v7 y v7.3) en lazy | se cargan siempre enteros; issue #396 | escribir un "lector por columnas" con la forma que describe `src/parsers/mat-v4-stream.js`; `src/data/columnar-ingest.js` lo abre en lazy sin más cambios. Enganchar en `_lazyMatReader` (`src/app/methods/file-methods.js`). Modelo de prueba: `scripts/test-lazy-mat.mjs` |
-| ~~2~~ | ~~**netCDF de series** en lazy~~ | **cerrado**: cuando las series de un netCDF no entran en memoria se copian al motor por trozos y el archivo abre en modo de ahorro, con todas las filas para cada análisis, herramienta y exportación. Ya no hay pregunta que hacer | "Implementado: las series de un netCDF por trozos" |
-| 2b | **pickle, audio** | solo cargan enteros (Excel entra por conversión a Parquet) | el mismo camino que 1: un lector por columnas por formato. Solo si hace falta |
-| 3 | **Fórmulas sin forma SQL** | el traductor de `src/expr/sql.js` escribe **las 23 funciones** del lenguaje, `diff()` y `cumsum()` incluidas, como ventanas: no falta ninguna. La **cadena de fórmulas** —la causa que un usuario alcanzaba, medida: se rendía en el paso 11, o en el 8 según los nombres de las columnas— está cerrada: sección "Implementado: una fórmula construida sobre otra". Queda sin forma SQL un **nombre que no resuelve**: una columna de texto o booleana, el resultado de una herramienta cuya tabla ya no está (hasta reconstruirla), una variable de índice independiente (solo en `.mat` de MATLAB, que nunca abre en lazy), y lo que se construya sobre cualquiera de ellos. La app lo avisa al crearla (`derivedLazyOverviewOnly`) y los análisis la rechazan | de esa lista, la columna **booleana** es la única que un archivo lazy encuentra de verdad, y tiene forma SQL propia (su columna): medirla y traducirla. Las demás son el ejecutor por trozos (`src/data/chunk-executor.js`) o no ocurren en lazy |
-| ~~4~~ | ~~**Eje de tiempo generado** (archivo sin columna de tiempo)~~ | **cerrado** (#413): el eje que dibuja el panel es la **fila del archivo**, no la posición de la muestra en el resumen, así que el tramo en pantalla y las filas del archivo son las mismas filas; la tendencia lo lee como cualquier otro, y lo que leía filas equivocadas sin avisar (ajuste de curvas, FFT, audio, exportaciones) lee las que el rango nombra | "Implementado: el eje de un archivo lazy sin columna de tiempo" |
-| 5 | **Límites del `.mat` lazy** | la copia ocupa disco del orden de `data_2`; recargar copia todo de nuevo; un archivo corto y muy ancho ahorra poca memoria (su resumen son casi todas sus filas) | "Implementado: resultados `.mat` en lazy", huecos conocidos. Para el último: un lector eager con arreglos tipados, o el resumen por demanda |
-| 6 | **Correlación cruzada: tope de 8 M filas** | la herramienta lee las dos columnas enteras en memoria hasta `LAZY_XCORR_MAX_ROWS` (8 M filas, 128 MB) y por encima se niega diciendo por qué (`dataToolXcorrLazyTooLarge`: remuestrear a un Δt más grueso primero). Medir el eje ya no cuesta: las consultas llevan señal, se detienen al dejar la herramienta y un archivo pasado el tope se niega antes de medirlo | "Implementado (fase 4b-4)", sección "Global". La ruta directa O(N·L) no se paga a esos tamaños; subir el tope es cambiar la FFT de la correlación por una por trozos |
-| 7 | **Huecos de más de 4 M de muestras seguidas** | el relleno y la integral no los cruzan y lo informan | "Implementado (fase 4b-3)". Caso muy raro |
+Lo que cerró cada tramo:
 
-**Sin medir con archivos reales.** Todo lo del `.mat` lazy se midió con archivos
-sintéticos (288 MB, 3 000 series, 12 000 pasos: ~20 s, ~260 MB de heap). Falta
-probar con resultados reales del dueño: con su tamaño, cantidad de variables y
-pasos se ajustan `INGEST_GROUP_COLUMNS` e `INGEST_OVERVIEW_VALUES`
-(`src/data/columnar-ingest.js`).
+- el plan de cuatro pasos de noviembre de 2026: #397 (el proyecto de un archivo
+  lazy es su vista), #398 (marcas en lazy), #400–#403 (análisis fuera del hilo
+  principal y su chequeo), #404 (resultados `.mat` en lazy);
+- **#413**: el eje de un archivo lazy sin columna de tiempo es la fila del
+  archivo, así que lo que leía filas equivocadas sin avisar lee las que el rango
+  nombra ("Implementado: el eje de un archivo lazy sin columna de tiempo");
+- **el netCDF de series**: sus series se copian al motor por trozos y el
+  archivo abre en modo de ahorro, con los mismos datos que leído entero —
+  verificado fila por fila sobre ocho archivos de prueba, incluido el cruce del
+  worker ("Implementado: las series de un netCDF por trozos");
+- **las fórmulas construidas sobre fórmulas**: una cadena se rendía en el paso
+  11 por el largo de su SQL y caía al resumen; ahora el nombre largo que se
+  repite se calcula una vez como columna del FROM y la cadena llega al 62
+  ("Implementado: una fórmula construida sobre otra");
+- **las negativas que ya no aplicaban**: las cuatro cadenas que decían "no
+  disponible en modo de ahorro" para cosas que sí funcionan, borradas con el
+  código que las alcanzaba, y una prueba que falla si el selector gana una
+  herramienta —o el panel un método de detrend— que no funcione en lazy
+  (`scripts/test-lazy-tool-coverage.mjs`).
 
-**Fuera del modo lazy, abiertos:** #394 (un fallo intermitente del CI en
-`e2e:gridded-netcdf`: la página se pierde mientras carga un proyecto guardado,
-sin reproducir) y la velocidad en memoria: se arregló que la página no se
-congele, no el tiempo hasta el resultado. Cerrados, de la lista de defectos de
-`docs/analysis-responsiveness.md`: #387 (el bloque de rango que se quedaba en
-*Selección* cuando la vista previa automática se ensanchaba — también en el
-histograma, el heatmap y la integral) y #399 (el error de página de Plotly al
-dibujar sobre un panel ya reconstruido: la guardia `_fullLayout` de `a85ef17`,
-ahora en los seis actualizadores de banda, con una prueba que falla si a uno le
-falta).
+### Límites declarados
 
-**Para quien retome** (reglas en `CLAUDE.md`): todo cambio termina en un PR
-fusionado a `main` con los dos jobs de CI en verde; lo que lee valores de una
-señal funciona también en lazy, con prueba de paridad; los textos van en los
-cinco idiomas de `src/i18n/translations.js`. En una sesión en la nube:
+Esto no son pendientes: son decisiones tomadas, dichas en la interfaz o
+anotadas acá. Un límite dicho es parte del producto.
+
+| Qué | El límite | Dónde |
+|---|---|---|
+| **Correlación cruzada** | lee las dos columnas enteras hasta 8 M filas (128 MB) y por encima se niega diciendo que hay que remuestrear primero | "Implementado (fase 4b-4)", sección "Global" |
+| **Huecos de más de 4 M muestras seguidas** | el relleno y la integral no los cruzan, y lo informan | "Implementado (fase 4b-3)" |
+| **La coordenada X de un netCDF** | se lee entera, como la lee el camino en memoria, porque toda decisión sobre el eje sale de sus valores: 8 bytes por paso, unos 250 MB a 30 millones de pasos. Lo que el modo lazy levanta es el costo de las *series*, que es donde está el tamaño de un netCDF | "Implementado: las series de un netCDF por trozos" |
+| **La copia de un `.mat` lazy** | ocupa disco del orden de `data_2`, y recargar copia de nuevo; un archivo corto y muy ancho ahorra poca memoria | "Implementado: resultados `.mat` en lazy" |
+| **Una fórmula sin forma SQL** | un nombre que no resuelve —una columna de texto o booleana, el resultado de una herramienta cuya tabla se borró, un índice independiente— vive solo sobre el resumen, y la app lo avisa al crearla. El tope de 20 000 caracteres queda como red, a 62 pasos de profundidad | "Implementado: una fórmula construida sobre otra", al final |
+
+### Formatos que no haremos por ahora
+
+| Formato | Qué hay hoy | Si alguna vez se hace |
+|---|---|---|
+| **`.mat` de MATLAB** (v5/v7 y v7.3) | se cargan enteros, hasta el límite de carga; issue **#396** | el v7.3 es HDF5 y el lector por partes ya existe (`src/gridded/hdf5-input.js`, WORKERFS); falta el v5/v7, inflando cada variable como flujo. El camino está probado dos veces y el sumidero ya aprendió lo que un formato nuevo necesita |
+| **pickle, audio** | se cargan enteros (Excel entra por conversión a Parquet) | un lector por columnas por formato, como los otros dos |
+
+### Sin medir con archivos reales
+
+Todo lo del `.mat` lazy se midió con archivos sintéticos (288 MB, 3 000 series,
+12 000 pasos: ~20 s, ~260 MB de heap). Falta probarlo con resultados reales del
+dueño: con su tamaño, cantidad de variables y pasos se ajustan
+`INGEST_GROUP_COLUMNS` e `INGEST_OVERVIEW_VALUES` (`src/data/columnar-ingest.js`).
+Lo mismo para un netCDF de eje largo: la fixture más larga del repositorio son
+96 pasos por 48 series, que forzada se lee en 96 bloques — el mismo camino que
+un millón de filas en mil bloques, pero no la misma escala.
+
+### Fuera del modo lazy
+
+**#394**, un fallo intermitente del CI en `e2e:gridded-netcdf`: la página se
+pierde mientras carga un proyecto guardado. Dos de sus tres candidatos están
+descartados con evidencia (el chequeo de versión, por construcción; la
+re-optimización de dependencias de Vite, por medición), se reproduce
+localmente, y los e2e ahora registran toda navegación que nadie pidió
+(`scripts/support/e2e-navigation-log.mjs`), que es lo que va a nombrar la
+próxima. Y la velocidad en memoria: se arregló que la página no se congele, no
+el tiempo hasta el resultado.
+
+### Para quien retome
+
+Las reglas están en `CLAUDE.md`: todo cambio termina en un PR fusionado a
+`main` con los dos jobs de CI en verde; lo que lee valores de una señal
+funciona también en lazy, con prueba de paridad; los textos van en los cinco
+idiomas de `src/i18n/translations.js`. En una sesión en la nube:
 `npm ci --ignore-scripts`, y siete pruebas (`test:csv`,
 `test:csv-robust-duckdb`, `test:csv-to-parquet`, `test:missing-lazy`,
 `test:state-band`, `test:temporal-profile-lazy`, `test:time-axis-fixtures`)
 necesitan el DuckDB nativo y solo corren en el CI.
+
+Y la regla que evita que esta lista vuelva a existir: lo nuevo nace funcionando
+en lazy ("Regla: lo nuevo nace funcionando en lazy").
 
 ---
 
@@ -2743,7 +2786,8 @@ unos kilobytes y Settings toma megabytes enteros); todo lo que viene después
 —el worker, los bloques, el motor, el dataset— es lo de verdad.
 ### Implementado: una fórmula construida sobre otra, sobre todas las filas
 
-El punto 3 tenía dos causas y una de ellas la alcanzaba cualquiera.
+De las dos causas que dejaban una fórmula sobre el resumen, una la alcanzaba
+cualquiera.
 
 En un archivo lazy una variable derivada no es un arreglo: es su SQL. Y un
 nombre, al resolverse, devuelve **el SQL de lo que lee**, que el traductor
@@ -2777,7 +2821,7 @@ lee el archivo entero. Es exactamente lo que ya le pasa a cualquier fórmula
 con un `diff()` adentro, y solo lo paga la mención que de otro modo se
 escribiría dos veces.
 
-**Lo que sigue sin forma SQL**, y es el resto del punto 3: un nombre que no
+**Lo que sigue sin forma SQL**, y queda como límite declarado: un nombre que no
 resuelve —una columna de texto o booleana, el resultado de una herramienta
 cuya tabla se borró, una variable de índice independiente— y el tope de 20 000
 caracteres como red, ahora a 62 pasos de profundidad en vez de 11.
