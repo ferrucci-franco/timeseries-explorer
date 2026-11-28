@@ -89,6 +89,10 @@ proto.initVersionCheck = function() {
 proto._versionCheckBusy = function() {
     if (this.files?.size > 0) return true;
     if (this._exampleLoading || this._fileLoadingToken) return true;
+    // A session or project being loaded: the files it brings are not open yet,
+    // the ones it replaces are already closed, and a silent load puts up no
+    // overlay — so none of the above sees it (_withSessionLoad, #394).
+    if (this._sessionLoadDepth > 0) return true;
     return !!document.querySelector(BUSY_SELECTORS);
 };
 

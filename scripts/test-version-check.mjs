@@ -3,6 +3,7 @@
 // -- above all, that a server still handing out the old page can never make
 // the app reload in a loop. The browser side is scripts/e2e-version-check.mjs.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
     RECHECK_INTERVAL_MS,
@@ -170,6 +171,57 @@ assert.deepEqual(decide({ dismissedSha: 'ccccccc', busy: true }), { action: 'ban
     map.clear();
     const { action } = decideVersionAction({ runningSha: 'aaaaaaa', remoteSha: 'bbbbbbb', attemptedSha: cleanReloadUrl('https://x/?build=bbbbbbb').arrivedSha });
     assert.equal(action, 'none');
+}
+
+
+// ── What counts as busy ─────────────────────────────────────────────────────
+//
+// "Busy" is the one thing that keeps an automatic reload from happening, so
+// what it does not count is what a reload throws away. A project load counted
+// as nothing: it closes the files that are open before it opens the ones it
+// brings, and a silent load puts up no overlay — a build deployed in that
+// moment reloaded the page and the load was gone (#394).
+{
+    const { installVersionCheckMethods } = await import('../src/app/methods/version-check-methods.js');
+    class App {}
+    installVersionCheckMethods(App);
+    const app = new App();
+    app.files = new Map();
+    const previousDocument = globalThis.document;
+    globalThis.document = { querySelector: () => null };
+    try {
+        assert.equal(app._versionCheckBusy(), false, 'an app with nothing open is not busy');
+
+        app.files.set('f', {});
+        assert.equal(app._versionCheckBusy(), true, 'a file open is busy');
+        app.files.clear();
+
+        app._fileLoadingToken = {};
+        assert.equal(app._versionCheckBusy(), true, 'a file loading is busy');
+        app._fileLoadingToken = null;
+
+        app._sessionLoadDepth = 1;
+        assert.equal(app._versionCheckBusy(), true, 'and a session or project being loaded is busy');
+        app._sessionLoadDepth = 0;
+        assert.equal(app._versionCheckBusy(), false, 'once it is done, it is not');
+
+        globalThis.document = { querySelector: (selector) => (selector.includes('.modal-overlay') ? {} : null) };
+        assert.equal(app._versionCheckBusy(), true, 'a dialog is busy: it may hold typed text');
+    } finally {
+        if (previousDocument === undefined) delete globalThis.document;
+        else globalThis.document = previousDocument;
+    }
+
+    // And the flag is raised where it matters: the loader runs its work inside
+    // it, not beside it.
+    const session = readFileSync(new URL('../src/app/methods/session-methods.js', import.meta.url), 'utf8');
+    assert.ok(session.includes([
+        'proto.loadSessionOrProjectFile = async function(file, options = {}) {',
+        '    return this._withSessionLoad(() => this._loadSessionOrProjectFile(file, options));',
+    ].join('\n')), 'loadSessionOrProjectFile does its work inside _withSessionLoad');
+    assert.match(session, /_sessionLoadDepth = \(this\._sessionLoadDepth \|\| 0\) \+ 1;[\s\S]*?finally \{[\s\S]*?_sessionLoadDepth = Math\.max/,
+        'and the count comes back down in a finally, however the load ends');
+    console.log('version check: a session or project being loaded counts as busy');
 }
 
 console.log('version-check: all assertions passed');
