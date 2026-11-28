@@ -2066,25 +2066,25 @@ export const GUIDE_CHAPTERS = [
                 }
             })().catch(() => { /* the demo was closed */ });
 
-            logger.show();
-            await d.cam(logger.el.panel, 1.7, 700);
+            // First the other program: the window under the app's.
+            await d.cam(logger.area(), 1.7, 700);
             d.say(say(
-                'A logger on a process line is still writing <b>line_3.csv</b>',
-                'Un enregistreur sur une ligne de procédé écrit encore <b>line_3.csv</b>',
-                'Un registrador en una línea de proceso sigue escribiendo <b>line_3.csv</b>',
-                'Un logger su una linea di processo sta ancora scrivendo <b>line_3.csv</b>',
-                '生产线上的记录仪仍在写入 <b>line_3.csv</b>',
+                'Another program, a data logger, is writing <b>line_3.csv</b>, row after row',
+                'Un autre programme, un enregistreur, écrit <b>line_3.csv</b>, ligne après ligne',
+                'Otro programa, un registrador de datos, escribe <b>line_3.csv</b>, fila tras fila',
+                'Un altro programma, un data logger, scrive <b>line_3.csv</b>, riga dopo riga',
+                '另一个程序——数据记录仪——正在一行一行地写入 <b>line_3.csv</b>',
             ));
-            await d.wait(2600);
+            await d.wait(3000);
 
             // ── The file as it was when it was opened ──
             await d.cam(null, null, 700);
             d.say(say(
-                'The file, as it was when it was opened: three channels',
-                'Le fichier, tel qu’il était à l’ouverture : trois voies',
-                'El archivo, tal como estaba al abrirlo: tres canales',
-                'Il file, com’era all’apertura: tre canali',
-                '文件打开时的样子：三个通道',
+                'In the app, the file as it was when it was opened: three channels',
+                'Dans l’application, le fichier tel qu’il était à l’ouverture : trois voies',
+                'En la app, el archivo tal como estaba al abrirlo: tres canales',
+                'Nell’app, il file com’era all’apertura: tre canali',
+                '在应用里，文件还是打开时的样子：三个通道',
             ));
             await d.select(NAMES);
             await d.plot(NAMES[0], 0, { label: NAMES.join(', ') });
@@ -2167,7 +2167,8 @@ export const GUIDE_CHAPTERS = [
             await d.tap(button, { after: 300 });
             if (!await d.until(() => !app.files.get(fileId)?.liveUpdate?.enabled, 4000)) throw new Error('guide: Live Update did not pause');
             await d.cam(null, null, 700);
-            await d.wait(1600);
+            await d.park(500);
+            await d.wait(1400);
             line.on = false;
         },
     },

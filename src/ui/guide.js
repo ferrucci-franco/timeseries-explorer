@@ -73,7 +73,7 @@ class Demo {
         // A finger instead of a mouse: touch events, and a dot for a pointer.
         this.touch = !!opts.touch;
         this.x = guide.VW * 0.6;
-        this.y = guide.VH * 0.55;
+        this.y = guide.AH * 0.55;
         this.isDown = false;
         this.downEl = null;
         this.dead = false;
@@ -229,10 +229,11 @@ html.demo *{scroll-behavior:auto !important}`;
 
     under() { return this.doc.elementFromPoint(this.x, this.y) || this.doc.body; }
 
-    ptr(type, target) {
+    ptr(type, target, extra) {
         const W = this.W;
         target.dispatchEvent(new W.PointerEvent(type, {
-            bubbles: true, cancelable: true, composed: true, view: W,
+            ...(extra || {}),
+            bubbles: extra?.bubbles !== false, cancelable: true, composed: true, view: W,
             clientX: this.x, clientY: this.y, screenX: this.x, screenY: this.y,
             pointerId: 1, pointerType: this.touch ? 'touch' : 'mouse', isPrimary: true,
             button: type === 'pointermove' ? -1 : 0, buttons: this.isDown ? 1 : 0,
@@ -304,11 +305,29 @@ html.demo *{scroll-behavior:auto !important}`;
         this.ptr('pointermove', e);
         this.mouse('mousemove', e);
         if (!this.isDown && e !== this.lastHover) {
-            if (this.lastHover?.isConnected) {
-                this.ptr('pointerleave', this.lastHover);
-                this.mouse('mouseout', this.lastHover, { relatedTarget: e });
+            const last = this.lastHover?.isConnected ? this.lastHover : null;
+            // Everything the pointer is no longer inside is told it left, and
+            // everything it is newly inside that it entered — which do not
+            // bubble, so each element is told itself. A card shown while the
+            // pointer is over a group of buttons goes away on the group's
+            // mouseleave; without it the card stayed up for the rest of a demo.
+            const chain = (from, other) => {
+                const out = [];
+                for (let n = from; n && n.nodeType === 1; n = n.parentElement) if (!other || !n.contains(other)) out.push(n);
+                return out;
+            };
+            if (last) {
+                this.mouse('mouseout', last, { relatedTarget: e });
+                for (const n of chain(last, e)) {
+                    this.ptr('pointerleave', n, { bubbles: false });
+                    this.mouse('mouseleave', n, { bubbles: false, relatedTarget: e });
+                }
             }
-            this.mouse('mouseover', e, { relatedTarget: this.lastHover || null });
+            this.mouse('mouseover', e, { relatedTarget: last });
+            for (const n of chain(e, last).reverse()) {
+                this.ptr('pointerenter', n, { bubbles: false });
+                this.mouse('mouseenter', n, { bubbles: false, relatedTarget: last });
+            }
             this.lastHover = e;
         }
     }
@@ -474,16 +493,40 @@ html.demo *{scroll-behavior:auto !important}`;
     }
 
     // Press, move along the points, release (a zoom box on a plot, a splitter, a cursor).
+    // opts.ctrl: with Ctrl held from the press to the release (shown as a key).
     async drag(from, to, opts = {}) {
         if (from != null) await this.move(from);
         await this.wait(160);
-        this.down();
-        await this.wait(opts.pause || 140);
-        const points = Array.isArray(to) && to.length && typeof to[0] !== 'number' ? to : [to];
-        for (const p of points) await this.move(p, opts.ms, opts.curve);
-        await this.wait(opts.end || 160);
-        this.up(false);
+        if (opts.ctrl) this.guide.showKey('Ctrl');
+        this.ctrl = !!opts.ctrl;
+        try {
+            this.down();
+            await this.wait(opts.pause || 140);
+            const points = Array.isArray(to) && to.length && typeof to[0] !== 'number' ? to : [to];
+            for (const p of points) await this.move(p, opts.ms, opts.curve);
+            await this.wait(opts.end || 160);
+            this.up(false);
+        } finally {
+            this.ctrl = false;
+        }
         await this.wait(opts.after != null ? opts.after : 300);
+    }
+
+    // Take the pointer off whatever it was last used on, to a place of the
+    // window where nothing answers it: the last picture of a demo shows what
+    // the demo did, not a button lit up or a value label under the pointer.
+    async park(ms) {
+        if (this.touch) return;
+        const bar = this.$('.top-bar');
+        if (!bar) return;
+        const r = bar.getBoundingClientRect();
+        // The empty stretch of the top bar, between the tabs and the buttons.
+        // (the groups stretch; what is drawn in them does not)
+        const boxes = (selector) => this.$$(selector).filter((e) => e.getClientRects().length).map((e) => e.getBoundingClientRect());
+        const right = Math.min(r.right, ...boxes('.top-bar-right > *').map((box) => box.left));
+        const left = Math.max(r.left, ...boxes('.top-bar-left > *, #workspace-tabs > *').map((box) => box.right).filter((x) => x < right));
+        const x = right - left > 30 ? (left + right) / 2 : r.left + 3;
+        await this.move([x, r.top + r.height / 2], ms);
     }
 
     // Drag something the page marks draggable (a variable of the tree) and drop
@@ -618,7 +661,7 @@ html.demo *{scroll-behavior:auto !important}`;
         this.doc.body.appendChild(menu);
         const mh = menu.getBoundingClientRect().height;
         const mw = menu.getBoundingClientRect().width;
-        const top = r.bottom + 2 + mh > this.guide.VH - 6 ? Math.max(6, r.top - 2 - mh) : r.bottom + 2;
+        const top = r.bottom + 2 + mh > this.guide.AH - 6 ? Math.max(6, r.top - 2 - mh) : r.bottom + 2;
         menu.style.left = `${Math.max(6, Math.min(r.left, this.guide.VW - mw - 6))}px`;
         menu.style.top = `${top}px`;
         try {
@@ -795,7 +838,7 @@ html.demo *{scroll-behavior:auto !important}`;
      * (guide-live-logger.js). Built the first time a demo asks for it.
      */
     liveLogger(options) {
-        if (!this._liveLogger) this._liveLogger = createLiveLoggerStage(this.doc, this.W, options);
+        if (!this._liveLogger) this._liveLogger = createLiveLoggerStage(this.guide.belowEl, this.W, options);
         return this._liveLogger;
     }
 
@@ -948,6 +991,9 @@ class Guide {
         this.lastError = null;
         this.VW = FRAME_WIDTH;
         this.VH = FRAME_HEIGHT;
+        // The height the app has of it: all, unless a chapter keeps a strip
+        // under the app for another program (`below`).
+        this.AH = FRAME_HEIGHT;
     }
 
     build() {
@@ -965,7 +1011,7 @@ class Guide {
         <section class="guide-main">
           <div class="guide-stagewrap">
             <div class="guide-screen">
-              <div class="guide-cam"><iframe title="demo" tabindex="-1" aria-hidden="true"></iframe></div>
+              <div class="guide-cam"><iframe title="demo" tabindex="-1" aria-hidden="true"></iframe><div class="guide-below" hidden></div></div>
               <div class="guide-veil"><span>${esc(L(TX.loading))}</span></div>
               <div class="guide-keys"></div>
               <div class="guide-prog"><i></i></div>
@@ -989,6 +1035,7 @@ class Guide {
         this.screen = q('.guide-screen');
         this.camEl = q('.guide-cam');
         this.frame = q('iframe');
+        this.belowEl = q('.guide-below');
         this.veil = q('.guide-veil');
         this.cap = q('.guide-cap');
         this.keys = q('.guide-keys');
@@ -1046,7 +1093,7 @@ class Guide {
         this.camEl.style.width = `${this.VW}px`;
         this.camEl.style.height = `${this.VH}px`;
         this.frame.style.width = `${this.VW}px`;
-        this.frame.style.height = `${this.VH}px`;
+        this.frame.style.height = `${this.AH}px`;
         this.applyCam(false);
         if (this.demo) this.demo.k();
     }
@@ -1115,11 +1162,20 @@ class Guide {
     }
 
     // The frame of a chapter: the desktop one, or a device's (a phone).
-    setDevice(device) {
+    //
+    // `below`: pixels of the screen kept under the app for a program that is
+    // not the app — the stand-in data logger of the Live Update demo. The
+    // screen is then a desktop with two windows, the app above and that
+    // program below, and nothing of the stand-in lies over the app.
+    setDevice(device, below = 0) {
         const size = DEVICES[device] || null;
         this.device = size;
         this.VW = size ? size.width : FRAME_WIDTH;
         this.VH = size ? size.height : FRAME_HEIGHT;
+        this.AH = this.VH - below;
+        this.belowEl.hidden = !below;
+        this.belowEl.style.height = `${below}px`;
+        this.belowEl.replaceChildren();
         this.screen.classList.toggle('guide-screen-phone', device === 'phone');
         this.screen.classList.toggle('guide-screen-tablet', device === 'tablet');
         this.layout();
@@ -1171,7 +1227,7 @@ class Guide {
         this.caption(null);
         this.setProg(0, false);
         this.camR = null;
-        this.setDevice(ch.device);
+        this.setDevice(ch.device, ch.below || 0);
         this.applyCam(false);
         const W = await this.loadFrame();
         if (my !== this.runId || !W) return;
