@@ -867,6 +867,31 @@ export default class NetcdfParser {
         return outputs;
     }
 
+    // One stretch of a variable's rows, gathered into one column per series.
+    //
+    // The same arithmetic _readSeriesBatch does over the whole variable, for
+    // the rows [rowStart, rowStart + rows) only: one read of the file per
+    // variable per stretch, with every series of it taken out of that one
+    // read. This is what lets a variable be streamed into a memory-saving
+    // dataset without ever holding a whole series — and why it costs one
+    // decompression of each chunk the stretch touches, not one per series.
+    _readSeriesSlab(descriptor, timeAxis, otherAxes, combinations, rowStart, rows) {
+        const shape = descriptor.shape;
+        const outputs = combinations.map(() => new Float64Array(rows));
+        const ranges = shape.map((size, axis) => (axis === timeAxis ? [rowStart, rowStart + rows] : [0, size]));
+        const slabShape = shape.map((size, axis) => (axis === timeAxis ? rows : size));
+        const values = flatValues(descriptor.read(ranges));
+        const strides = rowMajorStrides(slabShape);
+        const timeStride = strides[timeAxis];
+        combinations.forEach((combination, index) => {
+            let base = 0;
+            otherAxes.forEach((item, position) => { base += combination[position] * strides[item.index]; });
+            const target = outputs[index];
+            for (let step = 0; step < rows; step++) target[step] = Number(values[base + step * timeStride]);
+        });
+        return outputs;
+    }
+
     _seriesVariable(descriptor, selectors, values) {
         const selectorId = selectors.map(item => `${idSegment(item.dimension)}=${idSegment(item.label)}`).join('/');
         const name = `netcdf:${descriptor.path.split('/').filter(Boolean).map(idSegment).join('/')}${selectorId ? `/${selectorId}` : ''}`;

@@ -25,9 +25,12 @@
 //     columns,                   // how many series `blocks` yields, the time among them
 //     timeColumn,                // which of them is the time
 //     variables: [{ name, description, kind, interpolation, negate,
-//                   column }      // index into the block's columns
+//                   column,       // index into the block's columns
+//                   extra }       // fields the generic shape has no room for
 //                 | { …, kind: 'parameter', values }],   // a constant, held here
 //     metadata,                  // format-specific, kept on the dataset
+//     timeKind?,                 // 'datetime' when the axis is milliseconds
+//     buildTree?,                // (variables) → the tree this format groups by
 //     async *blocks({ signal, blockBytes }) → { rowStart, rows, columns: Float64Array[] }
 //   }
 

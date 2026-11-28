@@ -145,6 +145,7 @@
     "test:lazy-datasets": "node scripts/test-lazy-datasets.mjs",
     "test:lazy-histogram": "node scripts/test-lazy-histogram.mjs",
     "test:lazy-mat": "node scripts/test-lazy-mat.mjs",
+    "test:lazy-netcdf": "node scripts/test-lazy-netcdf.mjs",
     "test:lazy-repeated-marks": "node scripts/test-lazy-repeated-marks.mjs",
     "test:lazy-sample-rows": "node scripts/test-lazy-sample-rows.mjs",
     "test:lazy-fft": "node scripts/test-lazy-fft.mjs",
