@@ -50,3 +50,14 @@ rewritten in the layout the Copernicus CDS writes, and subsampled for the
 smaller of the two files; the values are unchanged. See
 `docs/era5-argentina-example.md` and the files' own global attributes.
 
+
+## Real-world CSV corpus (`test-files/csv-real-world`)
+
+Test data for the CSV reader. 72 files are unchanged copies of files published
+in public repositories under an explicit licence (MIT, GPL, LGPL, Apache, EPL,
+EUPL, CERN-OHL-S, CC-BY, CC-BY-SA, ODC-BY); each stays under the licence of its
+source. `test-files/csv-real-world/manifest.jsonl` gives the source URL, the
+repository and its licence for every file, and
+`test-files/csv-real-world/README.md` lists them. The other 70 files are
+synthetic: written by this project in the format of a file that could not be
+redistributed, with none of its measurements (see the same README).

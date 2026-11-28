@@ -18,6 +18,12 @@ the file open, right, the first time?
   One optional large file could not be fetched from this environment, because
   Zenodo is not on its network allowlist. That leaves 143 files, 132 of them
   single tables.
+  70 of the files are now synthetic: each has the format of the file that was
+  measured here and none of its measurements (see the corpus `README.md`).
+  Every reader in the tables below reads a synthetic file as it read the file
+  it replaces (our reader, pandas and CleverCSV 0.8.5 were run on both), so
+  the results hold for the corpus as committed. In `results/`, only the header
+  names that held a serial number or a place name changed.
 - **Labels.** `make-labels.py` writes `labels.jsonl`, with line numbers counted
   from 0.
   - Defaults come from the manifest: encoding family, delimiter, decimal
