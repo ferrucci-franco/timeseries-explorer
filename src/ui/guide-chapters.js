@@ -1215,9 +1215,25 @@ export const GUIDE_CHAPTERS = [
                 '<b>线性</b>：过这一段的一条直线',
             ));
             await d.tap(linear, { after: 300 });
+            // (the value of the first coefficient named a: the line's, since
+            // the rows of a result take no room of their own, only their cells do)
             const slope = () => Array.from(options().querySelectorAll('.trend-fit-block .phase2d-fit-coeff'))
-                .find((e) => e.querySelector('.phase2d-fit-coeff-k')?.textContent.trim() === 'a');
+                .find((e) => e.querySelector('.phase2d-fit-coeff-k')?.textContent.trim() === 'a')
+                ?.querySelector('.phase2d-fit-coeff-v');
             if (!await d.until(() => !computing(d) && slope() && timePlot(d).data.length >= 3, 10000)) throw new Error('guide: no linear trend');
+            await d.wait(1400);
+            const mean = options().querySelector('input[data-trend-curve="mean"]');
+            const curves = timePlot(d).data.length;
+            d.say(say(
+                'Untick <b>Mean</b>: each curve is drawn on its own — the line stays',
+                'Décochez <b>Moyenne</b> : chaque courbe se trace séparément — la droite reste',
+                'Desmarque <b>Valor medio</b>: cada curva se dibuja por separado — la recta queda',
+                'Togli la spunta a <b>Media</b>: ogni curva si disegna da sola — la retta resta',
+                '取消勾选<b>均值</b>：每条曲线各自独立——直线保留',
+            ));
+            await d.tap(options().querySelector('input[data-trend-curve="mean"]') || mean, { after: 300 });
+            if (!await d.until(() => !computing(d) && timePlot(d).data.length < curves && slope(), 10000)) throw new Error('guide: the mean was not taken off');
+            await d.move(plotArea(timePlot(d), 0.5, 0.2), 600);
             await d.wait(1600);
 
             await d.reveal(options().querySelector('.trend-fit-block'));
