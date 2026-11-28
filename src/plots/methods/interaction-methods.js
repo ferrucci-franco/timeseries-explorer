@@ -79,6 +79,12 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         if (plot?.cursors?.enabled) this._renderCursorOverlay(plot);
     }
 
+    // An analysis opening its time pane onto the range it analyses
+    // (_applyPendingAnalysisFocus) moves this panel only: the panels linked to
+    // it keep the zoom the user gave them. The next pan or zoom made here is
+    // carried as always.
+    if (plot?._analysisFocusRelayout) return;
+
     if (!this.syncAxes) return;
 
     if (this._syncing) {
@@ -1530,7 +1536,13 @@ proto._applyPendingAnalysisFocus = function(plot, mode = plot?.mode) {
         ? [domain.min, domain.max]
         : this._analysisFocusViewRange(state.x1, state.x2, domain.min, domain.max);
     if (!range) return false;
-    Plotly.relayout(div, { 'xaxis.range': range.slice(), 'xaxis.autorange': false });
+    // This panel's own move, not one for the linked time axes: turning an
+    // analysis on here used to send its whole range to every linked panel,
+    // undoing the zoom made there (_onRelayout reads the mark; Plotly emits
+    // plotly_relayout before the promise settles).
+    plot._analysisFocusRelayout = true;
+    const clear = () => { plot._analysisFocusRelayout = false; };
+    Promise.resolve(Plotly.relayout(div, { 'xaxis.range': range.slice(), 'xaxis.autorange': false })).then(clear, clear);
     return true;
 };
 
