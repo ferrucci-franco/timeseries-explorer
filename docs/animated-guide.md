@@ -57,13 +57,54 @@ loop starts from a clean app. In that mode the app:
   `scripts/e2e-guide.mjs` compares the storage before and after every demo, and
   that is how the gridded view's own `localStorage` calls were caught;
 - does not count a page view and shows no first-visit hint;
-- uses the desktop layout whatever the screen;
+- uses the desktop layout whatever the screen — with one exception, the demo
+  of the phone layout (next section);
 - reads CSV with the in-memory parser, because the query engine keeps a database
   in the origin's private file system that the app around the frame is using.
 
-The guide is not offered where it cannot run: on the phone layout (its demos show
-the desktop layout), inside its own frame, and on a page opened from disk
-(`file://`), where a page may not script a frame.
+The guide is not offered where it cannot run: on the phone layout (its window
+and its demos are drawn for a large screen), inside its own frame, and on a
+page opened from disk (`file://`), where a page may not script a frame.
+
+## The demo of the phone layout
+
+"The same app, on a phone" (`phone`) is the one demo that does not show the
+desktop layout: a chapter with `device: 'phone'` is played in a frame the size
+of a phone held upright, drawn with a phone's outline, by a finger.
+
+- **The frame.** `DEVICES` in `guide.js` gives the size (375 × 667 CSS pixels,
+  a small iPhone: taller ones leave too little of the guide's height per
+  pixel) and what is added to the frame's address: `?demo&layout=compact&…`.
+  `Guide.setDevice()` sets the frame's size for the chapter, and the same
+  `layout()` that fits the desktop frame fits this one, so the phone is always
+  whole inside the guide's window. `.guide-screen-phone` (guide.css) rounds
+  the bezel.
+- **The layout.** `layout=compact` is read in `src/app/demo-mode.js`
+  (`DEMO_LAYOUT`) and nowhere else: `initCompactLayout` takes it as the layout
+  choice of the frame instead of `full`, and the boot script of `index.html`,
+  which decides the layout before the first paint, reads the same parameter.
+  Without `demo` the parameter means nothing.
+- **The finger.** The plots only listen to fingers where there is a touch
+  screen (`isTouchCapable()`), and the guide runs on computers that have none,
+  so that copy of the app is told it has one (`demo-mode.js`). The driver of
+  such a chapter is in touch mode: `d.tap` and `d.drag` send what a finger
+  sends — `pointerdown`/`touchstart`, `touchmove`, `touchend`/`pointerup`,
+  and then, for a finger that did not travel on a page that did not prevent
+  the touch, the `mousedown`/`mouseup`/`click` a browser adds — to the element
+  the finger landed on. `d.pinch` puts two fingers down; `d.doubleTap` taps
+  twice within a double tap's time. The touch events are plain events carrying
+  `touches`, `targetTouches` and `changedTouches`, not `TouchEvent`s, which
+  Firefox and Safari on a computer cannot construct. The pointer is drawn as a
+  finger's dot, two of them during a pinch. Nothing hovers: `d.move` only
+  moves the dot.
+- **Nothing else changes.** Storage is untouched as in every demo, the data is
+  generated in the browser, and every other chapter is played as before, with
+  a mouse in the desktop frame.
+
+The gestures are the ones of `src/ui/plot-touch-gestures.js`: one finger pans,
+two pinch (side by side: the time axis only), two quick taps fit. The window
+zoom — tap, then touch again and drag — is `d.tap(point)` followed by
+`d.drag(point, to, { pause: 320 })`.
 
 ## Adding a demo
 
@@ -88,7 +129,8 @@ Add an entry to `GUIDE_CHAPTERS` in `src/ui/guide-chapters.js`:
 
 Rules of thumb: one idea per demo, 25–40 seconds, a caption of a few words per
 step — the demo shows, the caption only names what is happening. `est` is the
-expected duration in milliseconds, for the progress bar of the first run.
+expected duration in milliseconds, for the progress bar of the first run. `device: 'phone'`
+plays the chapter on the phone layout, with a finger (the section above).
 
 ### What a demo can do (`d`)
 
@@ -99,7 +141,9 @@ expected duration in milliseconds, for the progress bar of the first run.
 | `d.until(() => cond, ms)` | Wait for the app: a file parsed, a plot drawn. It **reports**, it does not raise: where the demo cannot go on without it (the ERA5 demo and its extracted point), throw, so `e2e:guide` fails instead of playing a caption that lies. |
 | `d.cam(target, scale)` / `d.cam(null)` | Zoom on an element (or several: an array), or show the whole app. |
 | `d.move(target)` / `d.tap(target)` | Move the pointer; click. A target is a selector, an element, `[x, y]`, or `{ el, ax, ay }` for a point of an element. |
-| `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. |
+| `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. In a phone demo: one finger, which pans a plot. |
+| `d.doubleTap(target)` | Two taps in a row (a phone demo: fit the plot). |
+| `d.pinch(target, from, to, { angle })` | Phone demos only: two fingers `from` pixels apart around the target, moved until they are `to` apart. |
 | `d.plot(name, panelIndex)` | Drag a variable from the tree onto a panel. |
 | `d.folder(label)` | Open or close a folder of the tree. |
 | `d.select(names)` | Select variables of the tree: a click, then Ctrl+click on each, in order (X, Y, Z of a phase plot). |
@@ -222,7 +266,7 @@ live path breaks.
 ## Opening one demo from elsewhere
 
 ```js
-app.openGuide('fft');   // 'csv-parsing', 'time-dashboard', 'phase-plots', 'data-tools', 'derived-variables', 'fft', 'temporal-profile', 'curve-fit', 'trend', 'measure', 'modelica', 'load-as-new', 'pypsa', 'era5-maps', 'live-update'
+app.openGuide('fft');   // 'csv-parsing', 'time-dashboard', 'phase-plots', 'data-tools', 'derived-variables', 'fft', 'temporal-profile', 'curve-fit', 'trend', 'measure', 'modelica', 'load-as-new', 'pypsa', 'era5-maps', 'live-update', 'phone'
 ```
 
 opens the guide on that demo. A "tip of the day", or a "show me" link next to a
