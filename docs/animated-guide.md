@@ -57,8 +57,8 @@ loop starts from a clean app. In that mode the app:
   `scripts/e2e-guide.mjs` compares the storage before and after every demo, and
   that is how the gridded view's own `localStorage` calls were caught;
 - does not count a page view and shows no first-visit hint;
-- uses the desktop layout whatever the screen — with one exception, the demo
-  of the phone layout (next section);
+- uses the desktop layout whatever the screen — except in the two demos played
+  on a device, a phone and a tablet (next section);
 - reads CSV with the in-memory parser, because the query engine keeps a database
   in the origin's private file system that the app around the frame is using.
 
@@ -66,15 +66,18 @@ The guide is not offered where it cannot run: on the phone layout (its window
 and its demos are drawn for a large screen), inside its own frame, and on a
 page opened from disk (`file://`), where a page may not script a frame.
 
-## The demo of the phone layout
+## The demos on a phone and on a tablet
 
-"The same app, on a phone" (`phone`) is the one demo that does not show the
-desktop layout: a chapter with `device: 'phone'` is played in a frame the size
-of a phone held upright, drawn with a phone's outline, by a finger.
+Two demos are played by a finger, in a frame the size of a device and drawn
+with its outline: "The same app, on a phone" (`phone`, `device: 'phone'`), the
+one demo that shows the phone layout, and "On a tablet: the full workspace"
+(`tablet`, `device: 'tablet'`), the desktop layout under a finger. The phone
+first; what differs for the tablet follows.
 
 - **The frame.** `DEVICES` in `guide.js` gives the size (375 × 667 CSS pixels,
   a small iPhone: taller ones leave too little of the guide's height per
-  pixel) and what is added to the frame's address: `?demo&layout=compact&…`.
+  pixel) and what is added to the frame's address:
+  `?demo&layout=compact&touch=1&…`.
   `Guide.setDevice()` sets the frame's size for the chapter, and the same
   `layout()` that fits the desktop frame fits this one, so the phone is always
   whole inside the guide's window. `.guide-screen-phone` (guide.css) rounds
@@ -83,10 +86,12 @@ of a phone held upright, drawn with a phone's outline, by a finger.
   (`DEMO_LAYOUT`) and nowhere else: `initCompactLayout` takes it as the layout
   choice of the frame instead of `full`, and the boot script of `index.html`,
   which decides the layout before the first paint, reads the same parameter.
-  Without `demo` the parameter means nothing.
+  Without `demo` the parameter means nothing, and `?demo` alone is the desktop
+  layout played with a mouse.
 - **The finger.** The plots only listen to fingers where there is a touch
   screen (`isTouchCapable()`), and the guide runs on computers that have none,
-  so that copy of the app is told it has one (`demo-mode.js`). The driver of
+  so that copy of the app is told it has one (`touch=1`, `DEMO_TOUCH` in
+  `demo-mode.js`). The driver of
   such a chapter is in touch mode: `d.tap` and `d.drag` send what a finger
   sends — `pointerdown`/`touchstart`, `touchmove`, `touchend`/`pointerup`,
   and then, for a finger that did not travel on a page that did not prevent
@@ -100,6 +105,18 @@ of a phone held upright, drawn with a phone's outline, by a finger.
 - **Nothing else changes.** Storage is untouched as in every demo, the data is
   generated in the browser, and every other chapter is played as before, with
   a mouse in the desktop frame.
+
+**The tablet** is a frame of 1024 × 768 (a tablet on its side), opened as
+`?demo&layout=auto&touch=1`. `layout=auto` forces nothing: the app's own rule
+(`shouldUseCompactLayout` in `src/ui/compact-layout.js`, mirrored by the boot
+script) decides from the frame's size, as it does for a real window — the
+phone layout below 600 px of width or 500 px of height, the desktop layout
+otherwise — so a tablet gets the desktop layout, and the demo throws if it
+ever does not. `touch=1` is the same flag as the phone's. On the desktop
+layout a finger puts a variable on a panel by pressing it until the app picks
+it up (`src/ui/touch-drag.js`, 350 ms) and dragging: in touch mode `d.plot`
+and `d.dragDrop` do that, waiting for the app's own chip to appear under the
+finger instead of counting the hold. Buttons and menus take taps.
 
 The gestures are the ones of `src/ui/plot-touch-gestures.js`: one finger pans,
 two pinch (side by side: the time axis only), two quick taps fit. The window
@@ -130,7 +147,7 @@ Add an entry to `GUIDE_CHAPTERS` in `src/ui/guide-chapters.js`:
 Rules of thumb: one idea per demo, 25–40 seconds, a caption of a few words per
 step — the demo shows, the caption only names what is happening. `est` is the
 expected duration in milliseconds, for the progress bar of the first run. `device: 'phone'`
-plays the chapter on the phone layout, with a finger (the section above).
+or `'tablet'` plays the chapter on that device, with a finger (the section above).
 
 ### What a demo can do (`d`)
 
@@ -266,7 +283,7 @@ live path breaks.
 ## Opening one demo from elsewhere
 
 ```js
-app.openGuide('fft');   // 'csv-parsing', 'time-dashboard', 'phase-plots', 'data-tools', 'derived-variables', 'fft', 'temporal-profile', 'curve-fit', 'trend', 'measure', 'modelica', 'load-as-new', 'pypsa', 'era5-maps', 'live-update', 'phone'
+app.openGuide('fft');   // 'csv-parsing', 'time-dashboard', 'phase-plots', 'data-tools', 'derived-variables', 'fft', 'temporal-profile', 'curve-fit', 'trend', 'measure', 'modelica', 'load-as-new', 'pypsa', 'era5-maps', 'live-update', 'phone', 'tablet'
 ```
 
 opens the guide on that demo. A "tip of the day", or a "show me" link next to a

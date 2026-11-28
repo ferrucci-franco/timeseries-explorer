@@ -27,10 +27,14 @@
             try {
                 var override = null;
                 try { override = window.localStorage.getItem('omv_layout_override'); } catch (e) {}
-                // The animated guide's frame shows the desktop layout, or the
-                // phone layout for the demo of it (src/app/demo-mode.js).
+                // The animated guide's frame shows the desktop layout — or the
+                // phone layout, or what its size gives, for the demos of a
+                // phone and of a tablet (src/app/demo-mode.js).
                 var search = (window.location && window.location.search) || '';
-                if (/[?&]demo(=|&|$)/.test(search)) override = /[?&]layout=compact(&|$)/.test(search) ? 'compact' : 'full';
+                if (/[?&]demo(=|&|$)/.test(search)) {
+                    var asked = /[?&]layout=(compact|auto)(&|$)/.exec(search);
+                    override = asked ? asked[1] : 'full';
+                }
                 var w = window.innerWidth, h = window.innerHeight;
                 var sw = window.screen && window.screen.width, sh = window.screen && window.screen.height;
                 if (sw > 0 && sh > 0 && w > 0 && h > 0) {

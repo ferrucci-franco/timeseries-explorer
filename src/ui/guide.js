@@ -24,12 +24,15 @@ const ABORT = { abort: true };
 // there is; the camera brings the part being shown back to a readable size.
 const FRAME_WIDTH = 1120;
 const FRAME_HEIGHT = 700;
-// A chapter with `device: 'phone'` plays the phone layout: the frame is a
-// phone held upright (the size of a small iPhone, so that it stays readable in
-// the height the guide has), the app in it is asked for its phone layout
-// (demo-mode.js: `layout=compact`), and the demo is played with a finger.
+// A chapter with a `device` is played with a finger, in a frame the size of
+// the device (demo-mode.js reads `query`):
+//  - 'phone': a phone held upright (the size of a small iPhone, so that it
+//    stays readable in the height the guide has), asked for the phone layout;
+//  - 'tablet': a tablet on its side, in the layout the app's own rule gives a
+//    window of that size — the desktop one.
 const DEVICES = {
-    phone: { width: 375, height: 667, query: 'layout=compact', touch: true },
+    phone: { width: 375, height: 667, query: 'layout=compact&touch=1', touch: true },
+    tablet: { width: 1024, height: 768, query: 'layout=auto&touch=1', touch: true },
 };
 
 const L = (o) => (o == null ? '' : typeof o === 'string' ? o : (o[i18n.currentLang] || o.en || ''));
@@ -487,6 +490,7 @@ html.demo *{scroll-behavior:auto !important}`;
     // it on a target. The browser runs such a drag itself and tells the page
     // through drag events only, so those are the events sent here.
     async dragDrop(from, to, opts = {}) {
+        if (this.touch) return this.touchDragDrop(from, to, opts);
         const p = await this.move(from);
         const source = (p.el && p.el.closest('[draggable="true"]')) || this.under().closest('[draggable="true"]');
         if (!source) throw new Error('guide: nothing to drag here');
@@ -517,6 +521,27 @@ html.demo *{scroll-behavior:auto !important}`;
             this.lastOver = null;
             this.cur.classList.remove('carry', 'down');
         }
+        await this.wait(opts.after != null ? opts.after : 500);
+    }
+
+    // The same drag for a finger, on the desktop layout (a tablet): press and
+    // hold until the app picks the variable up — its own chip appears under
+    // the finger — then move and let go. The hold is the app's time, not the
+    // demo's, so it is waited for and not counted.
+    async touchDragDrop(from, to, opts = {}) {
+        await this.move(from);
+        await this.wait(160);
+        this.down();
+        this.ripple();
+        if (!await this.until(() => this.$('.touch-drag-chip'), 3000)) {
+            this.up(false);
+            throw new Error('guide: the finger picked nothing up');
+        }
+        await this.wait(200);
+        const points = Array.isArray(to) && to.length && typeof to[0] !== 'number' ? to : [to];
+        for (const q of points) await this.move(q, opts.ms != null ? opts.ms : 1000);
+        await this.wait(opts.end != null ? opts.end : 300);
+        this.up(false);
         await this.wait(opts.after != null ? opts.after : 500);
     }
 
@@ -1096,6 +1121,7 @@ class Guide {
         this.VW = size ? size.width : FRAME_WIDTH;
         this.VH = size ? size.height : FRAME_HEIGHT;
         this.screen.classList.toggle('guide-screen-phone', device === 'phone');
+        this.screen.classList.toggle('guide-screen-tablet', device === 'tablet');
         this.layout();
     }
 
