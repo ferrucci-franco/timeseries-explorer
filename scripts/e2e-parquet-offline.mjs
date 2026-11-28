@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 import translations from '../src/i18n/translations.js';

@@ -27,6 +27,7 @@
 // Needs a Chromium for Playwright. Run with `npm run e2e:analysis-cancel`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const ROWS = 200000;

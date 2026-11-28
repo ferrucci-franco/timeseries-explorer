@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const FIXTURE = 'test-files/excel/units-row-dotted-dates-device-suffix.xlsx';

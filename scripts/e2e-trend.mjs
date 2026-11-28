@@ -20,6 +20,7 @@
 // OMV_SHOTS=<dir> also writes a picture of the panel.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const ROWS = 300001;

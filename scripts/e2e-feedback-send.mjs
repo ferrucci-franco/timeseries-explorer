@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { createServer as createHttpServer } from 'node:http';
 
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 
 import { FEEDBACK_SEND_TIMEOUT_MS } from '../src/app/feedback-transport.js';
 

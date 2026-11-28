@@ -16,6 +16,7 @@
 // Needs a Chromium for Playwright. Run with `npm run e2e:wav-export`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 import { audioSamplesFromArrays } from '../src/utils/audio-samples.js';
 import { encodeWav, encodeWavFrames, wavHeader } from '../src/utils/wav-encode.js';

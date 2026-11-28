@@ -217,6 +217,14 @@ Recommended smoke tests:
   what the stubs cannot show: Plotly's own behaviour and a browser clock in a
   time zone other than UTC (the A|B cursors on a date axis, #176). Install the
   browser once with `npx playwright install chromium`.
+  Every one of those scripts imports `scripts/support/e2e-navigation-log.mjs`
+  for its effect: it prints nothing while a run goes well, and names any
+  navigation the script did not ask for — with the address, so a `?build=` one
+  reads as the version check and the same address as a reload — plus the
+  reason the page gave for it and a renderer that crashed. A page lost in the
+  middle of a check used to leave nothing to go on (#394). A new e2e script
+  wants that import line too, and `npm run e2e:navigation-log` is what keeps
+  the helper honest.
 
 CI runs both on every pull request and on every push to `main`.
 

@@ -10,6 +10,7 @@
 // Not part of test:release, which stays offline and browser-free.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 // Hourly for 60 days: calendar time, so Heatmap and Profile have days to show.

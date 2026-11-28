@@ -15,6 +15,7 @@
 // part of test:release, which stays offline and browser-free.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const T0 = Date.UTC(2026, 9, 20, 10, 0, 0);
