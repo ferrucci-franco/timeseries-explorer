@@ -1697,7 +1697,7 @@ html.compact .legend-toggle-btn:active {
 }
 
 /* FFT, the histogram, the temporal profile and the integral (the last two are
-   .hist-container as well): the status stays on the plot; their buttons and
+   .hist-container as well): the status stays above the plot; their buttons and
    options live in the Analyze sheet.
 
    On the desktop the analysis' buttons are the header of its side panel
@@ -1722,19 +1722,20 @@ html.compact .heatmap-workspace > .edge-toggle-rail {
 }
 
 /* With the drawer gone there is no column to put beside the plots, only the
-   status to keep. So on a phone the strip is laid over the top of the plots
-   rather than taking a column of its own — and the plots keep the height the
-   old bar used to take. */
-html.compact :is(.fft-container, .hist-container, .heatmap-container) {
-    position: relative;
+   status to keep. It used to be laid over the top of the plots, where it ran
+   under the plot's corner buttons (the legend's, A|B, the fits) and the top
+   tick label. So it is a line of its own above the plots: one line, cut with
+   an ellipsis when it is longer than the screen (what it points at is in the
+   Analyze sheet), and always the same height, so the plots under it do not
+   move when the text changes. */
+html.compact :is(.fft-workspace, .hist-workspace, .heatmap-workspace) {
+    flex-direction: column;
 }
 
 html.compact .analysis-side {
     display: block !important;
-    position: absolute;
-    inset: 0 0 auto 0;
-    z-index: 3;
-    flex: none;
+    order: -1;
+    flex: 0 0 auto;
     width: auto;
     max-width: none;
     min-width: 0;
@@ -1743,11 +1744,26 @@ html.compact .analysis-side {
     pointer-events: none;
 }
 
+/* An analysis with no status line (the curve fit) has no line to keep. */
+html.compact .analysis-side:not(:has(.fft-status, .hist-status, .heatmap-status)) {
+    display: none !important;
+}
+
 html.compact .analysis-side > :is(.fft-topbar, .hist-topbar, .heatmap-topbar) {
     min-height: 0;
     padding: 2px 8px;
     border-bottom: 0;
     background: transparent;
+    flex-wrap: nowrap;
+}
+
+html.compact .analysis-side > :is(.fft-topbar, .hist-topbar, .heatmap-topbar) > :is(.fft-status, .hist-status, .heatmap-status) {
+    flex: 1 1 auto;
+    min-height: 1.3em;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ── Empty state ─────────────────────────────────────────────────────── */

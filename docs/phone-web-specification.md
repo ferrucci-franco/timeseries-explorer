@@ -793,7 +793,8 @@ builds its rows from the same models the desktop dropdowns are drawn from
 an item added there arrives on the phone as a switch, a segmented choice, a numeric
 field or a button, by its kind. The CSS side is three
 selectors: the analysis's top-bar groups, its options panel and its edge rail, hidden
-in `src/styles/compact.css` so only its status stays on the plot (an analysis built
+in `src/styles/compact.css` so only its status stays, as one line above the plots,
+cut with an ellipsis, clear of the plot's corner buttons (an analysis built
 on the FFT shell, as correlation and the fit are, is covered by its selectors
 already).
 

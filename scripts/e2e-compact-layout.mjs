@@ -86,6 +86,40 @@ const linesUnderCornerButtons = (page, panelId) => page.evaluate(async (id) => {
     return { count: buttons.length, wrong };
 }, panelId);
 
+// An analysis' status line ("FFT ready (2,000 samples)") and the plot's corner
+// buttons (the legend's, A|B, the fits) never share a pixel: the line used to
+// be laid over the top of the time pane, under those buttons.
+const statusOverCornerButtons = page => page.evaluate(() => {
+    const panel = document.querySelector('.compact-active-panel');
+    const shown = (el) => {
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && style.visibility !== 'hidden';
+    };
+    const statuses = [...panel.querySelectorAll('.fft-status, .hist-status, .heatmap-status')]
+        .filter(el => shown(el) && el.textContent.trim());
+    const buttons = [...panel.querySelectorAll('.compact-fit-btn, .legend-toggle-btn')].filter(shown);
+    const right = panel.getBoundingClientRect().right;
+    const problems = [];
+    for (const status of statuses) {
+        const a = status.getBoundingClientRect();
+        if (a.right > right + 1) problems.push(`"${status.textContent.trim()}" runs ${Math.round(a.right - right)} px past the screen`);
+        for (const btn of buttons) {
+            const b = btn.getBoundingClientRect();
+            if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
+                problems.push(`"${status.textContent.trim()}" is over ${btn.dataset.axis || btn.className}`);
+            }
+        }
+    }
+    return { statuses: statuses.length, buttons: buttons.length, problems };
+});
+const assertStatusClear = async (page, label, { buttons = 1 } = {}) => {
+    const found = await statusOverCornerButtons(page);
+    assert.ok(found.statuses >= 1, `${label}: its status line is on screen`);
+    assert.ok(found.buttons >= buttons, `${label}: the corner buttons are on screen (${found.buttons})`);
+    assert.deepEqual(found.problems, [], `${label}: the status line is clear of the corner buttons`);
+};
+
 const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
 await server.listen();
 const baseUrl = `http://127.0.0.1:${server.httpServer.address().port}/`;
@@ -760,6 +794,7 @@ try {
         2,
         'the time pane and the spectrum each have their fit buttons',
     );
+    await assertStatusClear(page, 'FFT', { buttons: 6 });
 
     // ── Cursors in FFT: the time pane's and the spectrum's ──────────────────
     const fftCursorButtons = page.locator('.compact-active-panel .compact-cursor-btn:not([hidden])');
@@ -1065,6 +1100,7 @@ try {
         null,
         { timeout: 15000 },
     );
+    await assertStatusClear(page, 'correlation');
     assert.deepEqual(
         await page.evaluate(() => {
             const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
@@ -1337,6 +1373,7 @@ try {
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the profile each have their fit buttons');
+        await assertStatusClear(profilePage, 'temporal profile', { buttons: 6 });
         await shot(profilePage, 'profile');
         // Signals come and go from Data as on a time series.
         await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
@@ -1368,6 +1405,7 @@ try {
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the bars each have their fit buttons');
+        await assertStatusClear(profilePage, 'integral', { buttons: 6 });
         await shot(profilePage, 'integral');
         await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
         await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
@@ -1407,6 +1445,7 @@ try {
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the bars each have their fit buttons');
+        await assertStatusClear(profilePage, 'histogram', { buttons: 6 });
         await shot(profilePage, 'histogram');
         await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
         await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
@@ -1445,6 +1484,7 @@ try {
         );
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the calendar each have their fit buttons');
+        await assertStatusClear(profilePage, 'Heatmap', { buttons: 5 });
         assert.deepEqual(
             await profilePage.evaluate(() => {
                 const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
@@ -1465,6 +1505,46 @@ try {
 
         assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
         await profileContext.close();
+
+        // The same on the narrow phones, in a language with long words: the
+        // FFT's line, and the integral's, which is the longest there is.
+        for (const viewport of [{ width: 375, height: 667 }, { width: 390, height: 844 }, { width: 360, height: 640 }]) {
+            for (const language of ['fr', 'it']) {
+                const narrow = await browser.newContext({ viewport, hasTouch: true, isMobile: true });
+                const narrowPage = await narrow.newPage();
+                const label = `${viewport.width} px, ${language}`;
+                await narrowPage.goto(baseUrl);
+                await narrowPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+                await narrowPage.evaluate(lang => window.app.setLanguage(lang), language);
+                await narrowPage.setInputFiles('#file-input', [{ name: 'load.csv', mimeType: 'text/csv', buffer: Buffer.from(rows.join('\n') + '\n') }]);
+                await narrowPage.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+                await narrowPage.locator('.compact-nav-btn[data-sheet="data"]').click();
+                await narrowPage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+                await narrowPage.locator('#variables-tree .tree-item[data-var-name="temp"]').click();
+                await narrowPage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
+                for (const [mode, paneDiv] of [['fft', 'fftDiv'], ['integral', 'integralDiv']]) {
+                    await narrowPage.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+                    await narrowPage.waitForSelector('.compact-analysis-list');
+                    await narrowPage.evaluate((wanted) => {
+                        window.app._compactSetPlotMode(wanted);
+                    }, mode);
+                    await narrowPage.waitForFunction(({ wanted, pane }) => {
+                        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+                        return plot?.mode === wanted && plot[pane]?.data?.length > 0;
+                    }, { wanted: mode, pane: paneDiv }, { timeout: 30000 });
+                    await narrowPage.locator('.compact-sheet-close').click();
+                    await narrowPage.waitForFunction(() => window.app._compact.sheet === null);
+                    await narrowPage.waitForFunction(
+                        () => document.querySelectorAll('.compact-active-panel .compact-fit-group:not([hidden])').length === 2,
+                        null,
+                        { timeout: 15000 },
+                    );
+                    await narrowPage.waitForTimeout(300);
+                    await assertStatusClear(narrowPage, `${mode}, ${label}`, { buttons: 6 });
+                }
+                await narrow.close();
+            }
+        }
     }
 
     // ── 3D, and 2D and 3D animations: signals in roles, one tap each ───────
