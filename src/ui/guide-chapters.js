@@ -108,10 +108,11 @@ function shaftSpeedCsv() {
 // and the inlet drifts slowly upwards. With `heat`, the file holds the heat
 // flow instead of the two temperatures, as a logger that computes it would:
 // flow / 60 × 4.186 × (T_out − T_in), in kW (water: 1 kg per litre,
-// 4.186 kJ/(kg·K)).
+// 4.186 kJ/(kg·K)) — and its time is the seconds since the start, not the
+// time of day.
 function thermalLoopCsv({ heat = false } = {}) {
     const rnd = random(23);
-    const lines = [heat ? 'timestamp,flow_Lpm [L/min],heat [kW]' : 'timestamp,flow_Lpm [L/min],T_in [°C],T_out [°C]'];
+    const lines = [heat ? 'time [s],flow_Lpm [L/min],heat [kW]' : 'timestamp,flow_Lpm [L/min],T_in [°C],T_out [°C]'];
     const t0 = Date.UTC(2026, 4, 18, 9, 0, 0);
     const step = 1 / 6; // minutes
     let rise = 11;
@@ -124,7 +125,7 @@ function thermalLoopCsv({ heat = false } = {}) {
         rise += ((stage ? 14 - 0.25 * stage : 20) - rise) * (step / (stage ? 3 : 12));
         const tIn = 40 + 3 * (minute / 120) + 0.15 * (rnd() - 0.5);
         const tOut = tIn + rise + 0.2 * (rnd() - 0.5);
-        const stamp = new Date(t0 + i * 10000).toISOString().slice(0, 19).replace('T', ' ');
+        const stamp = heat ? String(i * 10) : new Date(t0 + i * 10000).toISOString().slice(0, 19).replace('T', ' ');
         const cells = heat
             ? [flow.toFixed(2), ((flow / 60) * 4.186 * (tOut - tIn)).toFixed(3)]
             : [flow.toFixed(2), tIn.toFixed(2), tOut.toFixed(2)];
@@ -232,12 +233,19 @@ function plotArea(gd, fx, fy) {
     return [r.left + xa._offset + xa._length * fx, r.top + ya._offset + ya._length * fy];
 }
 
-/** Where a time (an x value) is on a plot, at a fraction of the drawing area's height. */
+/**
+ * Where a time (an x value) is on a plot, at a fraction of the drawing area's
+ * height. The value is the axis' own number — seconds, or the milliseconds of
+ * a calendar axis as the app counts them — and is placed as such (`l2p`).
+ * Plotly's `d2l` must not see it: on a calendar axis it reads a number as a
+ * moment of the viewer's clock and shifts it by their time zone, and the demo
+ * then dragged its cursors off the edge of the plot anywhere but in UTC.
+ */
 function plotAt(gd, x, fy = 0.5) {
     const r = gd.getBoundingClientRect();
     const xa = gd._fullLayout.xaxis;
     const ya = gd._fullLayout.yaxis;
-    return [r.left + xa._offset + xa.l2p(xa.d2l(x)), r.top + ya._offset + ya._length * fy];
+    return [r.left + xa._offset + xa.l2p(Number(x)), r.top + ya._offset + ya._length * fy];
 }
 
 /** The time-series plot of a panel — with an analysis on, the pane that keeps the signal. */
@@ -1192,22 +1200,23 @@ export const GUIDE_CHAPTERS = [
                 'Media, σ — e la pendenza <b>a ≈ −0,012 bar/min</b>: il tasso di perdita',
                 '均值、σ——以及斜率 <b>a ≈ −0.012 bar/min</b>：即泄漏速率',
             ));
-            await d.move({ el: slope(), ax: 0.7 });
+            await d.move({ el: slope(), ax: 0.9, dx: 14 });
             await d.wait(3200);
             await d.cam(null, null, 800);
+            await d.park(500);
             await d.wait(600);
         },
     },
 
     {
-        id: 'measure', g: 'analysis', icon: '⇔', est: 40000,
+        id: 'measure', g: 'analysis', icon: '⇔', est: 53000,
         t: say('Measure: cursors, statistics, integral', 'Mesurer : curseurs, statistiques, intégrale', 'Medir: cursores, estadísticas, integral', 'Misurare: cursori, statistiche, integrale', '测量：光标、统计与积分'),
         d: say(
-            'Three ways to put a number on a curve. <b>A|B</b>, the measurement cursors: two lines to drag, with the time and the value between them. <b>Σ</b>: minimum, maximum, mean and RMS of every signal of the panel. And <b>Analysis ▾ → Integral</b>: the area under a signal over a stretch — the energy, when the signal is a power.',
-            'Trois façons de mettre un chiffre sur une courbe. <b>A|B</b>, les curseurs de mesure : deux lignes à glisser, avec le temps et la valeur entre elles. <b>Σ</b> : minimum, maximum, moyenne et RMS de chaque signal du panneau. Et <b>Analyse ▾ → Intégrale</b> : l’aire sous un signal sur un tronçon — l’énergie, quand le signal est une puissance.',
-            'Tres maneras de ponerle un número a una curva. <b>A|B</b>, los cursores de medida: dos líneas para arrastrar, con el tiempo y el valor entre ellas. <b>Σ</b>: mínimo, máximo, media y RMS de cada señal del panel. Y <b>Análisis ▾ → Integral</b>: el área bajo una señal en un tramo — la energía, cuando la señal es una potencia.',
-            'Tre modi per dare un numero a una curva. <b>A|B</b>, i cursori di misura: due linee da trascinare, con il tempo e il valore tra di esse. <b>Σ</b>: minimo, massimo, media e RMS di ogni segnale del pannello. E <b>Analisi ▾ → Integrale</b>: l’area sotto un segnale su un tratto — l’energia, quando il segnale è una potenza.',
-            '给曲线读数的三种方式。<b>A|B</b> 测量光标：拖动两条线，读出它们之间的时间差和数值差。<b>Σ</b>：面板中每个信号的最小值、最大值、均值和 RMS。还有<b>分析 ▾ → 积分</b>：信号在一段上的面积——当信号是功率时，就是能量。',
+            'Three ways to put a number on a curve. <b>A|B</b>, the measurement cursors: two lines to drag, with the time and the value between them — hold Ctrl to drag both at once. <b>Σ</b>: minimum, maximum, mean and RMS of every signal of the panel. And <b>Analysis ▾ → Integral</b>: the area under a signal over a stretch — the energy, when the signal is a power.',
+            'Trois façons de mettre un chiffre sur une courbe. <b>A|B</b>, les curseurs de mesure : deux lignes à glisser, avec le temps et la valeur entre elles — avec Ctrl, les deux à la fois. <b>Σ</b> : minimum, maximum, moyenne et RMS de chaque signal du panneau. Et <b>Analyse ▾ → Intégrale</b> : l’aire sous un signal sur un tronçon — l’énergie, quand le signal est une puissance.',
+            'Tres maneras de ponerle un número a una curva. <b>A|B</b>, los cursores de medida: dos líneas para arrastrar, con el tiempo y el valor entre ellas — con Ctrl, las dos a la vez. <b>Σ</b>: mínimo, máximo, media y RMS de cada señal del panel. Y <b>Análisis ▾ → Integral</b>: el área bajo una señal en un tramo — la energía, cuando la señal es una potencia.',
+            'Tre modi per dare un numero a una curva. <b>A|B</b>, i cursori di misura: due linee da trascinare, con il tempo e il valore tra di esse — con Ctrl, entrambe insieme. <b>Σ</b>: minimo, massimo, media e RMS di ogni segnale del pannello. E <b>Analisi ▾ → Integrale</b>: l’area sotto un segnale su un tratto — l’energia, quando il segnale è una potenza.',
+            '给曲线读数的三种方式。<b>A|B</b> 测量光标：拖动两条线，读出它们之间的时间差和数值差——按住 Ctrl 可同时拖动两条。<b>Σ</b>：面板中每个信号的最小值、最大值、均值和 RMS。还有<b>分析 ▾ → 积分</b>：信号在一段上的面积——当信号是功率时，就是能量。',
         ),
         async setup(d) {
             await d.loadText('thermal_loop.csv', thermalLoopCsv({ heat: true }));
@@ -1217,8 +1226,12 @@ export const GUIDE_CHAPTERS = [
         },
         async run(d) {
             const panel = d.panel(0);
-            const minute = (m) => Date.UTC(2026, 4, 18, 9, 0, 0) + m * 60000;
+            const plot = () => d.app.plotManager.plots.get(panel.dataset.id);
+            // A time of the record, as its axis counts it: seconds.
+            const minute = (m) => m * 60;
             const toolbar = panel.querySelector('.layout-panel-toolbar');
+            // Where a cursor is, and where it is wanted, within a few seconds.
+            const cursorAt = (which, m) => Math.abs(plot().cursors[which] - minute(m)) < 90;
             d.say(say(
                 'The heat flow of a thermal loop, over two hours',
                 'Le flux de chaleur d’une boucle thermique, sur deux heures',
@@ -1244,27 +1257,45 @@ export const GUIDE_CHAPTERS = [
             }
             await d.cam(null, null, 800);
             const gd = timePlot(d);
+            const line = (which) => panel.querySelector(`.cursor-overlay-line-${which}`);
             d.say(say(
-                'Drag <b>A</b> to where the pump stops, <b>B</b> to where it starts again',
-                'Glissez <b>A</b> à l’arrêt de la pompe, <b>B</b> à son redémarrage',
-                'Arrastre <b>A</b> hasta donde se detiene la bomba, <b>B</b> hasta donde arranca de nuevo',
-                'Trascina <b>A</b> dove la pompa si ferma, <b>B</b> dove riparte',
-                '把 <b>A</b> 拖到水泵停机处，<b>B</b> 拖到重新启动处',
+                'Drag <b>A</b> to the start of a pump stage, <b>B</b> to its end',
+                'Glissez <b>A</b> au début d’un palier de la pompe, <b>B</b> à sa fin',
+                'Arrastre <b>A</b> al inicio de una etapa de la bomba, <b>B</b> a su final',
+                'Trascina <b>A</b> all’inizio di uno stadio della pompa, <b>B</b> alla sua fine',
+                '把 <b>A</b> 拖到水泵某一档的起点，<b>B</b> 拖到它的终点',
             ));
-            await d.drag({ el: panel.querySelector('.cursor-overlay-line-a'), ay: 0.55 }, plotAt(gd, minute(35), 0.55), { ms: 1200 });
-            await d.drag({ el: panel.querySelector('.cursor-overlay-line-b'), ay: 0.7 }, plotAt(gd, minute(50), 0.7), { ms: 1200 });
+            await d.drag({ el: line('a'), ay: 0.78 }, plotAt(gd, minute(51), 0.78), { ms: 1700 });
+            await d.wait(500);
+            await d.drag({ el: line('b'), ay: 0.86 }, plotAt(gd, minute(79), 0.86), { ms: 1700 });
+            if (!cursorAt('a', 51) || !cursorAt('b', 79)) throw new Error('guide: the cursors are not where they were dragged');
+            await d.wait(500);
+            const box = panel.querySelector('.cursor-info-box');
             const values = panel.querySelector('.cursor-info-values');
-            await d.cam(panel.querySelector('.cursor-info-box'), 1.7, 800);
+            await d.cam(box, 1.7, 800);
             d.say(say(
-                '<b>ΔX</b>: the pump was off for a quarter of an hour',
-                '<b>ΔX</b> : la pompe est restée arrêtée un quart d’heure',
-                '<b>ΔX</b>: la bomba estuvo apagada un cuarto de hora',
-                '<b>ΔX</b>: la pompa è rimasta ferma un quarto d’ora',
-                '<b>ΔX</b>：水泵停了一刻钟',
+                'A and B, and between them: <b>ΔX</b>, about 28 minutes, and <b>ΔY</b>',
+                'A et B, et entre eux : <b>ΔX</b>, environ 28 minutes, et <b>ΔY</b>',
+                'A y B, y entre ellos: <b>ΔX</b>, unos 28 minutos, y <b>ΔY</b>',
+                'A e B, e tra di essi: <b>ΔX</b>, circa 28 minuti, e <b>ΔY</b>',
+                'A 和 B，以及两者之间的 <b>ΔX</b>（约 28 分钟）和 <b>ΔY</b>',
             ));
-            await d.move({ el: values, ax: 0.5, ay: 0.55 });
-            await d.wait(2600);
+            await d.move({ el: values, ax: 0.78, ay: 0.5 });
+            await d.wait(3200);
+
+            // Ctrl held: the two cursors move as one, the same time apart.
             await d.cam(null, null, 700);
+            d.say(say(
+                '<b>Ctrl</b> + drag moves both cursors together',
+                '<b>Ctrl</b> + glisser déplace les deux curseurs ensemble',
+                '<b>Ctrl</b> + arrastrar mueve ambos cursores juntos',
+                '<b>Ctrl</b> + trascina sposta entrambi i cursori insieme',
+                '<b>Ctrl</b> + 拖动：两个光标一起移动',
+            ));
+            await d.drag({ el: line('a'), ay: 0.78 }, plotAt(gd, minute(11), 0.78), { ms: 1900, ctrl: true });
+            if (!cursorAt('a', 11) || !cursorAt('b', 39)) throw new Error('guide: Ctrl + drag did not move the two cursors together');
+            await d.move(plotArea(gd, 0.5, 0.93), 500);
+            await d.wait(1800);
             await d.tap(panel.querySelector('.cursor-info-box .cursor-close-btn'), { after: 300 });
 
             // ── Σ ──
@@ -1278,7 +1309,7 @@ export const GUIDE_CHAPTERS = [
             await d.cam({ el: toolbar, ax: 0.95 }, 1.6, 600);
             await d.tap(panel.querySelector('.panel-stats-btn'), { after: 150 });
             await d.cam(null, null, 250);
-            if (!await d.modalOk({ read: 2000, after: 400 })) throw new Error('guide: no statistics');
+            if (!await d.modalOk({ read: 1600, after: 400 })) throw new Error('guide: no statistics');
 
             // ── Integral ──
             await d.cam({ el: toolbar, ax: 0.62 }, 1.5, 600);
@@ -1290,42 +1321,60 @@ export const GUIDE_CHAPTERS = [
                 '<b>分析 ▾</b> → 积分：功率对时间积分就是能量',
             ));
             await d.analysis('integral');
-            const total = () => (panel.querySelector('.integral-summary')?.textContent || '');
-            if (!await d.until(() => /kW·h/.test(total()) && timePlot(d)?._fullLayout && !computing(d), 10000)) throw new Error('guide: no integral');
+            // The total the panel shows, in kW·h: the bar of the pane below.
+            const energy = () => {
+                const text = panel.querySelector('.integral-summary')?.textContent || '';
+                // (written with the decimal mark of the language: 6.37 or 6,37)
+                const found = text.match(/(\d+(?:[.,]\d+)?)\s*kW·h/);
+                return found && !computing(d) ? Number(found[1].replace(',', '.')) : NaN;
+            };
+            const bars = () => plot()?.integralDiv;
+            if (!await d.until(() => energy() > 20 && timePlot(d)?._fullLayout && bars()?._fullLayout, 10000)) throw new Error('guide: no integral');
             await d.cam(null, null, 800);
             d.say(say(
-                'The whole record: the energy delivered, in <b>kW·h</b>',
-                'Tout l’enregistrement : l’énergie fournie, en <b>kW·h</b>',
-                'Todo el registro: la energía entregada, en <b>kW·h</b>',
-                'Tutta la registrazione: l’energia fornita, in <b>kW·h</b>',
-                '整段记录：输送的能量，单位 <b>kW·h</b>',
+                'The whole record: <b>23 kW·h</b> delivered — the bar below',
+                'Tout l’enregistrement : <b>23 kW·h</b> fournis — la barre en dessous',
+                'Todo el registro: <b>23 kW·h</b> entregados — la barra de abajo',
+                'Tutta la registrazione: <b>23 kW·h</b> forniti — la barra sotto',
+                '整段记录：共输送 <b>23 kW·h</b>——见下方的柱',
             ));
-            await d.wait(2200);
+            await d.move(plotArea(bars(), 0.95, 0.55));
+            await d.wait(2400);
 
             const selection = panel.querySelector('.integral-options [data-analysis-range-full="false"]');
             await d.reveal(selection);
             d.say(say(
-                '<b>Selection</b>: the energy of one stretch — drag its edges',
-                '<b>Sélection</b> : l’énergie d’un seul tronçon — glissez ses bords',
-                '<b>Selección</b>: la energía de un solo tramo — arrastre sus bordes',
-                '<b>Selezione</b>: l’energia di un solo tratto — trascina i bordi',
-                '<b>选区</b>：只算一段的能量——拖动它的两条边',
+                '<b>Selection</b>: only the green stretch is integrated',
+                '<b>Sélection</b> : seul le tronçon vert est intégré',
+                '<b>Selección</b>: solo se integra el tramo verde',
+                '<b>Selezione</b>: si integra solo il tratto verde',
+                '<b>选区</b>：只对绿色区段积分',
             ));
             await d.tap(selection, { after: 400 });
-            await d.until(() => !computing(d) && timePlot(d)?._fullLayout, 8000);
-            const before = total();
+            if (!await d.until(() => Number.isFinite(energy()) && timePlot(d)?._fullLayout, 8000)) throw new Error('guide: no integral of the selection');
+            // The signal and its total, closer — before the edges move, so that
+            // nothing else moves once the result is there.
+            await d.cam([timePlot(d), bars()], 1.25, 800);
+            d.say(say(
+                'Drag its edges onto one pump stage',
+                'Glissez ses bords sur un palier de la pompe',
+                'Arrastre sus bordes sobre una etapa de la bomba',
+                'Trascina i bordi su uno stadio della pompa',
+                '把它的两条边拖到水泵的某一档上',
+            ));
             await dragRangeEdge(d, 'x2', minute(80), { fy: 0.3 });
             await dragRangeEdge(d, 'x1', minute(50), { fy: 0.3 });
-            if (!await d.until(() => !computing(d) && total() !== before, 10000)) throw new Error('guide: the integral did not follow the selection');
+            // Half an hour at about 12.5 kW: a little over 6 kW·h.
+            if (!await d.until(() => energy() > 5.5 && energy() < 7.5, 10000)) throw new Error('guide: the integral did not follow the selection');
             d.say(say(
-                'Half an hour at the third pump stage: about 6 kW·h',
-                'Une demi-heure au troisième palier de la pompe : environ 6 kW·h',
-                'Media hora en la tercera etapa de la bomba: unos 6 kW·h',
-                'Mezz’ora al terzo stadio della pompa: circa 6 kW·h',
-                '水泵第三档的半小时：约 6 kW·h',
+                'Half an hour of that stage: <b>6.4 kW·h</b>',
+                'Une demi-heure de ce palier : <b>6,4 kW·h</b>',
+                'Media hora de esa etapa: <b>6,4 kW·h</b>',
+                'Mezz’ora di quello stadio: <b>6,4 kW·h</b>',
+                '这一档的半小时：<b>6.4 kW·h</b>',
             ));
-            await d.move({ el: panel.querySelector('.integral-summary'), ax: 0.3 }).catch(() => {});
-            await d.wait(2800);
+            await d.park();
+            await d.wait(3000);
         },
     },
 
