@@ -6,7 +6,8 @@
   Spanish, Italian and Chinese. It is the in-app Help (Menu → Help) as a web
   page, built from the same texts by `scripts/manual/render-manual.mjs`;
   `npm run manual:pdf` prints it, and `npm run manual:figures` captures its
-  figures again.
+  figures again from the app, on a desktop, a phone and a tablet (see "The
+  Help and the user manual" in `CONTRIBUTING.md`).
 - **Animated guide**: Menu → Animated guide plays short scripted demos inside
   the app; see [animated-guide.md](animated-guide.md).
 - **Release notes**: one file per version in [releases/](releases/).
