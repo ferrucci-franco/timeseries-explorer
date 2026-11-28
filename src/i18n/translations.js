@@ -2662,6 +2662,9 @@ const translations = {
             dropStateX3: 'Drop the third state variable',
             multiSelectHint: '**Ctrl/Cmd-click** to **multi-select variables** before dragging.',
             legendHint: 'Click **legend items** to **show** or **hide** traces. **Shift+Click** to **remove trace**.',
+            // The same two lines for a finger (a tablet in the full layout): no keys.
+            dropHintTouch: '**Press and hold** a variable, then **drag** it onto this panel.',
+            legendHintTouch: 'Tap **legend items** to **show** or **hide** traces.',
 
             // Buttons / dialogs
             confirm: 'Confirm',
@@ -5905,6 +5908,9 @@ const translations = {
             dropStateX3: 'Déposez la troisième variable d’état',
             multiSelectHint: '**Ctrl/Cmd-clic** pour **sélectionner plusieurs variables** avant de les faire glisser.',
             legendHint: 'Cliquez sur les **éléments de légende** pour **afficher** ou **masquer** les traces. **Maj+clic** pour **supprimer la trace**.',
+            // The same two lines for a finger (a tablet in the full layout): no keys.
+            dropHintTouch: '**Appuyez longuement** sur une variable, puis **faites-la glisser** sur ce panneau.',
+            legendHintTouch: 'Touchez les **éléments de légende** pour **afficher** ou **masquer** les traces.',
 
             // Buttons / dialogs
             confirm: 'Confirmer',
@@ -9130,6 +9136,9 @@ const translations = {
             dropStateX3: 'Suelta la tercera variable de estado',
             multiSelectHint: '**Ctrl/Cmd-clic** para **seleccionar varias variables** antes de arrastrarlas.',
             legendHint: 'Haz clic en la **leyenda** para **mostrar** u **ocultar** trazas. **Mayús+clic** para **eliminar la traza**.',
+            // The same two lines for a finger (a tablet in the full layout): no keys.
+            dropHintTouch: '**Mantené apretada** una variable y **arrastrala** a este panel.',
+            legendHintTouch: 'Tocá la **leyenda** para **mostrar** u **ocultar** trazas.',
             confirm: 'Confirmar',
             cancel: 'Cancelar',
             dismiss: 'Cerrar',
@@ -12343,6 +12352,9 @@ const translations = {
             dropStateX3: 'Rilascia la terza variabile di stato',
             multiSelectHint: '**Ctrl/Cmd-clic** per **selezionare più variabili** prima di trascinarle.',
             legendHint: 'Clicca sulla **legenda** per **mostrare** o **nascondere** le tracce. **Maiusc+clic** per **rimuovere la traccia**.',
+            // The same two lines for a finger (a tablet in the full layout): no keys.
+            dropHintTouch: '**Tieni premuta** una variabile e **trascinala** su questo pannello.',
+            legendHintTouch: 'Tocca la **legenda** per **mostrare** o **nascondere** le tracce.',
             confirm: 'Conferma',
             cancel: 'Annulla',
             dismiss: 'Chiudi',
@@ -15567,6 +15579,9 @@ const translations = {
             dropStateX3: '拖放第三个状态变量',
             multiSelectHint: '拖动前按 **Ctrl/Cmd+单击** 可**多选变量**。',
             legendHint: '单击**图例项**可**显示**或**隐藏**曲线。**Shift+单击**可**移除曲线**。',
+            // The same two lines for a finger (a tablet in the full layout): no keys.
+            dropHintTouch: '**按住**变量，然后将其**拖到**此面板上。',
+            legendHintTouch: '点按**图例项**可**显示**或**隐藏**曲线。',
 
             // Buttons / dialogs
             confirm: '确认',

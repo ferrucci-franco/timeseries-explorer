@@ -178,7 +178,9 @@ Reusable UI building blocks outside the main app class.
     browser lets a page take it): the page's Fullscreen API, so the top edge
     shows no browser bar, and an amber pill there to leave it. The one piece
     ported from the owner's other apps; texts in `translations.js`, styles in
-    `src/styles/base.css`
+    `src/styles/base.css`. The phone layout lists it in its More sheet
+    (`_compactSyncFullscreenEntry` in `compact-methods.js`), a row that goes
+    both ways
 
 ### `src/i18n`
 

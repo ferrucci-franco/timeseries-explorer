@@ -115,6 +115,99 @@ try {
     });
     const lower = page.locator('.timeseries-analysis-menu-btn').last();
     await lower.waitFor();
+
+    // Linked time axes: a zoom made in one panel survives what is done to the
+    // other. An analysis opens its own time pane onto the range it analyses,
+    // and used to send that range to every linked panel (Histogram, Temporal
+    // profile and Integral did), undoing the zoom there.
+    {
+        const xRange = index => page.evaluate((i) => {
+            const panel = document.querySelectorAll('.layout-panel')[i];
+            const axis = window.app.plotManager.plots.get(panel.dataset.id).div._fullLayout.xaxis;
+            return axis.range.map(value => axis.r2l(value));
+        }, index);
+        const sameRange = (a, b) => a.length === 2 && b.length === 2 && a.every((value, i) => Math.abs(value - b[i]) <= 1);
+        assert.equal(await page.evaluate(() => window.app.plotManager.syncAxes), true, 'the time axes are linked');
+        const whole = await xRange(0);
+        // A box zoom with the mouse on the upper panel; the lower one follows.
+        const area = await page.evaluate(() => {
+            const r = document.querySelector('.layout-panel .nsewdrag').getBoundingClientRect();
+            return { x: r.x, y: r.y, w: r.width, h: r.height };
+        });
+        await page.mouse.move(area.x + area.w * 0.3, area.y + area.h / 2);
+        await page.mouse.down();
+        await page.mouse.move(area.x + area.w * 0.4, area.y + area.h / 2, { steps: 5 });
+        await page.mouse.move(area.x + area.w * 0.5, area.y + area.h / 2, { steps: 5 });
+        await page.mouse.up();
+        await page.waitForFunction(({ i, full }) => {
+            const panel = document.querySelectorAll('.layout-panel')[i];
+            const axis = window.app.plotManager.plots.get(panel.dataset.id).div._fullLayout.xaxis;
+            const range = axis.range.map(value => axis.r2l(value));
+            return range[1] - range[0] < 0.5 * (full[1] - full[0]);
+        }, { i: 1, full: whole });
+        const zoomed = await xRange(0);
+        assert.ok(zoomed[1] - zoomed[0] < 0.5 * (whole[1] - whole[0]), 'the upper panel is zoomed');
+        assert.ok(sameRange(await xRange(1), zoomed), 'and the lower one followed');
+        const settle = async (mode) => {
+            await page.waitForFunction((wanted) => {
+                const panel = document.querySelectorAll('.layout-panel')[1];
+                const plot = window.app.plotManager.plots.get(panel.dataset.id);
+                return plot?.mode === wanted && plot.div?._fullLayout?.xaxis?.range;
+            }, mode, { timeout: 30000 });
+            // The pane is built, its view restored, then its focus applied.
+            await page.waitForTimeout(700);
+        };
+        for (const mode of ORDER.slice(1)) {
+            await lower.click();
+            await page.locator(`.analysis-card.marks-item-${mode}`).click();
+            await settle(mode);
+            assert.ok(sameRange(await xRange(0), zoomed), `${mode} on the lower panel leaves the upper panel's zoom alone`);
+            await page.locator('.timeseries-analysis-menu-btn').last().click();
+            await page.keyboard.press('Home');
+            await page.keyboard.press('Enter');
+            await settle('timeseries');
+            assert.ok(sameRange(await xRange(0), zoomed), `and so does turning ${mode} off again`);
+            assert.ok(sameRange(await xRange(1), zoomed), `the lower panel is back on the shared window after ${mode}`);
+        }
+        // Another plot type on the lower panel, and back (straight to 2D, as
+        // below: its signals go, and come back by a drop on the empty panel).
+        for (const mode of ['phase2d', 'timeseries']) {
+            await page.evaluate((wanted) => {
+                const panel = document.querySelectorAll('.layout-panel')[1];
+                window.app.plotManager._setMode(panel.dataset.id, wanted);
+            }, mode);
+            await page.waitForFunction((wanted) => {
+                const panel = document.querySelectorAll('.layout-panel')[1];
+                return window.app.plotManager.plots.get(panel.dataset.id)?.mode === wanted;
+            }, mode);
+            await page.waitForTimeout(500);
+            assert.ok(sameRange(await xRange(0), zoomed), `the lower panel as ${mode} leaves the upper panel's zoom alone`);
+        }
+        await page.evaluate(() => {
+            const panelEl = [...document.querySelectorAll('.layout-panel')].pop();
+            window.app.plotManager.addTrace(panelEl.dataset.id, 'y', panelEl);
+        });
+        await settle('timeseries');
+        assert.ok(sameRange(await xRange(0), zoomed), 'a signal dropped on the lower panel leaves the zoom alone');
+        assert.ok(sameRange(await xRange(1), zoomed), 'and opens on the shared window');
+        // The link itself still carries a zoom made on an analysis' time pane.
+        await lower.click();
+        await page.locator('.analysis-card.marks-item-histogram').click();
+        await settle('histogram');
+        await page.evaluate(({ full }) => {
+            const panel = document.querySelectorAll('.layout-panel')[1];
+            const div = window.app.plotManager.plots.get(panel.dataset.id).div;
+            const iso = ms => new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
+            return Plotly.relayout(div, { 'xaxis.range': [iso(full[0] + 0.6 * (full[1] - full[0])), iso(full[0] + 0.8 * (full[1] - full[0]))] });
+        }, { full: whole });
+        await page.waitForTimeout(700);
+        assert.ok(sameRange(await xRange(0), await xRange(1)), 'a zoom on the histogram\'s time pane still moves the linked panel');
+        assert.ok(!sameRange(await xRange(0), zoomed));
+        await page.locator('.timeseries-analysis-menu-btn').last().click();
+        await page.keyboard.press('Home');
+        await page.keyboard.press('Enter');
+        await settle('timeseries');
+    }
     await lower.click();
     assert.equal(await insideWindow(page), true);
     const menuBox = await page.locator('.panel-analysis-menu').boundingBox();

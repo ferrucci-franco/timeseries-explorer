@@ -122,6 +122,8 @@ proto.initEventListeners = function() {
             exitFullscreen: i18n.t('exitFullscreen'),
             exitPill: i18n.t('exitFullscreenPill'),
         }),
+        // The phone layout's entry (More) says which way it goes.
+        onChange: () => this._compactSyncFullscreenEntry?.(),
     });
     this._initOptionHelpButtons();
 

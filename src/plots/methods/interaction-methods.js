@@ -5,6 +5,7 @@ import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/ff
 import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
+import { isTouchFirst } from '../../ui/touch-drag.js';
 import { sceneAspectUpdate } from '../../ui/plot-3d-gestures.js';
 import { movedBeyondSlop } from '../../utils/touch-plot-gestures.js';
 import { copyTextToClipboard, cursorReadoutText } from '../../utils/clipboard.js';
@@ -78,6 +79,12 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         }
         if (plot?.cursors?.enabled) this._renderCursorOverlay(plot);
     }
+
+    // An analysis opening its time pane onto the range it analyses
+    // (_applyPendingAnalysisFocus) moves this panel only: the panels linked to
+    // it keep the zoom the user gave them. The next pan or zoom made here is
+    // carried as always.
+    if (plot?._analysisFocusRelayout) return;
 
     if (!this.syncAxes) return;
 
@@ -1530,7 +1537,13 @@ proto._applyPendingAnalysisFocus = function(plot, mode = plot?.mode) {
         ? [domain.min, domain.max]
         : this._analysisFocusViewRange(state.x1, state.x2, domain.min, domain.max);
     if (!range) return false;
-    Plotly.relayout(div, { 'xaxis.range': range.slice(), 'xaxis.autorange': false });
+    // This panel's own move, not one for the linked time axes: turning an
+    // analysis on here used to send its whole range to every linked panel,
+    // undoing the zoom made there (_onRelayout reads the mark; Plotly emits
+    // plotly_relayout before the promise settles).
+    plot._analysisFocusRelayout = true;
+    const clear = () => { plot._analysisFocusRelayout = false; };
+    Promise.resolve(Plotly.relayout(div, { 'xaxis.range': range.slice(), 'xaxis.autorange': false })).then(clear, clear);
     return true;
 };
 
@@ -5808,10 +5821,13 @@ proto._updatePlaceholder = function(panelId, panelEl) {
         default: // timeseries
             msg = i18n.t('dropTimeseriesMulti');
     }
+    // A finger has no Ctrl or Shift: on a touch-first device the two hints say
+    // how a variable gets here by touch and what a tap on the legend does.
+    const touchFirst = isTouchFirst();
     placeholder.innerHTML = `
         <span>${msg}</span>
-        <small class="layout-panel-placeholder-hint">${formatPlaceholderHint('multiSelectHint')}</small>
-        <small class="layout-panel-placeholder-hint">${formatPlaceholderHint('legendHint')}</small>
+        <small class="layout-panel-placeholder-hint">${formatPlaceholderHint(touchFirst ? 'dropHintTouch' : 'multiSelectHint')}</small>
+        <small class="layout-panel-placeholder-hint">${formatPlaceholderHint(touchFirst ? 'legendHintTouch' : 'legendHint')}</small>
     `;
     // Halfway through a pair: the way out of it, under what to drop next.
     if (pp?.x && PENDING_PAIR_MODES.has(mode)) {

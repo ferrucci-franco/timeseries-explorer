@@ -86,6 +86,40 @@ const linesUnderCornerButtons = (page, panelId) => page.evaluate(async (id) => {
     return { count: buttons.length, wrong };
 }, panelId);
 
+// An analysis' status line ("FFT ready (2,000 samples)") and the plot's corner
+// buttons (the legend's, A|B, the fits) never share a pixel: the line used to
+// be laid over the top of the time pane, under those buttons.
+const statusOverCornerButtons = page => page.evaluate(() => {
+    const panel = document.querySelector('.compact-active-panel');
+    const shown = (el) => {
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && style.visibility !== 'hidden';
+    };
+    const statuses = [...panel.querySelectorAll('.fft-status, .hist-status, .heatmap-status')]
+        .filter(el => shown(el) && el.textContent.trim());
+    const buttons = [...panel.querySelectorAll('.compact-fit-btn, .legend-toggle-btn')].filter(shown);
+    const right = panel.getBoundingClientRect().right;
+    const problems = [];
+    for (const status of statuses) {
+        const a = status.getBoundingClientRect();
+        if (a.right > right + 1) problems.push(`"${status.textContent.trim()}" runs ${Math.round(a.right - right)} px past the screen`);
+        for (const btn of buttons) {
+            const b = btn.getBoundingClientRect();
+            if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
+                problems.push(`"${status.textContent.trim()}" is over ${btn.dataset.axis || btn.className}`);
+            }
+        }
+    }
+    return { statuses: statuses.length, buttons: buttons.length, problems };
+});
+const assertStatusClear = async (page, label, { buttons = 1 } = {}) => {
+    const found = await statusOverCornerButtons(page);
+    assert.ok(found.statuses >= 1, `${label}: its status line is on screen`);
+    assert.ok(found.buttons >= buttons, `${label}: the corner buttons are on screen (${found.buttons})`);
+    assert.deepEqual(found.problems, [], `${label}: the status line is clear of the corner buttons`);
+};
+
 const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
 await server.listen();
 const baseUrl = `http://127.0.0.1:${server.httpServer.address().port}/`;
@@ -760,6 +794,7 @@ try {
         2,
         'the time pane and the spectrum each have their fit buttons',
     );
+    await assertStatusClear(page, 'FFT', { buttons: 6 });
 
     // ── Cursors in FFT: the time pane's and the spectrum's ──────────────────
     const fftCursorButtons = page.locator('.compact-active-panel .compact-cursor-btn:not([hidden])');
@@ -1065,6 +1100,7 @@ try {
         null,
         { timeout: 15000 },
     );
+    await assertStatusClear(page, 'correlation');
     assert.deepEqual(
         await page.evaluate(() => {
             const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
@@ -1202,6 +1238,37 @@ try {
     await page.locator('.compact-switch-row input').click();
     // Examples and the menu are phone lists, not the desktop dropdowns.
     assert.equal(await page.locator('.compact-sheet #example-menu, .compact-sheet #extra-menu').count(), 0, 'the desktop menus are not lent');
+    // Full screen, the desktop top bar's button: one row here, which goes
+    // both ways (a finger cannot point at the top edge for the exit pill).
+    {
+        const entry = page.locator('.compact-page-more .compact-fullscreen-entry');
+        assert.equal(await page.evaluate(() => document.fullscreenEnabled), true, 'this browser has a page full screen');
+        assert.equal(await entry.count(), 1, 'so More offers it');
+        assert.equal((await entry.innerText()).trim(), 'Full screen');
+        assert.equal(await entry.getAttribute('aria-pressed'), 'false');
+        assert.ok((await entry.boundingBox()).height >= 44, 'at a finger\'s size');
+        await entry.tap();
+        await page.waitForFunction(() => document.fullscreenElement === document.documentElement);
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.getAttribute('aria-pressed') === 'true');
+        assert.equal((await entry.innerText()).trim(), 'Exit full screen', 'the same row now leaves it');
+        assert.equal(await page.evaluate(() => document.querySelector('.app-fullscreen-pill').classList.contains('show')), true,
+            'and the exit pill shows on entering');
+        assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact')), true, 'still the phone layout');
+        await entry.tap();
+        await page.waitForFunction(() => !document.fullscreenElement);
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.getAttribute('aria-pressed') === 'false');
+        assert.equal((await entry.innerText()).trim(), 'Full screen', 'and back');
+        // Left another way (the pill, Esc, the system's Back): the row follows.
+        await entry.tap();
+        await page.waitForFunction(() => !!document.fullscreenElement);
+        await page.evaluate(() => document.exitFullscreen());
+        await page.waitForFunction(() => !document.fullscreenElement);
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.getAttribute('aria-pressed') === 'false');
+        await page.evaluate(() => window.app.setLanguage('fr'));
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.textContent.trim() === 'Plein écran');
+        await page.evaluate(() => window.app.setLanguage('en'));
+        await page.waitForFunction(() => document.querySelector('.compact-fullscreen-entry')?.textContent.trim() === 'Full screen');
+    }
     assert.equal(await page.locator('.compact-sheet .compact-menu-btn', { hasText: 'Lorenz Attractor' }).isVisible(), true, 'the examples stay listed after a tap elsewhere in the sheet');
     for (const title of ['Project', 'Tools', 'Help and feedback']) {
         assert.equal(await page.locator('.compact-page-more .compact-section-title', { hasText: title }).count(), 1, `the menu has its ${title} group`);
@@ -1337,6 +1404,7 @@ try {
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the profile each have their fit buttons');
+        await assertStatusClear(profilePage, 'temporal profile', { buttons: 6 });
         await shot(profilePage, 'profile');
         // Signals come and go from Data as on a time series.
         await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
@@ -1368,6 +1436,7 @@ try {
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the bars each have their fit buttons');
+        await assertStatusClear(profilePage, 'integral', { buttons: 6 });
         await shot(profilePage, 'integral');
         await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
         await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
@@ -1407,6 +1476,7 @@ try {
         await profilePage.waitForTimeout(400);
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the bars each have their fit buttons');
+        await assertStatusClear(profilePage, 'histogram', { buttons: 6 });
         await shot(profilePage, 'histogram');
         await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
         await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
@@ -1445,6 +1515,7 @@ try {
         );
         assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
             'the time pane and the calendar each have their fit buttons');
+        await assertStatusClear(profilePage, 'Heatmap', { buttons: 5 });
         assert.deepEqual(
             await profilePage.evaluate(() => {
                 const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
@@ -1465,6 +1536,46 @@ try {
 
         assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
         await profileContext.close();
+
+        // The same on the narrow phones, in a language with long words: the
+        // FFT's line, and the integral's, which is the longest there is.
+        for (const viewport of [{ width: 375, height: 667 }, { width: 390, height: 844 }, { width: 360, height: 640 }]) {
+            for (const language of ['fr', 'it']) {
+                const narrow = await browser.newContext({ viewport, hasTouch: true, isMobile: true });
+                const narrowPage = await narrow.newPage();
+                const label = `${viewport.width} px, ${language}`;
+                await narrowPage.goto(baseUrl);
+                await narrowPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+                await narrowPage.evaluate(lang => window.app.setLanguage(lang), language);
+                await narrowPage.setInputFiles('#file-input', [{ name: 'load.csv', mimeType: 'text/csv', buffer: Buffer.from(rows.join('\n') + '\n') }]);
+                await narrowPage.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+                await narrowPage.locator('.compact-nav-btn[data-sheet="data"]').click();
+                await narrowPage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+                await narrowPage.locator('#variables-tree .tree-item[data-var-name="temp"]').click();
+                await narrowPage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
+                for (const [mode, paneDiv] of [['fft', 'fftDiv'], ['integral', 'integralDiv']]) {
+                    await narrowPage.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+                    await narrowPage.waitForSelector('.compact-analysis-list');
+                    await narrowPage.evaluate((wanted) => {
+                        window.app._compactSetPlotMode(wanted);
+                    }, mode);
+                    await narrowPage.waitForFunction(({ wanted, pane }) => {
+                        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+                        return plot?.mode === wanted && plot[pane]?.data?.length > 0;
+                    }, { wanted: mode, pane: paneDiv }, { timeout: 30000 });
+                    await narrowPage.locator('.compact-sheet-close').click();
+                    await narrowPage.waitForFunction(() => window.app._compact.sheet === null);
+                    await narrowPage.waitForFunction(
+                        () => document.querySelectorAll('.compact-active-panel .compact-fit-group:not([hidden])').length === 2,
+                        null,
+                        { timeout: 15000 },
+                    );
+                    await narrowPage.waitForTimeout(300);
+                    await assertStatusClear(narrowPage, `${mode}, ${label}`, { buttons: 6 });
+                }
+                await narrow.close();
+            }
+        }
     }
 
     // ── 3D, and 2D and 3D animations: signals in roles, one tap each ───────
@@ -1685,6 +1796,113 @@ try {
     assert.deepEqual(ierrors, [], 'no page errors on iOS');
     await ios.close();
 
+    // ── No page full screen (iPhone Safari): no dead entry in More ──────────
+    {
+        const noFs = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        await noFs.addInitScript(() => {
+            for (const name of ['fullscreenEnabled', 'webkitFullscreenEnabled']) {
+                Object.defineProperty(Document.prototype, name, { configurable: true, get: () => false });
+            }
+        });
+        const noFsPage = await noFs.newPage();
+        await noFsPage.goto(baseUrl);
+        await noFsPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+        assert.equal(await noFsPage.evaluate(() => document.fullscreenEnabled), false);
+        await noFsPage.locator('.compact-nav-btn[data-sheet="more"]').click();
+        await noFsPage.waitForSelector('.compact-page-more .compact-segmented');
+        assert.equal(await noFsPage.locator('.compact-fullscreen-entry').count(), 0, 'More does not offer a full screen the browser lacks');
+        assert.equal(await noFsPage.evaluate(() => document.getElementById('fullscreen-btn').hidden), true, 'as the top bar\'s button hides');
+        await noFs.close();
+    }
+
+    // ── A tablet with the desktop layout: the top bar's button takes a tap ──
+    {
+        const tablet = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: true });
+        const tabletPage = await tablet.newPage();
+        await tabletPage.goto(baseUrl);
+        await tabletPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+        assert.equal(await tabletPage.evaluate(() => document.documentElement.classList.contains('compact')), false, 'a tablet sideways keeps the desktop layout');
+        // The empty panel's hint is worded for a finger: no Ctrl, no Shift.
+        const touchHints = await tabletPage.locator('.layout-panel-placeholder .layout-panel-placeholder-hint').allInnerTexts();
+        assert.deepEqual(touchHints, [
+            'Press and hold a variable, then drag it onto this panel.',
+            'Tap legend items to show or hide traces.',
+        ], 'a touch-first device in the desktop layout reads how a finger does it');
+        await tabletPage.evaluate(() => window.app.setLanguage('fr'));
+        const frHints = (await tabletPage.locator('.layout-panel-placeholder').innerText());
+        assert.match(frHints, /Appuyez longuement sur une variable/, 'in the language of the app');
+        assert.doesNotMatch(frHints, /Ctrl|Maj\+/);
+        await tabletPage.evaluate(() => window.app.setLanguage('en'));
+        const fsButton = tabletPage.locator('#fullscreen-btn');
+        assert.equal(await fsButton.isVisible(), true);
+        await fsButton.tap();
+        await tabletPage.waitForFunction(() => document.fullscreenElement === document.documentElement);
+        await tabletPage.waitForFunction(() => document.getElementById('fullscreen-btn').getAttribute('aria-pressed') === 'true');
+        await fsButton.tap();
+        await tabletPage.waitForFunction(() => !document.fullscreenElement);
+        await tablet.close();
+    }
+
+    // ── A tablet upright: the top bar starts at its left edge ───────────────
+    // The row of controls is wider than the window there. It scrolls, from its
+    // first button, and the brand gives way to it whole — title, then badge,
+    // then logo (src/ui/top-bar-scroll.js) — exactly as in a mouse window of
+    // the same size: nothing is cut in half at the left edge.
+    {
+        const topBarAt = async (options) => {
+            const context = await browser.newContext(options);
+            await context.addInitScript(() => { try { localStorage.setItem('omv_touch_hint_seen', '1'); } catch (_) { /* private mode */ } });
+            const tabletPage = await context.newPage();
+            await tabletPage.goto(baseUrl);
+            await tabletPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+            await tabletPage.waitForTimeout(400);
+            const seen = await tabletPage.evaluate(() => {
+                const bar = document.querySelector('.top-bar');
+                const row = bar.querySelector('.top-bar-right');
+                const brand = bar.querySelector('.top-bar-left');
+                const box = el => { const r = el.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) }; };
+                const shown = el => getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().width > 0;
+                const first = [...row.children].find(child => child.getBoundingClientRect().width > 0);
+                return {
+                    compact: document.documentElement.classList.contains('compact'),
+                    pageScroll: window.scrollX + document.scrollingElement.scrollLeft,
+                    rowScroll: row.scrollLeft,
+                    rowScrolls: row.scrollWidth > row.clientWidth + 1,
+                    rowBox: box(row),
+                    firstButton: box(first),
+                    brand: ['as-logo', 'is-squeezed', 'without-badge'].filter(name => brand.classList.contains(name)),
+                    // What of the brand is drawn, and where.
+                    brandParts: [...brand.querySelectorAll('.app-logo, h1')].filter(el => shown(el) && shown(brand)).map(box),
+                    tabs: box(bar.querySelector('.workspace-tabs')),
+                    width: window.innerWidth,
+                };
+            });
+            await context.close();
+            return seen;
+        };
+        for (const viewport of [{ width: 768, height: 1024 }, { width: 820, height: 1180 }, { width: 744, height: 1133 }]) {
+            const label = `${viewport.width}×${viewport.height}`;
+            const touch = await topBarAt({ viewport, hasTouch: true });
+            const mouse = await topBarAt({ viewport });
+            assert.equal(touch.compact, false, `${label}: a tablet upright keeps the desktop layout`);
+            assert.equal(touch.pageScroll, 0, `${label}: the page is not scrolled sideways`);
+            assert.equal(touch.rowScroll, 0, `${label}: the row of controls starts at its first button`);
+            assert.ok(touch.firstButton.left >= touch.rowBox.left && touch.firstButton.right <= touch.width,
+                `${label}: which is whole, inside the window`);
+            assert.ok(touch.tabs.left >= 0 && touch.rowBox.left >= touch.tabs.right, `${label}: after the tab strip, not over it`);
+            for (const part of touch.brandParts) {
+                assert.ok(part.left >= 0 && part.right <= touch.width, `${label}: what is drawn of the brand is whole (${JSON.stringify(part)})`);
+            }
+            assert.deepEqual(touch, mouse, `${label}: the same bar as a mouse window of that size`);
+        }
+        // Sideways there is room for the logo, and it is all there.
+        const landscape = await topBarAt({ viewport: { width: 1024, height: 768 }, hasTouch: true });
+        assert.deepEqual(landscape.brand, ['as-logo', 'without-badge']);
+        assert.equal(landscape.rowScrolls, false, 'a tablet sideways shows the whole row');
+        assert.equal(landscape.brandParts.length, 1, 'with the logo');
+        assert.ok(landscape.brandParts[0].left >= 0 && landscape.brandParts[0].width === 30, 'whole, at the left edge');
+    }
+
     // ── Desktop: untouched ──────────────────────────────────────────────────
     const desktop = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const dpage = await desktop.newPage();
@@ -1700,6 +1918,10 @@ try {
     assert.equal(await dpage.locator('#sidebar').isVisible(), true);
     assert.equal(await dpage.locator('.layout-panel-toolbar').first().isVisible(), true);
     assert.equal(await dpage.locator('.compact-try-example').isVisible(), false);
+    assert.deepEqual(await dpage.locator('.layout-panel-placeholder .layout-panel-placeholder-hint').allInnerTexts(), [
+        'Ctrl/Cmd-click to multi-select variables before dragging.',
+        'Click legend items to show or hide traces. Shift+Click to remove trace.',
+    ], 'with a mouse and a keyboard the empty panel names the keys');
 
     // ── From the desktop to the phone layout, and back ──────────────────────
     await dpage.locator('#extra-menu-btn').click();

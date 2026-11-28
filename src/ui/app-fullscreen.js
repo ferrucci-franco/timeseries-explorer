@@ -12,6 +12,11 @@
 //   const fs = installAppFullscreen({ button, texts: () => ({ fullscreen, exitFullscreen, exitPill }) });
 //   fs.refresh();   // after a language change
 //
+// The phone layout has no top bar: its More page lists an entry instead
+// (compact-methods.js), which calls `fs.toggle()` and reads `fs.available`,
+// `fs.isFullscreen()` and `fs.icon()`; `onChange` tells it when the state
+// changed (the pill, Esc or the system's Back leave full screen too).
+//
 // The icon is a screen with two arrows, not four corners: the Auto-fit button
 // beside it is a square of four corners already.
 //
@@ -30,13 +35,13 @@ const DEFAULT_TEXTS = { fullscreen: 'Full screen', exitFullscreen: 'Exit full sc
 // not cover them.
 const EDGE_PX = 6;
 
-export function installAppFullscreen({ button = null, texts = null, doc = document } = {}) {
+export function installAppFullscreen({ button = null, texts = null, onChange: notify = null, doc = document } = {}) {
     const root = doc.documentElement;
     const currentTexts = () => ({ ...DEFAULT_TEXTS, ...(typeof texts === 'function' ? texts() : (texts || {})) });
     const enabled = !!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled);
     if (!enabled || !(root.requestFullscreen || root.webkitRequestFullscreen)) {
         if (button) button.hidden = true;
-        return { refresh() {}, isFullscreen: () => false, toggle() {} };
+        return { available: false, refresh() {}, isFullscreen: () => false, toggle() {}, icon: () => ICON_ENTER };
     }
     const isFullscreen = () => !!(doc.fullscreenElement || doc.webkitFullscreenElement);
     const swallow = (result) => { if (result && typeof result.catch === 'function') result.catch(() => {}); };
@@ -75,7 +80,7 @@ export function installAppFullscreen({ button = null, texts = null, doc = docume
 
     button?.addEventListener('click', (event) => { toggle(); if (event.detail) button.blur(); });
     pill.addEventListener('click', () => { hide(); exit(); });
-    const onChange = () => { refresh(); if (isFullscreen()) show(2500); else hide(); };
+    const onChange = () => { refresh(); if (isFullscreen()) show(2500); else hide(); notify?.(); };
     doc.addEventListener('fullscreenchange', onChange);
     doc.addEventListener('webkitfullscreenchange', onChange);
 
@@ -104,5 +109,5 @@ export function installAppFullscreen({ button = null, texts = null, doc = docume
     }, true);
 
     refresh();
-    return { refresh, isFullscreen, toggle };
+    return { available: true, refresh, isFullscreen, toggle, icon: () => (isFullscreen() ? ICON_EXIT : ICON_ENTER) };
 }

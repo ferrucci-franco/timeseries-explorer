@@ -29,15 +29,32 @@ const ANALYSIS_FOCUS_PADDING = 4;
 // windows with room to spare.
 const ANALYSIS_MIN_SELECTION_PX = 48;
 
+// Plotly picks a date axis' tick step (dtick, in ms) from the visible span, so
+// the format follows it: below a minute between ticks the labels need their
+// seconds, below a second their fraction — or every tick reads the same
+// "08:00". A step of a minute or more matches no stop and keeps `tickformat`.
+const CALENDAR_SUBMINUTE_TICK_STOPS = [
+    { dtickrange: [null, 0.9999], fraction: '.%6f' },
+    { dtickrange: [1, 9.9999], fraction: '.%3f' },
+    { dtickrange: [10, 99.9999], fraction: '.%2f' },
+    { dtickrange: [100, 999.9999], fraction: '.%1f' },
+    { dtickrange: [1000, 59999.9999], fraction: '' },
+];
+
 export function getCalendarTimeFormats(mode = '24h', language = 'en') {
     const useAmPm = mode === 'ampm' || mode === 'calendar-ampm';
     const tickformat = useAmPm ? '%-I:%M %p' : '%H:%M';
     const hoverformat = useAmPm ? '%-I:%M:%S %p' : '%H:%M:%S';
+    const dateLine = `\n${getCalendarDateTickFormat(language)}`;
     return {
         tickformat,
         // Plotly treats the text after \n as a secondary date label, keeping
         // the day visible when it changes without making locale the clock source.
-        tickformatWithDate: `${tickformat}\n${getCalendarDateTickFormat(language)}`,
+        tickformatWithDate: `${tickformat}${dateLine}`,
+        tickformatstops: CALENDAR_SUBMINUTE_TICK_STOPS.map(({ dtickrange, fraction }) => ({
+            dtickrange: [...dtickrange],
+            value: `${useAmPm ? `%-I:%M:%S${fraction} %p` : `%H:%M:%S${fraction}`}${dateLine}`,
+        })),
         hoverformat,
         traceHoverformat: `%Y-%m-%d ${hoverformat}`,
     };
@@ -527,13 +544,14 @@ proto._calendarAxisConfig = function(fileId, timeVar = null, rangeOrValues = nul
     return {
         type: 'date',
         tickformat: formats.tickformatWithDate,
+        tickformatstops: formats.tickformatstops,
         hoverformat: formats.hoverformat,
     };
 };
 
 proto._timeAxisRelayoutUpdate = function(axisConfig = {}, axisPath = 'xaxis') {
     const update = {};
-    for (const key of ['type', 'tickmode', 'tickvals', 'ticktext', 'tickformat', 'hoverformat']) {
+    for (const key of ['type', 'tickmode', 'tickvals', 'ticktext', 'tickformat', 'tickformatstops', 'hoverformat']) {
         if (axisConfig[key] !== undefined) update[`${axisPath}.${key}`] = axisConfig[key];
     }
     return update;

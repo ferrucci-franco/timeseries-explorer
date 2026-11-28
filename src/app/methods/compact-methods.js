@@ -2397,6 +2397,17 @@ export function installCompactMethods(ViewerClass) {
         return [version, row.querySelector('.extra-version-build')?.textContent].filter(Boolean).join(' · ');
     };
 
+    // The More page's full-screen row, in step with the page: "Full screen" /
+    // "Exit full screen", with the top-bar button's icon and texts.
+    proto._compactSyncFullscreenEntry = function(entry = document.querySelector('.compact-fullscreen-entry')) {
+        const fullscreen = this._appFullscreen;
+        if (!entry || !fullscreen) return;
+        const on = fullscreen.isFullscreen();
+        entry.querySelector('.compact-menu-icon').innerHTML = fullscreen.icon();
+        entry.querySelector('.compact-menu-label').textContent = i18n.t(on ? 'exitFullscreen' : 'fullscreen');
+        entry.setAttribute('aria-pressed', String(on));
+    };
+
     proto._buildCompactMorePage = function() {
         const node = el('div', 'compact-page compact-page-more');
         const restores = [];
@@ -2412,6 +2423,18 @@ export function installCompactMethods(ViewerClass) {
             layoutRow.appendChild(btn);
         }
         layout.appendChild(layoutRow);
+        // Full screen, the top bar's button on the desktop: one row that goes
+        // both ways, since a finger cannot point at the top edge to bring the
+        // exit pill back. Not offered where the browser has no page full
+        // screen (iPhone Safari).
+        if (this._appFullscreen?.available) {
+            const list = el('div', 'compact-list compact-menu-list');
+            const entry = menuRow('', '', '', () => this._appFullscreen.toggle());
+            entry.classList.add('compact-fullscreen-entry');
+            list.appendChild(entry);
+            layout.appendChild(list);
+            this._compactSyncFullscreenEntry(entry);
+        }
         node.appendChild(layout);
 
         const language = section(i18n.t('compactLanguage'));
