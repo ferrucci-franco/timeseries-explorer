@@ -24,6 +24,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const FIXTURE = 'generic-timeseries-classic.nc';
