@@ -606,7 +606,7 @@ export const GUIDE_CHAPTERS = [
             d.say(say(
                 '<b>Data tools</b> → <b>Remove outliers</b>',
                 '<b>Outils de données</b> → <b>Supprimer les valeurs aberrantes</b>',
-                '<b>Herramientas de datos</b> → <b>Eliminar valores atipicos</b>',
+                '<b>Herramientas de datos</b> → <b>Eliminar valores atípicos</b>',
                 '<b>Strumenti dati</b> → <b>Rimuovi valori anomali</b>',
                 '<b>数据工具</b> → <b>去除离群值</b>',
             ));
