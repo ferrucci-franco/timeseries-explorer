@@ -17,6 +17,11 @@
 
 import MatParser from '../parsers/mat-parser.js';
 
+// The netCDF files being read by parts into the engine, by the id the main
+// thread gave each one: a reader holds the file open (a mounted HDF5, a byte
+// source) between one block and the next.
+const columnarReaders = new Map();
+
 let baseParser = null;
 function getBaseParser() {
     // The format parsers all delegate shared normalization (data-type
@@ -55,6 +60,38 @@ export const PARSE_HANDLERS = {
         const parser = new Parser(getBaseParser());
         if (file) return { result: await parser.parseFile(file, filename, { maxLoadBytes }) };
         return { result: await parser.parse(buffer, filename, { maxFileBytes }) };
+    },
+
+    // ─── A netCDF file by parts, for a memory-saving dataset ───────────────
+    //
+    // The file is read here because it can only be read here: FileReaderSync,
+    // and the WORKERFS h5wasm is mounted on, exist in a worker and nowhere
+    // else. DuckDB-WASM is on the main thread, so the blocks are handed over
+    // one at a time, pulled: the ingest asks for the next only once it has
+    // appended the last, which is what keeps this side from running ahead of
+    // the engine. See src/data/netcdf-columns-client.js.
+    'netcdf-columns:open': async ({ id, file, filename }) => {
+        const { openNetcdfColumns } = await import('../parsers/netcdf-columns.js');
+        const reader = await openNetcdfColumns({ file, filename }, { parser: getBaseParser(), filename });
+        // Null is "not a file this reader takes": the caller opens it the way
+        // it was always opened.
+        if (!reader) return { result: null };
+        columnarReaders.get(id)?.close();
+        columnarReaders.set(id, reader);
+        return { result: reader.description };
+    },
+
+    'netcdf-columns:block': async ({ id, rowStart, rows }) => {
+        const reader = columnarReaders.get(id);
+        if (!reader) throw Object.assign(new Error('The netCDF reader is no longer open.'), { code: 'COLUMNAR_NOT_OPEN' });
+        const block = reader.readBlock(Number(rowStart) || 0, Number(rows) || 0);
+        return { result: block, transfer: block.columns.map(column => column.buffer) };
+    },
+
+    'netcdf-columns:close': async ({ id }) => {
+        columnarReaders.get(id)?.close();
+        columnarReaders.delete(id);
+        return { result: true };
     },
 
     'parse:microcap': async ({ filename, buffer }) => {

@@ -54,6 +54,35 @@ function abortError() {
     return error;
 }
 
+// Where a variable the ingest builds goes in the tree. The tree travels as
+// data (the file is read in a worker, the engine is on the main thread), so a
+// leaf cannot be the variable itself: it is this mark, and
+// netcdfTreeFromSkeleton swaps in the built variable by name.
+const INGEST_MARK = '__omv_ingest';
+const ingestMark = (name) => ({ [INGEST_MARK]: name });
+
+/**
+ * The tree of a lazy netCDF dataset: the skeleton the reader handed over, with
+ * every mark replaced by the variable the ingest built for that name. A leaf
+ * that is not a mark — the file's metadata, its global attributes, the
+ * coordinates it did not plot — is kept as it is.
+ *
+ * @param {object} node the skeleton, or one of its nodes
+ * @param {Record<string, object>} built the dataset's variables, by name
+ */
+export function netcdfTreeFromSkeleton(node, built) {
+    const out = { ...node, _children: Object.create(null), _variables: Object.create(null) };
+    for (const [label, value] of Object.entries(node?._variables || {})) {
+        const name = value?.[INGEST_MARK];
+        const variable = name ? built?.[name] : value;
+        if (variable) out._variables[label] = variable;
+    }
+    for (const [label, child] of Object.entries(node?._children || {})) {
+        out._children[label] = netcdfTreeFromSkeleton(child, built);
+    }
+    return out;
+}
+
 function sliceToFloat64(values, start, end) {
     if (values instanceof Float64Array) return values.slice(start, end);
     const out = new Float64Array(Math.max(0, end - start));
@@ -208,7 +237,23 @@ export async function openNetcdfColumns(input, { parser, filename = '' } = {}) {
             if (step <= rowsPerBlock * 4) rowsPerBlock = Math.max(step, Math.floor(rowsPerBlock / step) * step);
         }
 
-        return {
+        // The tree the in-memory path would have built — the series grouped by
+        // the dataset each was cut from, under the file's dimensions, its
+        // global attributes and the coordinates it did not plot — with a mark
+        // in place of each variable the ingest builds. Data, so it travels
+        // from the worker the file is read in to the thread the engine is on,
+        // where netcdfTreeFromSkeleton puts the built variables in.
+        const skeleton = plan.result.tree;
+        delete skeleton._variables[axis.variable.displayName || timeName];
+        skeleton._variables[axis.variable.displayName || timeName] = ingestMark(timeName);
+        for (const item of series) {
+            netcdf._addSeriesTree(skeleton, item.descriptor, item.selectors, ingestMark(item.name));
+        }
+        netcdf._addSkippedTree(skeleton, metadata.skippedVariables);
+        netcdf._addPartialTree(skeleton, metadata.partialVariables);
+
+        // Everything about the file that is data: what the worker hands over.
+        const description = {
             format: 'netcdf',
             rows,
             columns,
@@ -218,49 +263,42 @@ export async function openNetcdfColumns(input, { parser, filename = '' } = {}) {
             variables,
             metadata,
             bytes: rows * columns * 8,
+            tree: skeleton,
+            rowsPerBlock,
+        };
+
+        // One stretch of every series, in the shape the ingest appends.
+        const readBlock = (rowStart, count) => {
+            const block = new Array(columns);
+            block[0] = sliceToFloat64(axisValues, rowStart, rowStart + count);
+            for (const group of groups) {
+                const gathered = netcdf._readSeriesSlab(
+                    group.plan.descriptor, group.plan.alignment.axis, group.plan.otherAxes,
+                    group.combinations, rowStart, count,
+                );
+                group.columns.forEach((column, index) => {
+                    block[column] = decodeNumeric(gathered[index], group.plan.descriptor.userAttrs);
+                });
+            }
+            return { rowStart, rows: count, columns: block };
+        };
+
+        return {
+            ...description,
+            description,
+            rowsPerBlock,
             close,
-            // The tree the in-memory path would have built: the series grouped
-            // by the dataset each was cut from, under the file's dimensions,
-            // its global attributes and the coordinates it did not plot.
-            buildTree(built, adopted = null) {
-                const tree = plan.result.tree;
-                const builtTimeName = adopted?.metadata?.timeName || timeName;
-                const timeVariable = built[builtTimeName];
-                if (timeVariable) {
-                    // The axis the plan put there holds every step it read;
-                    // the dataset's holds the overview, and is the object the
-                    // rest of the app has.
-                    delete tree._variables[axis.variable.displayName || timeName];
-                    tree._variables[timeVariable.displayName || builtTimeName] = timeVariable;
-                }
-                for (const item of series) {
-                    const variable = built[item.name];
-                    if (variable) netcdf._addSeriesTree(tree, item.descriptor, item.selectors, variable);
-                }
-                netcdf._addSkippedTree(tree, metadata.skippedVariables);
-                netcdf._addPartialTree(tree, metadata.partialVariables);
-                return tree;
-            },
+            readBlock,
+            buildTree: (built) => netcdfTreeFromSkeleton(skeleton, built),
             async *blocks({ signal = null, blockBytes = 0 } = {}) {
                 const perBlock = blockBytes > 0
                     ? Math.max(1, Math.floor(blockBytes / (8 * columns)))
                     : rowsPerBlock;
                 for (let rowStart = 0; rowStart < rows; rowStart += perBlock) {
                     if (signal?.aborted) throw abortError();
-                    const count = Math.min(perBlock, rows - rowStart);
-                    const block = new Array(columns);
-                    block[0] = sliceToFloat64(axisValues, rowStart, rowStart + count);
-                    for (const group of groups) {
-                        const gathered = netcdf._readSeriesSlab(
-                            group.plan.descriptor, group.plan.alignment.axis, group.plan.otherAxes,
-                            group.combinations, rowStart, count,
-                        );
-                        group.columns.forEach((column, index) => {
-                            block[column] = decodeNumeric(gathered[index], group.plan.descriptor.userAttrs);
-                        });
-                    }
+                    const block = readBlock(rowStart, Math.min(perBlock, rows - rowStart));
                     if (signal?.aborted) throw abortError();
-                    yield { rowStart, rows: count, columns: block };
+                    yield block;
                 }
             },
         };

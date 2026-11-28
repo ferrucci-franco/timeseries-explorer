@@ -22,6 +22,11 @@
 //   · the time axis of a CF file stays a calendar axis;
 //   · a block size that forces many blocks gives the same numbers as one block
 //     over the whole file;
+//   · the same, through the worker boundary: the reader's description and every
+//     block are passed through structuredClone, as postMessage passes them, and
+//     the blocks are pulled by src/data/netcdf-columns-client.js;
+//   · the loading path asks for the lazy dataset where the limit is found,
+//     before asking the user whether to load the file whole;
 //   · a PyPSA network is left to its own parser.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -33,6 +38,7 @@ const DuckDbSource = (await import(new URL('../src/data/duckdb-source.js', impor
 const MatParser = (await import(new URL('../src/parsers/mat-parser.js', import.meta.url))).default;
 const NetcdfParser = (await import(new URL('../src/parsers/netcdf-parser.js', import.meta.url))).default;
 const { openNetcdfColumns } = await import(new URL('../src/parsers/netcdf-columns.js', import.meta.url));
+const { netcdfColumnarReader } = await import(new URL('../src/data/netcdf-columns-client.js', import.meta.url));
 const { ingestColumnarReader } = await import(new URL('../src/data/columnar-ingest.js', import.meta.url));
 const { streamColumns } = await import(new URL('../src/data/column-stream.js', import.meta.url));
 
@@ -73,12 +79,26 @@ async function everyRow(lazy, names) {
     return new Map(names.map(name => [name, chunks.flatMap(chunk => Array.from(chunk.yByVar.get(name)))]));
 }
 
-async function compare(name, { blockBytes = 0 } = {}) {
+async function compare(name, { blockBytes = 0, throughWorker = false } = {}) {
     const buffer = fixture(name);
-    const label = blockBytes ? `${name} (blocks of ${blockBytes} bytes)` : name;
+    const label = `${name}${blockBytes ? ` (blocks of ${blockBytes} bytes)` : ''}${throughWorker ? ' through the worker boundary' : ''}`;
     const eager = await new NetcdfParser(new MatParser()).parse(buffer);
-    const reader = await openNetcdfColumns({ buffer }, { parser: new MatParser(), filename: name });
+    let reader = await openNetcdfColumns({ buffer }, { parser: new MatParser(), filename: name });
     assert.ok(reader, `${label}: read by parts`);
+    if (throughWorker) {
+        // Everything the worker hands over goes through structuredClone, which
+        // is what postMessage does to it: a function, or anything else that
+        // cannot be cloned, fails here rather than in the browser.
+        const held = reader;
+        const description = structuredClone(held.description);
+        reader = netcdfColumnarReader(description, {
+            id: 'test',
+            request: async (op, payload) => {
+                assert.equal(op, 'netcdf-columns:block', 'the client asks for blocks and nothing else');
+                return structuredClone(held.readBlock(payload.rowStart, payload.rows));
+            },
+        });
+    }
     let blocks = 0;
     const streamed = reader.blocks.bind(reader);
     reader.blocks = async function* (options = {}) {
@@ -150,7 +170,8 @@ async function compare(name, { blockBytes = 0 } = {}) {
 // the app has to keep, and a gridded download whose series are a subset.
 let splitSomewhere = 0;
 for (const name of ['generic-timeseries-classic.nc', 'generic-timeseries-64bit-offset.nc',
-    'generic-grouped-netcdf4.netcdf', 'cmip-noleap.nc', 'era5-like-new-cds.nc']) {
+    'generic-grouped-netcdf4.netcdf', 'cmip-noleap.nc', 'era5-like-new-cds.nc',
+    'era5-like-time-chunked.nc', 'era5-like-legacy-cds.nc', 'cdf5-grid.nc']) {
     const whole = await compare(name);
     // The same file again, forced into blocks of a few rows: the numbers do not
     // depend on where a block ends. A fixture of four steps is one block
@@ -161,8 +182,33 @@ for (const name of ['generic-timeseries-classic.nc', 'generic-timeseries-64bit-o
         assert.ok(split.blocks > 1, `${name}: ${whole.rows} rows at 8 values a block is more than one block`);
     }
     if (split.blocks > 1) splitSomewhere += 1;
+    // And once more as the app does it: the description cloned, the blocks
+    // pulled one at a time through the client.
+    await compare(name, { blockBytes: 8 * 8, throughWorker: true });
 }
 assert.ok(splitSomewhere > 0, 'at least one fixture was read in several blocks');
+
+// ── Where the app asks for it ───────────────────────────────────────────────
+//
+// A netCDF is judged by what its series would load, not by the size of the
+// file, so the lazy dataset is asked for where that limit is found — and
+// before the question about loading the file whole, which is only for when
+// there is no lazy dataset to be had.
+{
+    const source = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
+    const overLimit = source.indexOf("if (err?.code !== 'NETCDF_OVER_LIMIT') throw err;");
+    const asksLazy = source.indexOf('this._openLazyNetcdf(filename, file, options)', overLimit);
+    const asksUser = source.indexOf('_confirmOversizedFile', overLimit);
+    assert.ok(overLimit > 0, 'the loading path still recognises NETCDF_OVER_LIMIT');
+    assert.ok(asksLazy > overLimit, 'it asks _openLazyNetcdf when the series do not fit');
+    assert.ok(asksLazy < asksUser, 'and it asks before asking the user to load the file whole');
+    // The worker is the only place the file can be read by parts.
+    const handlers = readFileSync(new URL('../src/workers/parse-handlers.js', import.meta.url), 'utf8');
+    for (const op of ['netcdf-columns:open', 'netcdf-columns:block', 'netcdf-columns:close']) {
+        assert.ok(handlers.includes(`'${op}'`), `the parse worker answers ${op}`);
+    }
+    console.log('  the loading path: the lazy dataset is asked for before the user is');
+}
 
 // A PyPSA network is a different dataset, built by its own parser.
 {
