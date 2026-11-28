@@ -64,6 +64,7 @@ for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     assert.doesNotMatch(translations[locale].helpSec11Body, /Live Update|实时更新/i, `${locale} large-file guidance should not mix in live monitoring`);
     assert.match(translations[locale].helpSec12Body, /Live Update|实时更新/i, `${locale} reload guidance should cover Live Update`);
     assert.match(translations[locale].helpSec13Body, /\.json[\s\S]*\.zip/i, `${locale} save guidance should distinguish view and project files`);
+    assert.match(translations[locale].helpSec1Body, /<h4>[^<]+<\/h4><ul class="help-usecases">(?:<li><b>[^<]+<\/b>.*?<\/li>){6}<\/ul><h4>/, `${locale} overview should open with the six kinds of user, before the quick start`);
     assert.match(translations[locale].helpSec14Body, /Franco Ferrucci/i, `${locale} About section should identify the creator`);
     assert.match(translations[locale].helpSec14Body, /github\.com\/ferrucci-franco\/timeseries-explorer/i, `${locale} About section should link to the source repository`);
     assert.match(translations[locale].helpSec14Body, /PUBLICATION\.md/i, `${locale} About section should link to publication status`);
