@@ -1843,6 +1843,66 @@ try {
         await tablet.close();
     }
 
+    // ── A tablet upright: the top bar starts at its left edge ───────────────
+    // The row of controls is wider than the window there. It scrolls, from its
+    // first button, and the brand gives way to it whole — title, then badge,
+    // then logo (src/ui/top-bar-scroll.js) — exactly as in a mouse window of
+    // the same size: nothing is cut in half at the left edge.
+    {
+        const topBarAt = async (options) => {
+            const context = await browser.newContext(options);
+            await context.addInitScript(() => { try { localStorage.setItem('omv_touch_hint_seen', '1'); } catch (_) { /* private mode */ } });
+            const tabletPage = await context.newPage();
+            await tabletPage.goto(baseUrl);
+            await tabletPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+            await tabletPage.waitForTimeout(400);
+            const seen = await tabletPage.evaluate(() => {
+                const bar = document.querySelector('.top-bar');
+                const row = bar.querySelector('.top-bar-right');
+                const brand = bar.querySelector('.top-bar-left');
+                const box = el => { const r = el.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) }; };
+                const shown = el => getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().width > 0;
+                const first = [...row.children].find(child => child.getBoundingClientRect().width > 0);
+                return {
+                    compact: document.documentElement.classList.contains('compact'),
+                    pageScroll: window.scrollX + document.scrollingElement.scrollLeft,
+                    rowScroll: row.scrollLeft,
+                    rowScrolls: row.scrollWidth > row.clientWidth + 1,
+                    rowBox: box(row),
+                    firstButton: box(first),
+                    brand: ['as-logo', 'is-squeezed', 'without-badge'].filter(name => brand.classList.contains(name)),
+                    // What of the brand is drawn, and where.
+                    brandParts: [...brand.querySelectorAll('.app-logo, h1')].filter(el => shown(el) && shown(brand)).map(box),
+                    tabs: box(bar.querySelector('.workspace-tabs')),
+                    width: window.innerWidth,
+                };
+            });
+            await context.close();
+            return seen;
+        };
+        for (const viewport of [{ width: 768, height: 1024 }, { width: 820, height: 1180 }, { width: 744, height: 1133 }]) {
+            const label = `${viewport.width}×${viewport.height}`;
+            const touch = await topBarAt({ viewport, hasTouch: true });
+            const mouse = await topBarAt({ viewport });
+            assert.equal(touch.compact, false, `${label}: a tablet upright keeps the desktop layout`);
+            assert.equal(touch.pageScroll, 0, `${label}: the page is not scrolled sideways`);
+            assert.equal(touch.rowScroll, 0, `${label}: the row of controls starts at its first button`);
+            assert.ok(touch.firstButton.left >= touch.rowBox.left && touch.firstButton.right <= touch.width,
+                `${label}: which is whole, inside the window`);
+            assert.ok(touch.tabs.left >= 0 && touch.rowBox.left >= touch.tabs.right, `${label}: after the tab strip, not over it`);
+            for (const part of touch.brandParts) {
+                assert.ok(part.left >= 0 && part.right <= touch.width, `${label}: what is drawn of the brand is whole (${JSON.stringify(part)})`);
+            }
+            assert.deepEqual(touch, mouse, `${label}: the same bar as a mouse window of that size`);
+        }
+        // Sideways there is room for the logo, and it is all there.
+        const landscape = await topBarAt({ viewport: { width: 1024, height: 768 }, hasTouch: true });
+        assert.deepEqual(landscape.brand, ['as-logo', 'without-badge']);
+        assert.equal(landscape.rowScrolls, false, 'a tablet sideways shows the whole row');
+        assert.equal(landscape.brandParts.length, 1, 'with the logo');
+        assert.ok(landscape.brandParts[0].left >= 0 && landscape.brandParts[0].width === 30, 'whole, at the left edge');
+    }
+
     // ── Desktop: untouched ──────────────────────────────────────────────────
     const desktop = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const dpage = await desktop.newPage();
