@@ -59,7 +59,10 @@ async function open(page, baseUrl, { lazy }) {
             panelId: document.querySelector('.layout-panel').dataset.id,
             lazy: !!data._duckdb,
             format: data.metadata.format,
-            rows: data.metadata.numTimesteps,
+            // What the file holds: the in-memory path calls it sampleCount, and a
+            // lazy dataset also carries numTimesteps, which must agree with it.
+            rows: data.metadata.sampleCount,
+            lazyRows: data.metadata.numTimesteps,
             timeKind: data.metadata.timeKind,
             timeName: data.metadata.timeName,
             generated: data.metadata.generatedSeriesCount,
@@ -69,7 +72,10 @@ async function open(page, baseUrl, { lazy }) {
                 return [variable.displayName || '', variable.kind, variable.dataType, variable.units || ''].join('|');
             }),
             tree: JSON.stringify(shape(data.tree)),
-            mark: !document.querySelector('.file-entry-lazy-indicator')?.hidden,
+            mark: (() => {
+                const element = document.querySelector('.file-entry-lazy-indicator');
+                return element ? !element.hidden : null;
+            })(),
         };
     });
     return { ...opened, asked, notice };
@@ -90,7 +96,7 @@ async function drawn(page, state, variable) {
         const rows = [];
         for (let i = 0; i < trace.x.length; i++) {
             const at = trace.x[i];
-            const x = typeof at === 'string' ? new Date(at).getTime() : Number(at);
+            const x = typeof at === 'number' ? at : new Date(at).getTime();
             rows.push([x, Number(trace.y[i])]);
         }
         return { rows };
@@ -124,13 +130,15 @@ try {
     assert.equal(lazy.lazy, true, 'with its series over the limit it opens in memory-saving mode');
     assert.equal(lazy.format, 'netcdf-lazy', 'as a lazy netCDF dataset');
     assert.deepEqual(lazy.asked, [], 'and nothing is asked: there is no question left to ask');
-    assert.ok(lazy.mark, "the file's memory-saving mark is shown");
+    assert.equal(lazy.mark, true, "the file's memory-saving mark is shown");
+    assert.notEqual(memory.mark, true, 'and the file read whole carries none');
     assert.match(lazy.notice, /./, 'with the notice that says what the mode is');
 
     assert.deepEqual(lazy.variables, memory.variables, 'the same variables, in the same order');
     assert.deepEqual(lazy.details, memory.details, 'each with the same display name, kind, data type and units');
     assert.equal(lazy.tree, memory.tree, 'and the same tree');
     assert.equal(lazy.rows, memory.rows, 'the same number of steps');
+    assert.equal(lazy.lazyRows, lazy.rows, 'and the dataset counts them the same way');
     assert.equal(lazy.timeKind, memory.timeKind, 'the time axis is a calendar in both');
     assert.equal(lazy.timeName, memory.timeName, 'under the same name');
     assert.equal(lazy.generated, memory.generated, 'the same number of series generated');
