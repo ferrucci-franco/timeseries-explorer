@@ -236,10 +236,11 @@ Before publishing:
 npm run build
 ```
 
-This generates the portable download artifacts first and then the final published `dist/` output. Use `npm run build:web` only when you explicitly want a web-only build without refreshing the stand-alone package.
+This builds the published web app into `dist/` (the same as `npm run build:web`). The stand-alone portable package is a separate, explicit step: `npm run build:portable`.
 
 ## Related docs
 
 - `README.md`
+- `docs/README.md` (index of the documentation)
 - `docs/architecture.md`
 - `docs/pro-roadmap.md`

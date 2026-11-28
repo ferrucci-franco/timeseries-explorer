@@ -377,7 +377,6 @@ proto.loadFile = async function(file, options = {}) {
             this._showSpreadsheetParquetHint(this.files.get(fileId));
         }
 
-        console.log('Loaded:', currentFile.name, '- variables:', Object.keys(data.variables).length);
         return { fileId, data };
     } catch (err) {
         if (isCancelled()) return null;

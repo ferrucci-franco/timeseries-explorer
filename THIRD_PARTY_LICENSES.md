@@ -6,7 +6,7 @@ own licenses. The principal runtime components are:
 
 | Component | Purpose | License |
 | --- | --- | --- |
-| [Plotly.js](https://github.com/plotly/plotly.js) | Interactive 2D and 3D plots | MIT |
+| [Plotly.js](https://github.com/plotly/plotly.js) and its locale files (`plotly.js-locales`) | Interactive 2D and 3D plots | MIT |
 | [DuckDB](https://github.com/duckdb/duckdb) and [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm) | Queries and memory-saving access to large tabular files | MIT |
 | [SheetJS Community Edition](https://git.sheetjs.com/SheetJS/sheetjs) | Excel and LibreOffice workbook import | Apache-2.0 |
 | [h5wasm](https://github.com/usnistgov/h5wasm) | HDF5/MAT v7.3 access in WebAssembly | NIST software notice and bundled HDF5 license terms |

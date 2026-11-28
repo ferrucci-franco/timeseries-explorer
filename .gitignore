@@ -39,8 +39,6 @@
 # Software metadata read by HAL and Software Heritage when the code is archived.
 !/codemeta.json
 !/THIRD_PARTY_LICENSES.md
-!/.codex/
-!/.codex/TODO.txt
 !/src/
 !/src/**
 !/public/

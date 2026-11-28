@@ -90,7 +90,7 @@ and `npm run desktop:dist:linux:x64`; all artifacts are written to `desktop-dist
 
 Public Desktop releases are built from version tags and distributed through
 [GitHub Releases](https://github.com/ferrucci-franco/timeseries-explorer/releases).
-The current Windows x64 beta is available from the application's Download Desktop command.
+The installers for the latest release are also offered by the application's Download Desktop command.
 Maintainer instructions, signing policy, validation and rollback are documented in
 [docs/desktop-release.md](docs/desktop-release.md).
 
