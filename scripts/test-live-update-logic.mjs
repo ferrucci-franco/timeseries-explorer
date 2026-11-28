@@ -242,7 +242,7 @@ const harness = new Harness();
     assert.equal(byteLimit.limitKind, 'bytes');
     const previousLang = i18n.currentLang;
     i18n.currentLang = 'es';
-    assert.match(harness._liveUpdateErrorMessage(rowLimit), /Live Update se pauso/);
+    assert.match(harness._liveUpdateErrorMessage(rowLimit), /Live Update se pausó/);
     i18n.currentLang = previousLang;
 }
 
