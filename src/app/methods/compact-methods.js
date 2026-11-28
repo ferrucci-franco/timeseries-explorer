@@ -187,7 +187,8 @@ export function installCompactMethods(ViewerClass) {
             if (override !== stored) globalThis.localStorage?.removeItem(LAYOUT_OVERRIDE_STORAGE_KEY);
         } catch (_) { /* no storage: automatic */ }
         // The guide's frame shows the desktop layout whatever the screen —
-        // or the phone layout, for the demo of it (demo-mode.js).
+        // or the phone layout, or what its own size gives, for the demos of
+        // a phone and of a tablet (demo-mode.js).
         if (DEMO_MODE) override = DEMO_LAYOUT;
         this._compact = {
             active: false,

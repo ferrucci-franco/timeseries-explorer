@@ -23,7 +23,7 @@ export const GUIDE_GROUPS = {
     signals: say('New signals', 'Nouveaux signaux', 'Nuevas señales', 'Nuovi segnali', '新信号'),
     analysis: say('Analysis', 'Analyse', 'Análisis', 'Analisi', '分析'),
     tools: say('With your tools', 'Avec vos outils', 'Con sus herramientas', 'Con i tuoi strumenti', '配合你的工具'),
-    phone: say('On a phone', 'Sur téléphone', 'En el teléfono', 'Sul telefono', '在手机上'),
+    phone: say('On a phone or a tablet', 'Sur téléphone ou tablette', 'En un teléfono o una tableta', 'Su telefono o tablet', '在手机或平板上'),
 };
 
 // ─── Made-up data ──────────────────────────────────────────────────────────
@@ -2350,6 +2350,93 @@ export const GUIDE_CHAPTERS = [
             await d.tap(exportButton, { after: 300 });
             if (!await d.until(() => d.$('.modal-overlay .modal-dialog-plot-export'), 5000)) throw new Error('guide: the export dialog did not open');
             await d.wait(3000);
+        },
+    },
+
+    {
+        id: 'tablet', g: 'phone', icon: '▭', est: 22000, device: 'tablet',
+        t: say('On a tablet: the full workspace', 'Sur tablette : tout l’espace de travail', 'En una tableta: todo el espacio de trabajo', 'Su un tablet: tutto lo spazio di lavoro', '在平板上：完整的工作区'),
+        d: say(
+            'A tablet is large enough for the full workspace: the side panel, several panels side by side, every menu — the same layout as on a computer, with a finger for a mouse. Press and hold a variable to drag it onto a panel; on a plot, one finger pans, two pinch, a double tap fits. Linked time axes follow from panel to panel as they do with a mouse.',
+            'Une tablette est assez grande pour tout l’espace de travail : le panneau latéral, plusieurs panneaux côte à côte, tous les menus — la même disposition que sur un ordinateur, avec le doigt pour souris. Appuyez longuement sur une variable pour la faire glisser sur un panneau ; sur un graphique, un doigt déplace, deux pincent, un double toucher ajuste. Les axes de temps liés se suivent d’un panneau à l’autre comme avec une souris.',
+            'Una tableta es lo bastante grande para todo el espacio de trabajo: el panel lateral, varios paneles lado a lado, todos los menús — la misma disposición que en una computadora, con el dedo en lugar del ratón. Mantenga apretada una variable para arrastrarla a un panel; en un gráfico, un dedo desplaza, dos pellizcan, un doble toque ajusta. Los ejes de tiempo vinculados se siguen de un panel a otro como con el ratón.',
+            'Un tablet è abbastanza grande per tutto lo spazio di lavoro: il pannello laterale, più pannelli affiancati, tutti i menu — la stessa disposizione di un computer, con il dito al posto del mouse. Tieni premuta una variabile per trascinarla su un pannello; su un grafico, un dito sposta, due pizzicano, un doppio tocco adatta. Gli assi temporali collegati si seguono da un pannello all’altro come con il mouse.',
+            '平板的屏幕足以容纳完整的工作区：侧栏、并排的多个面板、所有菜单——与电脑上相同的布局，只是用手指代替鼠标。按住变量即可把它拖到面板上；在图表上，单指平移，双指捏合，双击自适应。联动的时间轴在面板之间同步，和用鼠标时一样。',
+        ),
+        async setup(d) {
+            await d.loadText('thermal_loop.csv', thermalLoopCsv());
+            // The frame is a tablet on its side, and the layout is the app's own
+            // choice for that size: the demo is about the desktop one.
+            if (d.app._compactIsActive()) throw new Error('guide: a tablet on its side got the phone layout');
+        },
+        async run(d) {
+            const pm = d.app.plotManager;
+            const plot = (i) => pm.plots.get(d.panel(i)?.dataset.id);
+            // The time shown by a panel, in milliseconds.
+            const span = (i) => {
+                const axis = plot(i)?.div?._fullLayout?.xaxis;
+                if (!axis) return null;
+                const [lo, hi] = axis.range.map((v) => axis.r2l(v));
+                return { lo, hi, width: hi - lo };
+            };
+            const drawn = async (i, traces) => {
+                if (!await d.until(() => plot(i)?.traces.length === traces && plot(i).div?._fullLayout, 6000)) {
+                    throw new Error(`guide: panel ${i} did not get its signal`);
+                }
+            };
+
+            d.say(say(
+                'Press and hold a signal, then drag it onto the panel',
+                'Appuyez longuement sur un signal, puis glissez-le sur le panneau',
+                'Mantenga apretada una señal y arrástrela al panel',
+                'Tieni premuto un segnale e trascinalo sul pannello',
+                '按住一个信号，然后把它拖到面板上',
+            ));
+            await d.wait(900);
+            await d.plot('T_in', 0, { ms: 800, after: 300 });
+            await drawn(0, 1);
+            await d.plot('T_out', 0, { ms: 800, after: 300 });
+            await drawn(0, 2);
+
+            const split = d.panel(0).querySelectorAll('.layout-panel-toolbar > .layout-toolbar-btn')[2];
+            d.say(say(
+                '<b>▼</b> splits the panel: the flow goes below',
+                '<b>▼</b> divise le panneau : le débit va en dessous',
+                '<b>▼</b> divide el panel: el caudal va debajo',
+                '<b>▼</b> divide il pannello: la portata va sotto',
+                '<b>▼</b>拆分面板：流量放在下方',
+            ));
+            await d.tap(split);
+            await d.until(() => d.panels().length === 2, 3000);
+            await d.plot('flow_Lpm', 1, { ms: 800, after: 300 });
+            await drawn(1, 1);
+            await d.wait(500);
+            const full = span(1);
+
+            d.say(say(
+                'Pinch a plot: the linked time axis follows below',
+                'Pincez un graphique : l’axe de temps lié suit en dessous',
+                'Pellizque un gráfico: el eje de tiempo vinculado lo sigue abajo',
+                'Pizzica un grafico: l’asse temporale collegato segue sotto',
+                '捏合一张图：下方联动的时间轴随之变化',
+            ));
+            await d.pinch(plotArea(plot(0).div, 0.42, 0.5), 90, 300, { ms: 1300 });
+            const linked = () => span(1).width < full.width / 2 && Math.abs(span(1).lo - span(0).lo) < full.width / 100;
+            if (!await d.until(linked, 5000)) throw new Error('guide: the other panel did not follow the pinch');
+            await d.wait(1500);
+
+            d.say(say(
+                '<b>Analysis ▾</b> → Histogram: the menus answer a finger too',
+                '<b>Analyse ▾</b> → Histogramme : les menus répondent aussi au doigt',
+                '<b>Análisis ▾</b> → Histograma: los menús también responden al dedo',
+                '<b>Analisi ▾</b> → Istogramma: anche i menu rispondono al dito',
+                '<b>分析 ▾</b> → 直方图：菜单同样响应手指',
+            ));
+            await d.analysis('histogram', 1);
+            if (!await d.until(() => d.panel(1).querySelectorAll('.js-plotly-plot').length >= 2 && !computing(d, 1), 8000)) {
+                throw new Error('guide: no histogram on the tablet');
+            }
+            await d.wait(2400);
         },
     },
 ];
