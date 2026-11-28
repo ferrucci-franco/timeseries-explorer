@@ -3,7 +3,7 @@
 > Status: **implemented — Phases 0–3 shipped (unified menu incl. numeric Seconds/Duration/Calendar, panel consensus, overlay guard, per-trace export, S4 elapsed import); remaining items are optional. See §14 for the live status.**
 > Branch: `worktree-feature+mixed-xaxis-plot`. Base commit: `2f5239d`.
 > v4 incorporates the third (self) review of v3. Every code claim is anchored to `file:line`; **(v)** marks claims re-verified against the code.
-> Iteration history in-repo: `time-axis-unification-review.md` (v1), `-review-2.md` (v2), `-review-3.md` (v3). Self-contained.
+> The three review rounds behind v1–v3 are in the git history of `docs/`. This document is self-contained.
 
 ---
 

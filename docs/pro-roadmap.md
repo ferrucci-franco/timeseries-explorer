@@ -2,7 +2,6 @@
 
 ## Done in this step
 
-- Full snapshot saved in `backup/before_new_structure`
 - App migrated to ES modules
 - New `src/` structure created
 - Architecture notes added for faster onboarding and agent navigation

@@ -241,5 +241,6 @@ This builds the published web app into `dist/` (the same as `npm run build:web`)
 ## Related docs
 
 - `README.md`
+- `docs/README.md` (index of the documentation)
 - `docs/architecture.md`
 - `docs/pro-roadmap.md`
