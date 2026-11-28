@@ -392,7 +392,17 @@ export default class NetcdfParser {
         return this._parseGeneric(opened.descriptors, opened.globalAttrs, filename, opened.storageFormat, options);
     }
 
-    _parseGeneric(descriptors, globalAttrs, filename, storageFormat, options = {}) {
+    // The decisions every series of a netCDF file rests on, made without
+    // reading one of them: which coordinate is the X axis, which variables
+    // align with it, how many series each would expand into, and how many of
+    // those are kept.
+    //
+    // Both paths run this one. _parseGeneric reads the series it names into
+    // memory; the columnar reader of netcdf-columns.js streams them into a
+    // memory-saving (lazy) dataset. So the same file opens as the same dataset
+    // — the same X axis, the same series, the same names, the same notes about
+    // what was left out — and only where the values live differs.
+    _planGeneric(descriptors, globalAttrs, filename, storageFormat) {
         if (!descriptors.length) throw new Error('The netCDF file does not contain any data variables.');
         const coordinateCache = new Map();
         const readFlat = descriptor => {
@@ -477,45 +487,66 @@ export default class NetcdfParser {
         }
 
         const limits = seriesLimits(plans.map(plan => plan.seriesCount), axis.length);
+        return { result, axis, coordinate, readFlat, plans, limits };
+    }
+
+    // One plan's kept combinations, and the labels of the dimensions they are
+    // taken along — with the note of what was left out when a variable has
+    // more series than the limit allows. Null when nothing of it is kept.
+    _expandPlan(result, plan, limit, descriptors, readFlat) {
+        const { descriptor, otherAxes, seriesCount } = plan;
+        if (limit < 1) {
+            this._skip(result, descriptor, `Expanding this variable would exceed the ${MAX_GENERATED_SERIES.toLocaleString()}-series safety limit.`);
+            return null;
+        }
+        const labelsByAxis = new Map(otherAxes.map(item => [item.index, this._dimensionLabels(
+            descriptor.dimensions[item.index], descriptor.shape[item.index], descriptors, readFlat
+        )]));
+        const sample = gridSample(otherAxes.map(item => item.size), limit);
+        if (sample.combinations.length < seriesCount) {
+            const perAxis = otherAxes.map((item, index) => ({
+                dimension: basename(descriptor.dimensions[item.index]),
+                kept: sample.counts[index],
+                size: item.size,
+            }));
+            result.metadata.partialVariables.push({
+                name: descriptor.path,
+                reason: `Loaded ${sample.combinations.length.toLocaleString()} of ${seriesCount.toLocaleString()} slices (${perAxis.map(item => `${item.kept} of ${item.size} ${item.dimension}`).join(' x ')}), evenly spaced along each dimension, to keep the dataset responsive.`,
+                shape: descriptor.shape,
+                dimensions: descriptor.dimensions,
+                partial: true,
+                generatedSeriesCount: sample.combinations.length,
+                availableSeriesCount: seriesCount,
+                sampledAxes: perAxis,
+            });
+        }
+        return { sample, labelsByAxis };
+    }
+
+    // Which index of each of the variable's other dimensions one series is
+    // taken at, and what that index is called.
+    _seriesSelectors(descriptor, otherAxes, combination, labelsByAxis) {
+        const fixed = new Map(otherAxes.map((item, index) => [item.index, combination[index]]));
+        return otherAxes.map(item => ({
+            dimension: basename(descriptor.dimensions[item.index]),
+            index: fixed.get(item.index),
+            label: coordinateLabel(labelsByAxis.get(item.index)?.[fixed.get(item.index)], fixed.get(item.index)),
+        }));
+    }
+
+    _parseGeneric(descriptors, globalAttrs, filename, storageFormat, options = {}) {
+        const { result, axis, readFlat, plans, limits } = this._planGeneric(descriptors, globalAttrs, filename, storageFormat);
         // What the series kept will hold, known before any is read.
         checkLoadLimit(limits.reduce((sum, limit) => sum + limit, 0) * axis.length * 8, options);
         for (const [planIndex, plan] of plans.entries()) {
-            const { descriptor, alignment, otherAxes, seriesCount } = plan;
-            const limit = limits[planIndex];
-            if (limit < 1) {
-                this._skip(result, descriptor, `Expanding this variable would exceed the ${MAX_GENERATED_SERIES.toLocaleString()}-series safety limit.`);
-                continue;
-            }
-            const labelsByAxis = new Map(otherAxes.map(item => [item.index, this._dimensionLabels(
-                descriptor.dimensions[item.index], descriptor.shape[item.index], descriptors, readFlat
-            )]));
-            const sample = gridSample(otherAxes.map(item => item.size), limit);
-            if (sample.combinations.length < seriesCount) {
-                const perAxis = otherAxes.map((item, index) => ({
-                    dimension: basename(descriptor.dimensions[item.index]),
-                    kept: sample.counts[index],
-                    size: item.size,
-                }));
-                result.metadata.partialVariables.push({
-                    name: descriptor.path,
-                    reason: `Loaded ${sample.combinations.length.toLocaleString()} of ${seriesCount.toLocaleString()} slices (${perAxis.map(item => `${item.kept} of ${item.size} ${item.dimension}`).join(' x ')}), evenly spaced along each dimension, to keep the dataset responsive.`,
-                    shape: descriptor.shape,
-                    dimensions: descriptor.dimensions,
-                    partial: true,
-                    generatedSeriesCount: sample.combinations.length,
-                    availableSeriesCount: seriesCount,
-                    sampledAxes: perAxis,
-                });
-            }
+            const { descriptor, alignment, otherAxes } = plan;
+            const expanded = this._expandPlan(result, plan, limits[planIndex], descriptors, readFlat);
+            if (!expanded) continue;
+            const { sample, labelsByAxis } = expanded;
             const rawSeries = this._readSeriesBatch(descriptor, alignment.axis, otherAxes, sample.combinations, readFlat);
             for (const [combinationIndex, combination] of sample.combinations.entries()) {
-                const fixed = new Map(otherAxes.map((item, index) => [item.index, combination[index]]));
                 const values = decodeNumeric(rawSeries[combinationIndex], descriptor.userAttrs);
-                const selectors = otherAxes.map(item => ({
-                    dimension: basename(descriptor.dimensions[item.index]),
-                    index: fixed.get(item.index),
-                    label: coordinateLabel(labelsByAxis.get(item.index)?.[fixed.get(item.index)], fixed.get(item.index)),
-                }));
+                const selectors = this._seriesSelectors(descriptor, otherAxes, combination, labelsByAxis);
                 const variable = this._seriesVariable(descriptor, selectors, values);
                 result.variables[variable.name] = variable;
                 this._addSeriesTree(result.tree, descriptor, selectors, variable);
