@@ -16,6 +16,7 @@ import i18n from '../i18n/index.js';
 import { GUIDE_CHAPTERS, GUIDE_GROUPS } from './guide-chapters.js';
 import { createOmStage } from './guide-om-stage.js';
 import { createFileDialogStage } from './guide-file-dialog.js';
+import { createLiveLoggerStage } from './guide-live-logger.js';
 
 const ABORT = { abort: true };
 
@@ -23,6 +24,13 @@ const ABORT = { abort: true };
 // there is; the camera brings the part being shown back to a readable size.
 const FRAME_WIDTH = 1120;
 const FRAME_HEIGHT = 700;
+// A chapter with `device: 'phone'` plays the phone layout: the frame is a
+// phone held upright (the size of a small iPhone, so that it stays readable in
+// the height the guide has), the app in it is asked for its phone layout
+// (demo-mode.js: `layout=compact`), and the demo is played with a finger.
+const DEVICES = {
+    phone: { width: 375, height: 667, query: 'layout=compact', touch: true },
+};
 
 const L = (o) => (o == null ? '' : typeof o === 'string' ? o : (o[i18n.currentLang] || o.en || ''));
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -54,11 +62,13 @@ export function guideIsAvailable() {
 // ─── The driver of one demo (one run of one chapter) ───────────────────────
 
 class Demo {
-    constructor(guide, W) {
+    constructor(guide, W, opts = {}) {
         this.guide = guide;
         this.W = W;
         this.doc = W.document;
         this.app = W.app;
+        // A finger instead of a mouse: touch events, and a dot for a pointer.
+        this.touch = !!opts.touch;
         this.x = guide.VW * 0.6;
         this.y = guide.VH * 0.55;
         this.isDown = false;
@@ -114,6 +124,12 @@ class Demo {
 #gcur.down .arr{transform:scale(calc(var(--k) * .86))}
 #gcur .chip{position:absolute; left:18px; top:22px; padding:3px 8px; border-radius:7px; background:#2563eb; color:#fff; font:600 12px/1.3 system-ui,sans-serif; white-space:nowrap; box-shadow:0 4px 12px rgba(0,0,0,.3); transform-origin:0 0; transform:scale(var(--k)); opacity:0; transition:opacity .12s}
 #gcur.carry .chip{opacity:1}
+#gcur .dot, #gcur2{display:none; position:absolute; left:-17px; top:-17px; width:34px; height:34px; box-sizing:border-box; border-radius:50%; background:rgba(37,99,235,.22); border:2px solid rgba(37,99,235,.85); box-shadow:0 2px 8px rgba(0,0,0,.28); transform:scale(var(--k)); transition:transform .1s, background .1s}
+#gcur.finger .arr{display:none}
+#gcur.finger .dot{display:block}
+#gcur.finger.down .dot, #gcur2.down{transform:scale(calc(var(--k) * .82)); background:rgba(37,99,235,.5)}
+#gcur2{position:fixed; left:0; top:0; margin:-17px 0 0 -17px; z-index:2147483646; pointer-events:none}
+#gcur2.on{display:block}
 .grip{position:fixed; z-index:2147483645; pointer-events:none; left:0; top:0; width:40px; height:40px; margin:-20px 0 0 -20px; border-radius:50%; border:3px solid #2563eb; animation:grip .55s ease-out forwards}
 @keyframes grip{from{transform:scale(calc(var(--k) * .3)); opacity:.95} to{transform:scale(calc(var(--k) * 1.5)); opacity:0}}
 .gmenu{position:fixed; z-index:2147483640; min-width:120px; max-height:260px; overflow:hidden; padding:4px; border-radius:8px; border:1px solid rgba(0,0,0,.25); background:#fff; color:#111; font:14px/1.3 system-ui,sans-serif; box-shadow:0 10px 30px rgba(0,0,0,.3)}
@@ -125,8 +141,14 @@ html.demo *{scroll-behavior:auto !important}`;
         doc.head.appendChild(st);
         const c = doc.createElement('div');
         c.id = 'gcur';
-        c.innerHTML = '<svg class="arr" viewBox="0 0 26 30"><path d="M3 2 L3 24 L8.6 18.6 L12.6 27.6 L16.4 26 L12.5 17.2 L20.5 17.2 Z" fill="#111" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg><span class="chip"></span>';
+        c.innerHTML = '<svg class="arr" viewBox="0 0 26 30"><path d="M3 2 L3 24 L8.6 18.6 L12.6 27.6 L16.4 26 L12.5 17.2 L20.5 17.2 Z" fill="#111" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg><i class="dot"></i><span class="chip"></span>';
+        if (this.touch) c.classList.add('finger');
         doc.body.appendChild(c);
+        // The second finger of a pinch.
+        const second = doc.createElement('div');
+        second.id = 'gcur2';
+        doc.body.appendChild(second);
+        this.cur2 = second;
         this.cur = c;
         this.chip = c.querySelector('.chip');
         this.k();
@@ -135,7 +157,9 @@ html.demo *{scroll-behavior:auto !important}`;
 
     // The pointer keeps a comfortable size on screen whatever the scale of the frame.
     k() {
-        if (this.cur) this.cur.style.setProperty('--k', String(Math.max(0.9, Math.min(2.2, 1 / (this.guide.s0 * this.guide.cz)))));
+        const k = String(Math.max(0.9, Math.min(2.2, 1 / (this.guide.s0 * this.guide.cz))));
+        if (this.cur) this.cur.style.setProperty('--k', k);
+        if (this.cur2) this.cur2.style.setProperty('--k', k);
     }
     draw() { this.cur.style.transform = `translate(${this.x}px, ${this.y}px)`; }
     ripple() {
@@ -207,7 +231,7 @@ html.demo *{scroll-behavior:auto !important}`;
         target.dispatchEvent(new W.PointerEvent(type, {
             bubbles: true, cancelable: true, composed: true, view: W,
             clientX: this.x, clientY: this.y, screenX: this.x, screenY: this.y,
-            pointerId: 1, pointerType: 'mouse', isPrimary: true,
+            pointerId: 1, pointerType: this.touch ? 'touch' : 'mouse', isPrimary: true,
             button: type === 'pointermove' ? -1 : 0, buttons: this.isDown ? 1 : 0,
             ctrlKey: !!this.ctrl, metaKey: false,
         }));
@@ -222,6 +246,26 @@ html.demo *{scroll-behavior:auto !important}`;
         }));
     }
 
+    // What a finger tells the page: the fingers on the screen (`touches`), and
+    // the ones this event is about (`changed`), each { id, x, y }. Returns
+    // false when the page prevented it — a browser then sends no click.
+    //
+    // A plain event carrying the three lists, not a TouchEvent: Firefox and
+    // Safari on a computer have no TouchEvent to construct, and the app reads
+    // nothing of a touch but where its fingers are.
+    touchEvent(type, target, touches, changed) {
+        const W = this.W;
+        const touch = (p) => ({
+            identifier: p.id, target, clientX: p.x, clientY: p.y, pageX: p.x + W.scrollX, pageY: p.y + W.scrollY,
+            screenX: p.x, screenY: p.y, radiusX: 11, radiusY: 11, rotationAngle: 0, force: 1,
+        });
+        const event = new W.Event(type, { bubbles: true, cancelable: true, composed: true });
+        const lists = { touches: touches.map(touch), targetTouches: touches.map(touch), changedTouches: changed.map(touch) };
+        for (const key in lists) Object.defineProperty(event, key, { value: lists[key] });
+        for (const key of ['ctrlKey', 'shiftKey', 'altKey', 'metaKey']) Object.defineProperty(event, key, { value: false });
+        return target.dispatchEvent(event);
+    }
+
     dragEvent(type, target) {
         const W = this.W;
         return target.dispatchEvent(new W.DragEvent(type, {
@@ -233,6 +277,16 @@ html.demo *{scroll-behavior:auto !important}`;
     // What a moving mouse tells the page: hover while it is up, a drag while down.
     // (Plotly reads mouse events, the app's own controls pointer events.)
     moved() {
+        if (this.touch) {
+            // A finger in the air says nothing; one on the screen keeps
+            // speaking to the element it landed on.
+            if (!this.isDown || !this.downEl) return;
+            if (Math.hypot(this.x - this.downAt.x, this.y - this.downAt.y) > 8) this.touchMoved = true;
+            const finger = { id: 1, x: this.x, y: this.y };
+            this.ptr('pointermove', this.downEl);
+            if (!this.touchEvent('touchmove', this.downEl, [finger], [finger])) this.touchPrevented = true;
+            return;
+        }
         const e = this.under();
         if (this.dt) {
             // An HTML drag in progress: the page only hears drag events.
@@ -287,6 +341,13 @@ html.demo *{scroll-behavior:auto !important}`;
         this.isDown = true;
         this.cur.classList.add('down');
         this.ptr('pointerdown', e);
+        if (this.touch) {
+            const finger = { id: 1, x: this.x, y: this.y };
+            this.downAt = { x: this.x, y: this.y };
+            this.touchMoved = false;
+            this.touchPrevented = !this.touchEvent('touchstart', e, [finger], [finger]);
+            return;
+        }
         this.mouse('mousedown', e);
         const f = e.closest && e.closest('input, textarea, select, button');
         if (f) { try { f.focus({ preventScroll: true }); } catch (_) { /* not focusable */ } }
@@ -297,6 +358,24 @@ html.demo *{scroll-behavior:auto !important}`;
         const over = this.under();
         this.isDown = false;
         this.cur.classList.remove('down');
+        if (this.touch) {
+            this.downEl = null;
+            if (!e) return;
+            if (!this.touchEvent('touchend', e, [], [{ id: 1, x: this.x, y: this.y }])) this.touchPrevented = true;
+            this.ptr('pointerup', e);
+            // A finger that did not travel, on a page that let the touch be:
+            // the browser makes a click of it, with the mouse events before it.
+            if (click === false || this.touchMoved || this.touchPrevented || !e.isConnected) return;
+            if (!(over === e || e.contains(over) || over.contains(e))) return;
+            this.mouse('mousemove', e);
+            this.mouse('mousedown', e);
+            // (a field takes the focus; a button touched by a finger shows no focus ring)
+            const f = e.closest && e.closest('input, textarea, select');
+            if (f) { try { f.focus({ preventScroll: true }); } catch (_) { /* not focusable */ } }
+            this.mouse('mouseup', e);
+            this.mouse('click', e);
+            return;
+        }
         this.ptr('pointerup', over);
         this.mouse('mouseup', over);
         // A click needs the press and the release on the same element.
@@ -317,6 +396,76 @@ html.demo *{scroll-behavior:auto !important}`;
             this.up(opts.click);
         } finally {
             this.ctrl = false;
+        }
+        await this.wait(opts.after != null ? opts.after : 300);
+    }
+
+    // Two taps in a row, close enough in time to be a double tap (on a plot of
+    // the phone layout: fit everything).
+    async doubleTap(t, opts = {}) {
+        if (t != null) await this.move(t, opts.ms);
+        await this.wait(140);
+        for (let i = 0; i < 2; i++) {
+            this.down();
+            this.ripple();
+            await this.wait(50);
+            this.up();
+            if (i === 0) await this.wait(opts.gap || 90);
+        }
+        await this.wait(opts.after != null ? opts.after : 300);
+    }
+
+    // Two fingers on the screen, `from` pixels apart around the target, moved
+    // until they are `to` apart: a pinch (touch demos only). opts.angle: the
+    // line the fingers are on, in degrees — 0, side by side, zooms the time
+    // axis of a plot and leaves the other alone.
+    async pinch(t, from, to, opts = {}) {
+        if (!this.touch) throw new Error('guide: a pinch needs fingers');
+        const c = this.pos(t);
+        const angle = ((opts.angle || 0) * Math.PI) / 180;
+        const fingers = (spread) => [
+            { id: 1, x: c.x - (Math.cos(angle) * spread) / 2, y: c.y - (Math.sin(angle) * spread) / 2 },
+            { id: 2, x: c.x + (Math.cos(angle) * spread) / 2, y: c.y + (Math.sin(angle) * spread) / 2 },
+        ];
+        const show = ([a, b]) => {
+            this.x = a.x;
+            this.y = a.y;
+            this.draw();
+            this.cur2.style.transform = `translate(${b.x}px, ${b.y}px)`;
+        };
+        let now = fingers(from);
+        await this.move([now[0].x, now[0].y]);
+        show(now);
+        this.cur2.classList.add('on');
+        await this.wait(260);
+        const target = this.under();
+        try {
+            // One finger lands, then the other.
+            this.cur.classList.add('down');
+            this.ripple();
+            this.touchEvent('touchstart', target, [now[0]], [now[0]]);
+            await this.wait(60);
+            this.cur2.classList.add('down');
+            this.touchEvent('touchstart', target, now, [now[1]]);
+            await this.wait(opts.pause || 160);
+            const ms = opts.ms || 1100;
+            let elapsed = 0;
+            let last = performance.now();
+            while (elapsed < ms) {
+                await this.frame();
+                const t1 = performance.now();
+                if (!this.guide.paused) elapsed += Math.min(50, t1 - last) * this.guide.speed;
+                last = t1;
+                now = fingers(from + (to - from) * ease(Math.min(1, elapsed / ms)));
+                show(now);
+                this.touchEvent('touchmove', target, now, now);
+            }
+            await this.wait(opts.end || 200);
+        } finally {
+            this.touchEvent('touchend', target, [now[0]], [now[1]]);
+            this.touchEvent('touchend', target, [], [now[0]]);
+            this.cur.classList.remove('down');
+            this.cur2.classList.remove('down', 'on');
         }
         await this.wait(opts.after != null ? opts.after : 300);
     }
@@ -382,18 +531,24 @@ html.demo *{scroll-behavior:auto !important}`;
     }
 
     // Typing in a field: a tap, the old text selected, the new one letter by letter, then Enter.
+    // opts.append: go on after what the field already holds (a formula, after a
+    // name picked from the suggestions).
     async type(t, text, opts = {}) {
         const p = this.pos(t);
         await this.tap(t);
         const f = (p.el && p.el.closest('input, textarea')) || this.doc.activeElement;
         if (!f) return;
-        try { f.focus({ preventScroll: true }); f.select(); } catch (_) { /* not text */ }
+        try {
+            f.focus({ preventScroll: true });
+            if (opts.append) f.setSelectionRange(f.value.length, f.value.length);
+            else f.select();
+        } catch (_) { /* not text */ }
         await this.wait(250);
         const W = this.W;
         const setter = Object.getOwnPropertyDescriptor(f.tagName === 'TEXTAREA' ? W.HTMLTextAreaElement.prototype : W.HTMLInputElement.prototype, 'value').set;
         const put = (v) => { setter.call(f, v); f.dispatchEvent(new W.Event('input', { bubbles: true })); };
-        put('');
-        let typed = '';
+        let typed = opts.append ? f.value : '';
+        if (!opts.append) put('');
         for (const ch of text) {
             typed += ch;
             put(typed);
@@ -544,11 +699,16 @@ html.demo *{scroll-behavior:auto !important}`;
 
     // ── What the demos ask of the app ──
 
-    /** Open a file the way a drop on the window would, and wait until it is in. */
-    async loadFile(name, content) {
+    /**
+     * Open a file the way a drop on the window would, and wait until it is in.
+     * opts.localPath: where the file is on disk, as the desktop edition knows
+     * it of a file it opened (the Live Update demo: guide-live-logger.js).
+     */
+    async loadFile(name, content, opts = {}) {
         const before = this.app.files.size;
         const file = new this.W.File([content], name);
-        await this.app.loadFile(file);
+        if (opts.localPath) await this.app.loadFiles([{ file, fileHandle: null, localPath: opts.localPath }]);
+        else await this.app.loadFile(file);
         await this.until(() => this.app.files.size > before && this.$('#variables-tree .tree-item'), 15000);
         await this.wait(120);
     }
@@ -602,6 +762,16 @@ html.demo *{scroll-behavior:auto !important}`;
     fileDialog() {
         if (!this._fileDialog) this._fileDialog = createFileDialogStage(this.doc, this.W);
         return this._fileDialog;
+    }
+
+    /**
+     * The stand-in for a data logger that is still writing its file, and for
+     * the file reads of the desktop edition that Live Update needs
+     * (guide-live-logger.js). Built the first time a demo asks for it.
+     */
+    liveLogger(options) {
+        if (!this._liveLogger) this._liveLogger = createLiveLoggerStage(this.doc, this.W, options);
+        return this._liveLogger;
     }
 
     /**
@@ -713,7 +883,7 @@ html.demo *{scroll-behavior:auto !important}`;
     }
 
     // Turn an analysis of a time-series panel on: 'fft', 'histogram', 'heatmap',
-    // 'temporal-profile', 'integral'; 'timeseries' turns it off.
+    // 'temporal-profile', 'integral', 'curve-fit', 'trend'; 'timeseries' turns it off.
     //
     // THE ONE PLACE that knows where the analyses are in the toolbar. When that
     // moves (they are being made easier to find), this is what to change — the
@@ -919,10 +1089,20 @@ class Guide {
         b.setAttribute('aria-label', s);
     }
 
+    // The frame of a chapter: the desktop one, or a device's (a phone).
+    setDevice(device) {
+        const size = DEVICES[device] || null;
+        this.device = size;
+        this.VW = size ? size.width : FRAME_WIDTH;
+        this.VH = size ? size.height : FRAME_HEIGHT;
+        this.screen.classList.toggle('guide-screen-phone', device === 'phone');
+        this.layout();
+    }
+
     // Load the frame afresh (a clean app for every run).
     loadFrame() {
         const theme = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
-        const q = `demo&lang=${encodeURIComponent(i18n.currentLang)}&theme=${theme}`;
+        const q = `demo${this.device ? `&${this.device.query}` : ''}&lang=${encodeURIComponent(i18n.currentLang)}&theme=${theme}`;
         const f = this.frame;
         return new Promise((resolve) => {
             const done = () => {
@@ -965,10 +1145,11 @@ class Guide {
         this.caption(null);
         this.setProg(0, false);
         this.camR = null;
+        this.setDevice(ch.device);
         this.applyCam(false);
         const W = await this.loadFrame();
         if (my !== this.runId || !W) return;
-        const d = new Demo(this, W);
+        const d = new Demo(this, W, { touch: !!this.device?.touch });
         this.demo = d;
         // The demo puts the focus in the frame: the keys of the person still go
         // to the guide, never to the app of the demo.

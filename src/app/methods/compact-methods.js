@@ -19,7 +19,7 @@ import {
     normalizeLayoutOverride,
     shouldUseCompactLayout,
 } from '../../ui/compact-layout.js';
-import { DEMO_MODE } from '../demo-mode.js';
+import { DEMO_LAYOUT, DEMO_MODE } from '../demo-mode.js';
 import { button, el, section } from './compact-dom.js';
 import {
     COMPACT_ANALYSES,
@@ -186,8 +186,9 @@ export function installCompactMethods(ViewerClass) {
             override = layoutOverrideToStore(stored, width, height);
             if (override !== stored) globalThis.localStorage?.removeItem(LAYOUT_OVERRIDE_STORAGE_KEY);
         } catch (_) { /* no storage: automatic */ }
-        // The guide's frame shows the desktop layout whatever the screen.
-        if (DEMO_MODE) override = 'full';
+        // The guide's frame shows the desktop layout whatever the screen —
+        // or the phone layout, for the demo of it (demo-mode.js).
+        if (DEMO_MODE) override = DEMO_LAYOUT;
         this._compact = {
             active: false,
             landscape: false,

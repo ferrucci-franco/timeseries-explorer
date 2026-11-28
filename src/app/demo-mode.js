@@ -7,6 +7,12 @@
 // counted, no first-visit hints, the desktop layout whatever the screen, and
 // the in-memory CSV reader (the query engine keeps a database in the origin's
 // private file system, which the app around the frame is already using).
+//
+// One demo shows the phone layout: its frame is opened as
+// `?demo&layout=compact&…`, at a phone's size. That copy uses the phone layout
+// whatever the screen, and takes itself for a touch screen — the guide plays
+// it with a finger (touch events) on a computer that may have none, and the
+// plots only listen to fingers where there is a touch screen.
 
 const params = (() => {
     try {
@@ -17,6 +23,15 @@ const params = (() => {
 })();
 
 export const DEMO_MODE = params.has('demo');
+
+/** The layout of the guide's frame: 'full' (desktop), or 'compact' for the demo of the phone layout. */
+export const DEMO_LAYOUT = DEMO_MODE && params.get('layout') === 'compact' ? 'compact' : 'full';
+
+// isTouchCapable() (src/ui/touch-drag.js) asks for this property, or for
+// touch points the browser reports; a script cannot give it the second.
+if (DEMO_LAYOUT === 'compact' && typeof window !== 'undefined' && !('ontouchstart' in window)) {
+    window.ontouchstart = null;
+}
 
 export function demoParam(name) {
     return DEMO_MODE ? params.get(name) : null;

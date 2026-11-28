@@ -14,7 +14,8 @@ That choice has three consequences worth knowing:
   demo to its end and fails on the first one that cannot find its target; run it
   after rearranging a toolbar or a dialog.
 - Nothing is downloaded but the app itself. The data is generated in the browser
-  (seeded, so every run shows the same curves); the exceptions are the two
+  (seeded, so every run shows the same curves — a motor shaft, a thermal loop,
+  an oven, a leak test, a process line); the exceptions are the two
   files under `public/examples/guide/`, fetched by the demo that needs them: a
   175 KB PyPSA network and 1.6 MB of real ERA5 over Argentina — a week of it,
   because the ERA5 demo ends on a temporal profile, and two days fold into a
@@ -33,6 +34,7 @@ entry) points at it; the only thing remembered is that it was opened
 | `src/ui/guide-om-stage.js` | The stand-in for the simulation tool the "Load as new" demo shows (next section). |
 | `src/ui/guide-file-dialog.js` | The stand-in Open dialog, and what keeps the browser's own picker out of a demo. |
 | `src/ui/guide-om-result.js` | Three runs of `ExampleSimplePendulum`, written as OpenModelica result files in the browser. |
+| `src/ui/guide-live-logger.js` | The stand-in data logger of the "Live Update" demo, and the file reads of the desktop edition it is followed through (below). |
 | `src/app/demo-mode.js` | `?demo`: what the copy of the app inside the frame does differently. |
 | `src/styles/guide.css` | The window's styles. |
 | `scripts/gen-guide-pypsa-example.py` | Writes `public/examples/guide/island_grid.nc` (needs `pypsa`, `highspy`, `netcdf4`). |
@@ -55,13 +57,54 @@ loop starts from a clean app. In that mode the app:
   `scripts/e2e-guide.mjs` compares the storage before and after every demo, and
   that is how the gridded view's own `localStorage` calls were caught;
 - does not count a page view and shows no first-visit hint;
-- uses the desktop layout whatever the screen;
+- uses the desktop layout whatever the screen — with one exception, the demo
+  of the phone layout (next section);
 - reads CSV with the in-memory parser, because the query engine keeps a database
   in the origin's private file system that the app around the frame is using.
 
-The guide is not offered where it cannot run: on the phone layout (its demos show
-the desktop layout), inside its own frame, and on a page opened from disk
-(`file://`), where a page may not script a frame.
+The guide is not offered where it cannot run: on the phone layout (its window
+and its demos are drawn for a large screen), inside its own frame, and on a
+page opened from disk (`file://`), where a page may not script a frame.
+
+## The demo of the phone layout
+
+"The same app, on a phone" (`phone`) is the one demo that does not show the
+desktop layout: a chapter with `device: 'phone'` is played in a frame the size
+of a phone held upright, drawn with a phone's outline, by a finger.
+
+- **The frame.** `DEVICES` in `guide.js` gives the size (375 × 667 CSS pixels,
+  a small iPhone: taller ones leave too little of the guide's height per
+  pixel) and what is added to the frame's address: `?demo&layout=compact&…`.
+  `Guide.setDevice()` sets the frame's size for the chapter, and the same
+  `layout()` that fits the desktop frame fits this one, so the phone is always
+  whole inside the guide's window. `.guide-screen-phone` (guide.css) rounds
+  the bezel.
+- **The layout.** `layout=compact` is read in `src/app/demo-mode.js`
+  (`DEMO_LAYOUT`) and nowhere else: `initCompactLayout` takes it as the layout
+  choice of the frame instead of `full`, and the boot script of `index.html`,
+  which decides the layout before the first paint, reads the same parameter.
+  Without `demo` the parameter means nothing.
+- **The finger.** The plots only listen to fingers where there is a touch
+  screen (`isTouchCapable()`), and the guide runs on computers that have none,
+  so that copy of the app is told it has one (`demo-mode.js`). The driver of
+  such a chapter is in touch mode: `d.tap` and `d.drag` send what a finger
+  sends — `pointerdown`/`touchstart`, `touchmove`, `touchend`/`pointerup`,
+  and then, for a finger that did not travel on a page that did not prevent
+  the touch, the `mousedown`/`mouseup`/`click` a browser adds — to the element
+  the finger landed on. `d.pinch` puts two fingers down; `d.doubleTap` taps
+  twice within a double tap's time. The touch events are plain events carrying
+  `touches`, `targetTouches` and `changedTouches`, not `TouchEvent`s, which
+  Firefox and Safari on a computer cannot construct. The pointer is drawn as a
+  finger's dot, two of them during a pinch. Nothing hovers: `d.move` only
+  moves the dot.
+- **Nothing else changes.** Storage is untouched as in every demo, the data is
+  generated in the browser, and every other chapter is played as before, with
+  a mouse in the desktop frame.
+
+The gestures are the ones of `src/ui/plot-touch-gestures.js`: one finger pans,
+two pinch (side by side: the time axis only), two quick taps fit. The window
+zoom — tap, then touch again and drag — is `d.tap(point)` followed by
+`d.drag(point, to, { pause: 320 })`.
 
 ## Adding a demo
 
@@ -86,7 +129,8 @@ Add an entry to `GUIDE_CHAPTERS` in `src/ui/guide-chapters.js`:
 
 Rules of thumb: one idea per demo, 25–40 seconds, a caption of a few words per
 step — the demo shows, the caption only names what is happening. `est` is the
-expected duration in milliseconds, for the progress bar of the first run.
+expected duration in milliseconds, for the progress bar of the first run. `device: 'phone'`
+plays the chapter on the phone layout, with a finger (the section above).
 
 ### What a demo can do (`d`)
 
@@ -97,28 +141,40 @@ expected duration in milliseconds, for the progress bar of the first run.
 | `d.until(() => cond, ms)` | Wait for the app: a file parsed, a plot drawn. It **reports**, it does not raise: where the demo cannot go on without it (the ERA5 demo and its extracted point), throw, so `e2e:guide` fails instead of playing a caption that lies. |
 | `d.cam(target, scale)` / `d.cam(null)` | Zoom on an element (or several: an array), or show the whole app. |
 | `d.move(target)` / `d.tap(target)` | Move the pointer; click. A target is a selector, an element, `[x, y]`, or `{ el, ax, ay }` for a point of an element. |
-| `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. |
+| `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. In a phone demo: one finger, which pans a plot. |
+| `d.doubleTap(target)` | Two taps in a row (a phone demo: fit the plot). |
+| `d.pinch(target, from, to, { angle })` | Phone demos only: two fingers `from` pixels apart around the target, moved until they are `to` apart. |
 | `d.plot(name, panelIndex)` | Drag a variable from the tree onto a panel. |
 | `d.folder(label)` | Open or close a folder of the tree. |
 | `d.select(names)` | Select variables of the tree: a click, then Ctrl+click on each, in order (X, Y, Z of a phase plot). |
 | `d.plotType(key, panelIndex)` | Change what a panel draws: `'timeseries'`, `'dashboard'`, `'phase2d'`, `'phase2dt'`, `'phase3d'`, `'state-anim-2'`, `'state-anim-3'`, confirming when the change empties the panel. |
-| `d.analysis(mode, panelIndex)` | Turn an analysis on: `'fft'`, `'histogram'`, `'heatmap'`, `'temporal-profile'`, `'integral'`. |
+| `d.analysis(mode, panelIndex)` | Turn an analysis on: `'fft'`, `'histogram'`, `'heatmap'`, `'temporal-profile'`, `'integral'`, `'curve-fit'`, `'trend'`. |
 | `d.choose(select, value)` | Pick in a drop-down list (a look-alike list is drawn, since a script cannot open the browser's own). |
 | `d.slide(rangeInput, value)` | Drag a slider. |
-| `d.type(input, text)` | Type in a field. |
+| `d.type(input, text)` | Type in a field. `{ append: true }` goes on after what the field holds (a formula, after a name taken from the suggestions); `{ enter: false }` leaves Enter out. |
 | `d.reveal(element)` | Scroll its panel so that it is in view. |
 | `d.loadText(name, text)`, `d.loadPublic(path)`, `d.loadBundledResult(script, name)` | Open data, in `setup`. |
+| `d.loadFile(name, bytes, { localPath })` | Open bytes as a file; with `localPath`, as the desktop edition opens a file it knows the path of (the Live Update demo). |
 | `d.modalOk()` | Read the dialog on screen for a moment, then close it by its button. |
 | `d.restage(bytes, name)` | Put new bytes behind the open file, so that Reload finds a changed file (next section). |
 | `d.om()` | The stand-in for the simulation tool (next section). |
 | `d.fileDialog()` | The stand-in Open dialog — and the browser's own picker made harmless. |
+| `d.liveLogger(options)` | The stand-in data logger and its file (the section after next). |
 | `d.$(sel)`, `d.$$(sel)`, `d.panel(i)`, `d.app` | The frame's document and app, for anything else. |
 
-Two helpers in `guide-chapters.js` turn what a plot draws into a place to point
-at: `plotArea(gd, fx, fy)`, a fraction of a plot's drawing area, and
-`mapPoint(gd, lon, lat)`, a longitude and a latitude on the gridded map — which
-is how the ERA5 demo puts its point on Buenos Aires and not on a corner. Both
-read Plotly's own layout, so they are called with the camera at rest.
+Helpers in `guide-chapters.js` turn what a plot draws into a place to point
+at: `plotArea(gd, fx, fy)`, a fraction of a plot's drawing area;
+`plotAt(gd, x, fy)`, a time on the x axis; and `mapPoint(gd, lon, lat)`, a
+longitude and a latitude on the gridded map — which is how the ERA5 demo puts
+its point on Buenos Aires and not on a corner. They read Plotly's own layout,
+so they are called with the camera at rest.
+
+For the analyses that work on a stretch of the signal (curve fit, trend,
+integral), `dragRangeEdge(d, 'x1' | 'x2', time)` drags an edge of the green
+stretch on the plot, `timePlot(d)` is the pane that keeps the signal, and
+`computing(d)` is true while the analysis' computing pill is up — wait on it
+(`d.until(() => !computing(d))`), never on a fixed time: the analyses run in a
+worker.
 
 `d.analysis()` is the only place that knows where the analyses are in a panel's
 toolbar. When that part of the toolbar is redesigned, change it there and both
@@ -170,10 +226,47 @@ without a recording:
 If the reload controls or the compare button move, this demo breaks like any
 other, and `npm run e2e:guide` says so.
 
+## The demo of a desktop-only feature
+
+"Live Update: a file still being written" (`live-update`) shows a feature of
+the Full Desktop edition: following a CSV while a logger is still appending
+rows to it. The web version cannot do it — it has no path on disk to go back
+to — and its button says so. The guide runs the web app in a frame, so the
+demo is staged, the same honest way as the simulation tool above:
+
+- **A stand-in logger** (`guide-live-logger.js`): a small panel drawn over the
+  side panel in the frame — a process line, its channels with their last
+  values, "writing to line_3.csv", a row counter that ticks. It is a picture;
+  its strings are English and are not translated. The demo hands it the rows,
+  four a second on the demo's own clock, so Pause stops the logger too. What
+  it has written so far is the "file".
+- **The thinnest desktop bridge**: Live Update reads a file through
+  `omvDesktop.statFile` (its size and date) and `omvDesktop.readFileSlice`
+  (the bytes between two offsets), which the desktop app's preload provides
+  (`electron/preload.cjs`). The stand-in installs an `omvDesktop` with those
+  two — answered from the logger's text — on the frame's window, and tells the
+  frame's app it is the desktop edition, which is what enables the Live Update
+  button there (and why the badge of the frame reads Full Desktop during this
+  demo). It refuses to do so anywhere but in the guide's frame, and nothing in
+  the app was changed for it: outside that frame Live Update is what it was.
+- **Everything else is the app's own code**: the file is opened with the path
+  it would have on a disk (`d.loadFile(…, { localPath })`), the demo presses
+  the real Live Update button, and from there `_startLiveUpdate`, the poll
+  every two seconds (`_pollLiveUpdate`), the probe of the appended bytes
+  (`_readLiveUpdateAppendProbe`), the rows parsed and appended
+  (`_applyLiveUpdateAppendProbe`), the time-series panel redrawn in place and
+  the dashboard's cards and LIVE badge are what the desktop edition runs. No
+  curve and no card is drawn by the demo. The same stand-in for the bridge is
+  what `scripts/e2e-live-update.mjs` uses to test Live Update in a browser.
+
+The demo waits for the rows to arrive (`d.until` on the number of rows the
+app holds) and throws when they do not, so `npm run e2e:guide` fails if the
+live path breaks.
+
 ## Opening one demo from elsewhere
 
 ```js
-app.openGuide('fft');   // 'csv-parsing', 'time-dashboard', 'phase-plots', 'fft', 'temporal-profile', 'modelica', 'load-as-new', 'pypsa'
+app.openGuide('fft');   // 'csv-parsing', 'time-dashboard', 'phase-plots', 'data-tools', 'derived-variables', 'fft', 'temporal-profile', 'curve-fit', 'trend', 'measure', 'modelica', 'load-as-new', 'pypsa', 'era5-maps', 'live-update', 'phone'
 ```
 
 opens the guide on that demo. A "tip of the day", or a "show me" link next to a
