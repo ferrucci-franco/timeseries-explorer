@@ -88,7 +88,10 @@ Built:
   sheet; a tab at the foot of each line to drag it, waiting at the edge when the
   cursor is out of view; their reading in a Cursors sheet, with step arrows; Δx and
   Δy in the app bar while that sheet is hidden;
-- help full screen, and the bottom bar's icons each in their own colour.
+- help full screen, and the bottom bar's icons each in their own colour;
+- the user documentation: the Help topic **Phone and tablet** (`helpSec16` in
+  `src/i18n/translations.js`), with figures captured on an emulated phone and
+  tablet (`npm run manual:figures`). Keep it in step with this document.
 
 The code is in `src/app/methods/compact-methods.js`,
 `src/app/methods/compact-analyses.js` (what each analysis is on a phone, §11),
