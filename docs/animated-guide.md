@@ -158,7 +158,8 @@ or `'tablet'` plays the chapter on that device, with a finger (the section above
 | `d.until(() => cond, ms)` | Wait for the app: a file parsed, a plot drawn. It **reports**, it does not raise: where the demo cannot go on without it (the ERA5 demo and its extracted point), throw, so `e2e:guide` fails instead of playing a caption that lies. |
 | `d.cam(target, scale)` / `d.cam(null)` | Zoom on an element (or several: an array), or show the whole app. |
 | `d.move(target)` / `d.tap(target)` | Move the pointer; click. A target is a selector, an element, `[x, y]`, or `{ el, ax, ay }` for a point of an element. |
-| `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter. In a phone demo: one finger, which pans a plot. |
+| `d.drag(from, to)` | Press, move, release: a zoom box on a plot, a splitter, a cursor. `{ ctrl: true }` holds Ctrl from the press to the release (both measurement cursors move together). In a phone demo: one finger, which pans a plot. |
+| `d.park()` | Take the pointer to the empty stretch of the top bar, so that nothing is lit up or labelled under it. |
 | `d.doubleTap(target)` | Two taps in a row (a phone demo: fit the plot). |
 | `d.pinch(target, from, to, { angle })` | Phone demos only: two fingers `from` pixels apart around the target, moved until they are `to` apart. |
 | `d.plot(name, panelIndex)` | Drag a variable from the tree onto a panel. |
@@ -186,6 +187,9 @@ longitude and a latitude on the gridded map — which is how the ERA5 demo puts
 its point on Buenos Aires and not on a corner. They read Plotly's own layout,
 so they are called with the camera at rest.
 
+`legendClick(d, plot, name)` clicks the entry of a curve in a plot's legend,
+which hides it, and waits for the plot to do so.
+
 For the analyses that work on a stretch of the signal (curve fit, trend,
 integral), `dragRangeEdge(d, 'x1' | 'x2', time)` drags an edge of the green
 stretch on the plot, `timePlot(d)` is the pane that keeps the signal, and
@@ -196,6 +200,18 @@ worker.
 `d.analysis()` is the only place that knows where the analyses are in a panel's
 toolbar. When that part of the toolbar is redesigned, change it there and both
 analysis demos follow. `d.plotType()` is the same for the plot types.
+
+**End on a clean picture.** The last frame of a demo stays on screen for two
+seconds before it loops. Park the pointer (`d.park()`) unless pointing at
+something is the point, and look at that frame: the driver tells the page
+when the pointer enters and leaves an element, as a mouse does, so a card or
+a tooltip that is up at the end is one a person would see too.
+
+**A demo plays in the viewer's time zone.** Put a calendar time on a plot only
+through `plotAt` (which places the axis' own number); Plotly's `d2l` shifts a
+number by the viewer's UTC offset, and a demo that used it dragged its cursors
+off the plot everywhere but in UTC. Run a demo with a calendar axis under
+another zone before trusting it (`TZ=America/Los_Angeles npm run e2e:guide`).
 
 Prefer selectors that do not depend on the language: a class, a `data-` attribute,
 the `value` of an option (`listWith(root, 'hann')`), never a label.
@@ -251,12 +267,18 @@ rows to it. The web version cannot do it — it has no path on disk to go back
 to — and its button says so. The guide runs the web app in a frame, so the
 demo is staged, the same honest way as the simulation tool above:
 
-- **A stand-in logger** (`guide-live-logger.js`): a small panel drawn over the
-  side panel in the frame — a process line, its channels with their last
-  values, "writing to line_3.csv", a row counter that ticks. It is a picture;
-  its strings are English and are not translated. The demo hands it the rows,
-  four a second on the demo's own clock, so Pause stops the logger too. What
-  it has written so far is the "file".
+- **A stand-in logger** (`guide-live-logger.js`): a program of its own, in
+  its own window — a title bar that says "Data logger — simulated", a REC
+  light, its channels with their last values, "writing to line_3.csv" and a
+  row counter that ticks. It is not drawn over the app: the chapter keeps a
+  strip of the screen under the app (`below: 124` on the chapter; `guide.js`
+  makes the app's frame that much shorter and draws the strip as a desktop),
+  and the window stands there, in the guide's own page, outside the app's
+  document. The demo's first caption is about it, with the camera on it
+  (`d.cam(logger.area())`), before anything happens in the app. Its few words
+  are given by the chapter, in the reader's language. The demo hands it the
+  rows, four a second on the demo's own clock, so Pause stops the logger too.
+  What it has written so far is the "file".
 - **The thinnest desktop bridge**: Live Update reads a file through
   `omvDesktop.statFile` (its size and date) and `omvDesktop.readFileSlice`
   (the bytes between two offsets), which the desktop app's preload provides
