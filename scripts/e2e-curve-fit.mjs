@@ -181,8 +181,26 @@ try {
   assert.equal(await fitGroup.isVisible(), true, 'and brings them back');
 
   // Saved from a lazy file: SQL over the file, exact against the fit.
+  //
+  // A lazy fit streams over the file, and each of the view changes above — the
+  // pane squeezed by hand, the two autoscale buttons, the residuals folded and
+  // brought back — starts one. So the fit is waited for rather than assumed,
+  // before saving it and again before reading it: on a loaded CI runner the
+  // 500 ms this used to wait were not always enough, and the result read here
+  // was null while a recompute was still in flight.
+  const fitSettled = () => page.waitForFunction(
+    id => window.app.plotManager.plots.get(id)?._curveFitResults?.[0]?.result?.fit?.status === 'ok',
+    panelId,
+    { timeout: 120000 },
+  );
+  await fitSettled();
   await page.click('.curve-fit-save-fit');
-  await page.waitForTimeout(500);
+  await page.waitForFunction(id => {
+    const pm = window.app.plotManager;
+    const r = pm.plots.get(id)?._curveFitResults?.[0];
+    return !!pm.files.get(r?.trace?.fileId)?.data?.variables?.y_fit1;
+  }, panelId, { timeout: 60000 });
+  await fitSettled();
   const lazySaved = await page.evaluate(async id => {
     const pm = window.app.plotManager; const plot = pm.plots.get(id); const r = plot._curveFitResults[0];
     const data = pm.files.get(r.trace.fileId).data;
