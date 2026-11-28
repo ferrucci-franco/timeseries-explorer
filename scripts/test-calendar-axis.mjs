@@ -151,7 +151,7 @@ const assertAmPmAxis = (axis, label, dateFormat = '%b %d, %Y') => {
     assert.equal(axis.tickformat, `%-I:%M %p\n${dateFormat}`, `${label}: AM/PM tick format is explicit`);
     assert.equal(axis.hoverformat, '%-I:%M:%S %p', `${label}: AM/PM axis hover format is explicit`);
     assert.ok(!axis.tickformat.includes('%H'), `${label}: no 24-hour directive remains in AM/PM ticks`);
-    assert.ok(axis.tickformatstops?.length && axis.tickformatstops.every(stop => /^%-I:%M:%S.* %p\n/.test(stop.value)),
+    assert.ok(axis.tickformatstops?.length && axis.tickformatstops.every(stop => /^%-I:%M:%S.* %p$/.test(stop.value.split('\n')[0])),
         `${label}: short spans name their seconds, in AM/PM`);
 };
 
