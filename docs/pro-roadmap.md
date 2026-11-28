@@ -151,3 +151,41 @@ Suggested implementation phases:
    - shared DOM helpers
    - constants/theme tokens
    - typed JSDoc or TypeScript migration
+
+## On hold: OpenModelica Arrow (`.arrow`) results
+
+OpenModelica added an Arrow-based result format (`Arrow.modelica`, spec v0.1,
+by Martin Sjölund, September 2026). The app does not read it, and that is
+parked on purpose until the format settles.
+
+Where it stands (checked 2026-11-28):
+
+- Spec v0.1, marked development. Never in a release — only `master` /
+  `1.28-dev` — and already redesigned once, because the first draft put too
+  much metadata in the file.
+- Dymola 2026x still writes MAT, so `.mat` stays the format that matters for
+  the Modelica files people bring to the app.
+
+Why it would fit well once it settles: it is columnar with its metadata inside
+the file, it can be read while the simulation is still writing it, and discrete
+variables carry run-end encoding — which is exactly what the state bands
+already draw (`docs/state-band-design.md`). It would be opened lazily by the
+same ingest as `.mat` and netCDF (`src/data/columnar-ingest.js`), so the shape
+of the work is one more reader, `src/parsers/arrow-columns.js`.
+
+Two parts are not optional for real OpenModelica output, and they are where the
+cost is:
+
+- **Run-end encoding.** Every discrete variable and every string column uses
+  it, and Arrow JS does not decode it — the reader has to.
+- **ZSTD buffer compression.** Arrow JS does not support it either.
+
+Estimate: about one session for an eager-only reader that ignores run-end
+encoding, which means it would not open real files; 2.5–3.5 sessions for one
+that handles both of the points above and works in memory-saving mode. Before
+committing to that, write a throwaway script that opens a real `.arrow` file
+and reports its schema, encodings, compression and decode time — that settles
+both risks with measurements instead of spec reading.
+
+Revisit when the spec reaches 1.0, or when it ships in a tagged OpenModelica
+release.
