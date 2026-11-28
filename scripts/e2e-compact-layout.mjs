@@ -1822,6 +1822,17 @@ try {
         await tabletPage.goto(baseUrl);
         await tabletPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
         assert.equal(await tabletPage.evaluate(() => document.documentElement.classList.contains('compact')), false, 'a tablet sideways keeps the desktop layout');
+        // The empty panel's hint is worded for a finger: no Ctrl, no Shift.
+        const touchHints = await tabletPage.locator('.layout-panel-placeholder .layout-panel-placeholder-hint').allInnerTexts();
+        assert.deepEqual(touchHints, [
+            'Press and hold a variable, then drag it onto this panel.',
+            'Tap legend items to show or hide traces.',
+        ], 'a touch-first device in the desktop layout reads how a finger does it');
+        await tabletPage.evaluate(() => window.app.setLanguage('fr'));
+        const frHints = (await tabletPage.locator('.layout-panel-placeholder').innerText());
+        assert.match(frHints, /Appuyez longuement sur une variable/, 'in the language of the app');
+        assert.doesNotMatch(frHints, /Ctrl|Maj\+/);
+        await tabletPage.evaluate(() => window.app.setLanguage('en'));
         const fsButton = tabletPage.locator('#fullscreen-btn');
         assert.equal(await fsButton.isVisible(), true);
         await fsButton.tap();
@@ -1847,6 +1858,10 @@ try {
     assert.equal(await dpage.locator('#sidebar').isVisible(), true);
     assert.equal(await dpage.locator('.layout-panel-toolbar').first().isVisible(), true);
     assert.equal(await dpage.locator('.compact-try-example').isVisible(), false);
+    assert.deepEqual(await dpage.locator('.layout-panel-placeholder .layout-panel-placeholder-hint').allInnerTexts(), [
+        'Ctrl/Cmd-click to multi-select variables before dragging.',
+        'Click legend items to show or hide traces. Shift+Click to remove trace.',
+    ], 'with a mouse and a keyboard the empty panel names the keys');
 
     // ── From the desktop to the phone layout, and back ──────────────────────
     await dpage.locator('#extra-menu-btn').click();

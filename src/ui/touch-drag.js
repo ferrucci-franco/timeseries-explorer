@@ -14,6 +14,15 @@ export function isTouchCapable() {
     return (Number(navigator.maxTouchPoints) || 0) > 0 || 'ontouchstart' in window;
 }
 
+/**
+ * Is a finger what this device is used with? A laptop with a touch screen has
+ * a mouse and a keyboard too, and its primary pointer is fine: it keeps the
+ * wording that names keys. The rule of the first-run touch hint.
+ */
+export function isTouchFirst() {
+    return isTouchCapable() && !!window.matchMedia?.('(pointer: coarse)')?.matches;
+}
+
 function makeChip(label, count) {
     const chip = document.createElement('div');
     chip.className = 'touch-drag-chip';
