@@ -28,7 +28,14 @@
     "Modelica",
     "OpenModelica",
     "simulation results",
-    "signal processing"
+    "signal processing",
+    "CSV",
+    "Parquet",
+    "netCDF",
+    "GRIB",
+    "climate data",
+    "spectral analysis",
+    "curve fitting"
   ],
   "developmentStatus": "active",
   "author": [
