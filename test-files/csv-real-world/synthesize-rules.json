@@ -1,0 +1,491 @@
+{
+ "_about": "Per-file rules for synthesize.py, written after reading each file. Line and column numbers count from 0. split: how a data line is cut into fields (delim, ws = runs of blanks, regex = one group per field). data: [first line, end line or null, options] segments; option each = every number on its own (summary lines), cols = only these columns. only / skip: a data line must / must not match. keep: time, index and code columns left as they are. keep_rows: lines left as they are. force: columns replaced even if constant. sentinels: missing-value numbers left as they are. group_by: long format, one series per value of this column. digits: columns whose numbers do not parse (several dots). text: label columns that get made-up words. replace_cols: fixed replacements in a column. prefix_digits: leading digits forced in a column (positions). shuffle: columns shuffled between rows. scrub: [original substring, replacement] outside the data lines (null = same-shape mask, {pad:c} = fill to the original length, \"all\" = data lines too); scrub_regex likewise.",
+ "files": {
+  "field-environment/campbell_cr6_toa5_easyflux_guttannen_nan_crlf.dat": {
+   "split": {"delim": ","},
+   "data": [[4, null]],
+   "keep": [1],
+   "scrub": [
+    ["EddyCorrUFR", "Station_001"],
+    ["\"CR6\",\"12056\"", "\"CR6\",\"00000\""],
+    ["Guttannen_AWS_calibrated", "Program_0000000000000001"],
+    ["\"57725\",\"Flux_CSFormat\"", "\"00000\",\"Flux_CSFormat\""]
+   ]
+  },
+  "field-environment/davis_weatherlink_tab_2row-header_12h-a-p_mmhg.txt": {
+   "split": {"delim": "\t"},
+   "data": [[2, null]]
+  },
+  "field-environment/dwd_klima-tag_berlin-dahlem_de_semicolon-padded_eor_-999.txt": {
+   "split": {"delim": ";"},
+   "data": [[1, null]],
+   "keep": [1, 2, 3, 4, 5, 7, 9],
+   "sentinels": ["-999"],
+   "replace_cols": {"0": {"403": "001"}}
+  },
+  "field-environment/hobo_event-logger_freiburg_ddmmyyyy_events-only.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]],
+   "keep": [0],
+   "shuffle": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+   "scrub": [
+    ["15_FPV_750", "00_AAA_000"],
+    ["10760769", "00000000"]
+   ]
+  },
+  "field-environment/hobo_mx_temp-light_newfoundland_gmt-0230_ampm.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]],
+   "keep": [0],
+   "scrub": [["21405903", "00000000"]]
+  },
+  "field-environment/hobo_pendant_freiburg_de-localized_mm.dd.yy-dots_ampm.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]],
+   "keep": [0],
+   "scrub": [["10347314", "00000000"]]
+  },
+  "field-environment/hobo_u20-water-level_ecuador_es-localized_registrado.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]],
+   "keep": [0],
+   "scrub": [
+    ["WL_04", "AA_00"],
+    ["20968507", "00000000"]
+   ]
+  },
+  "field-environment/jma_monthly_5-stations-since-1900_ja_shift-jis_station-row-header.csv": {
+   "split": {"delim": ","},
+   "data": [[5, null]],
+   "keep": [2, 3, 5, 6, 8, 9, 11, 12, 14, 15],
+   "scrub": [
+    ["東京", "Ａ点"],
+    ["大阪", "Ｂ点"],
+    ["福岡", "Ｃ点"],
+    ["札幌", "Ｄ点"],
+    ["那覇", "Ｅ点"]
+   ]
+  },
+  "field-environment/knmi_uurgegevens_de-bilt_nl_hash-comments_padded_hh-1-24.txt": {
+   "split": {"delim": ","},
+   "data": [[14, null]],
+   "keep": [1, 2],
+   "replace_cols": {"0": {"260": "001"}},
+   "scrub": [["# 260:         5.180       52.100       1.90  DE BILT", "# 001:         0.000       00.000       0.00  STATION"]]
+  },
+  "field-environment/ndbc_stdmet_buoy-44258_whitespace_2hash-headers_MM-missing.txt": {
+   "split": {"ws": true},
+   "data": [[2, null]],
+   "keep": [0, 1, 2, 3, 4]
+  },
+  "field-environment/rp5ru_meteo-station_yekaterinburg_ru_hash-comments_newest-first.csv": {
+   "split": {"delim": ";"},
+   "data": [[7, null]],
+   "scrub": [
+    ["Екатеринбурге", null],
+    ["Екатеринбург", null],
+    ["ID=28440", "ID=00000"],
+    ["id=28440", "id=00000"]
+   ]
+  },
+  "field-environment/smhi_opendata_goteborg_sv_multi-block-metadata_sidecar-notes-column.csv": {
+   "split": {"delim": ";"},
+   "data": [[15, null], [7, 13, {"each": true, "cols": [2, 3, 4]}]],
+   "scrub": [["Göteborg A;71420", "Station_001;00000"]]
+  },
+  "field-environment/smn-argentina_datohorario_es_latin1_fixed-width_units-row_long-format.txt": {
+   "split": {"regex": "^(.{8})(.{6})(.{6})(.{5})(.{8})(.{5})(.{5}) {5}(.*)$"},
+   "data": [[2, null]],
+   "keep": [0, 1],
+   "text": [7]
+  },
+  "field-environment/solinst_levelogger_acre-center_2024_metadata-preamble_ampm.csv": {
+   "split": {"delim": ","},
+   "data": [[12, null]],
+   "keep": [0, 1, 2],
+   "scrub_regex": [
+    ["^2056389$", "0000000"],
+    ["^ACRE$", "AAAA"],
+    ["^CEN$", "AAA"]
+   ]
+  },
+  "field-environment/usgs_nwis_iv_potomac_rdb_tab_format-spec-row.rdb": {
+   "split": {"delim": "\t"},
+   "data": [[28, null]],
+   "replace_cols": {"1": {"01646500": "00000000"}},
+   "scrub": [
+    ["01646500", "00000000"],
+    ["POTOMAC RIVER NEAR WASH, DC LITTLE FALLS PUMP STA", null],
+    ["(nadww01)", "(host001)"],
+    ["69928", "00001"]
+   ]
+  },
+  "field-environment/vanessen_cera-diver_diver-office_ini-preamble_end-footer.CSV": {
+   "split": {"delim": ","},
+   "data": [[52, null]],
+   "scrub": [
+    ["C:\\Users\\nicol\\AppData\\Roaming\\DiverOffice\\La Jara Creek\\CSV\\P1-B_231205122222_U8153.CSV", "C:\\data\\run{pad:0}.CSV"],
+    ["..00-U8153  216.", "..00-U0000  000."],
+    ["=P1-B", "=S001"]
+   ]
+  },
+  "field-environment/ysi_exo_korexo-export_utf16le-bom_sep-line_profile.csv": {
+   "split": {"delim": ","},
+   "keep": [0, 1, 2],
+   "data": [[10, null], [5, 7, {"each": true, "cols": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]}]],
+   "replace_cols": {"3": {"SQR100": "SITE01"}},
+   "scrub_regex": [["\\b\\d{2}[A-Z]\\d{6}\\b", null]]
+  },
+  "industrial-energy/beckhoff-twincat-scope_nl_paired-time.csv": {
+   "split": {"delim": "\t"},
+   "data": [[24, null]],
+   "keep": [0, 2, 4],
+   "scrub": [
+    ["H:\\mscthesisgeert\\MScThesisTemplate\\Code\\AGC_functions\\dSPACE_TwinCAT_recordings\\NoiseMeas0V.csv", "C:\\data\\run{pad:0}.csv"],
+    ["frequency area 1", "signal comment 1"],
+    ["frequency area 2", "signal comment 2"],
+    ["tie-line power flow", "signal comment 0003"],
+    ["172.18.237.162", "198.51.100.100"]
+   ]
+  },
+  "industrial-energy/beckhoff-twincat-xy-scope_de_semicolon.csv": {
+   "split": {"delim": ";"},
+   "data": [[13, null]],
+   "keep": [0],
+   "scrub": [
+    ["E:\\hawino\\Measurements\\Trajectory\\realTrajectory.csv", "C:\\data\\run{pad:0}.csv"],
+    ["5.53.207.184", "198.51.100.1"]
+   ]
+  },
+  "industrial-energy/datadis_consumo-horario_es_cups-anon.csv": {
+   "split": {"delim": ";"},
+   "data": [[1, null]],
+   "decimal": ",",
+   "replace_cols": {"0": {"d0fbcc1108d8": "a0b0c0d0e0f0"}}
+  },
+  "industrial-energy/fronius-solarweb_export_de_units-row.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]]
+  },
+  "industrial-energy/futaba_mold-pressure-system_injection-molding_key-colon-preamble_trailing-comma.csv": {
+   "split": {"delim": ","},
+   "data": [[4, null]],
+   "keep": [0]
+  },
+  "industrial-energy/hioki-pq_interval-data_cnc-machine_eng-notation_over-tokens.CSV": {
+   "split": {"delim": ","},
+   "data": [[1, null]]
+  },
+  "industrial-energy/huawei-fusionsolar_plant-report_daily.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]],
+   "digits": [5],
+   "scrub": [["Plant Report_ITB", "Plant Report_AAA"]]
+  },
+  "industrial-energy/machine-axis-logger_de_quoted-decimal-comma.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]],
+   "decimal": ",",
+   "keep": [1, 2]
+  },
+  "industrial-energy/niagara-ax_history-export_boolean-state_quoted-flags.csv": {
+   "split": {"delim": ","},
+   "data": [[3, null]],
+   "shuffle": [3],
+   "scrub": [
+    ["GTC_Multisite_Inwi", "AAA_Bbbbbbbbb_Cccc"],
+    ["RAB-MCO OF-DJ-CLIM-4", "AAA-BBB CC-DD-EEEE-0"]
+   ]
+  },
+  "industrial-energy/niagara-ax_history-export_temp_ma_ampm-tz.csv": {
+   "split": {"delim": ","},
+   "data": [[3, null]],
+   "scrub": [
+    ["GTC_Multisite_Inwi", "AAA_Bbbbbbbbb_Cccc"],
+    ["NAD-MCO", "AAA-BBB"]
+   ]
+  },
+  "industrial-energy/sel-751_relay_event-report_cev_10028.CEV": {
+   "split": {"delim": ","},
+   "keep": [20, 21],
+   "data": [[7, 519], [5, 6, {"each": true, "cols": [22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]}]],
+   "special": ["sel_cev_checksums"],
+   "scrub": [
+    ["3232295108", "0000000000"],
+    ["FDR07_480_125KW", "FEEDER_00000001"],
+    ["SWGR_A-2B1", "TERMINAL_1"],
+    ["CONAM   := UCSD", "CONAM   := AAAA"]
+   ]
+  },
+  "industrial-energy/siemens-s7-1200_datalog_es_padded-fields.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]],
+   "keep": [0],
+   "force": [6, 7, 8]
+  },
+  "industrial-energy/siemens-wincc_datalog_it_hydro.csv": {
+   "split": {"delim": ";"},
+   "data": [[1, null]],
+   "decimal": ",",
+   "keep": [4],
+   "group_by": 0,
+   "force": [2]
+  },
+  "industrial-energy/siemens-wincc_datalog_sr_tab_bom.txt": {
+   "split": {"delim": "\t"},
+   "data": [[1, null]],
+   "keep": [1, 4],
+   "group_by": 0
+  },
+  "industrial-energy/siemens-wincc_datalog_vi_temperature.csv": {
+   "split": {"regex": "^(\"[^\"]*\"),(\"[^\"]*\"),(\\d+(?:,\\d+)?),(\\d),(\\d+,\\d+)$"},
+   "data": [[1, null]],
+   "decimal": ",",
+   "keep": [4],
+   "group_by": 0,
+   "force": [2]
+  },
+  "industrial-energy/wind-turbine-scada-1min_ko_cp949_empty-index-header_status-text.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]]
+  },
+  "industrial-energy/yokogawa-smartdac-gm10_universal-viewer_utf8-bom_31-line-preamble_degC.csv": {
+   "split": {"delim": ","},
+   "data": [[34, null]],
+   "keep": [2],
+   "scrub": [
+    ["tesla,,Windows User", "user0,,Windows User"],
+    ["S5Y417799", "S0A000000"]
+   ]
+  },
+  "industrial-energy/yokogawa-wt3000_power-analyzer_function-preamble_padded-e03-nan.csv": {
+   "split": {"delim": ","},
+   "data": [[22, null]],
+   "keep": [0, 3]
+  },
+  "industrial-energy/yokogawa-wt310_remote-logger_comma-tab_9.91e37-nan.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]],
+   "keep": [4],
+   "sentinels": ["9.91e+037"]
+  },
+  "lab-instruments/digilent_waveforms_bom_hash_comments_2ch.csv": {
+   "split": {"delim": ","},
+   "data": [[20, null]],
+   "keep": [0],
+   "scrub": [["SN:210151AA5CFE", "SN:000000000000"]]
+  },
+  "lab-instruments/graphtec_gl240_metadata_two_header_rows.csv": {
+   "split": {"delim": ","},
+   "data": [[23, null]],
+   "keep": [0, 1, 2]
+  },
+  "lab-instruments/graphtec_gl820_burnout_sentinel_padded.csv": {
+   "split": {"delim": ","},
+   "data": [[23, null]],
+   "keep": [0, 1, 2]
+  },
+  "lab-instruments/hp3458a-keysight34461a_wingpib-log_interleaved-instruments_headerless_bom.csv": {
+   "split": {"delim": ","},
+   "data": [[0, null]],
+   "keep": [0],
+   "group_by": 1
+  },
+  "lab-instruments/keysight_daq973a_benchvue_bom_config_preamble.csv": {
+   "split": {"delim": ","},
+   "keep": [0, 1],
+   "data": [[62, null], [30, 31, {"each": true, "cols": [1, 2, 3, 4, 5]}], [52, 53, {"each": true, "cols": [1]}], [56, 57, {"each": true, "cols": [1]}]],
+   "scrub": [["MY59013886", "MY00000000"]]
+  },
+  "lab-instruments/keysight_e36233a-psu_datalog_quoted-metadata_clock-unset-2002.csv": {
+   "split": {"delim": ","},
+   "data": [[21, null]],
+   "keep": [0]
+  },
+  "lab-instruments/keysight_n9020a-mxa_swept-sa-trace_44-line-preamble_DATA-marker.csv": {
+   "split": {"delim": ","},
+   "data": [[45, null]],
+   "keep": [0]
+  },
+  "lab-instruments/labview_lvm_sl_tab_decimalcomma_impact.lvm": {
+   "split": {"delim": "\t"},
+   "data": [[23, null]],
+   "decimal": ",",
+   "scrub": [["Operator\tJS", "Operator\tAA"]]
+  },
+  "lab-instruments/lecroy_wavepro725zi_segment_header.csv": {
+   "split": {"delim": ","},
+   "data": [[5, null]],
+   "keep": [0],
+   "scrub": [["Zi-A,67858,", "Zi-A,00000,"]]
+  },
+  "lab-instruments/motor-inverter-bench_regen-test_ja_utf8-bom_units-row_minute-timestamps.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]],
+   "keep": [1]
+  },
+  "lab-instruments/ni-labview_lvm_es_multi-segment_one-sample-each_no-x-column.lvm": {
+   "split": {"delim": "\t"},
+   "data": [[22, null]],
+   "decimal": ",",
+   "only": "^\t[-0-9]",
+   "force": [1],
+   "scrub": [["Operator\tAdministrador", "Operator\tOperador00001"]]
+  },
+  "lab-instruments/ni-labview_lvm_no_ddmmyyyy_comment-column_decimal-comma.lvm": {
+   "split": {"delim": "\t"},
+   "data": [[23, null]],
+   "decimal": ",",
+   "keep": [0],
+   "scrub": [["Operator\teddywh", "Operator\tuser01"]]
+  },
+  "lab-instruments/picoscope_en_minus_infinity_overrange.csv": {
+   "split": {"delim": ","},
+   "data": [[3, null]],
+   "keep": [0]
+  },
+  "lab-instruments/picoscope_es_semicolon_decimalcomma_tiempo_canal.csv": {
+   "split": {"delim": ";"},
+   "data": [[3, null]],
+   "decimal": ",",
+   "keep": [0]
+  },
+  "lab-instruments/picoscope_it_5ch_with_digital_tempo_canale.csv": {
+   "split": {"delim": ","},
+   "data": [[3, null]],
+   "keep": [0]
+  },
+  "lab-instruments/rigol_mso_analog_plus_hex_digital.csv": {
+   "split": {"delim": ","},
+   "data": [[2, null]],
+   "keep": [0]
+  },
+  "lab-instruments/rohde-schwarz_fsv30_semicolon_key_value_header.dat": {
+   "split": {"delim": ";"},
+   "data": [[29, null]],
+   "keep": [0]
+  },
+  "lab-instruments/simtrol-motor-control_ja_utf8-bom_fullwidth-space-in-headers.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]],
+   "keep": [0]
+  },
+  "lab-instruments/tektronix_excel_resaved_de_trailing_semicolons_ch1.CSV": {
+   "split": {"delim": ","},
+   "data": [[0, null]],
+   "keep": [1, 2],
+   "keep_rows": [17],
+   "scrub": [["C034927", "C000000", "all"]]
+  },
+  "lab-instruments/tektronix_mdo4104c_rf_spectrum.csv": {
+   "split": {"delim": ","},
+   "data": [[21, null]],
+   "keep": [0]
+  },
+  "lab-instruments/yokogawa_dl850ev_padded_quoted_header_leading_empty_col.csv": {
+   "split": {"delim": ","},
+   "data": [[16, null]]
+  },
+  "lab-instruments/yokogawa_we7562-mca_list-mode_slash-comment-preamble_quoted-key.csv": {
+   "split": {"delim": ","},
+   "data": [[38, null]],
+   "keep": [0, 1]
+  },
+  "mech-chem-bio/aim-racestudio_formula-student-damper_ja_shift-jis_duplicate-header.csv": {
+   "split": {"delim": ","},
+   "data": [[17, null]],
+   "keep": [0],
+   "scrub": [
+    ["Izumiootsu", "Venue 0001"],
+    ["_OF-25", "_AA-00"],
+    ["\"iida\"", "\"user\""],
+    ["飯田コース３周", "番号コース３周"]
+   ]
+  },
+  "mech-chem-bio/anton-paar_rheocompass_tab_multi-result-blocks_ampm-time-of-day.csv": {
+   "split": {"delim": "\t"},
+   "data": [[10, null]],
+   "keep": [1, 2],
+   "only": "^\t[0-9]",
+   "scrub": [["anna_barrier_ceramic_04_21_2025", "project_{pad:0}"]],
+   "scrub_regex": [["(?<=^Test:\t).+$", null]]
+  },
+  "mech-chem-bio/betaflight_blackbox-decode_quad_space-padded_flags.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]],
+   "keep": [0, 1]
+  },
+  "mech-chem-bio/chroma-chromalex_battery-cycler-detail_zh-tw_utf8-bom_bmw-power-map.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]],
+   "keep": [0, 1, 2, 3, 4, 5, 6, 7, 10, 11]
+  },
+  "mech-chem-bio/chroma-chromalex_battery-cycler-step_zh-tw_utf8-bom_dd-hh-mm-ss-duration.csv": {
+   "split": {"delim": ","},
+   "data": [[1, null]],
+   "keep": [0, 1, 2, 3, 4, 5, 6, 7, 10, 11]
+  },
+  "mech-chem-bio/garmin_fitcsvtool_activity_ragged.csv": {
+   "split": {"delim": ","},
+   "special": ["garmin_fit"],
+   "data": [],
+   "fit_keep": ["timestamp", "time_created", "start_time", "local_timestamp", "manufacturer", "garmin_product", "product", "software_version", "hardware_version", "device_index", "device_type", "sport", "sub_sport", "event", "event_type", "event_group", "type", "number", "message_index", "num_sessions", "num_laps", "first_lap_index", "lap_trigger", "trigger", "timer_trigger", "data", "battery_status", "unknown@3"],
+   "fit_zero": ["serial_number"],
+   "fit_prefix": {"position_lat": "100", "position_long": "100", "start_position_lat": "100", "start_position_long": "100", "end_position_lat": "100", "end_position_long": "100"}
+  },
+  "mech-chem-bio/instron_bluehill_tensile_results-table-then-raw.csv": {
+   "split": {"delim": ","},
+   "keep": [0],
+   "data": [[7, null], [3, 4, {"each": true, "cols": [2, 3, 4, 6]}]]
+  },
+  "mech-chem-bio/oceanoptics_oceanview_qepro_raman_header-block.txt": {
+   "split": {"delim": "\t"},
+   "data": [[14, null]],
+   "keep": [0],
+   "scrub": [
+    ["QEP03738", "QEP00000"],
+    ["User: dcclab", "User: user01"]
+   ]
+  },
+  "mech-chem-bio/openbci_gui_cyton_eeg_percent-comments_dup-cols.txt": {
+   "split": {"delim": ","},
+   "data": [[5, null]],
+   "keep": [0, 22, 24],
+   "sentinels": ["-187500.02235174447"]
+  },
+  "mech-chem-bio/pasco_capstone_es_semicolon_multirun-side-by-side.csv": {
+   "split": {"delim": ";"},
+   "data": [[1, null]],
+   "decimal": ",",
+   "keep": [0, 5]
+  },
+  "mech-chem-bio/racelogic-vbox_vbo_ini-sections_space-delim_signed-minutes.vbo": {
+   "split": {"ws": true},
+   "data": [[88, null]],
+   "keep": [1, 8, 9, 10],
+   "prefix_digits": {"2": "0600", "3": "0600"},
+   "scrub": [
+    ["Serial : 005358", "Serial : 000000"],
+    ["VBOX0133_", "VBOX0000_"],
+    ["+7339.870600 +2372.308780 +7339.871030 +2372.314290", "+0600.100000 +0600.200000 +0600.100500 +0600.200500"]
+   ]
+  },
+  "mech-chem-bio/zwick_testxpert_bending_de_latin1_semicolon.TRA": {
+   "split": {"delim": ";"},
+   "data": [[165, null]],
+   "decimal": ",",
+   "keep": [14, 19, 23],
+   "scrub": [
+    ["WN:805754", "WN:000000"],
+    ["WN:820243", "WN:000000"],
+    ["\"Kurrle\"", "\"Tester\""],
+    ["1:5,98 mm", "1:5,42 mm"],
+    ["1:161,06 N", "1:148,37 N"],
+    ["\"Dehnung bei Fmax\";5,88203", "\"Dehnung bei Fmax\";5,41736"],
+    ["\"Kraftmaximum\";166,497", "\"Kraftmaximum\";152,318"],
+    ["\"Einspannlänge\";1,03195", "\"Einspannlänge\";1,02731"],
+    ["\"Probennummer\";7", "\"Probennummer\";1"]
+   ]
+  }
+ }
+}

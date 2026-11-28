@@ -6,7 +6,7 @@ Decimal_Separator	,
 Multi_Headings	Yes
 X_Columns	No
 Time_Pref	Absolute
-Operator	Administrador
+Operator	Operador00001
 Date	2011/05/25
 Time	09:38:33,265625
 ***End_of_Header***	
@@ -20,7 +20,7 @@ X0	0,0000000000000000E+0
 Delta_X	1,000000	
 ***End_of_Header***		
 X_Value	Untitled	Comment
-	0,510503
+	0,504489
 
 Channels	1	
 Samples	1	
@@ -31,5 +31,5 @@ X0	1,7187500000000000E-1
 Delta_X	1,000000	
 ***End_of_Header***		
 X_Value	Untitled	Comment
-	0,510503
+	0,485296
 
