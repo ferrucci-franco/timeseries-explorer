@@ -132,6 +132,11 @@ held in memory and the same file in memory-saving mode. `npm run e2e` drives
 the real app in a browser. Both run on every pull request
 ([CI](.github/workflows/ci.yml)).
 
+The numerical results are also compared with NumPy and SciPy on the same
+inputs (`npm run test:numerical-reference`): FFT, fits, statistics, integrals,
+filters and correlation agree to rounding error. The table is in
+[docs/validation.md](docs/validation.md).
+
 ## How to cite
 
 A publication describing the application is [in preparation](PUBLICATION.md).

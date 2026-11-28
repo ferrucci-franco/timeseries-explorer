@@ -94,6 +94,9 @@
 !/test-files/matlab/*.mat
 !/test-files/microcap/
 !/test-files/microcap/**
+# Reference values from NumPy/SciPy for scripts/test-numerical-reference.mjs.
+!/test-files/validation/
+!/test-files/validation/**
 !/bench/
 !/bench/**
 

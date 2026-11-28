@@ -23,6 +23,8 @@
 ## For developers and maintainers
 
 - [architecture.md](architecture.md): how the app is put together. Start here.
+- [validation.md](validation.md): how the numerical results are verified,
+  with the comparison against NumPy and SciPy.
 - [../CONTRIBUTING.md](../CONTRIBUTING.md): where to change things, and the
   checks to run.
 - [desktop-release.md](desktop-release.md): the release procedure for the
