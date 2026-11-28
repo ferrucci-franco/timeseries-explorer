@@ -25,6 +25,7 @@
 // Needs a Chromium for Playwright. Run with `npm run e2e:lazy-mat`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 import { trajectory } from './support/mat-v4-fixture.mjs';
 

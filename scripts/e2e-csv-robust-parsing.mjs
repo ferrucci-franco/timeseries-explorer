@@ -5,6 +5,7 @@
 // The same file in UTF-8 goes through DuckDB-WASM, which must read it alike.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const lines = [

@@ -11,6 +11,7 @@
 // Needs a Chromium for Playwright. Run with `npm run e2e:pending-cancel-copy`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const rows = ['time,a,b,c,d'];

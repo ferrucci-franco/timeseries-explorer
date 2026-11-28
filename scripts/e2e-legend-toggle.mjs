@@ -7,6 +7,7 @@
 // Needs a Chromium for Playwright. Run with `npm run e2e:legend-toggle`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const LONG = 'plant_boiler_feedwater_pump_discharge_pressure_measured_at_header';
