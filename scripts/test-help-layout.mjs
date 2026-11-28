@@ -10,7 +10,9 @@ const publication = readFileSync(new URL('../PUBLICATION.md', import.meta.url), 
 const thirdPartyLicenses = readFileSync(new URL('../THIRD_PARTY_LICENSES.md', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-const topicSections = [...ui.matchAll(/\{ section: '(\d+)', icon: '(\w+)', color: '#[0-9a-f]+' \}/gi)];
+// The topic list lives in a module of its own, shared with the manual page.
+const helpTopics = readFileSync(new URL('../src/app/help-topics.js', import.meta.url), 'utf8');
+const topicSections = [...helpTopics.matchAll(/\{ section: '(\d+)', icon: '(\w+)', color: '#[0-9a-f]+' \}/gi)];
 assert.equal(topicSections.length, 15, 'Help should expose all fifteen topics in its navigation');
 // Section 15 (Align and reindex files) sits right after Time-series plots (5).
 assert.deepEqual(topicSections.map(match => Number(match[1])), [1, 2, 3, 4, 5, 15, 6, 7, 8, 9, 10, 11, 12, 13, 14], 'Help topics should follow the user workflow');

@@ -1,18 +1,145 @@
 # Time Series Explorer
 
-Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, netCDF and GRIB (ERA5 and CMIP grids on a map, station series, PyPSA networks), small pandas pickle result files, Micro-Cap numeric output, and audio recordings.
+Time Series Explorer is a browser and desktop application to explore time
+series: simulation results, measurements and tabular data. Files are opened by
+drag and drop, their signals are plotted in a workspace of linked panels, and
+each panel can turn into an analysis (spectrum, distribution, curve fit, …)
+without writing code. Everything runs on the user's computer: **files are never
+uploaded**.
 
-**▶ [Open the app in your browser](https://www.unditas.com/)** — the live version, running now, with
-nothing to install and nothing to clone. Your files are never uploaded: parsing and
-plotting happen in the browser.
+**▶ [Open the app](https://www.unditas.com/)** · **[User manual](https://www.unditas.com/manual/)** ·
+**[Desktop downloads](https://github.com/ferrucci-franco/timeseries-explorer/releases/latest)**
+(Windows, macOS, Linux)
 
-Prefer to work offline, with native local-file access and very large files? Download the
-**[Full Desktop edition](https://github.com/ferrucci-franco/timeseries-explorer/releases/latest)**
-for Windows, macOS and Linux.
+![A Modelica simulation result in four linked panels: time series, phase plots and energies](public/manual/img/pendulum.webp)
 
-Created by [Franco Ferrucci](https://github.com/ferrucci-franco). A technical
-publication about the application is [in preparation](PUBLICATION.md).
-Citation metadata for the software is available in [CITATION.cff](CITATION.cff).
+Created by [Franco Ferrucci](https://github.com/ferrucci-franco) (GEPASUD
+Laboratory, University of French Polynesia). MIT License.
+
+## What it does
+
+- **Opens many formats directly**, with no conversion step: MATLAB `.mat`
+  (v4 to v7.3, including OpenModelica and Dymola results), CSV and text tables,
+  Excel and LibreOffice sheets, Parquet, netCDF and GRIB, pandas pickle,
+  Micro-Cap output and audio recordings. See [Supported files](#supported-files).
+- **Plots in linked panels.** A workspace of split panels and tabs with shared
+  time axes and synchronized hover; measurement cursors, range statistics,
+  log axes, stacked and right axes, marks for gaps, NaN and repeated timestamps.
+- **Seven plot types per panel**: time series, value dashboard, x–y (phase)
+  plot, x–y along time, 3D curve, and the state animated in the plane or in
+  space.
+- **Analyses of a time-series panel**: Fourier spectrum (FFT) with windows,
+  histogram, calendar heatmap, temporal profile (the typical day, week or
+  year), integral, curve fit (linear, quadratic, power law, exponential,
+  first-order response) and trend. On an x–y panel: Pearson correlation and
+  curve fit of each pair.
+- **Data tools that create new signals**: remove outliers, fill missing
+  values, collapse repeated timestamps, derivative, integral, moving average,
+  detrend, digital filter, resample, cross-correlation, edge interval and
+  rate; and **derived variables** written as formulas of the signals.
+- **Compares files**: several runs of a simulation side by side, parameters
+  that differ between files, time-axis alignment and offset between files.
+- **Gridded climate data on a map**: ERA5, CMIP and other regular
+  latitude/longitude grids (netCDF, GRIB) with a time slider, and extraction of
+  point and region series that then behave like any other signal.
+- **Files larger than memory.** In memory-saving mode a file stays in an
+  embedded DuckDB database and every analysis reads all of its rows, giving the
+  same numbers as on a file held in memory.
+- **Reproducible views**: a view or a complete project (data included) is saved
+  to a file and restored later; plots and data export as PNG, SVG, CSV and WAV.
+- **Five interface languages** (English, French, Spanish, Italian, Chinese), a
+  phone layout, and a desktop edition that works offline and follows a file
+  while a simulation or a logger is still writing it (Live Update).
+
+## Quick start
+
+1. Open <https://www.unditas.com/> in a current browser. Nothing is installed.
+2. Press **Examples** and pick one (a pendulum simulated with OpenModelica, the
+   Lorenz system, a year of power-grid data, a noisy chirp for the FFT,
+   correlated signals for curve fitting, ERA5 reanalysis over Argentina), or
+   drop a file of your own on the page.
+3. Drag signals from the sidebar onto a panel; use the panel's toolbar to split
+   it, change its plot type or open an analysis.
+
+**Menu → Animated guide** plays short demos inside the app, and **Menu → Help**
+is the manual.
+
+## Documentation
+
+- **[User manual](https://www.unditas.com/manual/)**, in the five languages of
+  the app. It is built from the in-app Help, so the two are always the same
+  text; `npm run manual:pdf` prints it as a PDF.
+- **[docs/](docs/README.md)**: architecture, file formats in detail, release
+  procedure and design notes.
+- **[Release notes](docs/releases/)** for every version.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)**: how to report a problem, ask a
+  question or propose a change.
+
+## Supported files
+
+| Data | Extensions |
+| --- | --- |
+| MATLAB arrays; OpenModelica and Dymola results | `.mat` (v4 to v7.3) |
+| CSV and text tables | `.csv`, `.txt`, `.dat`, … (delimiter, decimal mark, encoding and time format are detected and can be adjusted in a preview) |
+| Spreadsheets | `.xlsx`, `.xlsm`, `.xls`, `.ods` |
+| Parquet | `.parquet` |
+| netCDF: gridded fields on a map, station series, PyPSA networks | `.nc`, `.nc4`, `.netcdf`, `.cdf`, Copernicus CDS `.zip` |
+| GRIB1 and GRIB2 on regular latitude/longitude grids | `.grib`, `.grb`, `.grib2`, `.grb2` |
+| pandas DataFrame and Series | `.pkl`, `.pickle` |
+| Micro-Cap numeric output | `.tno`, `.ano`, `.dno` |
+| Audio recordings | `.wav`, `.mp3`, `.m4a`, `.mp4`, `.aac`, `.flac`, `.ogg`, `.opus`, `.aiff`, `.caf`, `.3gp`, `.amr`, `.webm` |
+
+What each reader accepts is described in
+[docs/file-formats.md](docs/file-formats.md).
+
+## Requirements
+
+- **To use the web app**: a current desktop or mobile browser (Chrome, Edge,
+  Firefox or Safari). The automated browser checks run on Chromium.
+- **To use the desktop edition**: Windows 10/11 x64, macOS (Intel or Apple
+  silicon) or Linux x86_64. The installers are in
+  [GitHub Releases](https://github.com/ferrucci-franco/timeseries-explorer/releases/latest),
+  with SHA-256 checksums. They are not code-signed yet; the release notes say
+  how to open them.
+- **To build from source**: Node.js 22.12 or later (`.nvmrc`) and npm.
+
+## Run from source
+
+```sh
+git clone https://github.com/ferrucci-franco/timeseries-explorer.git
+cd timeseries-explorer
+npm ci
+npm run dev        # the web app, on http://127.0.0.1:8000
+npm run desktop    # the desktop edition (Electron)
+npm run build      # the published web app, into dist/
+```
+
+`npm ci` also installs the native DuckDB module used by the desktop edition and
+by some tests; where no prebuilt binary exists for the platform it is compiled,
+which needs a C++ toolchain. More ways to run and package the app are under
+[Versions and local runs](#versions-and-local-runs).
+
+## Tests
+
+```sh
+npm test           # the test suite: about 250 scripts, offline, on bundled fixtures
+npm run e2e        # the browser checks (needs Chromium: npx playwright install chromium)
+```
+
+`npm test` covers the file readers, the numerical kernels (FFT, fits,
+integrals, correlation, filters, statistics) and the agreement between a file
+held in memory and the same file in memory-saving mode. `npm run e2e` drives
+the real app in a browser. Both run on every pull request
+([CI](.github/workflows/ci.yml)).
+
+## How to cite
+
+A publication describing the application is [in preparation](PUBLICATION.md).
+Until it is available, please cite the software, using the metadata in
+[CITATION.cff](CITATION.cff) (GitHub shows it under "Cite this repository"):
+
+> Ferrucci, Franco. *Time Series Explorer*. GitHub repository:
+> <https://github.com/ferrucci-franco/timeseries-explorer>
 
 ## Versions and local runs
 
@@ -124,7 +251,8 @@ output path.
 - `src/ui`: layout engine and modal helpers
 - `src/i18n`: translations and DOM localization
 - `src/styles`: split CSS source files
-- `docs`: architecture and roadmap notes
+- `docs`: documentation ([index](docs/README.md))
+- `scripts/manual`: the user manual page, built from the Help texts
 
 ## Architecture at a glance
 
@@ -156,180 +284,6 @@ prefilled, under your own name (screenshots are then dragged in by hand). The
 issue is public, so attach only what is safe to share.
 
 More detail: [docs/feedback.md](docs/feedback.md)
-
-## Audio support
-
-Recordings open as one signal per channel (`Mono`, or `Left`/`Right`) on a time
-axis in elapsed seconds, built from the file's own sample rate. Accepted:
-`.wav`, `.mp3`, `.m4a`, `.m4b`, `.mp4`, `.aac`, `.flac`, `.ogg`, `.oga`,
-`.opus`, `.aif`, `.aiff`, `.aifc`, `.caf`, `.3gp`, `.3gpp`, `.amr`, `.webm`,
-`.weba` — which covers phone voice memos (iPhone `.m4a`; Android `.m4a`,
-`.3gp`, `.webm`) and WhatsApp voice messages, which download as an audio-only
-`.mp4`. A `Recording` node in the variable tree carries the sample rate,
-channel count, duration and format.
-
-`.mp4` and `.m4a` are the same ISO base-media container under two names, so
-nothing decodes differently between them; an `.mp4` that turns out to carry a
-video track and no sound track is refused with a message that says exactly
-that, instead of a generic decode failure.
-
-WAV is decoded by `src/parsers/audio-decode.js` itself (PCM 8/16/24/32-bit,
-32/64-bit float, and G.711 A-law/mu-law), so it works with no audio engine
-present — including in Node, where `npm run test:audio` exercises it. Apple
-Lossless (`.m4a` recorded with the Voice Memos "Lossless" quality setting) is
-also decoded by the app's own code, `src/parsers/alac-decoder.js`, because no
-browser except Safari ships an ALAC decoder; `npm run test:alac` verifies that
-decode is bit-exact. Every other container is handed to the browser's own
-`decodeAudioData`, on a context created at the sample rate read from the
-container header so the samples come back at the file's rate rather than the
-sound card's. This is the one format the app decodes on the main thread: Web
-Audio does not exist inside a Worker.
-
-Because a small file can decode into a very large one, the size limit for audio
-is measured on the decoded samples rather than on the file, and is asked about
-between decoding and building the columns (Settings → File loading → Audio
-full-load limit).
-
-## Micro-Cap support
-
-Micro-Cap numeric output — the text files the simulator writes next to its
-analyses (`.tno` for transient, `.ano` for AC, `.dno` for DC) — opens
-directly, banner, `Limits`/`Stepping Options` prose and all. The same content
-saved or renamed as `.txt`/`.out` is recognized by its asterisk banner and
-routed to the same reader instead of the CSV path. The first table column
-(`T`, `F`, ...) becomes the file's X axis with its printed unit; every other
-column becomes a signal named as printed (`v(C1)`, `DB(V(2))`, `PD(R3)`) with
-its unit shown in the tree and used for plot legends.
-
-Parameter stepping is the interesting case: a stepped file repeats the
-waveform table once per step combination. Each signal then becomes a group in
-the variable tree holding one entry per run, labelled by the stepped values
-that actually differ between runs (`C1=10u, V1=12`), so overlaying one signal
-across all step values is a matter of picking leaves from one group. Runs
-whose tables share the same printed time grid (the usual interpolated output)
-line up exactly; `Actual Waveform Values` grids that differ per run are placed
-on the union of their time points, with gaps where a run has no sample.
-`npm run test:microcap` exercises the reader against the fixtures under
-`test-files/microcap/`.
-
-## netCDF support
-
-The `.nc`, `.nc4`, `.netcdf` and `.cdf` loader reads netCDF3 (Classic,
-64-bit offset and CDF-5) and netCDF4/HDF5. What a file is gets decided from its
-bytes, not its name: a ZIP or a saved error page named `.nc` is reported as
-what it is, with what to do about it.
-
-**GRIB** (`.grib`, `.grb`, `.grib2`, `.grb2`, or a GRIB saved as `.nc`), the
-format ERA5 is stored in and the one the Climate Data Store sends by default,
-opens on the same map: GRIB1 and GRIB2 on regular latitude/longitude grids,
-with simple, complex (with or without spatial differencing) or IEEE packing,
-and bitmaps. It is read by parts too: the messages are listed from their
-headers and a field is decoded when a map or a series needs it (a week of
-hourly global ERA5 at 0.25°, 350 MB, opens in about 3 s). JPEG 2000, PNG and
-CCSDS packing, spectral fields and Gaussian or rotated grids are named in the
-error, with the command to convert them.
-
-**Files of series** (stations, PyPSA networks) are read by parts in the parse
-worker too: the file is never copied whole into memory, so a 600 MB station
-archive opens in a few seconds. The netCDF limit in Settings → File loading
-applies to what the file loads (the series it keeps), not to its size; above
-it the app asks before loading.
-
-**Gridded files** (ERA5, CMIP, regular lat/lon grids) open on a map, read by
-parts in a worker, so their size is not limited by memory (a multi-GB ERA5
-month opens in a couple of seconds). The map view has offline Natural Earth
-coastlines, a time slider with playback, a level selector and palettes. Its
-colour scale is fitted to the whole period and stays fixed while the time
-moves, so colours compare across steps. One "Color range" button holds it all:
-the two ends (typed by hand), the palette, and the fits (whole period, exact
-period, current step, visible area; optional percentile clipping and centring
-on zero), with the one in use marked in blue. On a desktop the map opens in a
-tab of its own ("Map 1", or the empty tab on screen), so the plots of the other
-tabs stay as they were; its variable and level open the side panel, and the
-colour range, the download and Close map end the map's title line (on the
-map's own tab, Close closes the tab, and the file's Map button blinks to show
-where the map comes back from). The map opens in **Navigate** (a thin cross
-with a small hand, its centre the point the inspector reads: drag or
-right-drag to pan, wheel or pinch to zoom; on a trackpad, two fingers up or
-down zoom and in any other direction pan; a click pins the cell under it);
-an analysis panel next to it turns it into series:
-
-- **Point**: click the map (or drag the orange ring, or type a latitude and
-  longitude), then extract the time series of the nearest grid cell, or one
-  interpolated bilinearly between the four cells around the point. A dotted
-  outline under the ring shows the cells the value comes from (the edges of
-  the nearest cell, or the square joining the four cell centres); extracted
-  bilinear points are drawn as diamonds, nearest-cell points as circles.
-- **Region**: draw a box or type its North/West/East/South limits (as in the
-  Copernicus CDS form), adjust it on the map, then extract the area-weighted
-  (cos latitude, or cell area when the file has latitude bounds) mean, minimum
-  and maximum for every time step: three series. The box moves from inside and
-  resizes from its edges.
-
-Escape goes back to Navigate from Point or Region.
-
-Large files are read by parts, never whole: a global hourly ERA5 month at
-0.25° (1.7 GB) opens in about 2 s, and a point or region series over its 744
-steps takes about 5 s on 4 cores, split along time between several workers.
-
-On a **phone** the map takes the width of the screen (the colour bar under
-it, upright) and is as tall as the grid needs; the time bar, the tools and the
-extractions scroll under it. A finger pans and pinches the map, a tap places
-the point, a finger draws or drags the box; once a point or a box is placed,
-"Extract" floats over the map, and holding a point or a box opens its menu
-(extract, reuse, remove).
-
-An **inspector** in the panel reads the cell under the pointer: where
-it is, its row and column in the grid, its value with units, and the step and
-level on screen. "Copy" puts that reading on the clipboard as one line. A click
-in Navigate pins the cell (its outline stays, and the inspector stays on it,
-following the time step while Play runs); a right click pins it and opens a
-menu with "Copy reading". A click on it again, or Escape, lets it go.
-
-A "?" next to the tools explains how a point's value and a region's mean,
-minimum and maximum are computed. Both tools read the level on the map, or any set of levels (all of them, say),
-in one pass: one series per level. Each place gets a colour and a tag (P1,
-R1…) shared by the map, the panel list and the preview, and is a folder of the
-variable tree. "+ Another variable at P1", under the place's series (or in its
-right-click menu), lights the Variable menu up: the variable (or level) picked
-there next is read at P1, the same way P1 was read, and joins the same folder.
-After an extraction the tree scrolls to "Extractions", opens it, and the folder
-and the new series blink together. A click on a point or a box's edge selects it (and its
-row, and the other way round); a right click (without dragging) opens a menu
-to extract or remove it, Delete removes the selected one, and the trash icon empties the list.
-
-Extractions become variables of the file in the explorer, named by the
-quantity ("2 metre temperature (t2m) · 45°N 90°E"), where FFT, integrals,
-heatmaps and cursors work on them. "Plot selected in new tab" plots the checked
-ones in a new tab at the end, named after the places ("P1, R1"; "P1-1" when
-that name is taken), and moves to it; the map keeps its own tab, and comes
-back with it. On a phone the series are plotted in the panels, the map closing,
-with "Back to the map" over them.
-In the preview under the map, curves that do not share a unit do not share an
-axis either: the first unit keeps the left axis and the others go to a second
-one on the right, each axis titled with the units it carries.
-Units show their powers as superscripts ("m s**-1" → m s⁻¹). The map and the extractions export through
-the same dialog as the plot panels (CSV, PNG, SVG). The ZIP the Copernicus CDS sends for mixed instantaneous/accumulated
-requests is listed and can be opened as one dataset, and several files with
-the same grid (consecutive months) can be joined in time. CF calendars
-`noleap`, `all_leap`, `360_day` and `julian` are decoded.
-
-A saved **project** keeps the map whole: every file the dataset was opened from
-(a CDS ZIP read as one dataset, or months joined in time, keep all of theirs)
-and the way they were joined, the places extracted on it with their series and
-their values, what the map was showing (variable, level and step, palette,
-colour range, zoom, and whether the list of series was folded away) and the
-panels that plotted those series. Opening the project puts all of it back, with
-the same names in the variable tree; a view session (JSON) does the same over
-the file opened again.
-
-**Series files** (station data, ARM, PyPSA) keep the series explorer: CF time
-coordinates, units, scale and offset packing, missing values, groups and
-dimension scales are normalized into plottable series, one shared X coordinate
-per file.
-
-Design, diagnosis and roadmap:
-[`docs/netcdf-gridded-viewer-spec.md`](docs/netcdf-gridded-viewer-spec.md).
 
 ## Production build
 

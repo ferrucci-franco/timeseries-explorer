@@ -2,11 +2,16 @@
 
 ## For users
 
-- **User manual**: the in-app Help (Menu → Help), in English, French, Spanish,
-  Italian and Chinese.
+- **User manual**: <https://www.unditas.com/manual/>, in English, French,
+  Spanish, Italian and Chinese. It is the in-app Help (Menu → Help) as a web
+  page, built from the same texts by `scripts/manual/render-manual.mjs`;
+  `npm run manual:pdf` prints it, and `npm run manual:figures` captures its
+  figures again.
 - **Animated guide**: Menu → Animated guide plays short scripted demos inside
   the app; see [animated-guide.md](animated-guide.md).
 - **Release notes**: one file per version in [releases/](releases/).
+- [file-formats.md](file-formats.md): what the audio, Micro-Cap, netCDF and
+  GRIB readers accept, and the map view of gridded data.
 - [large-files.md](large-files.md): opening files of 500 MB and more.
 - [csv-loading.md](csv-loading.md) and
   [csv-robust-parsing.md](csv-robust-parsing.md): how a CSV is read, and what
