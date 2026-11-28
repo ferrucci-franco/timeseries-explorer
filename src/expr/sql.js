@@ -62,6 +62,30 @@ import { quoteIdent, windowColumn } from '../data/lazy-tool-sql.js';
 // A formula this long in SQL has nested enough shared subexpressions that it
 // is not worth sending: the overview is the honest answer then.
 const MAX_SQL_LENGTH = 20000;
+// A name whose SQL is longer than this, mentioned more than once, is read from
+// a column of the query's FROM instead of being written out at every mention.
+//
+// A name resolves to the SQL of what it reads, and that is treated as cheap to
+// repeat — true of a column, `"speed"::DOUBLE`, and not of a formula built on a
+// formula, which carries the whole SQL of the one below it. Two mentions of such
+// a name doubled the text, and a chain of everyday formulas (the previous result
+// plus a little arithmetic) passed MAX_SQL_LENGTH and fell back to the overview
+// of the file — measured on two such chains: 183, 379, 997, 2149 … 11 049
+// characters, refused at the eleventh step, and at the eighth where the columns
+// have shorter names. Written as a column, the same two reach the 62nd and the
+// 35th.
+//
+// Written once as a column of the FROM (asColumn, the same mechanism diff() and
+// cumsum() use), the chain grows by what each formula itself adds. The lambda
+// binding share() uses for a computed value is not an option here: sixteen
+// nested list_transform lambdas, one per step of the chain, ran the engine out
+// of memory on the first query.
+//
+// It costs what a window column costs: the FROM computes it over the file's
+// rows before the query's range filter, so a zoomed query over such a formula
+// reads the whole file — which is what a formula with a diff() in it already
+// does. Only a mention that would otherwise be written twice pays it.
+const REPEAT_INLINE_LIMIT = 600;
 
 const NAN = "CAST('NaN' AS DOUBLE)";
 const MINUS_ZERO = "CAST('-0.0' AS DOUBLE)";
@@ -124,6 +148,9 @@ export function formulaToSql(formula, variables, resolve, out = null) {
     // Every window column met so far, by name: those of the variables read,
     // and those diff() and cumsum() create.
     const registry = new Map();
+    // The names bound to a lambda variable for this formula, while its body is
+    // being written: a mention of one of them is that variable.
+    const bound = new Map();
     const windowsIn = (text) => {
         const found = new Map();
         const visit = (sql) => {
@@ -171,6 +198,8 @@ export function formulaToSql(formula, variables, resolve, out = null) {
             case 'number':
                 return node(literal(n.value), true);
             case 'name': {
+                const held = bound.get(n.value);
+                if (held) return node(held, true);
                 const resolved = resolve(n.value);
                 if (!resolved) throw new FormulaNotTranslatable(`"${n.value}" has no SQL form`);
                 if ('scalar' in resolved) return node(literal(Number(resolved.scalar)), true);
@@ -329,6 +358,39 @@ export function formulaToSql(formula, variables, resolve, out = null) {
             + ` THEN (CASE WHEN ${r} < 0 AND floor(${r} + 0.5) = 0 THEN ${MINUS_ZERO} ELSE floor(${r} + 0.5) END)`
             + ` ELSE ${r} END)`
         )));
+    }
+
+    // Which names the formula mentions, and how often. A walk over whatever
+    // the parser built, so a name nested in a construct this does not know
+    // about is still counted.
+    const mentions = new Map();
+    const countMentions = (node_) => {
+        if (!node_ || typeof node_ !== 'object') return;
+        if (Array.isArray(node_)) {
+            node_.forEach(countMentions);
+            return;
+        }
+        if (node_.type === 'name') {
+            mentions.set(node_.value, (mentions.get(node_.value) || 0) + 1);
+            return;
+        }
+        for (const value of Object.values(node_)) countMentions(value);
+    };
+    countMentions(ast);
+    const repeated = [...mentions.entries()]
+        .filter(([name, count]) => {
+            if (count < 2) return false;
+            const resolved = resolve(name);
+            return !!resolved && !('scalar' in resolved) && String(resolved.sql || '').length > REPEAT_INLINE_LIMIT;
+        })
+        .map(([name]) => name);
+
+    // Each of those becomes a column of the FROM, computed once, and every
+    // mention of the name reads that column.
+    for (const name of repeated) {
+        const resolved = resolve(name);
+        for (const window of resolved.windows || []) registry.set(window.column, window);
+        bound.set(name, asColumn(settle(resolved.sql)));
     }
 
     const sql = emit(ast).sql;
