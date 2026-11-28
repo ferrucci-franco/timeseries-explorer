@@ -2273,7 +2273,6 @@ export function installCompactMethods(ViewerClass) {
         }
         // New signals made from the file's own: derived variables.
         if (this._compactDerivedAnalyzeSection) node.appendChild(this._compactDerivedAnalyzeSection());
-        node.appendChild(el('p', 'compact-note compact-note-muted', i18n.t('compactMoreAnalysesSoon')));
 
         return {
             title: i18n.t('compactNavAnalyze'),
