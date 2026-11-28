@@ -2921,6 +2921,7 @@ const translations = {
 
             // Help
             helpTitle: 'Help - Time Series Explorer',
+            manualTitle: 'User manual',
             helpClose: 'Close',
             helpSec1Title: "Overview and quick start",
             helpSec1Body: "<p>Time Series Explorer turns simulation results, measurements, and tabular data into an interactive workspace. You can compare several runs, combine signals from different files, inspect them as time series, analyze their frequency or distribution, build phase plots, and animate trajectories.</p><h4>A useful first minute</h4><ol><li>Drop one or more files onto the start screen, or use the <b>folder</b> button.</li><li>Choose a file in the sidebar, search its variables, and drag a signal onto a plot panel.</li><li>Add more signals to the same panel, or use the panel arrows to create another plot.</li><li>Choose a plot type from that panel's toolbar, then zoom, measure, compare, or transform the data.</li></ol><div class=\"help-callout\"><b>Your data stays local.</b> Files are processed on your device; the web version does not upload their contents to a server. The Full Desktop version also works offline and adds native access to local files.</div>",
@@ -6132,6 +6133,7 @@ const translations = {
 
             // Help
             helpTitle: 'Aide - Time Series Explorer',
+            manualTitle: 'Manuel d’utilisation',
             helpClose: 'Fermer',
             helpSec1Title: "Vue d’ensemble et démarrage",
             helpSec1Body: "<p>Time Series Explorer transforme résultats de simulation, mesures et tableaux en un espace de travail interactif. Il permet de comparer plusieurs essais, combiner des signaux de fichiers différents, analyser leur évolution temporelle, leur spectre ou leur distribution, construire des portraits de phase et animer des trajectoires.</p><h4>Première minute</h4><ol><li>Déposez un ou plusieurs fichiers sur l’écran initial, ou utilisez le bouton <b>dossier</b>.</li><li>Sélectionnez un fichier, recherchez ses variables et faites glisser un signal vers un panneau.</li><li>Ajoutez d’autres signaux au même panneau, ou créez un graphique avec les flèches du panneau.</li><li>Choisissez un type de graphique dans sa barre d’outils, puis zoomez, mesurez, comparez ou transformez.</li></ol><div class=\"help-callout\"><b>Vos données restent locales.</b> Les fichiers sont traités sur votre appareil ; la version web n’envoie pas leur contenu à un serveur. La version Full Desktop fonctionne aussi hors ligne et ajoute l’accès natif aux fichiers locaux.</div>",
@@ -9312,6 +9314,7 @@ const translations = {
             saNormLabel: 'Norma',
             saDZoomLabel: 'Zoom',
             helpTitle: 'Ayuda - Time Series Explorer',
+            manualTitle: 'Manual de usuario',
             helpClose: 'Cerrar',
             helpSec1Title: "Panorama y primeros pasos",
             helpSec1Body: "<p>Time Series Explorer convierte resultados de simulación, mediciones y datos tabulares en un espacio de trabajo interactivo. Permite comparar ensayos, combinar señales de distintos archivos, estudiarlas en el tiempo, analizar frecuencia o distribución, crear diagramas de fase y animar trayectorias.</p><h4>Tu primer minuto</h4><ol><li>Arrastra uno o varios archivos a la pantalla inicial, o usa el botón de <b>carpeta</b>.</li><li>Elige un archivo en la barra lateral, busca sus variables y arrastra una señal a un panel.</li><li>Agrega más señales al mismo panel o crea otro gráfico con las flechas del panel.</li><li>Elige el tipo de gráfico en su barra de herramientas y luego haz zoom, mide, compara o transforma los datos.</li></ol><div class=\"help-callout\"><b>Tus datos permanecen en tu equipo.</b> Los archivos se procesan localmente; la versión web no sube su contenido a un servidor. La versión Full Desktop también funciona sin conexión y añade acceso nativo a archivos locales.</div>",
@@ -12492,6 +12495,7 @@ const translations = {
             saNormLabel: 'Norma',
             saDZoomLabel: 'Zoom',
             helpTitle: 'Guida - Time Series Explorer',
+            manualTitle: 'Manuale utente',
             helpClose: 'Chiudi',
             helpSec1Title: "Panoramica e primi passi",
             helpSec1Body: "<p>Time Series Explorer trasforma risultati di simulazione, misure e dati tabellari in uno spazio di lavoro interattivo. Consente di confrontare prove, combinare segnali di file diversi, studiarli nel tempo, analizzarne frequenza o distribuzione, creare diagrammi di fase e animare traiettorie.</p><h4>Il primo minuto</h4><ol><li>Trascinare uno o più file sulla schermata iniziale, oppure usare il pulsante <b>cartella</b>.</li><li>Scegliere un file nella barra laterale, cercare le variabili e trascinare un segnale su un pannello.</li><li>Aggiungere segnali allo stesso pannello o creare un altro grafico con le frecce del pannello.</li><li>Scegliere il tipo di grafico dalla barra e poi eseguire zoom, misure, confronti o trasformazioni.</li></ol><div class=\"help-callout\"><b>I dati restano locali.</b> I file vengono elaborati sul dispositivo; la versione web non ne carica il contenuto su un server. La versione Full Desktop funziona anche offline e aggiunge accesso nativo ai file locali.</div>",
@@ -15694,6 +15698,7 @@ const translations = {
 
             // Help
             helpTitle: '帮助 - Time Series Explorer',
+            manualTitle: '用户手册',
             helpClose: '关闭',
             helpSec1Title: "概述与快速入门",
             helpSec1Body: "<p>Time Series Explorer 可将仿真结果、测量数据和表格数据转换为交互式工作区。您可以比较多次运行的结果，组合来自不同文件的信号，将其作为时间序列查看，分析其频率或分布，构建相图，并为轨迹制作动画。</p><h4>有用的第一分钟</h4><ol><li>将一个或多个文件拖放到起始界面，或使用<b>文件夹</b>按钮。</li><li>在侧边栏中选择一个文件，搜索其变量，并将信号拖放到绘图面板上。</li><li>向同一面板添加更多信号，或使用面板箭头创建另一个图表。</li><li>从该面板的工具栏中选择图表类型，然后缩放、测量、比较或变换数据。</li></ol><div class=\"help-callout\"><b>您的数据保留在本地。</b>文件在您的设备上处理；网页版不会将其内容上传到服务器。完整桌面版还可离线使用，并增加了对本地文件的原生访问。</div>",
