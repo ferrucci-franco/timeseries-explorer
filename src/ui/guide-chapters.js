@@ -386,7 +386,8 @@ export const GUIDE_CHAPTERS = [
                 'Stesso grafico, date giuste — niente da ricaricare',
                 '同一张图，日期已正确——无需重新加载',
             ));
-            await d.wait(1200);
+            await d.park(600);
+            await d.wait(900);
         },
     },
 
@@ -476,7 +477,8 @@ export const GUIDE_CHAPTERS = [
                         '<b>最新</b>：回到最新读数',
                     ));
                     await d.tap(latest);
-                    await d.wait(1600);
+                    await d.park(600);
+                    await d.wait(1200);
                 }
             }
         },
@@ -966,7 +968,8 @@ export const GUIDE_CHAPTERS = [
             const e0 = Number(end.min || 0);
             const e1 = Number(end.max || 100);
             await d.slide(end, e0 + (e1 - e0) * 0.3, { ms: 1400 });
-            await d.wait(1400);
+            await d.park(600);
+            await d.wait(1000);
         },
     },
 
@@ -1138,16 +1141,21 @@ export const GUIDE_CHAPTERS = [
                 'La costante di tempo: <b>τ ≈ 90 s</b> — con il guadagno K e R²',
                 '时间常数：<b>τ ≈ 90 s</b>——还有增益 K 和 R²',
             ));
-            const tau = Array.from(result.querySelectorAll('.phase2d-fit-coeff')).find((e) => e.querySelector('.phase2d-fit-coeff-k')?.textContent.trim() === 'τ');
-            await d.move({ el: tau || result, ax: 0.7 });
+            // (the results are written again whenever the fit is: the row as it is now)
+            const tau = Array.from(panel.querySelectorAll('.curve-fit-options .phase2d-fit-coeff'))
+                .find((e) => e.querySelector('.phase2d-fit-coeff-k')?.textContent.trim() === 'τ')
+                ?.querySelector('.phase2d-fit-coeff-v');
+            if (!tau?.getClientRects().length) throw new Error('guide: the fit shows no time constant');
+            await d.move({ el: tau, ax: 0.9, dx: 14 });
             await d.wait(3000);
             await d.cam(null, null, 800);
+            await d.park(500);
             await d.wait(600);
         },
     },
 
     {
-        id: 'trend', g: 'analysis', icon: '⟋', est: 28000,
+        id: 'trend', g: 'analysis', icon: '⟋', est: 36000,
         t: say('Trend: mean and slope of a stretch', 'Tendance : moyenne et pente d’un tronçon', 'Tendencia: media y pendiente de un tramo', 'Tendenza: media e pendenza di un tratto', '趋势：一段的均值与斜率'),
         d: say(
             'Is a signal drifting, and how fast? <b>Analysis ▾ → Trend analysis</b> takes stretches of a signal and gives the mean, the spread and the slope of each — with a line, a parabola or an exponential drawn over it — in a table that compares the stretches.',
@@ -2115,26 +2123,34 @@ export const GUIDE_CHAPTERS = [
                 'Sette giorni ripiegati in uno: il ciclo diurno',
                 '七天叠成一天：日变化',
             ));
-            await d.wait(2800);
+            await d.park(600);
+            await d.wait(2400);
         },
     },
 
     {
-        id: 'live-update', g: 'tools', icon: '⏺', est: 41000,
+        id: 'live-update', g: 'tools', icon: '⏺', est: 42000, below: 124,
         t: say('Live Update: a file still being written', 'Live Update : un fichier encore en cours d’écriture', 'Live Update: un archivo que aún se está escribiendo', 'Live Update: un file ancora in scrittura', '实时更新：仍在写入的文件'),
         d: say(
-            'A data logger keeps adding rows to its CSV while you look at it. In the <b>Full Desktop</b> edition, <b>Live Update</b> follows the file: every few seconds it reads only the rows that were added and extends every plot of it — time series and dashboards together — without reloading. Here a stand-in logger writes the file; what follows it is the app’s own Live Update.',
-            'Un enregistreur ajoute des lignes à son CSV pendant que vous le regardez. Dans l’édition <b>Full Desktop</b>, <b>Live Update</b> suit le fichier : toutes les quelques secondes il ne lit que les lignes ajoutées et prolonge tous ses graphiques — séries temporelles et tableaux de bord ensemble — sans recharger. Ici un enregistreur factice écrit le fichier ; ce qui le suit est le vrai Live Update de l’application.',
-            'Un registrador sigue agregando filas a su CSV mientras usted lo mira. En la edición <b>Full Desktop</b>, <b>Live Update</b> sigue el archivo: cada pocos segundos lee solo las filas agregadas y prolonga todos sus gráficos — series temporales y dashboards a la vez — sin recargar. Aquí un registrador simulado escribe el archivo; lo que lo sigue es el Live Update real de la app.',
-            'Un data logger continua ad aggiungere righe al suo CSV mentre lo guardi. Nell’edizione <b>Full Desktop</b>, <b>Live Update</b> segue il file: ogni pochi secondi legge solo le righe aggiunte e prolunga tutti i suoi grafici — serie temporali e dashboard insieme — senza ricaricare. Qui un logger simulato scrive il file; a seguirlo è il vero Live Update dell’app.',
-            '数据记录仪在你查看 CSV 的同时仍在往里追加数据行。在<b>完整桌面版（Full Desktop）</b>中，<b>实时更新</b>会跟随该文件：每隔几秒只读取新增的行，并延长它的所有图表——时间序列和仪表板一起更新——无需重新加载。这里由一个模拟记录仪写文件；跟随它的则是应用真正的实时更新功能。',
+            'A data logger keeps adding rows to its CSV while you look at it. In the <b>Full Desktop</b> edition, <b>Live Update</b> follows the file: every few seconds it reads only the rows that were added and extends every plot of it — time series and dashboards together — without reloading. Here the logger is a simulated program, in its own window under the app; what follows its file is the app’s own Live Update.',
+            'Un enregistreur ajoute des lignes à son CSV pendant que vous le regardez. Dans l’édition <b>Full Desktop</b>, <b>Live Update</b> suit le fichier : toutes les quelques secondes il ne lit que les lignes ajoutées et prolonge tous ses graphiques — séries temporelles et tableaux de bord ensemble — sans recharger. Ici l’enregistreur est un programme simulé, dans sa propre fenêtre sous l’application ; ce qui suit son fichier est le vrai Live Update de l’application.',
+            'Un registrador sigue agregando filas a su CSV mientras usted lo mira. En la edición <b>Full Desktop</b>, <b>Live Update</b> sigue el archivo: cada pocos segundos lee solo las filas agregadas y prolonga todos sus gráficos — series temporales y dashboards a la vez — sin recargar. Aquí el registrador es un programa simulado, en su propia ventana bajo la app; lo que sigue su archivo es el Live Update real de la app.',
+            'Un data logger continua ad aggiungere righe al suo CSV mentre lo guardi. Nell’edizione <b>Full Desktop</b>, <b>Live Update</b> segue il file: ogni pochi secondi legge solo le righe aggiunte e prolunga tutti i suoi grafici — serie temporali e dashboard insieme — senza ricaricare. Qui il logger è un programma simulato, in una finestra propria sotto l’app; a seguirne il file è il vero Live Update dell’app.',
+            '数据记录仪在你查看 CSV 的同时仍在往里追加数据行。在<b>完整桌面版（Full Desktop）</b>中，<b>实时更新</b>会跟随该文件：每隔几秒只读取新增的行，并延长它的所有图表——时间序列和仪表板一起更新——无需重新加载。这里的记录仪是一个模拟程序，位于应用下方它自己的窗口中；跟随其文件的则是应用真正的实时更新功能。',
         ),
         async setup(d) {
             // The logger and its file (guide-live-logger.js): a stand-in, like
-            // the simulation tool of "Load as new". The file is what it has
-            // written so far, and the app is given the path it would have on a
-            // disk — which is what the desktop edition knows of a file it opens.
-            const logger = d.liveLogger({ title: 'DATA LOGGER · LINE 3', name: 'line_3.csv', path: 'D:\\logs\\line_3.csv', channels: LINE_CHANNELS });
+            // the simulation tool of "Load as new" — a program of its own, in
+            // its own window under the app's (`below`), whose title bar says
+            // it is simulated. The file is what it has written so far, and the
+            // app is given the path it would have on a disk — which is what
+            // the desktop edition knows of a file it opens.
+            const logger = d.liveLogger({
+                title: d.L(say('Data logger — simulated', 'Enregistreur de données — simulé', 'Registrador de datos — simulado', 'Data logger — simulato', '数据记录仪——模拟')),
+                writing: d.L(say('writing to', 'écrit dans', 'escribe en', 'scrive su', '正在写入')),
+                rows: d.L(say('rows', 'lignes', 'filas', 'righe', '行')),
+                name: 'line_3.csv', path: 'D:\\logs\\line_3.csv', channels: LINE_CHANNELS,
+            });
             d.line = { row: processLine(), eventAt: Infinity, on: false };
             logger.header(LINE_HEADER);
             logger.write(Array.from({ length: 60 }, (_, i) => d.line.row(i)));
