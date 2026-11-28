@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { buildPortableApp } from './build-portable.mjs';
 
 const FIXTURES = resolve('test-files/netcdf');

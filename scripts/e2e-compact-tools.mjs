@@ -16,6 +16,7 @@
 // SHOTS_DIR=<dir> also saves screenshots of each step.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 function makeCsv() {

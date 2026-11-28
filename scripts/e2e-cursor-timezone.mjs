@@ -24,6 +24,7 @@
 // stays offline and browser-free; CI runs it as its own step.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 const ZONES = [

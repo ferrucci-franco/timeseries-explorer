@@ -13,6 +13,7 @@
 // Needs a Chromium for Playwright. Run with `npm run e2e:button-press`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 function makeCsv() {

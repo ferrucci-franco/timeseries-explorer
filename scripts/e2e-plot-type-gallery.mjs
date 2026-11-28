@@ -10,6 +10,7 @@
 // Needs a Chromium for Playwright. Run with `npm run e2e:plot-type-gallery`.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 import { PLOT_TYPES } from '../src/plots/plot-type-gallery.js';

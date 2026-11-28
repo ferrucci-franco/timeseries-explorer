@@ -23,6 +23,7 @@
 // of test:release, which stays offline and browser-free.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import './support/e2e-navigation-log.mjs';
 import { createServer } from 'vite';
 
 // The plot types are one button of the panel's toolbar and a gallery behind it.
