@@ -303,7 +303,10 @@ try {
         const shared = Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0]));
         assert.ok(shared < (b[1] - b[0]) * 0.5, `the new segment is placed away from the first (${a} / ${b})`);
     }
-    assert.equal(await page.locator('.trend-remove-btn').isDisabled(), false, 'with two segments, Remove is on');
+    // The toolbar is redrawn after the segment list changes: on a slow runner
+    // the list already held two segments while Remove still read disabled.
+    await page.waitForFunction(() => document.querySelector('.trend-remove-btn')?.disabled === false, null, { timeout: 5000 })
+        .catch(() => assert.fail('with two segments, Remove is on'));
     await setSegment({ rangeFull: false, x1: 1500, x2: 2500 });
     await settled(1);
     const ramp = await result(1);

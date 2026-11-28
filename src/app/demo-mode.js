@@ -8,11 +8,16 @@
 // the in-memory CSV reader (the query engine keeps a database in the origin's
 // private file system, which the app around the frame is already using).
 //
-// One demo shows the phone layout: its frame is opened as
-// `?demo&layout=compact&…`, at a phone's size. That copy uses the phone layout
-// whatever the screen, and takes itself for a touch screen — the guide plays
-// it with a finger (touch events) on a computer that may have none, and the
-// plots only listen to fingers where there is a touch screen.
+// Two demos show the app under a finger, in a frame the size of the device:
+//
+//   ?demo&layout=compact&touch=1   a phone: the phone layout, whatever the screen
+//   ?demo&layout=auto&touch=1      a tablet: the layout the app's own rule gives
+//                                  a window of the frame's size (compact-layout.js)
+//
+// `touch=1` makes that copy take itself for a touch screen: the guide plays it
+// with a finger (touch events) on a computer that may have none, and the plots
+// and the tree only listen to fingers where there is a touch screen. `?demo`
+// alone is the desktop layout played with a mouse, as it always was.
 
 const params = (() => {
     try {
@@ -24,12 +29,19 @@ const params = (() => {
 
 export const DEMO_MODE = params.has('demo');
 
-/** The layout of the guide's frame: 'full' (desktop), or 'compact' for the demo of the phone layout. */
-export const DEMO_LAYOUT = DEMO_MODE && params.get('layout') === 'compact' ? 'compact' : 'full';
+/**
+ * The layout choice of the guide's frame: 'full' (desktop, whatever the
+ * screen), 'compact' (the phone layout, whatever the screen) or 'auto' (what
+ * the frame's size gives).
+ */
+export const DEMO_LAYOUT = DEMO_MODE && ['compact', 'auto'].includes(params.get('layout')) ? params.get('layout') : 'full';
+
+/** The guide's frame is played with a finger. */
+export const DEMO_TOUCH = DEMO_MODE && params.get('touch') === '1';
 
 // isTouchCapable() (src/ui/touch-drag.js) asks for this property, or for
 // touch points the browser reports; a script cannot give it the second.
-if (DEMO_LAYOUT === 'compact' && typeof window !== 'undefined' && !('ontouchstart' in window)) {
+if (DEMO_TOUCH && typeof window !== 'undefined' && !('ontouchstart' in window)) {
     window.ontouchstart = null;
 }
 

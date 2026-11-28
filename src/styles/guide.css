@@ -148,6 +148,11 @@ body.theme-dark .guide {
     border-radius: 30px;
     border-width: 7px;
 }
+/* And a tablet on its side. */
+.guide-screen.guide-screen-tablet {
+    border-radius: 22px;
+    border-width: 8px;
+}
 .guide-cam { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .guide-cam iframe { display: block; border: 0; pointer-events: none; background: var(--bg-primary); }
 .guide-veil {

@@ -18,5 +18,6 @@ export const HELP_TOPICS = [
     { section: '11', icon: 'database', color: '#64748b' },
     { section: '12', icon: 'reload', color: '#0ea5e9' },
     { section: '13', icon: 'save', color: '#22c55e' },
+    { section: '16', icon: 'phone', color: '#10b981' },
     { section: '14', icon: 'info', color: '#6366f1' },
 ];

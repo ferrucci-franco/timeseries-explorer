@@ -16,6 +16,35 @@ uploaded**.
 Created by [Franco Ferrucci](https://github.com/ferrucci-franco) (GEPASUD
 Laboratory, University of French Polynesia). MIT License.
 
+## Who it is for
+
+- **An instrumentation engineer or technician** opens logger and instrument
+  files as they come (CSV in any dialect, Excel, audio recordings) and reads
+  them with the A|B cursors and the panel statistics, the FFT of a vibration
+  and the digital filter. Live Update, in the desktop edition, follows a logger
+  while it writes, and a phone is enough to check a file on site. Example:
+  *Noisy Chirp Fourier Transform*.
+- **A simulation engineer** opens OpenModelica and Dymola results with their
+  model tree, overlays several runs, hovers to read the parameters that differ
+  between them, and turns a panel into a phase plot or a state animation.
+  Example: *Simple Pendulum*.
+- **A teacher** has nothing to install: the app runs in the browser on the
+  students' own devices, with bundled examples and an animated guide, and in
+  class a plot turns into its FFT or a phase plot in two clicks. Example:
+  *Lorenz Attractor*.
+- **A scientist or researcher** fits curves and reads their equations and R²,
+  measures correlation, spectra and integrals (the numerical results are
+  checked against NumPy and SciPy), saves views and projects to reproduce a
+  figure, and exports data and figures. The files never leave the computer.
+  Example: *Correlation and Curve Fitting*.
+- **A data analyst** opens large CSV and Parquet files in memory-saving mode,
+  on an embedded DuckDB engine, then uses the calendar heatmap, the temporal
+  profile, resampling and derived variables written as formulas. Example:
+  *Power Grid Timeseries*.
+- **An energy or climate analyst** puts ERA5 and CMIP fields (netCDF, GRIB) on
+  a map, extracts point and region series, and opens PyPSA networks and
+  power-grid time series. Example: *ERA5 Reanalysis over Argentina*.
+
 ## What it does
 
 - **Opens many formats directly**, with no conversion step: MATLAB `.mat`
@@ -273,7 +302,7 @@ More detail: [docs/architecture.md](docs/architecture.md)
 
 **Menu → Animated guide** (or the Animated guide button on the welcome screen) plays short demos of features that are easy to miss
 (re-reading a CSV, the seven plot types of a panel, the data tools, derived variables, FFT, temporal profile,
-curve fit, trend analysis, cursors and integral, working with OpenModelica/Dymola, PyPSA and ERA5 grids, Live Update, and the phone layout played in a phone-sized frame). They are not recordings: the real app runs in a frame and a script
+curve fit, trend analysis, cursors and integral, working with OpenModelica/Dymola, PyPSA and ERA5 grids, Live Update, and the app under a finger on a phone and on a tablet). They are not recordings: the real app runs in a frame and a script
 drives it, so the demos follow the app's language and theme. `npm run e2e:guide`
 plays them all and fails when a demo no longer finds the control it clicks.
 

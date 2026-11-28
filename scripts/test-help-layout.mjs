@@ -13,11 +13,12 @@ const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.me
 // The topic list lives in a module of its own, shared with the manual page.
 const helpTopics = readFileSync(new URL('../src/app/help-topics.js', import.meta.url), 'utf8');
 const topicSections = [...helpTopics.matchAll(/\{ section: '(\d+)', icon: '(\w+)', color: '#[0-9a-f]+' \}/gi)];
-assert.equal(topicSections.length, 15, 'Help should expose all fifteen topics in its navigation');
-// Section 15 (Align and reindex files) sits right after Time-series plots (5).
-assert.deepEqual(topicSections.map(match => Number(match[1])), [1, 2, 3, 4, 5, 15, 6, 7, 8, 9, 10, 11, 12, 13, 14], 'Help topics should follow the user workflow');
-assert.equal(new Set(topicSections.map(match => match[1])).size, 15, 'Help topic ids must be unique');
-assert.equal(new Set(topicSections.map(match => match[2])).size, 15, 'Each Help topic should have a distinct icon');
+assert.equal(topicSections.length, 16, 'Help should expose all sixteen topics in its navigation');
+// Section 15 (Align and reindex files) sits right after Time-series plots (5);
+// section 16 (Phone and tablet) comes last before About.
+assert.deepEqual(topicSections.map(match => Number(match[1])), [1, 2, 3, 4, 5, 15, 6, 7, 8, 9, 10, 11, 12, 13, 16, 14], 'Help topics should follow the user workflow');
+assert.equal(new Set(topicSections.map(match => match[1])).size, 16, 'Help topic ids must be unique');
+assert.equal(new Set(topicSections.map(match => match[2])).size, 16, 'Each Help topic should have a distinct icon');
 
 for (const section of topicSections.map(match => match[1])) {
     assert.equal(
@@ -64,6 +65,9 @@ for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     assert.doesNotMatch(translations[locale].helpSec11Body, /Live Update|实时更新/i, `${locale} large-file guidance should not mix in live monitoring`);
     assert.match(translations[locale].helpSec12Body, /Live Update|实时更新/i, `${locale} reload guidance should cover Live Update`);
     assert.match(translations[locale].helpSec13Body, /\.json[\s\S]*\.zip/i, `${locale} save guidance should distinguish view and project files`);
+    assert.match(translations[locale].helpSec1Body, /<h4>[^<]+<\/h4><ul class="help-usecases">(?:<li><b>[^<]+<\/b>.*?<\/li>){6}<\/ul><h4>/, `${locale} overview should open with the six kinds of user, before the quick start`);
+    assert.match(translations[locale].helpSec16Body, /600 px[\s\S]*500 px/, `${locale} phone topic should give the width and height below which the phone layout is used`);
+    assert.match(translations[locale].helpSec16Body, /Live Update|实时更新/i, `${locale} phone topic should say Live Update is not on a phone`);
     assert.match(translations[locale].helpSec14Body, /Franco Ferrucci/i, `${locale} About section should identify the creator`);
     assert.match(translations[locale].helpSec14Body, /github\.com\/ferrucci-franco\/timeseries-explorer/i, `${locale} About section should link to the source repository`);
     assert.match(translations[locale].helpSec14Body, /PUBLICATION\.md/i, `${locale} About section should link to publication status`);
@@ -71,6 +75,8 @@ for (const locale of ['en', 'fr', 'es', 'it', 'zh']) {
     assert.match(translations[locale].helpSec14Body, /THIRD_PARTY_LICENSES\.md/i, `${locale} About section should link to third-party licensing details`);
     assert.match(translations[locale].helpSec14Body, /target="_blank" rel="noopener noreferrer"/i, `${locale} external Help links should open safely`);
     for (const mention of guide.match(/.{0,24}Desktop.{0,24}/g) || []) {
+        // "Desktop" is also a choice of More → Layout in the phone layout.
+        if (/Mobile, Desktop\)|Layout → Desktop/.test(mention)) continue;
         assert.match(mention, /Full Desktop version|versi(?:on|ón|one) Full Desktop/i, `${locale} Help should make clear that Desktop means the Full Desktop version`);
     }
 }
