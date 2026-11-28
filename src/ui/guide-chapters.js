@@ -20,6 +20,7 @@ const say = (en, fr, es, it, zh) => ({ en, fr, es, it, zh });
 export const GUIDE_GROUPS = {
     import: say('Import', 'Importer', 'Importar', 'Importare', '导入'),
     plots: say('Plots', 'Graphiques', 'Gráficos', 'Grafici', '图表'),
+    signals: say('New signals', 'Nouveaux signaux', 'Nuevas señales', 'Nuovi segnali', '新信号'),
     analysis: say('Analysis', 'Analyse', 'Análisis', 'Analisi', '分析'),
     tools: say('With your tools', 'Avec vos outils', 'Con sus herramientas', 'Con i tuoi strumenti', '配合你的工具'),
 };
@@ -84,6 +85,98 @@ function buildingCsv() {
     return lines.join('\n');
 }
 
+// The speed of a motor shaft read from an encoder: a ramp up, a plateau, a
+// ramp down, with measurement noise and four glitches of the counter.
+function shaftSpeedCsv() {
+    const rnd = random(5);
+    const smooth = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+    const glitches = new Map([[310, 7], [777, -6], [1130, 7], [1502, -5]]);
+    const lines = ['time [s],speed [rad/s]'];
+    for (let i = 0; i < 2000; i++) {
+        const t = i / 100;
+        const speed = 10 * (smooth((t - 2) / 5) - smooth((t - 12) / 5)) + 0.6 * (rnd() - 0.5) + (glitches.get(i) || 0);
+        lines.push(`${t.toFixed(2)},${speed.toFixed(4)}`);
+    }
+    return lines.join('\n');
+}
+
+// Two hours of a thermal loop — a heat exchanger fed by a pump with stages —
+// logged every ten seconds: the volume flow, and the water temperature at the
+// inlet and at the outlet. The pump changes stage four times and is off for a
+// quarter of an hour; the outlet follows each change with a first-order lag,
+// and the inlet drifts slowly upwards. With `heat`, the file holds the heat
+// flow instead of the two temperatures, as a logger that computes it would:
+// flow / 60 × 4.186 × (T_out − T_in), in kW (water: 1 kg per litre,
+// 4.186 kJ/(kg·K)).
+function thermalLoopCsv({ heat = false } = {}) {
+    const rnd = random(23);
+    const lines = [heat ? 'timestamp,flow_Lpm [L/min],heat [kW]' : 'timestamp,flow_Lpm [L/min],T_in [°C],T_out [°C]'];
+    const t0 = Date.UTC(2026, 4, 18, 9, 0, 0);
+    const step = 1 / 6; // minutes
+    let rise = 11;
+    for (let i = 0; i <= 720; i++) {
+        const minute = i * step;
+        const stage = minute < 10 ? 12 : minute < 35 ? 24 : minute < 50 ? 0 : minute < 80 ? 18 : 30;
+        const flow = stage ? stage + 0.3 * (rnd() - 0.5) : 0;
+        // The exchanger warms a slower flow more; with the pump off the water
+        // standing in it creeps towards the hot side.
+        rise += ((stage ? 14 - 0.25 * stage : 20) - rise) * (step / (stage ? 3 : 12));
+        const tIn = 40 + 3 * (minute / 120) + 0.15 * (rnd() - 0.5);
+        const tOut = tIn + rise + 0.2 * (rnd() - 0.5);
+        const stamp = new Date(t0 + i * 10000).toISOString().slice(0, 19).replace('T', ' ');
+        const cells = heat
+            ? [flow.toFixed(2), ((flow / 60) * 4.186 * (tOut - tIn)).toFixed(3)]
+            : [flow.toFixed(2), tIn.toFixed(2), tOut.toFixed(2)];
+        lines.push(`${stamp},${cells.join(',')}`);
+    }
+    return lines.join('\n');
+}
+
+// An oven whose set point is stepped up at t = 60 s: the temperature answers
+// as a first-order system with a time constant of 90 s, plus sensor noise.
+function ovenStepCsv() {
+    const rnd = random(31);
+    const lines = ['time [s],temperature [°C]'];
+    for (let i = 0; i < 1200; i++) {
+        const t = i * 0.5;
+        const temperature = 22 + (t < 60 ? 0 : 38 * (1 - Math.exp(-(t - 60) / 90))) + 0.5 * (rnd() - 0.5);
+        lines.push(`${t.toFixed(1)},${temperature.toFixed(3)}`);
+    }
+    return lines.join('\n');
+}
+
+// A leak test: a vessel is pressurised, settles for a few minutes while the
+// gas cools, and then loses about 0.012 bar per minute.
+function leakTestCsv() {
+    const rnd = random(57);
+    const lines = ['time [min],pressure [bar]'];
+    for (let i = 0; i <= 720; i++) {
+        const t = i / 12;
+        const pressure = 7.6 + 0.4 * Math.exp(-t / 3) - 0.012 * t + 0.03 * (rnd() - 0.5);
+        lines.push(`${t.toFixed(3)},${pressure.toFixed(4)}`);
+    }
+    return lines.join('\n');
+}
+
+// A process line as its logger writes it, four rows a second, the time in
+// seconds since it started: the pressure of a circuit, its flow and the
+// current of the pump's motor. From the row
+// `eventAt` on, the pressure falls away — a filter clogging — the flow goes
+// with it and the motor draws more.
+const LINE_HEADER = 'time [s],pressure_bar,flow_m3h,motor_A';
+const LINE_CHANNELS = [{ name: 'pressure_bar', unit: 'bar' }, { name: 'flow_m3h', unit: 'm³/h' }, { name: 'motor_A', unit: 'A' }];
+function processLine() {
+    const rnd = random(77);
+    return (i, eventAt = Infinity) => {
+        const since = Math.max(0, i - eventAt) / 4; // seconds into the event
+        const fall = 1 - Math.exp(-since / 1.6);
+        const pressure = 6.2 - 2.4 * fall + 0.25 * Math.sin(i / 9) + 0.12 * (rnd() - 0.5);
+        const flow = 12 - 3.6 * fall + 0.4 * Math.sin(i / 14 + 1) + 0.2 * (rnd() - 0.5);
+        const current = 9 + 1.9 * fall + 0.3 * Math.sin(i / 6) + 0.15 * (rnd() - 0.5);
+        return `${(i / 4).toFixed(2)},${pressure.toFixed(2)},${flow.toFixed(2)},${current.toFixed(2)}`;
+    };
+}
+
 // ─── Small helpers ─────────────────────────────────────────────────────────
 
 /** The drop-down list, inside `root`, that offers this value. */
@@ -120,6 +213,36 @@ function plotArea(gd, fx, fy) {
     const xa = gd._fullLayout.xaxis;
     const ya = gd._fullLayout.yaxis;
     return [r.left + xa._offset + xa._length * fx, r.top + ya._offset + ya._length * fy];
+}
+
+/** Where a time (an x value) is on a plot, at a fraction of the drawing area's height. */
+function plotAt(gd, x, fy = 0.5) {
+    const r = gd.getBoundingClientRect();
+    const xa = gd._fullLayout.xaxis;
+    const ya = gd._fullLayout.yaxis;
+    return [r.left + xa._offset + xa.l2p(xa.d2l(x)), r.top + ya._offset + ya._length * fy];
+}
+
+/** The time-series plot of a panel — with an analysis on, the pane that keeps the signal. */
+function timePlot(d, panelIndex = 0) {
+    return d.app.plotManager.plots.get(d.panel(panelIndex)?.dataset.id)?.div || null;
+}
+
+/** True while an analysis of this panel is still computing (its pill is up). */
+function computing(d, panelIndex = 0) {
+    return !!d.panel(panelIndex)?.querySelector('.analysis-computing-indicator.active');
+}
+
+/**
+ * Drag an edge of the green stretch an analysis works on ('x1' its start, 'x2'
+ * its end) to a time, on the plot. Where the edge is now is read from the
+ * field that shows it in the analysis' options.
+ */
+async function dragRangeEdge(d, key, to, { fy = 0.5, panelIndex = 0 } = {}) {
+    const field = d.panel(panelIndex).querySelector(`[data-analysis-range-key="${key}"][data-analysis-range-role="slider"]`);
+    if (!field) throw new Error(`guide: no range bound ${key}`);
+    const gd = timePlot(d, panelIndex);
+    await d.drag(plotAt(gd, Number(field.value), fy), plotAt(gd, to, fy), { ms: 1100 });
 }
 
 // ─── The chapters ──────────────────────────────────────────────────────────
@@ -425,6 +548,259 @@ export const GUIDE_CHAPTERS = [
         },
     },
     {
+        id: 'data-tools', g: 'signals', icon: '⚒', est: 40000,
+        t: say('Data tools: clean, filter, differentiate', 'Outils de données : nettoyer, filtrer, dériver', 'Herramientas de datos: limpiar, filtrar, derivar', 'Strumenti dati: pulire, filtrare, derivare', '数据工具：清理、滤波、求导'),
+        d: say(
+            'The <b>Data tools</b> of the side panel make new signals out of the ones in the file: take the spikes out, filter the noise with a designed low-pass, differentiate, integrate, resample… Each tool previews its result on the plot before it is created, and every result is a signal like any other — the next tool can start from it.',
+            'Les <b>Outils de données</b> du panneau latéral créent de nouveaux signaux à partir de ceux du fichier : retirer les pics, filtrer le bruit avec un passe-bas calculé, dériver, intégrer, rééchantillonner… Chaque outil montre un aperçu de son résultat sur le graphique avant de le créer, et chaque résultat est un signal comme les autres — l’outil suivant peut en partir.',
+            'Las <b>Herramientas de datos</b> del panel lateral crean señales nuevas a partir de las del archivo: quitar los picos, filtrar el ruido con un pasa bajos diseñado, derivar, integrar, remuestrear… Cada herramienta muestra una vista previa de su resultado en el gráfico antes de crearlo, y cada resultado es una señal como cualquier otra — la siguiente herramienta puede partir de ella.',
+            'Gli <b>Strumenti dati</b> del pannello laterale creano nuovi segnali da quelli del file: togliere i picchi, filtrare il rumore con un passa-basso progettato, derivare, integrare, ricampionare… Ogni strumento mostra un’anteprima del risultato sul grafico prima di crearlo, e ogni risultato è un segnale come gli altri — lo strumento successivo può partire da lì.',
+            '侧栏的<b>数据工具</b>用文件里的信号生成新信号：去掉尖峰、用设计好的低通滤除噪声、求导、积分、重采样……每个工具在创建前都会在图上预览结果，而每个结果都和普通信号一样——下一个工具可以接着用它。',
+        ),
+        async setup(d) {
+            await d.loadText('shaft_speed.csv', shaftSpeedCsv());
+            // The measured signal is already on a panel, as after a first look.
+            d.app.plotManager._handleVariableDrop(d.panel(0).dataset.id, ['speed'], d.panel(0), { axis: 'y' });
+            await d.until(() => d.$('.layout-panel .js-plotly-plot')?._fullLayout, 6000);
+        },
+        async run(d) {
+            const tools = d.$('.data-tools-section');
+            const source = d.$('#outlier-variable');
+            const createAndPlot = d.$('#data-tool-create-plot');
+            // (the list of transformations under the tools: one row per signal made)
+            const made = () => d.$$('#data-tool-table .data-tool-row').length;
+            // A tool is opened by its tile; its form opens on the signal to pick.
+            const open = async (tool) => {
+                await d.reveal(tools);
+                await d.cam(tools, 1.5, 700);
+                await d.tap(`.data-tool-tile[data-tool="${tool}"]`, { after: 200 });
+                const opened = await d.until(() => d.$('#data-tool-select').value === tool && source.getClientRects().length, 4000);
+                if (!opened) throw new Error(`guide: the data tool ${tool} did not open`);
+                await d.reveal(source);
+                await d.cam(tools, 1.5, 500);
+            };
+            // The signal the tool before this one made is the last of the list.
+            const pickLast = async () => {
+                await d.choose(source, source.options[source.options.length - 1].value, { after: 300 });
+            };
+            // Create and plot: the result joins the others on the panel, and the
+            // gallery of tools comes back.
+            const create = async () => {
+                const before = made();
+                await d.reveal(createAndPlot);
+                await d.tap(createAndPlot, { after: 200 });
+                const created = await d.until(() => d.$('#data-tool-select').value === '' && made() > before, 8000);
+                if (!created) throw new Error('guide: the data tool did not create its signal');
+            };
+
+            d.say(say(
+                'A shaft speed from an encoder: noise, and a few spikes',
+                'La vitesse d’un arbre lue par un codeur : du bruit, et quelques pics',
+                'La velocidad de un eje leída por un encoder: ruido, y algunos picos',
+                'La velocità di un albero letta da un encoder: rumore, e qualche picco',
+                '编码器测得的轴转速：有噪声，还有几个尖峰',
+            ));
+            await d.wait(1800);
+
+            // ── Remove outliers ──
+            d.say(say(
+                '<b>Data tools</b> → <b>Remove outliers</b>',
+                '<b>Outils de données</b> → <b>Supprimer les valeurs aberrantes</b>',
+                '<b>Herramientas de datos</b> → <b>Eliminar valores atípicos</b>',
+                '<b>Strumenti dati</b> → <b>Rimuovi valori anomali</b>',
+                '<b>数据工具</b> → <b>去除离群值</b>',
+            ));
+            await open('removeOutliers');
+            await d.choose(source, 'speed', { after: 300 });
+            const interpolate = d.$('#outlier-replacement-wrap input[value="interpolate"]');
+            await d.reveal(interpolate);
+            d.say(say(
+                '<b>Interpolate</b>: each spike is replaced, not left as a gap',
+                '<b>Interpoler</b> : chaque pic est remplacé, sans laisser de trou',
+                '<b>Interpolar</b>: cada pico se reemplaza, sin dejar un hueco',
+                '<b>Interpola</b>: ogni picco viene sostituito, senza lasciare un buco',
+                '<b>插值</b>：每个尖峰都被替换，不留空缺',
+            ));
+            await d.tap(interpolate, { after: 300 });
+            await d.cam(null, null, 800);
+            d.say(say(
+                'The dashed curve is the preview: the spikes are gone',
+                'La courbe en tirets est l’aperçu : les pics ont disparu',
+                'La curva de trazos es la vista previa: los picos desaparecieron',
+                'La curva tratteggiata è l’anteprima: i picchi sono spariti',
+                '虚线是预览：尖峰不见了',
+            ));
+            await d.wait(1200);
+            await create();
+
+            // ── A designed low-pass ──
+            d.say(say(
+                '<b>Digital filter</b>, on the signal just made',
+                '<b>Filtre numérique</b>, sur le signal qui vient d’être créé',
+                '<b>Filtro digital</b>, sobre la señal recién creada',
+                '<b>Filtro digitale</b>, sul segnale appena creato',
+                '<b>数字滤波器</b>，作用在刚生成的信号上',
+            ));
+            await open('filter');
+            await pickLast();
+            const cutoff = d.$('#filter-design-cutoff');
+            await d.reveal(cutoff);
+            d.say(say(
+                'A <b>Low-pass</b> is designed from its cut-off frequency: 1 Hz',
+                'Un <b>Passe-bas</b> est calculé à partir de sa fréquence de coupure : 1 Hz',
+                'Un <b>Pasa bajos</b> se diseña a partir de su frecuencia de corte: 1 Hz',
+                'Un <b>Passa-basso</b> si progetta dalla sua frequenza di taglio: 1 Hz',
+                '<b>低通</b>滤波器由截止频率设计：1 Hz',
+            ));
+            await d.type(cutoff, '1');
+            const direction = d.$('#filter-mode');
+            await d.reveal(direction);
+            d.say(say(
+                '<b>Forward and back</b>: the filter adds no delay',
+                '<b>Aller-retour</b> : le filtre n’ajoute aucun retard',
+                '<b>Ida y vuelta</b>: el filtro no agrega retardo',
+                '<b>Avanti e indietro</b>: il filtro non aggiunge ritardo',
+                '<b>前向再后向</b>：滤波不带来延迟',
+            ));
+            await d.choose(direction, 'zeroPhase', { after: 300 });
+            await d.cam(null, null, 800);
+            await d.wait(900);
+            await create();
+
+            // ── Its derivative ──
+            d.say(say(
+                '<b>Derivative</b> of the filtered speed: the acceleration',
+                '<b>Dérivée</b> de la vitesse filtrée : l’accélération',
+                '<b>Derivada</b> de la velocidad filtrada: la aceleración',
+                '<b>Derivata</b> della velocità filtrata: l’accelerazione',
+                '对滤波后的转速求<b>导数</b>：得到加速度',
+            ));
+            await open('derivative');
+            await pickLast();
+            await d.type('#outlier-output-name', 'acceleration', { enter: false, speed: 60 });
+            await d.cam(null, null, 800);
+            await create();
+            d.say(say(
+                'Three tools in a chain — each result is a signal of the file',
+                'Trois outils à la chaîne — chaque résultat est un signal du fichier',
+                'Tres herramientas en cadena — cada resultado es una señal del archivo',
+                'Tre strumenti in catena — ogni risultato è un segnale del file',
+                '三个工具串联——每个结果都是文件里的一个信号',
+            ));
+            await d.move(plotArea(d.$('.layout-panel .js-plotly-plot'), 0.3, 0.45));
+            await d.wait(2200);
+        },
+    },
+
+    {
+        id: 'derived-variables', g: 'signals', icon: 'ƒ', est: 35000,
+        t: say('Derived variables: a formula of signals', 'Variables dérivées : une formule de signaux', 'Variables derivadas: una fórmula de señales', 'Variabili derivate: una formula di segnali', '派生变量：用信号写公式'),
+        d: say(
+            '<b>New variable…</b> in the side panel computes a signal from the others with a formula: here the heat flow of a thermal loop, <b>flow × heat capacity × temperature difference</b>. The names of the signals are offered as you type, and the new variable is plotted, filtered and analysed like a measured one.',
+            '<b>Nouvelle variable…</b> dans le panneau latéral calcule un signal à partir des autres avec une formule : ici le flux de chaleur d’une boucle thermique, <b>débit × capacité thermique × écart de température</b>. Les noms des signaux sont proposés pendant la frappe, et la nouvelle variable se trace, se filtre et s’analyse comme une mesure.',
+            '<b>Nueva variable…</b> en el panel lateral calcula una señal a partir de las otras con una fórmula: aquí el flujo de calor de un lazo térmico, <b>caudal × capacidad calorífica × diferencia de temperatura</b>. Los nombres de las señales se ofrecen mientras escribe, y la nueva variable se grafica, se filtra y se analiza como una medida.',
+            '<b>Nuova variabile…</b> nel pannello laterale calcola un segnale dagli altri con una formula: qui il flusso di calore di un circuito termico, <b>portata × capacità termica × differenza di temperatura</b>. I nomi dei segnali vengono proposti mentre scrivi, e la nuova variabile si traccia, si filtra e si analizza come una misura.',
+            '侧栏的<b>新建变量…</b>用公式由其他信号算出一个新信号：这里是热力回路的热流量，<b>流量 × 比热容 × 温差</b>。输入时会提示信号名，新变量可以像实测信号一样绘图、滤波和分析。',
+        ),
+        async setup(d) {
+            await d.loadText('thermal_loop.csv', thermalLoopCsv());
+        },
+        async run(d) {
+            const suggestion = (name) => d.$$('#derived-suggestions .derived-suggestion')
+                .find((e) => e.dataset.suggestionName === name && e.getClientRects().length);
+            d.say(say(
+                'A thermal loop: the flow, the inlet and the outlet temperature',
+                'Une boucle thermique : le débit, la température d’entrée et de sortie',
+                'Un lazo térmico: el caudal, la temperatura de entrada y la de salida',
+                'Un circuito termico: la portata, la temperatura di ingresso e di uscita',
+                '一个热力回路：流量、进口温度和出口温度',
+            ));
+            await d.select(['flow_Lpm', 'T_in', 'T_out']);
+            await d.plot('flow_Lpm', 0, { label: 'flow_Lpm, T_in, T_out' });
+            await d.until(() => d.panel(0).querySelector('.js-plotly-plot')?._fullLayout, 5000);
+            await d.wait(1600);
+
+            const section = d.$('.derived-section');
+            await d.reveal(section);
+            await d.cam(section, 1.5, 700);
+            d.say(say(
+                '<b>New variable…</b>: a name, and a formula',
+                '<b>Nouvelle variable…</b> : un nom, et une formule',
+                '<b>Nueva variable…</b>: un nombre y una fórmula',
+                '<b>Nuova variabile…</b>: un nome e una formula',
+                '<b>新建变量…</b>：一个名字，一个公式',
+            ));
+            await d.tap('#derived-toggle', { after: 300 });
+            await d.until(() => d.$('#derived-name').getClientRects().length, 3000);
+            await d.reveal('#derived-create');
+            await d.cam(section, 1.5, 500);
+            await d.type('#derived-name', 'heat_kW', { enter: false, speed: 70 });
+
+            d.say(say(
+                'Type a few letters: the signals of the file are offered',
+                'Tapez quelques lettres : les signaux du fichier sont proposés',
+                'Escriba unas letras: se ofrecen las señales del archivo',
+                'Scrivi qualche lettera: vengono proposti i segnali del file',
+                '输入几个字母：文件里的信号就会被提示出来',
+            ));
+            await d.type('#derived-formula', 'flo', { enter: false, change: false, speed: 160 });
+            if (!await d.until(() => suggestion('flow_Lpm'), 3000)) throw new Error('guide: the formula field did not offer flow_Lpm');
+            await d.wait(500);
+            await d.tap(suggestion('flow_Lpm'), { after: 400 });
+            d.say(say(
+                'Heat flow in kW: flow × heat capacity × temperature difference',
+                'Flux de chaleur en kW : débit × capacité thermique × écart de température',
+                'Flujo de calor en kW: caudal × capacidad calorífica × diferencia de temperatura',
+                'Flusso di calore in kW: portata × capacità termica × differenza di temperatura',
+                '热流量（kW）：流量 × 比热容 × 温差',
+            ));
+            await d.type('#derived-formula', ' / 60 * 4.186 * (T_out - T_in)', { append: true, enter: false, change: false, speed: 75 });
+            await d.wait(900);
+            await d.tap('#derived-create', { after: 300 });
+            if (!await d.until(() => d.app.plotManager.data?.variables?.heat_kW, 6000)) throw new Error('guide: heat_kW was not created');
+
+            await d.cam(null, null, 800);
+            const split = d.panel(0).querySelectorAll('.layout-panel-toolbar > .layout-toolbar-btn')[2];
+            d.say(say(
+                '<b>▼</b> splits the panel: <b>heat_kW</b> under the measurements',
+                '<b>▼</b> divise le panneau : <b>heat_kW</b> sous les mesures',
+                '<b>▼</b> divide el panel: <b>heat_kW</b> bajo las medidas',
+                '<b>▼</b> divide il pannello: <b>heat_kW</b> sotto le misure',
+                '<b>▼</b>拆分面板：把 <b>heat_kW</b> 放在实测信号下方',
+            ));
+            await d.tap(split);
+            await d.until(() => d.panels().length === 2, 3000);
+            // (the three measurements are still selected: only the new one is dragged)
+            const row = await d.variable('heat_kW');
+            await d.tap({ el: row.querySelector('.tree-label') || row }, { after: 200 });
+            await d.plot('heat_kW', 1);
+            if (!await d.until(() => d.panel(1).querySelector('.js-plotly-plot')?._fullLayout, 6000)) throw new Error('guide: heat_kW was not plotted');
+            await d.wait(600);
+
+            const heat = d.panel(1).querySelector('.js-plotly-plot');
+            d.say(say(
+                'It jumps with every pump stage, then settles as the outlet follows',
+                'Il saute à chaque palier de la pompe, puis se stabilise quand la sortie suit',
+                'Salta con cada etapa de la bomba y luego se estabiliza cuando la salida la sigue',
+                'Salta a ogni stadio della pompa, poi si assesta quando l’uscita segue',
+                '水泵每换一档它就跳变，随后随出口温度稳定下来',
+            ));
+            await d.move(plotArea(heat, 0.1, 0.35));
+            await d.move(plotArea(heat, 0.2, 0.3), 900);
+            await d.wait(1500);
+            d.say(say(
+                'Pump off: no flow, so the heat flow reads zero',
+                'Pompe arrêtée : pas de débit, donc un flux de chaleur nul',
+                'Bomba apagada: sin caudal, el flujo de calor marca cero',
+                'Pompa ferma: nessuna portata, quindi il flusso di calore è zero',
+                '水泵停机：没有流量，热流量就是零',
+            ));
+            await d.move(plotArea(heat, 0.35, 0.85), 900);
+            await d.wait(2200);
+        },
+    },
+
+    {
         id: 'fft', g: 'analysis', icon: '∿', est: 34000,
         t: say('Frequency spectrum (FFT)', 'Spectre de fréquence (FFT)', 'Espectro de frecuencia (FFT)', 'Spettro di frequenza (FFT)', '频谱 (FFT)'),
         d: say(
@@ -620,6 +996,319 @@ export const GUIDE_CHAPTERS = [
             await d.move(plotArea(profile, 0.12, 0.45));
             await d.move(plotArea(profile, 0.62, 0.4), 1600);
             await d.wait(1200);
+        },
+    },
+
+    {
+        id: 'curve-fit', g: 'analysis', icon: '⌒', est: 28000,
+        t: say('Curve fit: a time constant', 'Ajustement de courbes : une constante de temps', 'Ajuste de curvas: una constante de tiempo', 'Adattamento curve: una costante di tempo', '曲线拟合：求时间常数'),
+        d: say(
+            '<b>Analysis ▾ → Curve fit</b> fits a line, a parabola, a power law, an exponential or a <b>first-order response</b> to a stretch of a signal. Place the green stretch on the plot, choose the model, and read the parameters — here the time constant <b>τ</b> of a temperature settling after a step — with the residuals in the pane below.',
+            '<b>Analyse ▾ → Ajustement de courbes</b> ajuste une droite, une parabole, une loi de puissance, une exponentielle ou une <b>réponse du premier ordre</b> sur un tronçon d’un signal. Placez le tronçon vert sur le graphique, choisissez le modèle et lisez les paramètres — ici la constante de temps <b>τ</b> d’une température qui se stabilise après un échelon — avec les résidus dans le volet du bas.',
+            '<b>Análisis ▾ → Ajuste de curvas</b> ajusta una recta, una parábola, una ley de potencia, una exponencial o una <b>respuesta de primer orden</b> a un tramo de una señal. Coloque el tramo verde en el gráfico, elija el modelo y lea los parámetros — aquí la constante de tiempo <b>τ</b> de una temperatura que se estabiliza tras un escalón — con los residuos en el panel de abajo.',
+            '<b>Analisi ▾ → Adattamento curve</b> adatta una retta, una parabola, una legge di potenza, un’esponenziale o una <b>risposta del primo ordine</b> a un tratto di un segnale. Posiziona il tratto verde sul grafico, scegli il modello e leggi i parametri — qui la costante di tempo <b>τ</b> di una temperatura che si assesta dopo un gradino — con i residui nel riquadro in basso.',
+            '<b>分析 ▾ → 曲线拟合</b>可对信号的一段拟合直线、抛物线、幂函数、指数或<b>一阶响应</b>。在图上放好绿色区段，选择模型，然后读取参数——这里是温度在阶跃后趋于稳定的时间常数 <b>τ</b>——下方窗格显示残差。',
+        ),
+        async setup(d) {
+            await d.loadText('oven_step.csv', ovenStepCsv());
+        },
+        async run(d) {
+            const panel = d.panel(0);
+            const fitted = () => {
+                const result = d.app.plotManager.plots.get(panel.dataset.id)?._curveFitResults?.[0]?.result;
+                return !computing(d) && result?.fit?.status === 'ok' ? result.fit : null;
+            };
+            d.say(say(
+                'An oven after a step of its set point',
+                'Un four après un échelon de sa consigne',
+                'Un horno tras un escalón de su consigna',
+                'Un forno dopo un gradino del setpoint',
+                '设定值阶跃之后的炉温',
+            ));
+            await d.plot('temperature');
+            await d.until(() => panel.querySelector('.js-plotly-plot')?._fullLayout, 5000);
+            await d.wait(1400);
+            await d.cam({ el: panel.querySelector('.layout-panel-toolbar'), ax: 0.62 }, 1.5, 700);
+            d.say(say(
+                '<b>Analysis ▾</b> → Curve fit',
+                '<b>Analyse ▾</b> → Ajustement de courbes',
+                '<b>Análisis ▾</b> → Ajuste de curvas',
+                '<b>Analisi ▾</b> → Adattamento curve',
+                '<b>分析 ▾</b> → 曲线拟合',
+            ));
+            await d.analysis('curve-fit');
+            if (!await d.until(() => panel.querySelector('.curve-fit-options .phase2d-fit-type-select') && timePlot(d)?._fullLayout, 8000)) {
+                throw new Error('guide: the curve fit did not open');
+            }
+            await d.cam(null, null, 800);
+
+            const type = panel.querySelector('.curve-fit-options .phase2d-fit-type-select');
+            d.say(say(
+                'Fit type: <b>First-order response + offset</b>',
+                'Type d’ajustement : <b>Réponse du premier ordre + décalage</b>',
+                'Tipo de ajuste: <b>Respuesta de primer orden + offset</b>',
+                'Tipo di adattamento: <b>Risposta del primo ordine + offset</b>',
+                '拟合类型：<b>一阶响应 + 偏移</b>',
+            ));
+            await d.choose(type, 'first-order-offset');
+            if (!await d.until(fitted, 15000)) throw new Error('guide: no first-order fit');
+            await d.wait(700);
+
+            d.say(say(
+                'Drag the edges of the green stretch: from the step to the plateau',
+                'Glissez les bords du tronçon vert : de l’échelon au palier',
+                'Arrastre los bordes del tramo verde: del escalón a la meseta',
+                'Trascina i bordi del tratto verde: dal gradino al plateau',
+                '拖动绿色区段的两条边：从阶跃处到平台',
+            ));
+            await dragRangeEdge(d, 'x1', 63, { fy: 0.6 });
+            await dragRangeEdge(d, 'x2', 540, { fy: 0.6 });
+            // The fit follows the stretch: wait for the one of the new range.
+            if (!await d.until(() => Math.abs((fitted()?.timeConstant || 0) - 90) < 15, 15000)) throw new Error('guide: the fit did not follow the stretch');
+            d.say(say(
+                'The dashed curve is the fit; its residuals are below',
+                'La courbe en tirets est l’ajustement ; ses résidus sont en dessous',
+                'La curva de trazos es el ajuste; sus residuos están debajo',
+                'La curva tratteggiata è l’adattamento; i residui sono sotto',
+                '虚线是拟合曲线；下方是它的残差',
+            ));
+            await d.wait(2200);
+
+            const result = panel.querySelector('.curve-fit-options .phase2d-fit-result');
+            await d.reveal(panel.querySelector('.curve-fit-options .phase2d-fit-stats') || result);
+            await d.cam(result, 1.7, 800);
+            d.say(say(
+                'The time constant: <b>τ ≈ 90 s</b> — with the gain K and R²',
+                'La constante de temps : <b>τ ≈ 90 s</b> — avec le gain K et R²',
+                'La constante de tiempo: <b>τ ≈ 90 s</b> — con la ganancia K y R²',
+                'La costante di tempo: <b>τ ≈ 90 s</b> — con il guadagno K e R²',
+                '时间常数：<b>τ ≈ 90 s</b>——还有增益 K 和 R²',
+            ));
+            const tau = Array.from(result.querySelectorAll('.phase2d-fit-coeff')).find((e) => e.querySelector('.phase2d-fit-coeff-k')?.textContent.trim() === 'τ');
+            await d.move({ el: tau || result, ax: 0.7 });
+            await d.wait(3000);
+            await d.cam(null, null, 800);
+            await d.wait(600);
+        },
+    },
+
+    {
+        id: 'trend', g: 'analysis', icon: '⟋', est: 28000,
+        t: say('Trend: mean and slope of a stretch', 'Tendance : moyenne et pente d’un tronçon', 'Tendencia: media y pendiente de un tramo', 'Tendenza: media e pendenza di un tratto', '趋势：一段的均值与斜率'),
+        d: say(
+            'Is a signal drifting, and how fast? <b>Analysis ▾ → Trend analysis</b> takes stretches of a signal and gives the mean, the spread and the slope of each — with a line, a parabola or an exponential drawn over it — in a table that compares the stretches.',
+            'Un signal dérive-t-il, et à quelle vitesse ? <b>Analyse ▾ → Analyse de tendance</b> prend des tronçons d’un signal et donne la moyenne, la dispersion et la pente de chacun — avec une droite, une parabole ou une exponentielle tracée par-dessus — dans un tableau qui compare les tronçons.',
+            '¿Una señal deriva, y a qué ritmo? <b>Análisis ▾ → Análisis de tendencia</b> toma tramos de una señal y da la media, la dispersión y la pendiente de cada uno — con una recta, una parábola o una exponencial dibujada encima — en una tabla que compara los tramos.',
+            'Un segnale sta derivando, e a che velocità? <b>Analisi ▾ → Analisi di tendenza</b> prende tratti di un segnale e dà la media, la dispersione e la pendenza di ciascuno — con una retta, una parabola o un’esponenziale disegnata sopra — in una tabella che confronta i tratti.',
+            '信号在漂移吗？漂得多快？<b>分析 ▾ → 趋势分析</b>选取信号的若干区段，给出每段的均值、离散程度和斜率——并可叠加直线、抛物线或指数曲线——再用一张表比较各段。',
+        ),
+        async setup(d) {
+            await d.loadText('leak_test.csv', leakTestCsv());
+        },
+        async run(d) {
+            const panel = d.panel(0);
+            const options = () => panel.querySelector('.trend-options');
+            d.say(say(
+                'A leak test: is the pressure falling, and how fast?',
+                'Un essai d’étanchéité : la pression baisse-t-elle, et à quelle vitesse ?',
+                'Una prueba de fugas: ¿baja la presión, y a qué ritmo?',
+                'Una prova di tenuta: la pressione scende, e a che velocità?',
+                '一次泄漏测试：压力在下降吗？降得多快？',
+            ));
+            await d.plot('pressure');
+            await d.until(() => panel.querySelector('.js-plotly-plot')?._fullLayout, 5000);
+            await d.wait(1500);
+            await d.cam({ el: panel.querySelector('.layout-panel-toolbar'), ax: 0.62 }, 1.5, 700);
+            d.say(say(
+                '<b>Analysis ▾</b> → Trend analysis',
+                '<b>Analyse ▾</b> → Analyse de tendance',
+                '<b>Análisis ▾</b> → Análisis de tendencia',
+                '<b>Analisi ▾</b> → Analisi di tendenza',
+                '<b>分析 ▾</b> → 趋势分析',
+            ));
+            await d.analysis('trend');
+            if (!await d.until(() => options()?.querySelector('.trend-stats') && timePlot(d)?._fullLayout && !computing(d), 10000)) {
+                throw new Error('guide: the trend analysis did not open');
+            }
+            await d.cam(null, null, 800);
+
+            d.say(say(
+                'Drag the green stretch past the settling of the first minutes',
+                'Glissez le tronçon vert après la stabilisation des premières minutes',
+                'Arrastre el tramo verde más allá del asentamiento de los primeros minutos',
+                'Trascina il tratto verde oltre l’assestamento dei primi minuti',
+                '把绿色区段拖到最初几分钟的稳定过程之后',
+            ));
+            await dragRangeEdge(d, 'x2', 56, { fy: 0.75 });
+            await dragRangeEdge(d, 'x1', 15, { fy: 0.75 });
+            await d.until(() => !computing(d), 8000);
+            d.say(say(
+                'The dotted line is its <b>mean</b>',
+                'La ligne pointillée est sa <b>moyenne</b>',
+                'La línea punteada es su <b>valor medio</b>',
+                'La linea punteggiata è la sua <b>media</b>',
+                '点线是它的<b>均值</b>',
+            ));
+            await d.wait(1800);
+
+            const linear = options().querySelector('input[data-trend-curve="linear"]');
+            await d.reveal(linear);
+            d.say(say(
+                '<b>Linear</b>: a line through the stretch',
+                '<b>Linéaire</b> : une droite à travers le tronçon',
+                '<b>Lineal</b>: una recta a través del tramo',
+                '<b>Lineare</b>: una retta attraverso il tratto',
+                '<b>线性</b>：过这一段的一条直线',
+            ));
+            await d.tap(linear, { after: 300 });
+            const slope = () => Array.from(options().querySelectorAll('.trend-fit-block .phase2d-fit-coeff'))
+                .find((e) => e.querySelector('.phase2d-fit-coeff-k')?.textContent.trim() === 'a');
+            if (!await d.until(() => !computing(d) && slope() && timePlot(d).data.length >= 3, 10000)) throw new Error('guide: no linear trend');
+            await d.wait(1600);
+
+            await d.reveal(options().querySelector('.trend-fit-block'));
+            await d.cam([options().querySelector('.trend-stats'), options().querySelector('.trend-fit-block')], 1.7, 800);
+            d.say(say(
+                'Mean, σ — and the slope <b>a ≈ −0.012 bar/min</b>: the leak rate',
+                'Moyenne, σ — et la pente <b>a ≈ −0,012 bar/min</b> : le débit de fuite',
+                'Media, σ — y la pendiente <b>a ≈ −0,012 bar/min</b>: la tasa de fuga',
+                'Media, σ — e la pendenza <b>a ≈ −0,012 bar/min</b>: il tasso di perdita',
+                '均值、σ——以及斜率 <b>a ≈ −0.012 bar/min</b>：即泄漏速率',
+            ));
+            await d.move({ el: slope(), ax: 0.7 });
+            await d.wait(3200);
+            await d.cam(null, null, 800);
+            await d.wait(600);
+        },
+    },
+
+    {
+        id: 'measure', g: 'analysis', icon: '⇔', est: 40000,
+        t: say('Measure: cursors, statistics, integral', 'Mesurer : curseurs, statistiques, intégrale', 'Medir: cursores, estadísticas, integral', 'Misurare: cursori, statistiche, integrale', '测量：光标、统计与积分'),
+        d: say(
+            'Three ways to put a number on a curve. <b>A|B</b>, the measurement cursors: two lines to drag, with the time and the value between them. <b>Σ</b>: minimum, maximum, mean and RMS of every signal of the panel. And <b>Analysis ▾ → Integral</b>: the area under a signal over a stretch — the energy, when the signal is a power.',
+            'Trois façons de mettre un chiffre sur une courbe. <b>A|B</b>, les curseurs de mesure : deux lignes à glisser, avec le temps et la valeur entre elles. <b>Σ</b> : minimum, maximum, moyenne et RMS de chaque signal du panneau. Et <b>Analyse ▾ → Intégrale</b> : l’aire sous un signal sur un tronçon — l’énergie, quand le signal est une puissance.',
+            'Tres maneras de ponerle un número a una curva. <b>A|B</b>, los cursores de medida: dos líneas para arrastrar, con el tiempo y el valor entre ellas. <b>Σ</b>: mínimo, máximo, media y RMS de cada señal del panel. Y <b>Análisis ▾ → Integral</b>: el área bajo una señal en un tramo — la energía, cuando la señal es una potencia.',
+            'Tre modi per dare un numero a una curva. <b>A|B</b>, i cursori di misura: due linee da trascinare, con il tempo e il valore tra di esse. <b>Σ</b>: minimo, massimo, media e RMS di ogni segnale del pannello. E <b>Analisi ▾ → Integrale</b>: l’area sotto un segnale su un tratto — l’energia, quando il segnale è una potenza.',
+            '给曲线读数的三种方式。<b>A|B</b> 测量光标：拖动两条线，读出它们之间的时间差和数值差。<b>Σ</b>：面板中每个信号的最小值、最大值、均值和 RMS。还有<b>分析 ▾ → 积分</b>：信号在一段上的面积——当信号是功率时，就是能量。',
+        ),
+        async setup(d) {
+            await d.loadText('thermal_loop.csv', thermalLoopCsv({ heat: true }));
+            // The heat flow is already on a panel, as after a first look.
+            d.app.plotManager._handleVariableDrop(d.panel(0).dataset.id, ['heat'], d.panel(0), { axis: 'y' });
+            await d.until(() => d.$('.layout-panel .js-plotly-plot')?._fullLayout, 6000);
+        },
+        async run(d) {
+            const panel = d.panel(0);
+            const minute = (m) => Date.UTC(2026, 4, 18, 9, 0, 0) + m * 60000;
+            const toolbar = panel.querySelector('.layout-panel-toolbar');
+            d.say(say(
+                'The heat flow of a thermal loop, over two hours',
+                'Le flux de chaleur d’une boucle thermique, sur deux heures',
+                'El flujo de calor de un lazo térmico, durante dos horas',
+                'Il flusso di calore di un circuito termico, in due ore',
+                '一个热力回路两小时内的热流量',
+            ));
+            await d.wait(1500);
+
+            // ── Cursors ──
+            const cursorButton = panel.querySelector('.cursor-btn');
+            await d.cam({ el: toolbar, ax: 0.95 }, 1.6, 700);
+            d.say(say(
+                '<b>A|B</b>: the measurement cursors',
+                '<b>A|B</b> : les curseurs de mesure',
+                '<b>A|B</b>: los cursores de medida',
+                '<b>A|B</b>: i cursori di misura',
+                '<b>A|B</b>：测量光标',
+            ));
+            await d.tap(cursorButton, { after: 300 });
+            if (!await d.until(() => panel.querySelector('.cursor-overlay-line-a') && panel.querySelector('.cursor-info-values'), 4000)) {
+                throw new Error('guide: the cursors did not open');
+            }
+            await d.cam(null, null, 800);
+            const gd = timePlot(d);
+            d.say(say(
+                'Drag <b>A</b> to where the pump stops, <b>B</b> to where it starts again',
+                'Glissez <b>A</b> à l’arrêt de la pompe, <b>B</b> à son redémarrage',
+                'Arrastre <b>A</b> hasta donde se detiene la bomba, <b>B</b> hasta donde arranca de nuevo',
+                'Trascina <b>A</b> dove la pompa si ferma, <b>B</b> dove riparte',
+                '把 <b>A</b> 拖到水泵停机处，<b>B</b> 拖到重新启动处',
+            ));
+            await d.drag({ el: panel.querySelector('.cursor-overlay-line-a'), ay: 0.55 }, plotAt(gd, minute(35), 0.55), { ms: 1200 });
+            await d.drag({ el: panel.querySelector('.cursor-overlay-line-b'), ay: 0.7 }, plotAt(gd, minute(50), 0.7), { ms: 1200 });
+            const values = panel.querySelector('.cursor-info-values');
+            await d.cam(panel.querySelector('.cursor-info-box'), 1.7, 800);
+            d.say(say(
+                '<b>ΔX</b>: the pump was off for a quarter of an hour',
+                '<b>ΔX</b> : la pompe est restée arrêtée un quart d’heure',
+                '<b>ΔX</b>: la bomba estuvo apagada un cuarto de hora',
+                '<b>ΔX</b>: la pompa è rimasta ferma un quarto d’ora',
+                '<b>ΔX</b>：水泵停了一刻钟',
+            ));
+            await d.move({ el: values, ax: 0.5, ay: 0.55 });
+            await d.wait(2600);
+            await d.cam(null, null, 700);
+            await d.tap(panel.querySelector('.cursor-info-box .cursor-close-btn'), { after: 300 });
+
+            // ── Σ ──
+            d.say(say(
+                '<b>Σ</b>: minimum, maximum, mean and RMS of each signal',
+                '<b>Σ</b> : minimum, maximum, moyenne et RMS de chaque signal',
+                '<b>Σ</b>: mínimo, máximo, media y RMS de cada señal',
+                '<b>Σ</b>: minimo, massimo, media e RMS di ogni segnale',
+                '<b>Σ</b>：每个信号的最小值、最大值、均值和 RMS',
+            ));
+            await d.cam({ el: toolbar, ax: 0.95 }, 1.6, 600);
+            await d.tap(panel.querySelector('.panel-stats-btn'), { after: 150 });
+            await d.cam(null, null, 250);
+            if (!await d.modalOk({ read: 2000, after: 400 })) throw new Error('guide: no statistics');
+
+            // ── Integral ──
+            await d.cam({ el: toolbar, ax: 0.62 }, 1.5, 600);
+            d.say(say(
+                '<b>Analysis ▾</b> → Integral: power over time is energy',
+                '<b>Analyse ▾</b> → Intégrale : une puissance dans le temps, c’est une énergie',
+                '<b>Análisis ▾</b> → Integral: potencia en el tiempo es energía',
+                '<b>Analisi ▾</b> → Integrale: una potenza nel tempo è un’energia',
+                '<b>分析 ▾</b> → 积分：功率对时间积分就是能量',
+            ));
+            await d.analysis('integral');
+            const total = () => (panel.querySelector('.integral-summary')?.textContent || '');
+            if (!await d.until(() => /kW·h/.test(total()) && timePlot(d)?._fullLayout && !computing(d), 10000)) throw new Error('guide: no integral');
+            await d.cam(null, null, 800);
+            d.say(say(
+                'The whole record: the energy delivered, in <b>kW·h</b>',
+                'Tout l’enregistrement : l’énergie fournie, en <b>kW·h</b>',
+                'Todo el registro: la energía entregada, en <b>kW·h</b>',
+                'Tutta la registrazione: l’energia fornita, in <b>kW·h</b>',
+                '整段记录：输送的能量，单位 <b>kW·h</b>',
+            ));
+            await d.wait(2200);
+
+            const selection = panel.querySelector('.integral-options [data-analysis-range-full="false"]');
+            await d.reveal(selection);
+            d.say(say(
+                '<b>Selection</b>: the energy of one stretch — drag its edges',
+                '<b>Sélection</b> : l’énergie d’un seul tronçon — glissez ses bords',
+                '<b>Selección</b>: la energía de un solo tramo — arrastre sus bordes',
+                '<b>Selezione</b>: l’energia di un solo tratto — trascina i bordi',
+                '<b>选区</b>：只算一段的能量——拖动它的两条边',
+            ));
+            await d.tap(selection, { after: 400 });
+            await d.until(() => !computing(d) && timePlot(d)?._fullLayout, 8000);
+            const before = total();
+            await dragRangeEdge(d, 'x2', minute(80), { fy: 0.3 });
+            await dragRangeEdge(d, 'x1', minute(50), { fy: 0.3 });
+            if (!await d.until(() => !computing(d) && total() !== before, 10000)) throw new Error('guide: the integral did not follow the selection');
+            d.say(say(
+                'Half an hour at the third pump stage: about 6 kW·h',
+                'Une demi-heure au troisième palier de la pompe : environ 6 kW·h',
+                'Media hora en la tercera etapa de la bomba: unos 6 kW·h',
+                'Mezz’ora al terzo stadio della pompa: circa 6 kW·h',
+                '水泵第三档的半小时：约 6 kW·h',
+            ));
+            await d.move({ el: panel.querySelector('.integral-summary'), ax: 0.3 }).catch(() => {});
+            await d.wait(2800);
         },
     },
 
@@ -1316,6 +2005,153 @@ export const GUIDE_CHAPTERS = [
                 '七天叠成一天：日变化',
             ));
             await d.wait(2800);
+        },
+    },
+
+    {
+        id: 'live-update', g: 'tools', icon: '⏺', est: 41000,
+        t: say('Live Update: a file still being written', 'Live Update : un fichier encore en cours d’écriture', 'Live Update: un archivo que aún se está escribiendo', 'Live Update: un file ancora in scrittura', '实时更新：仍在写入的文件'),
+        d: say(
+            'A data logger keeps adding rows to its CSV while you look at it. In the <b>Full Desktop</b> edition, <b>Live Update</b> follows the file: every few seconds it reads only the rows that were added and extends every plot of it — time series and dashboards together — without reloading. Here a stand-in logger writes the file; what follows it is the app’s own Live Update.',
+            'Un enregistreur ajoute des lignes à son CSV pendant que vous le regardez. Dans l’édition <b>Full Desktop</b>, <b>Live Update</b> suit le fichier : toutes les quelques secondes il ne lit que les lignes ajoutées et prolonge tous ses graphiques — séries temporelles et tableaux de bord ensemble — sans recharger. Ici un enregistreur factice écrit le fichier ; ce qui le suit est le vrai Live Update de l’application.',
+            'Un registrador sigue agregando filas a su CSV mientras usted lo mira. En la edición <b>Full Desktop</b>, <b>Live Update</b> sigue el archivo: cada pocos segundos lee solo las filas agregadas y prolonga todos sus gráficos — series temporales y dashboards a la vez — sin recargar. Aquí un registrador simulado escribe el archivo; lo que lo sigue es el Live Update real de la app.',
+            'Un data logger continua ad aggiungere righe al suo CSV mentre lo guardi. Nell’edizione <b>Full Desktop</b>, <b>Live Update</b> segue il file: ogni pochi secondi legge solo le righe aggiunte e prolunga tutti i suoi grafici — serie temporali e dashboard insieme — senza ricaricare. Qui un logger simulato scrive il file; a seguirlo è il vero Live Update dell’app.',
+            '数据记录仪在你查看 CSV 的同时仍在往里追加数据行。在<b>完整桌面版（Full Desktop）</b>中，<b>实时更新</b>会跟随该文件：每隔几秒只读取新增的行，并延长它的所有图表——时间序列和仪表板一起更新——无需重新加载。这里由一个模拟记录仪写文件；跟随它的则是应用真正的实时更新功能。',
+        ),
+        async setup(d) {
+            // The logger and its file (guide-live-logger.js): a stand-in, like
+            // the simulation tool of "Load as new". The file is what it has
+            // written so far, and the app is given the path it would have on a
+            // disk — which is what the desktop edition knows of a file it opens.
+            const logger = d.liveLogger({ title: 'DATA LOGGER · LINE 3', name: 'line_3.csv', path: 'D:\\logs\\line_3.csv', channels: LINE_CHANNELS });
+            d.line = { row: processLine(), eventAt: Infinity, on: false };
+            logger.header(LINE_HEADER);
+            logger.write(Array.from({ length: 60 }, (_, i) => d.line.row(i)));
+            await d.loadFile(logger.name, logger.bytes(), { localPath: logger.path });
+        },
+        async run(d) {
+            const logger = d.liveLogger();
+            const line = d.line;
+            const app = d.app;
+            const fileId = app.activeFileId;
+            const loaded = () => app._liveUpdateRowCount(fileId);
+            const NAMES = LINE_CHANNELS.map((ch) => ch.name);
+
+            // The logger writes four rows a second from now to the end of the
+            // demo, whatever the app is doing — on the demo's clock, so Pause
+            // stops it as it stops everything else.
+            line.on = true;
+            logger.recording(true);
+            (async () => {
+                while (line.on) {
+                    logger.write([line.row(logger.rows(), line.eventAt)]);
+                    await d.wait(250);
+                }
+            })().catch(() => { /* the demo was closed */ });
+
+            logger.show();
+            await d.cam(logger.el.panel, 1.7, 700);
+            d.say(say(
+                'A logger on a process line is still writing <b>line_3.csv</b>',
+                'Un enregistreur sur une ligne de procédé écrit encore <b>line_3.csv</b>',
+                'Un registrador en una línea de proceso sigue escribiendo <b>line_3.csv</b>',
+                'Un logger su una linea di processo sta ancora scrivendo <b>line_3.csv</b>',
+                '生产线上的记录仪仍在写入 <b>line_3.csv</b>',
+            ));
+            await d.wait(2600);
+
+            // ── The file as it was when it was opened ──
+            await d.cam(null, null, 700);
+            d.say(say(
+                'The file, as it was when it was opened: three channels',
+                'Le fichier, tel qu’il était à l’ouverture : trois voies',
+                'El archivo, tal como estaba al abrirlo: tres canales',
+                'Il file, com’era all’apertura: tre canali',
+                '文件打开时的样子：三个通道',
+            ));
+            await d.select(NAMES);
+            await d.plot(NAMES[0], 0, { label: NAMES.join(', ') });
+            await d.until(() => d.panel(0).querySelector('.js-plotly-plot')?._fullLayout, 6000);
+            await d.wait(700);
+
+            const split = d.panel(0).querySelectorAll('.layout-panel-toolbar > .layout-toolbar-btn')[1];
+            d.say(say(
+                'A second panel, as a <b>Dashboard</b>: a card per channel',
+                'Un second panneau, en <b>Tableau de bord</b> : une carte par voie',
+                'Un segundo panel, como <b>Dashboard</b>: una tarjeta por canal',
+                'Un secondo pannello, come <b>Dashboard</b>: una scheda per canale',
+                '第二个面板设为<b>仪表板</b>：每个通道一张卡片',
+            ));
+            await d.tap(split);
+            await d.until(() => d.panels().length === 2, 3000);
+            await d.plotType('dashboard', 1);
+            await d.plot(NAMES[0], 1, { ax: 0.5, label: NAMES.join(', ') });
+            if (!await d.until(() => d.panel(1).querySelectorAll('.dashboard-card').length >= NAMES.length, 6000)) {
+                throw new Error('guide: the dashboard has no cards');
+            }
+            await d.wait(900);
+
+            // ── Live Update ──
+            const button = d.$('#live-update-file');
+            await d.cam(d.$('.live-update-topbar-wrap') || button, 2.4, 700);
+            d.say(say(
+                '<b>Live Update</b> — in the <b>Full Desktop</b> edition',
+                '<b>Live Update</b> — dans l’édition <b>Full Desktop</b>',
+                '<b>Live Update</b> — en la edición <b>Full Desktop</b>',
+                '<b>Live Update</b> — nell’edizione <b>Full Desktop</b>',
+                '<b>实时更新</b>——<b>完整桌面版（Full Desktop）</b>的功能',
+            ));
+            await d.wait(900);
+            const before = loaded();
+            // What the logger writes two and a half seconds from now on is the event.
+            line.eventAt = logger.rows() + 22;
+            await d.tap(button, { after: 300 });
+            if (!await d.until(() => app.files.get(fileId)?.liveUpdate?.enabled, 5000)) throw new Error('guide: Live Update did not start');
+            await d.cam(null, null, 700);
+            d.say(say(
+                'The rows written since the file was opened arrive first',
+                'Les lignes écrites depuis l’ouverture arrivent d’abord',
+                'Primero llegan las filas escritas desde que se abrió',
+                'Per prime arrivano le righe scritte dopo l’apertura',
+                '打开文件之后写入的行先到',
+            ));
+            if (!await d.until(() => loaded() > before, 8000)) throw new Error('guide: Live Update read no new rows');
+            await d.wait(2600);
+            d.say(say(
+                'Then every two seconds: the curves grow, the cards follow',
+                'Puis toutes les deux secondes : les courbes s’allongent, les cartes suivent',
+                'Luego cada dos segundos: las curvas crecen, las tarjetas las siguen',
+                'Poi ogni due secondi: le curve crescono, le schede seguono',
+                '之后每两秒一次：曲线延长，卡片随之更新',
+            ));
+            await d.wait(3200);
+            d.say(say(
+                'The pressure falls away — seen as the logger writes it',
+                'La pression chute — vue au moment où l’enregistreur l’écrit',
+                'La presión cae — vista mientras el registrador la escribe',
+                'La pressione crolla — vista mentre il logger la scrive',
+                '压力骤降——记录仪一写入就能看到',
+            ));
+            await d.move({ el: d.panel(1).querySelector('.dashboard-card'), ax: 0.5, ay: 0.6 });
+            await d.wait(5200);
+            // The event has been written: wait for the poll that brings it.
+            if (!await d.until(() => loaded() >= line.eventAt + 16, 12000)) throw new Error('guide: the event did not arrive');
+            await d.wait(1200);
+
+            // ── And off ──
+            await d.cam(d.$('.live-update-topbar-wrap') || button, 2.4, 700);
+            d.say(say(
+                'The same button pauses it: the plots keep what has arrived',
+                'Le même bouton le met en pause : les graphiques gardent ce qui est arrivé',
+                'El mismo botón lo pausa: los gráficos conservan lo que llegó',
+                'Lo stesso pulsante lo mette in pausa: i grafici tengono ciò che è arrivato',
+                '同一个按钮可暂停：图表保留已到达的数据',
+            ));
+            await d.tap(button, { after: 300 });
+            if (!await d.until(() => !app.files.get(fileId)?.liveUpdate?.enabled, 4000)) throw new Error('guide: Live Update did not pause');
+            await d.cam(null, null, 700);
+            await d.wait(1600);
+            line.on = false;
         },
     },
 ];

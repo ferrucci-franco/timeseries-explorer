@@ -79,6 +79,16 @@ for (const match of source.matchAll(/\bsay\(/g)) {
 }
 assert.ok(captions > GUIDE_CHAPTERS.length * 3, `captions found: ${captions}`);
 
+// ── The list of ids in the documentation ──
+// docs/animated-guide.md names the demos that `app.openGuide(id)` opens; a demo
+// added here and not there is a demo nobody knows can be linked to.
+const docs = await readFile(new URL('../docs/animated-guide.md', import.meta.url), 'utf8');
+const listed = (docs.match(/app\.openGuide\('[^']+'\);\s*\/\/(.*)/) || [])[1] || '';
+assert.deepEqual(
+    Array.from(listed.matchAll(/'([a-z0-9-]+)'/g), match => match[1]),
+    GUIDE_CHAPTERS.map(chapter => chapter.id),
+    'docs/animated-guide.md lists every demo id, in order');
+
 // ── The menu entry ──
 for (const lang of LANGUAGES) {
     for (const key of ['extraGuide', 'extraGuideTooltip']) {

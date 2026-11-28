@@ -16,6 +16,7 @@ import i18n from '../i18n/index.js';
 import { GUIDE_CHAPTERS, GUIDE_GROUPS } from './guide-chapters.js';
 import { createOmStage } from './guide-om-stage.js';
 import { createFileDialogStage } from './guide-file-dialog.js';
+import { createLiveLoggerStage } from './guide-live-logger.js';
 
 const ABORT = { abort: true };
 
@@ -382,18 +383,24 @@ html.demo *{scroll-behavior:auto !important}`;
     }
 
     // Typing in a field: a tap, the old text selected, the new one letter by letter, then Enter.
+    // opts.append: go on after what the field already holds (a formula, after a
+    // name picked from the suggestions).
     async type(t, text, opts = {}) {
         const p = this.pos(t);
         await this.tap(t);
         const f = (p.el && p.el.closest('input, textarea')) || this.doc.activeElement;
         if (!f) return;
-        try { f.focus({ preventScroll: true }); f.select(); } catch (_) { /* not text */ }
+        try {
+            f.focus({ preventScroll: true });
+            if (opts.append) f.setSelectionRange(f.value.length, f.value.length);
+            else f.select();
+        } catch (_) { /* not text */ }
         await this.wait(250);
         const W = this.W;
         const setter = Object.getOwnPropertyDescriptor(f.tagName === 'TEXTAREA' ? W.HTMLTextAreaElement.prototype : W.HTMLInputElement.prototype, 'value').set;
         const put = (v) => { setter.call(f, v); f.dispatchEvent(new W.Event('input', { bubbles: true })); };
-        put('');
-        let typed = '';
+        let typed = opts.append ? f.value : '';
+        if (!opts.append) put('');
         for (const ch of text) {
             typed += ch;
             put(typed);
@@ -544,11 +551,16 @@ html.demo *{scroll-behavior:auto !important}`;
 
     // ── What the demos ask of the app ──
 
-    /** Open a file the way a drop on the window would, and wait until it is in. */
-    async loadFile(name, content) {
+    /**
+     * Open a file the way a drop on the window would, and wait until it is in.
+     * opts.localPath: where the file is on disk, as the desktop edition knows
+     * it of a file it opened (the Live Update demo: guide-live-logger.js).
+     */
+    async loadFile(name, content, opts = {}) {
         const before = this.app.files.size;
         const file = new this.W.File([content], name);
-        await this.app.loadFile(file);
+        if (opts.localPath) await this.app.loadFiles([{ file, fileHandle: null, localPath: opts.localPath }]);
+        else await this.app.loadFile(file);
         await this.until(() => this.app.files.size > before && this.$('#variables-tree .tree-item'), 15000);
         await this.wait(120);
     }
@@ -602,6 +614,16 @@ html.demo *{scroll-behavior:auto !important}`;
     fileDialog() {
         if (!this._fileDialog) this._fileDialog = createFileDialogStage(this.doc, this.W);
         return this._fileDialog;
+    }
+
+    /**
+     * The stand-in for a data logger that is still writing its file, and for
+     * the file reads of the desktop edition that Live Update needs
+     * (guide-live-logger.js). Built the first time a demo asks for it.
+     */
+    liveLogger(options) {
+        if (!this._liveLogger) this._liveLogger = createLiveLoggerStage(this.doc, this.W, options);
+        return this._liveLogger;
     }
 
     /**
@@ -713,7 +735,7 @@ html.demo *{scroll-behavior:auto !important}`;
     }
 
     // Turn an analysis of a time-series panel on: 'fft', 'histogram', 'heatmap',
-    // 'temporal-profile', 'integral'; 'timeseries' turns it off.
+    // 'temporal-profile', 'integral', 'curve-fit', 'trend'; 'timeseries' turns it off.
     //
     // THE ONE PLACE that knows where the analyses are in the toolbar. When that
     // moves (they are being made easier to find), this is what to change — the
