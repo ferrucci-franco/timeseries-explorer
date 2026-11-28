@@ -33,7 +33,7 @@ bordes conocidos, la mayoría dichos en la interfaz.
 |---|---|---|---|
 | 1 | **`.mat` de MATLAB** (v5/v7 y v7.3) en lazy | se cargan siempre enteros; issue #396 | escribir un "lector por columnas" con la forma que describe `src/parsers/mat-v4-stream.js`; `src/data/columnar-ingest.js` lo abre en lazy sin más cambios. Enganchar en `_lazyMatReader` (`src/app/methods/file-methods.js`). Modelo de prueba: `scripts/test-lazy-mat.mjs` |
 | 2 | **pickle, netCDF de series, audio** | solo cargan enteros (Excel entra por conversión a Parquet) | el mismo camino que 1: un lector por columnas por formato. Solo si hace falta |
-| 3 | **Fórmulas sin forma SQL** | el traductor de `src/expr/sql.js` escribe **las 23 funciones** del lenguaje (`DERIVED_CONSTANTS`/`DERIVED_FUNCTIONS` en `src/app/constants.js`), `diff()` y `cumsum()` incluidas, como ventanas: no falta ninguna. Lo que no tiene forma SQL es un **nombre que no resuelve** — una variable que solo existe en el resumen, y entonces lo que se construya sobre ella también— y una fórmula cuyo SQL pasa los 20 000 caracteres (`MAX_SQL_LENGTH`). En lazy esas existen solo sobre el resumen; la app lo avisa al crearlas (`derivedLazyOverviewOnly`) y los análisis las rechazan (`statsLazyOverviewOnly`, `trendLazyOverviewOnly`) | para el nombre que no resuelve, calcularla con el ejecutor por trozos (`src/data/chunk-executor.js`), que es el único camino: no hay función que agregar al traductor |
+| 3 | **Fórmulas sin forma SQL** | el traductor de `src/expr/sql.js` escribe **las 23 funciones** del lenguaje, `diff()` y `cumsum()` incluidas, como ventanas: no falta ninguna. La **cadena de fórmulas** —la causa que un usuario alcanzaba, medida: se rendía en el paso 11, o en el 8 según los nombres de las columnas— está cerrada: sección "Implementado: una fórmula construida sobre otra". Queda sin forma SQL un **nombre que no resuelve**: una columna de texto o booleana, el resultado de una herramienta cuya tabla ya no está (hasta reconstruirla), una variable de índice independiente (solo en `.mat` de MATLAB, que nunca abre en lazy), y lo que se construya sobre cualquiera de ellos. La app lo avisa al crearla (`derivedLazyOverviewOnly`) y los análisis la rechazan | de esa lista, la columna **booleana** es la única que un archivo lazy encuentra de verdad, y tiene forma SQL propia (su columna): medirla y traducirla. Las demás son el ejecutor por trozos (`src/data/chunk-executor.js`) o no ocurren en lazy |
 | ~~4~~ | ~~**Eje de tiempo generado** (archivo sin columna de tiempo)~~ | **cerrado** (#413): el eje que dibuja el panel es la **fila del archivo**, no la posición de la muestra en el resumen, así que el tramo en pantalla y las filas del archivo son las mismas filas; la tendencia lo lee como cualquier otro, y lo que leía filas equivocadas sin avisar (ajuste de curvas, FFT, audio, exportaciones) lee las que el rango nombra | "Implementado: el eje de un archivo lazy sin columna de tiempo" |
 | 5 | **Límites del `.mat` lazy** | la copia ocupa disco del orden de `data_2`; recargar copia todo de nuevo; un archivo corto y muy ancho ahorra poca memoria (su resumen son casi todas sus filas) | "Implementado: resultados `.mat` en lazy", huecos conocidos. Para el último: un lector eager con arreglos tipados, o el resumen por demanda |
 | 6 | **Correlación cruzada: tope de 8 M filas** | la herramienta lee las dos columnas enteras en memoria hasta `LAZY_XCORR_MAX_ROWS` (8 M filas, 128 MB) y por encima se niega diciendo por qué (`dataToolXcorrLazyTooLarge`: remuestrear a un Δt más grueso primero). Medir el eje ya no cuesta: las consultas llevan señal, se detienen al dejar la herramienta y un archivo pasado el tope se niega antes de medirlo | "Implementado (fase 4b-4)", sección "Global". La ruta directa O(N·L) no se paga a esos tamaños; subir el tope es cambiar la FFT de la correlación por una por trozos |
@@ -2625,6 +2625,55 @@ racha mínima más larga, panel mixto, eje generado, plan en streaming y
 cancelación) y `scripts/e2e-lazy-repeated-marks.mjs` (Chromium: el mismo CSV de
 12 MB entero y en lazy, las mismas barras, textos y anillos con los mismos
 zooms; un archivo lazy sin repetidos).
+
+### Implementado: una fórmula construida sobre otra, sobre todas las filas
+
+El punto 3 tenía dos causas y una de ellas la alcanzaba cualquiera.
+
+En un archivo lazy una variable derivada no es un arreglo: es su SQL. Y un
+nombre, al resolverse, devuelve **el SQL de lo que lee**, que el traductor
+trata como barato de repetir. Eso es cierto de una columna
+(`"velocidad"::DOUBLE`) y no de una fórmula construida sobre otra, que lleva
+adentro el SQL entero de la de abajo. Así que una fórmula que menciona dos
+veces a la anterior **duplicaba el texto**, y una cadena —el resultado
+anterior y un poco de aritmética, lo que uno escribe explorando— lo duplicaba
+en cada paso. Medido sobre una cadena de ese tipo: 183, 379, 997, 2149, 2317,
+2513, 5265, 10 685, 10 853, 11 049 caracteres, y **el paso 11 se rendía** por
+los 20 000 de `MAX_SQL_LENGTH`: esa variable y todo lo que se construyera
+encima se quedaban sobre el resumen, con los siete rechazos que eso arrastra.
+
+Ahora un nombre cuyo SQL pasa los 600 caracteres y se menciona más de una vez
+**se calcula una vez como columna del FROM** (`asColumn`, el mismo mecanismo
+que usan `diff()` y `cumsum()`), y cada mención lee esa columna. La misma
+cadena llega al **paso 62** antes de rendirse, y la de la prueba —cuyas columnas tienen nombres más cortos, así que se apoya más en el texto— del paso 8 al 35, contando el texto de las
+columnas que el FROM calcula, que es lo que el traductor mide.
+
+**Por qué no un lambda.** El traductor ya tiene `share()`, que ata un valor
+calculado a una variable de lambda (`list_transform([x], lambda v: …)[1]`) y
+sirve para que `log(log(log(x)))` no crezca como 2^n. Atar así cada paso de la
+cadena deja el FROM intacto y conserva el empuje del filtro de rango, pero
+anida un lambda por paso: con dieciséis, la primera consulta **se quedó sin
+memoria** en DuckDB-WASM. Medido, y por eso la columna.
+
+**Lo que cuesta.** Una columna del FROM se calcula sobre las filas del archivo
+*antes* del filtro de rango de la consulta —tiene que ser así para que una
+ventana vea todas las filas—, así que un zoom sobre una fórmula de ese tipo
+lee el archivo entero. Es exactamente lo que ya le pasa a cualquier fórmula
+con un `diff()` adentro, y solo lo paga la mención que de otro modo se
+escribiría dos veces.
+
+**Lo que sigue sin forma SQL**, y es el resto del punto 3: un nombre que no
+resuelve —una columna de texto o booleana, el resultado de una herramienta
+cuya tabla se borró, una variable de índice independiente— y el tope de 20 000
+caracteres como red, ahora a 62 pasos de profundidad en vez de 11.
+
+**Pruebas:** el bloque de la cadena en `scripts/test-formula-sql.mjs`
+(`npm run test:formula-sql`): dieciséis pasos, cada uno calculado en memoria
+desde el anterior y en SQL desde el SQL anterior con sus columnas, comparados
+fila por fila sobre el DuckDB-WASM real y **exactos** (toda la cadena es de la
+familia exacta: + − × ÷, `sqrt`, `abs`, `min`), sobre los valores de borde del
+archivo de prueba: ceros con signo, los dos infinitos, NaN y los dobles
+extremos. Y el largo total medido, que falla si la duplicación vuelve.
 
 ### Regla: lo nuevo nace funcionando en lazy
 

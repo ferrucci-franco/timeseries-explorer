@@ -322,6 +322,83 @@ console.log(`formula SQL: ${RANDOM_TREES} random formulas run, and each of their
 console.log(`  worst difference of a single operation: ${maxUlps} ulp${worst ? ` (${worst})` : ''}`);
 console.log(`  root() results past 5e11 rounded to a neighbouring integer: ${rootRoundingFlips}`);
 
+// ── A chain of formulas, each built on the one before ───────────────────────
+//
+// On a lazy file a derived variable resolves to the SQL of what it reads, so a
+// formula built on another carries the whole SQL of the one below it — and two
+// mentions of it used to write that SQL twice. Measured on this very chain:
+// 183, 379, 997, 2149 … 11 049 characters, and the eleventh step refused for
+// length, which left it and everything above it on the overview of the file.
+//
+// A long name mentioned more than once is read from a column of the FROM now
+// (REPEAT_INLINE_LIMIT in src/expr/sql.js), which takes this chain from eight
+// steps to thirty-five — measured, counting the text of the columns — and that
+// must not move a single value: each step here is computed in memory from the step
+// before it, and in SQL from the SQL before it, with its columns carried along,
+// and the two are compared row by row. Every operation in the chain is of the
+// exact family (+ − × ÷, sqrt, abs, min), so they must agree bit for bit.
+{
+    const chainVariables = {
+        a: { data: columns.a }, b: { data: columns.b }, c: { data: columns.c },
+    };
+    const chainSql = new Map([
+        ['a', { sql: '"a"', windows: [] }],
+        ['b', { sql: '"b"', windows: [] }],
+        ['c', { sql: '"c"', windows: [] }],
+    ]);
+    const chainResolve = name => chainSql.get(name) || null;
+    // What somebody writes while exploring: the previous result and a little
+    // arithmetic — the third shape mentions it twice, which is the case that
+    // doubled the text.
+    const shapes = [
+        previous => `(${previous} + a) / 2`,
+        previous => `${previous} * b - c`,
+        previous => `sqrt(abs(${previous})) + ${previous} / 3`,
+        previous => `${previous} - min(${previous}, b)`,
+    ];
+    const STEPS = 16;
+    let previous = 'a';
+    let last = null;
+    for (let step = 1; step <= STEPS; step++) {
+        const name = `d${step}`;
+        const formula = shapes[(step - 1) % shapes.length](previous);
+        const values = compileFormula(formula, chainVariables, () => 'series')
+            .run(Object.fromEntries(Object.entries(chainVariables).map(([key, variable]) => [key, variable.data])), {}, N);
+        const out = {};
+        const sql = formulaToSql(formula, chainVariables, chainResolve, out);
+        const windows = out.windows || [];
+        chainVariables[name] = { data: values };
+        chainSql.set(name, { sql, windows });
+        last = { step, name, formula, sql, windows, values };
+        previous = name;
+    }
+
+    // The loop above is the guard: with the long name written out at every
+    // mention this chain refused at step 8, so sixteen steps would not have
+    // translated at all. The length is the other half — about 8 500 characters
+    // over four columns of the FROM, against the 20 000 the translator refuses.
+    const total = last.windows.reduce((sum, window) => sum + window.sql.length, last.sql.length);
+    assert.ok(total < 12000,
+        `a chain of ${STEPS} formulas is ${total} characters of SQL, which is the doubling back`);
+
+    const result = conn
+        .query(`SELECT ${last.sql} AS v FROM ${windowedFromSql('t', 'TRUE', last.windows)} ORDER BY id`)
+        .getChildAt(0);
+    for (let i = 0; i < N; i++) {
+        const got = result.get(i);
+        const actual = got === null ? NaN : Number(got);
+        const want = last.values[i];
+        if (Number.isNaN(want) || Number.isNaN(actual)) {
+            assert.ok(Number.isNaN(want) && Number.isNaN(actual),
+                `the chain at a=${pairs[i][0]}, b=${pairs[i][1]}: expected ${want}, got ${actual}`);
+            continue;
+        }
+        assert.ok(Object.is(actual, want),
+            `the chain at a=${pairs[i][0]}, b=${pairs[i][1]}: expected ${Object.is(want, -0) ? '-0' : want}, got ${Object.is(actual, -0) ? '-0' : actual}`);
+    }
+    console.log(`formula SQL: a chain of ${STEPS} formulas on one another is ${total} characters over ${last.windows.length} column(s) of the FROM, and agrees exactly, row by row`);
+}
+
 // ── What has no SQL form says so ────────────────────────────────────────────
 assert.throws(() => formulaToSql('a + b', variables, name => (name === 'b' ? null : resolve(name))), FormulaNotTranslatable,
     'a formula over a variable with no SQL form is not translated');
