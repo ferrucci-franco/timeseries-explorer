@@ -253,6 +253,24 @@ function timePlot(d, panelIndex = 0) {
     return d.app.plotManager.plots.get(d.panel(panelIndex)?.dataset.id)?.div || null;
 }
 
+/**
+ * Click the entry of a curve in the legend of a plot, which hides the curve
+ * (or shows it again), and wait until the plot has done so. Plotly waits a
+ * moment after a click, to tell it from a double click.
+ */
+async function legendClick(d, plot, name) {
+    // (the plot is drawn again when a signal joins it: the one on screen now)
+    const gd = plot();
+    const entry = Array.from(gd.querySelectorAll('.legend .traces'))
+        .find((g) => (g.querySelector('.legendtext')?.textContent || '').trim() === name);
+    const index = gd.data.findIndex((trace) => trace.name === name);
+    if (!entry || index < 0) throw new Error(`guide: no legend entry ${name}`);
+    const was = gd.data[index].visible === 'legendonly';
+    await d.tap(entry.querySelector('.legendtoggle') || entry, { after: 200 });
+    const done = await d.until(() => (plot().data?.find((trace) => trace.name === name)?.visible === 'legendonly') !== was, 4000);
+    if (!done) throw new Error(`guide: the legend did not answer for ${name}`);
+}
+
 /** True while an analysis of this panel is still computing (its pill is up). */
 function computing(d, panelIndex = 0) {
     return !!d.panel(panelIndex)?.querySelector('.analysis-computing-indicator.active');
@@ -573,14 +591,14 @@ export const GUIDE_CHAPTERS = [
         },
     },
     {
-        id: 'data-tools', g: 'signals', icon: '⚒', est: 40000,
+        id: 'data-tools', g: 'signals', icon: '⚒', est: 48000,
         t: say('Data tools: clean, filter, differentiate', 'Outils de données : nettoyer, filtrer, dériver', 'Herramientas de datos: limpiar, filtrar, derivar', 'Strumenti dati: pulire, filtrare, derivare', '数据工具：清理、滤波、求导'),
         d: say(
-            'The <b>Data tools</b> of the side panel make new signals out of the ones in the file: take the spikes out, filter the noise with a designed low-pass, differentiate, integrate, resample… Each tool previews its result on the plot before it is created, and every result is a signal like any other — the next tool can start from it.',
-            'Les <b>Outils de données</b> du panneau latéral créent de nouveaux signaux à partir de ceux du fichier : retirer les pics, filtrer le bruit avec un passe-bas calculé, dériver, intégrer, rééchantillonner… Chaque outil montre un aperçu de son résultat sur le graphique avant de le créer, et chaque résultat est un signal comme les autres — l’outil suivant peut en partir.',
-            'Las <b>Herramientas de datos</b> del panel lateral crean señales nuevas a partir de las del archivo: quitar los picos, filtrar el ruido con un pasa bajos diseñado, derivar, integrar, remuestrear… Cada herramienta muestra una vista previa de su resultado en el gráfico antes de crearlo, y cada resultado es una señal como cualquier otra — la siguiente herramienta puede partir de ella.',
-            'Gli <b>Strumenti dati</b> del pannello laterale creano nuovi segnali da quelli del file: togliere i picchi, filtrare il rumore con un passa-basso progettato, derivare, integrare, ricampionare… Ogni strumento mostra un’anteprima del risultato sul grafico prima di crearlo, e ogni risultato è un segnale come gli altri — lo strumento successivo può partire da lì.',
-            '侧栏的<b>数据工具</b>用文件里的信号生成新信号：去掉尖峰、用设计好的低通滤除噪声、求导、积分、重采样……每个工具在创建前都会在图上预览结果，而每个结果都和普通信号一样——下一个工具可以接着用它。',
+            'The <b>Data tools</b> of the side panel make new signals out of the ones in the file: take the spikes out, filter the noise with a designed low-pass, differentiate, integrate, resample… Each tool previews its result on the plot before it is created, and every result is a signal like any other — the next tool can start from it, and a click on its legend entry hides it.',
+            'Les <b>Outils de données</b> du panneau latéral créent de nouveaux signaux à partir de ceux du fichier : retirer les pics, filtrer le bruit avec un passe-bas calculé, dériver, intégrer, rééchantillonner… Chaque outil montre un aperçu de son résultat sur le graphique avant de le créer, et chaque résultat est un signal comme les autres — l’outil suivant peut en partir, et un clic sur son entrée de légende le masque.',
+            'Las <b>Herramientas de datos</b> del panel lateral crean señales nuevas a partir de las del archivo: quitar los picos, filtrar el ruido con un pasa bajos diseñado, derivar, integrar, remuestrear… Cada herramienta muestra una vista previa de su resultado en el gráfico antes de crearlo, y cada resultado es una señal como cualquier otra — la siguiente herramienta puede partir de ella, y un clic en su entrada de la leyenda la oculta.',
+            'Gli <b>Strumenti dati</b> del pannello laterale creano nuovi segnali da quelli del file: togliere i picchi, filtrare il rumore con un passa-basso progettato, derivare, integrare, ricampionare… Ogni strumento mostra un’anteprima del risultato sul grafico prima di crearlo, e ogni risultato è un segnale come gli altri — lo strumento successivo può partire da lì, e un clic sulla sua voce di legenda lo nasconde.',
+            '侧栏的<b>数据工具</b>用文件里的信号生成新信号：去掉尖峰、用设计好的低通滤除噪声、求导、积分、重采样……每个工具在创建前都会在图上预览结果，而每个结果都和普通信号一样——下一个工具可以接着用它，点击它的图例项即可隐藏。',
         ),
         async setup(d) {
             await d.loadText('shaft_speed.csv', shaftSpeedCsv());
@@ -657,6 +675,17 @@ export const GUIDE_CHAPTERS = [
             ));
             await d.wait(1200);
             await create();
+            const gd = () => d.$('.layout-panel .js-plotly-plot');
+            d.say(say(
+                'Click a legend entry to hide a curve: the raw signal goes',
+                'Cliquez sur une entrée de la légende pour masquer une courbe : le signal brut s’efface',
+                'Haga clic en una entrada de la leyenda para ocultar una curva: la señal original desaparece',
+                'Fai clic su una voce della legenda per nascondere una curva: il segnale grezzo sparisce',
+                '点击图例中的一项即可隐藏曲线：原始信号消失',
+            ));
+            await legendClick(d, gd, 'speed');
+            await d.park(500);
+            await d.wait(1400);
 
             // ── A designed low-pass ──
             d.say(say(
@@ -678,19 +707,19 @@ export const GUIDE_CHAPTERS = [
                 '<b>低通</b>滤波器由截止频率设计：1 Hz',
             ));
             await d.type(cutoff, '1');
-            const direction = d.$('#filter-mode');
-            await d.reveal(direction);
-            d.say(say(
-                '<b>Forward and back</b>: the filter adds no delay',
-                '<b>Aller-retour</b> : le filtre n’ajoute aucun retard',
-                '<b>Ida y vuelta</b>: el filtro no agrega retardo',
-                '<b>Avanti e indietro</b>: il filtro non aggiunge ritardo',
-                '<b>前向再后向</b>：滤波不带来延迟',
-            ));
-            await d.choose(direction, 'zeroPhase', { after: 300 });
             await d.cam(null, null, 800);
-            await d.wait(900);
+            await d.wait(1200);
             await create();
+            d.say(say(
+                'Hide the unfiltered one too: the filtered speed alone',
+                'Masquez aussi la non filtrée : la vitesse filtrée seule',
+                'Oculte también la no filtrada: la velocidad filtrada sola',
+                'Nascondi anche quella non filtrata: la velocità filtrata da sola',
+                '把未滤波的也隐藏：只留下滤波后的转速',
+            ));
+            await legendClick(d, gd, 'speed no_outliers');
+            await d.park(500);
+            await d.wait(1400);
 
             // ── Its derivative ──
             d.say(say(
@@ -706,14 +735,14 @@ export const GUIDE_CHAPTERS = [
             await d.cam(null, null, 800);
             await create();
             d.say(say(
-                'Three tools in a chain — each result is a signal of the file',
-                'Trois outils à la chaîne — chaque résultat est un signal du fichier',
-                'Tres herramientas en cadena — cada resultado es una señal del archivo',
-                'Tre strumenti in catena — ogni risultato è un segnale del file',
-                '三个工具串联——每个结果都是文件里的一个信号',
+                'The filtered speed and its derivative — three tools in a chain',
+                'La vitesse filtrée et sa dérivée — trois outils à la chaîne',
+                'La velocidad filtrada y su derivada — tres herramientas en cadena',
+                'La velocità filtrata e la sua derivata — tre strumenti in catena',
+                '滤波后的转速及其导数——三个工具串联而成',
             ));
-            await d.move(plotArea(d.$('.layout-panel .js-plotly-plot'), 0.3, 0.45));
-            await d.wait(2200);
+            await d.park();
+            await d.wait(2400);
         },
     },
 
