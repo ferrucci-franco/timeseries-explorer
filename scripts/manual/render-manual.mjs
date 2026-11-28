@@ -1,9 +1,9 @@
 // The user manual as a web page, built from the texts of the in-app Help.
 //
-// The Help (Menu -> Help) is the manual: fifteen topics, in every language of
+// The Help (Menu -> Help) is the manual: sixteen topics, in every language of
 // the app, kept in src/i18n/translations.js. It could only be read inside the
 // app. This module renders the same texts, in the same order, as one static
-// page per language, with figures of the bundled examples:
+// page per language, with figures captured from the app itself:
 //
 //   manual/index.html        English
 //   manual/<lang>/index.html the other languages
@@ -13,6 +13,7 @@
 // There is one source. The build writes the pages (vite.config.js), so a
 // change to a Help text changes the manual with the next build, and
 // `npm run test:manual` fails when a topic, a figure or a language is missing.
+import { readFileSync } from 'node:fs';
 import translations from '../../src/i18n/translations.js';
 import { HELP_TOPICS } from '../../src/app/help-topics.js';
 
@@ -22,17 +23,128 @@ export const MANUAL_DEFAULT_LANG = 'en';
 // What each language calls itself, for the language links of the page.
 const LANG_NAMES = { en: 'English', fr: 'Français', es: 'Español', it: 'Italiano', zh: '中文' };
 
-// A figure is a capture of one bundled example, shown under the topic it
-// illustrates. Its caption is built from the app's own translated labels
-// ("Examples -> Lorenz Attractor"), which is also how to get the same screen.
+// A figure is a capture of the real app, shown under the topic it
+// illustrates. Each has an `id` (its file is `<id>.webp`) and one of:
+//
+//   example  the key of a bundled example: the figure is that example as the
+//            Examples menu opens it, and its caption is built from the app's
+//            own labels ("Examples -> Lorenz Attractor"), which is also how to
+//            get the same screen;
+//   (none)   a scripted scene of the same id in
+//            scripts/capture-manual-figures.mjs, which drives the app to the
+//            state shown; its caption is the text `manualFig_<id>` of
+//            src/i18n/translations.js, in every language.
+//
+// `device` is the screen it was captured on: 'desktop' (the default,
+// 1280 x 800 unless the scene asks for another size), 'phone' (upright),
+// 'tablet' (sideways) or 'tablet-portrait'. The phone and the tablets are
+// Playwright's own device profiles, touch included, so a figure shows what
+// that device really gets. Phone figures are drawn narrow, side by side.
 export const MANUAL_FIGURES = [
-    { section: '1', file: 'pendulum.webp', example: 'examplePendulum' },
-    { section: '2', file: 'era5-map.webp', example: 'exampleEra5Argentina' },
-    { section: '5', file: 'temporal-profile.webp', example: 'examplePowergridTimeseries' },
-    { section: '6', file: 'fft.webp', example: 'exampleNoisyChirpFourierTransform' },
-    { section: '6', file: 'curve-fit.webp', example: 'exampleCorrelationCurveFitting' },
-    { section: '7', file: 'lorenz.webp', example: 'exampleLorenz' },
-];
+    { section: '1', id: 'welcome' },
+    { section: '1', id: 'pendulum', example: 'examplePendulum' },
+    { section: '2', id: 'csv-preview' },
+    { section: '2', id: 'era5-map', example: 'exampleEra5Argentina' },
+    { section: '3', id: 'modelica-tree' },
+    { section: '4', id: 'sidebar-filter' },
+    { section: '5', id: 'right-axis' },
+    { section: '5', id: 'marks-gaps' },
+    { section: '5', id: 'dashboard' },
+    { section: '15', id: 'time-axis' },
+    { section: '6', id: 'fft', example: 'exampleNoisyChirpFourierTransform' },
+    { section: '6', id: 'histogram' },
+    { section: '6', id: 'heatmap' },
+    { section: '6', id: 'temporal-profile', example: 'examplePowergridTimeseries' },
+    { section: '6', id: 'integral' },
+    { section: '6', id: 'curve-fit-time' },
+    { section: '6', id: 'trend' },
+    { section: '6', id: 'curve-fit', example: 'exampleCorrelationCurveFitting' },
+    { section: '7', id: 'lorenz', example: 'exampleLorenz' },
+    { section: '8', id: 'cursors' },
+    { section: '8', id: 'statistics' },
+    { section: '9', id: 'compare-runs' },
+    { section: '10', id: 'data-tools' },
+    { section: '10', id: 'digital-filter' },
+    { section: '10', id: 'derived-editor' },
+    { section: '11', id: 'memory-saving' },
+    { section: '13', id: 'export-dialog' },
+    { section: '16', id: 'phone-plot', device: 'phone' },
+    { section: '16', id: 'phone-data', device: 'phone' },
+    { section: '16', id: 'phone-plot-sheet', device: 'phone' },
+    { section: '16', id: 'phone-analyze', device: 'phone' },
+    { section: '16', id: 'phone-map', device: 'phone' },
+    { section: '16', id: 'phone-tools', device: 'phone' },
+    { section: '16', id: 'tablet', device: 'tablet' },
+    { section: '16', id: 'tablet-map', device: 'tablet' },
+    { section: '16', id: 'tablet-portrait', device: 'tablet-portrait' },
+].map(figure => ({ device: 'desktop', file: `${figure.id}.webp`, ...figure }));
+
+// Captures are saved at twice the size they have on the screen, so a figure
+// is never drawn wider than half its pixels.
+export const MANUAL_FIGURE_SCALE = 2;
+
+const figureDir = new URL('../../public/manual/img/', import.meta.url);
+
+/**
+ * The pixel size of a WebP file, read from its header: the three layouts a
+ * WebP can have (lossy, lossless, extended). Null when the file is missing.
+ */
+export function webpSize(url) {
+    let bytes;
+    try {
+        bytes = readFileSync(url);
+    } catch (_) {
+        return null;
+    }
+    if (bytes.length < 30 || bytes.toString('latin1', 0, 4) !== 'RIFF' || bytes.toString('latin1', 8, 12) !== 'WEBP') return null;
+    const kind = bytes.toString('latin1', 12, 16);
+    if (kind === 'VP8 ') return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
+    if (kind === 'VP8L') {
+        const bits = bytes.readUInt32LE(21);
+        return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+    }
+    if (kind === 'VP8X') return { width: bytes.readUIntLE(24, 3) + 1, height: bytes.readUIntLE(27, 3) + 1 };
+    return null;
+}
+
+/** The size of a figure's file, in pixels. */
+export function manualFigureSize(figure) {
+    const size = webpSize(new URL(figure.file, figureDir));
+    if (!size) throw new Error(`manual: public/manual/img/${figure.file} is missing or not a WebP (npm run manual:figures)`);
+    return size;
+}
+
+/** A figure's caption in one language. */
+export function manualFigureCaption(figure, lang) {
+    if (figure.example) return `${text(lang, 'welcomeExamples')} → ${text(lang, figure.example)}`;
+    return text(lang, `manualFig_${figure.id.replace(/-/g, '_')}`);
+}
+
+function figureHtml(figure, lang, root) {
+    const caption = manualFigureCaption(figure, lang);
+    const { width, height } = manualFigureSize(figure);
+    const shown = Math.round(width / MANUAL_FIGURE_SCALE);
+    return `<figure class="fig-${figure.device}"><img src="${root}img/${figure.file}" alt="${escapeHtml(caption)}" width="${width}" height="${height}" style="width: ${shown}px" loading="lazy"><figcaption>${escapeHtml(caption)}</figcaption></figure>`;
+}
+
+// The figures of a topic. Phone figures that follow one another share a row.
+function figuresHtml(section, lang, root) {
+    const out = [];
+    let row = null;
+    for (const figure of MANUAL_FIGURES.filter(item => item.section === section)) {
+        const html = figureHtml(figure, lang, root);
+        if (figure.device !== 'phone') {
+            row = null;
+            out.push(html);
+        } else if (row) {
+            row.push(html);
+        } else {
+            row = [html];
+            out.push(row);
+        }
+    }
+    return out.map(item => (Array.isArray(item) ? `<div class="figure-row">\n${item.join('\n')}\n</div>` : item)).join('\n');
+}
 
 const escapeHtml = value => String(value)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -84,8 +196,14 @@ table { border-collapse: collapse; width: 100%; font-size: .93rem; margin: .8rem
 th, td { border: 1px solid var(--line); padding: .4rem .55rem; text-align: left; vertical-align: top; }
 th { background: var(--soft); }
 figure { margin: 1.2rem 0 1.6rem; }
-figure img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
 figcaption { color: var(--muted); font-size: .9rem; margin-top: .4rem; }
+.figure-row { display: flex; flex-wrap: wrap; gap: 1rem 1.25rem; align-items: flex-start; margin: 1.2rem 0 1.6rem; }
+.figure-row figure { margin: 0; flex: 0 1 220px; min-width: 0; }
+figure.fig-phone { max-width: 300px; }
+figure.fig-phone img { width: 100% !important; }
+figure.fig-tablet-portrait { max-width: 460px; }
+.help-usecases li { margin: .4rem 0; }
 footer { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 1rem; color: var(--muted); font-size: .9rem; }
 @media (max-width: 860px) {
   .page { grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
@@ -100,6 +218,9 @@ footer { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 1r
   main h2 { page-break-after: avoid; }
   main h3 { page-break-after: avoid; }
   figure, table, .help-callout { page-break-inside: avoid; }
+  .figure-row { gap: .6rem; }
+  .figure-row figure { flex-basis: 150px; }
+  figure.fig-desktop img, figure.fig-tablet img, figure.fig-tablet-portrait img { max-height: 105mm; width: auto !important; }
   a { color: inherit; text-decoration: none; }
 }
 `;
@@ -119,10 +240,7 @@ export function renderManual({ lang = MANUAL_DEFAULT_LANG, version = '' } = {}) 
     for (const topic of HELP_TOPICS) {
         const id = `topic-${topic.section}`;
         const title = text(lang, `helpSec${topic.section}Title`);
-        const figures = MANUAL_FIGURES.filter(figure => figure.section === topic.section).map(figure => {
-            const caption = `${text(lang, 'welcomeExamples')} → ${text(lang, figure.example)}`;
-            return `<figure><img src="${root}img/${figure.file}" alt="${escapeHtml(caption)}" width="1280" height="800" loading="lazy"><figcaption>${escapeHtml(caption)}</figcaption></figure>`;
-        }).join('\n');
+        const figures = figuresHtml(topic.section, lang, root);
         toc.push(`<li><a href="#${id}">${escapeHtml(title)}</a></li>`);
         sections.push(`<section id="${id}">\n<h2>${escapeHtml(title)}</h2>\n${promoteHeadings(text(lang, `helpSec${topic.section}Body`))}\n${figures}\n</section>`);
     }

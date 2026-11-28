@@ -7,14 +7,17 @@
 //   npm run manual:pdf -- --out some/dir
 //
 // Needs a Chromium for Playwright.
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import sharp from 'sharp';
 import { MANUAL_DEFAULT_LANG, MANUAL_LANGS, manualPagePath, renderManual } from './manual/render-manual.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+// 178 mm of text at about 230 dots per inch.
+const PRINT_FIGURE_WIDTH = 1600;
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
     const index = args.indexOf(name);
@@ -31,8 +34,19 @@ const browser = await chromium.launch();
 try {
     const pageFile = join(site, manualPagePath(lang));
     await mkdir(dirname(pageFile), { recursive: true });
-    await writeFile(pageFile, renderManual({ lang, version }));
-    await cp(join(root, 'public/manual/img'), join(site, 'manual/img'), { recursive: true });
+    // The printer embeds a WebP as raw pixels, which made a PDF of tens of
+    // megabytes. A JPEG goes in as it is, so the figures are printed from
+    // JPEG copies, no wider than a page needs.
+    await writeFile(pageFile, renderManual({ lang, version }).replace(/(img\/[\w-]+)\.webp"/g, '$1.jpg"'));
+    const figureDir = join(root, 'public/manual/img');
+    await mkdir(join(site, 'manual/img'), { recursive: true });
+    for (const name of (await readdir(figureDir)).filter(file => file.endsWith('.webp'))) {
+        await sharp(join(figureDir, name))
+            .resize({ width: PRINT_FIGURE_WIDTH, withoutEnlargement: true })
+            .flatten({ background: '#ffffff' })
+            .jpeg({ quality: 86 })
+            .toFile(join(site, 'manual/img', name.replace(/\.webp$/, '.jpg')));
+    }
     await cp(join(root, 'public/icons'), join(site, 'icons'), { recursive: true });
 
     const page = await browser.newPage();

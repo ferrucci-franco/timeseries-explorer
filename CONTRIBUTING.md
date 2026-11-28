@@ -245,8 +245,39 @@ The Help texts (`helpSec<n>Title` and `helpSec<n>Body` in
 `src/i18n/translations.js`, listed in `src/app/help-topics.js`) are also the
 user manual: the build writes them as web pages under `manual/`
 (`scripts/manual/render-manual.mjs`). So a feature is documented once, in the
-Help, in every language. `npm run manual:figures` captures the manual's figures
-again from the bundled examples, and `npm run manual:pdf` prints the manual.
+Help, in every language, and `npm run manual:pdf` prints the manual.
+
+A new topic is a `helpSec<n>Title` / `helpSec<n>Body` pair in the five
+languages, a line in `src/app/help-topics.js` (its place in the order, an icon
+of `HELP_ICON_PATHS` in `src/app/methods/ui-methods.js`, a colour), and its
+place in the order checked by `scripts/test-help-layout.mjs`. The first topic
+opens with "Who it is for", one entry per kind of user; `README.md` has the
+same list.
+
+**The figures** are captures of the real app, listed in `MANUAL_FIGURES`
+(`scripts/manual/render-manual.mjs`) with the topic each one sits under:
+
+- a figure with an `example` is a bundled example as the Examples menu opens
+  it, captioned "Examples → name";
+- any other is a **scene**: a small function of the figure's id in
+  `scripts/capture-manual-figures.mjs` that drives the app to the state to show
+  (opens a generated file of `scripts/manual/figure-data.mjs`, plots signals,
+  turns an analysis on, opens a dialog), and may return a `clip` when the whole
+  window would make the subject too small. Its caption is `manualFig_<id>` in
+  `src/i18n/translations.js`, one short sentence in each language;
+- `device` is `desktop` (the default), `phone`, `tablet` (landscape) or
+  `tablet-portrait`. The phone and the tablets are Playwright's device
+  profiles, touch included, so the figure shows the layout that device really
+  gets. Phone figures are drawn narrow, side by side.
+
+`npm run manual:figures` captures them all (light theme, English, seeded data,
+WebP at twice the screen size into `public/manual/img/`), and
+`npm run manual:figures -- --only <id>` one of them. Look at a figure after
+capturing it: the script cannot tell a half-drawn plot from a good one.
+`npm run test:manual` fails for a figure without its file or a caption, a file
+no figure uses, or a topic left without a figure. Capture a figure again when a
+change to the app makes it mislead. The Live Update topic has no figure yet: it
+exists in the desktop edition only, which this script does not drive.
 
 ## Related docs
 
