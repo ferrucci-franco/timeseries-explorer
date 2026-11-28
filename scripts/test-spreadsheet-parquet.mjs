@@ -207,7 +207,7 @@ check(() => {
 check(() => {
     // Both texts around the conversion threshold used to describe the feature
     // as CSV-only, so a reader had no way to learn spreadsheets are covered.
-    const spreadsheet = { en: /spreadsheet/i, fr: /feuilles de calcul/i, es: /hojas de calculo/i, it: /fogli di calcolo/i, zh: /电子表格/ };
+    const spreadsheet = { en: /spreadsheet/i, fr: /feuilles de calcul/i, es: /hojas de cálculo/i, it: /fogli di calcolo/i, zh: /电子表格/ };
     for (const lang of ['en', 'fr', 'es', 'it', 'zh']) {
         assert.match(translations[lang].compactFormatHelpBody, spreadsheet[lang],
             `${lang}.compactFormatHelpBody says the conversion covers spreadsheets`);
@@ -222,7 +222,7 @@ check(() => {
     // with no setting of their own — SPREADSHEET_PARQUET_HINT_BYTES.
     const notThisSetting = {
         en: /do not use this setting/i,
-        fr: /n utilisent pas ce reglage/i,
+        fr: /n’utilisent pas ce réglage/i,
         es: /no usan este ajuste/i,
         it: /non usano questa impostazione/i,
         zh: /不使用此设置/,

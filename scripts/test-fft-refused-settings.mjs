@@ -273,7 +273,7 @@ assert.equal(
 
     // The unit noun lives inside each translated string, so it cannot be left
     // in English by a caller that forgets to translate it separately.
-    for (const [lang, word] of [['fr', 'echantillons'], ['es', 'muestras'], ['it', 'campioni']]) {
+    for (const [lang, word] of [['fr', 'échantillons'], ['es', 'muestras'], ['it', 'campioni']]) {
         withLanguage(lang, () => {
             const template = i18n.t('fftReadySamples');
             assert.match(template, new RegExp(word, 'i'), `${lang} names the unit in its own language`);
