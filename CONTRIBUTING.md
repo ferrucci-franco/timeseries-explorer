@@ -19,7 +19,8 @@ can be shared publicly; otherwise describe its format and size.
 ## Asking for help
 
 Questions about how to do something are welcome as issues too; there is no
-separate forum. Check the in-app Help first: it documents every feature and
+separate forum. Check the in-app Help first (also at
+<https://www.unditas.com/manual/>): it documents every feature and
 the file formats in detail. If you have no GitHub account, the Feedback command
 sends the question for you.
 
@@ -237,6 +238,15 @@ npm run build
 ```
 
 This builds the published web app into `dist/` (the same as `npm run build:web`). The stand-alone portable package is a separate, explicit step: `npm run build:portable`.
+
+## The Help and the user manual
+
+The Help texts (`helpSec<n>Title` and `helpSec<n>Body` in
+`src/i18n/translations.js`, listed in `src/app/help-topics.js`) are also the
+user manual: the build writes them as web pages under `manual/`
+(`scripts/manual/render-manual.mjs`). So a feature is documented once, in the
+Help, in every language. `npm run manual:figures` captures the manual's figures
+again from the bundled examples, and `npm run manual:pdf` prints the manual.
 
 ## Related docs
 

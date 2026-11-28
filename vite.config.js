@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite';
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { renderManualPages } from './scripts/manual/render-manual.mjs';
 
 function resolveGitSha() {
   // Prefer the CI-provided commit; fall back to a local git call, then to a
@@ -53,9 +55,35 @@ function versionJsonPlugin() {
   };
 }
 
+// The user manual: the texts of the in-app Help as static pages, one per
+// language, under manual/ (scripts/manual/render-manual.mjs). Written by the
+// build and answered by the dev server from the same function, so the manual
+// is never a second copy of the Help. Its figures are public/manual/img.
+function manualPagesPlugin() {
+  const version = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
+  return {
+    name: 'omv-manual-pages',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = (req.url || '').split('?')[0].replace(/^\//, '').replace(/\/$/, '/index.html');
+        if (!path.startsWith('manual/')) return next();
+        const page = renderManualPages({ version }).find(candidate => candidate.path === path);
+        if (!page) return next();
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.end(page.html);
+      });
+    },
+    generateBundle() {
+      for (const page of renderManualPages({ version })) {
+        this.emitFile({ type: 'asset', fileName: page.path, source: page.html });
+      }
+    },
+  };
+}
+
 export default defineConfig({
   base: './',
-  plugins: [versionJsonPlugin()],
+  plugins: [versionJsonPlugin(), manualPagesPlugin()],
   define: {
     __GIT_SHA__: JSON.stringify(GIT_SHA),
     __BUILD_DATE__: JSON.stringify(BUILD_DATE),
