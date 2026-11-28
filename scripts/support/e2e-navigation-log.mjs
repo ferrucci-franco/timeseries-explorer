@@ -63,6 +63,34 @@ function watchPage(page) {
             }
         };
     }
+    // And so is a reload the script asks for from inside the page, which
+    // several checks do to see what survives one:
+    // `page.evaluate(() => location.reload())`. That is the same navigation as
+    // `page.reload()` as far as this log is concerned, and counting it is what
+    // makes the rest of the log mean something: a run of the suite printed
+    // seven of those, from a check that passed.
+    //
+    // Only an evaluate whose own source navigates counts — `String(fn)` is that
+    // source — because every check calls evaluate constantly, and a blanket
+    // grace after each one would blind this. The grace is for the navigation
+    // itself, which commits after the call has returned.
+    const NAVIGATES = /location\s*\.\s*(?:reload|replace|assign|href)|\blocation\s*=|\.submit\s*\(/;
+    const NAVIGATION_GRACE_MS = 2000;
+    for (const name of ['evaluate', 'evaluateHandle']) {
+        const original = page[name]?.bind(page);
+        if (!original) continue;
+        page[name] = async (body, ...rest) => {
+            if (!NAVIGATES.test(typeof body === 'function' ? String(body) : String(body ?? ''))) {
+                return original(body, ...rest);
+            }
+            asked += 1;
+            try {
+                return await original(body, ...rest);
+            } finally {
+                setTimeout(() => { asked = Math.max(0, asked - 1); }, NAVIGATION_GRACE_MS).unref?.();
+            }
+        };
+    }
     // Chromium raises this twice for one navigation of its own (the
     // same-document hop and the commit), and a line repeated is a line that
     // reads as two incidents.
