@@ -151,6 +151,8 @@ const assertAmPmAxis = (axis, label, dateFormat = '%b %d, %Y') => {
     assert.equal(axis.tickformat, `%-I:%M %p\n${dateFormat}`, `${label}: AM/PM tick format is explicit`);
     assert.equal(axis.hoverformat, '%-I:%M:%S %p', `${label}: AM/PM axis hover format is explicit`);
     assert.ok(!axis.tickformat.includes('%H'), `${label}: no 24-hour directive remains in AM/PM ticks`);
+    assert.ok(axis.tickformatstops?.length && axis.tickformatstops.every(stop => /^%-I:%M:%S.* %p\n/.test(stop.value)),
+        `${label}: short spans name their seconds, in AM/PM`);
 };
 
 const assert24HourAxis = (axis, label, dateFormat = '%b %d, %Y') => {
@@ -158,21 +160,73 @@ const assert24HourAxis = (axis, label, dateFormat = '%b %d, %Y') => {
     assert.equal(axis.tickformat, `%H:%M\n${dateFormat}`, `${label}: 24-hour tick format is explicit`);
     assert.equal(axis.hoverformat, '%H:%M:%S', `${label}: 24-hour axis hover format is explicit`);
     assert.ok(!/%-?I|%p/.test(axis.tickformat), `${label}: no AM/PM directive remains in 24-hour ticks`);
+    assert.ok(axis.tickformatstops?.length && axis.tickformatstops.every(stop => /^%H:%M:%S/.test(stop.value)),
+        `${label}: short spans name their seconds`);
 };
 
 // A single helper is the source of truth for every calendar clock format.
-assert.deepEqual(getCalendarTimeFormats('calendar-ampm'), {
+const { tickformatstops: ampmStops, ...ampmFormats } = getCalendarTimeFormats('calendar-ampm');
+const { tickformatstops: h24Stops, ...h24Formats } = getCalendarTimeFormats('calendar-24h');
+assert.deepEqual(ampmFormats, {
     tickformat: '%-I:%M %p',
     tickformatWithDate: '%-I:%M %p\n%b %d, %Y',
     hoverformat: '%-I:%M:%S %p',
     traceHoverformat: '%Y-%m-%d %-I:%M:%S %p',
 });
-assert.deepEqual(getCalendarTimeFormats('calendar-24h'), {
+assert.deepEqual(h24Formats, {
     tickformat: '%H:%M',
     tickformatWithDate: '%H:%M\n%b %d, %Y',
     hoverformat: '%H:%M:%S',
     traceHoverformat: '%Y-%m-%d %H:%M:%S',
 });
+
+
+// A span under a minute: Plotly steps its ticks by seconds or less, and a
+// "%H:%M" label is then the same on every tick. The format follows the step
+// (Plotly's tickformatstops: the stop whose dtickrange holds the step, in ms,
+// both ends included; none: tickformat), so it follows the zoom too.
+{
+    const formatForStep = (formats, dtickMs) => {
+        const stop = formats.tickformatstops.find(({ dtickrange: [lo, hi] }) =>
+            (lo === null || dtickMs >= lo) && (hi === null || dtickMs <= hi));
+        return stop ? stop.value : formats.tickformatWithDate;
+    };
+    const h24 = getCalendarTimeFormats('calendar-24h');
+    const ampm = getCalendarTimeFormats('calendar-ampm');
+    assert.deepEqual(h24Stops, h24.tickformatstops);
+    assert.deepEqual(ampmStops, ampm.tickformatstops);
+    // Long spans keep today's format: a minute or more between ticks, and
+    // Plotly's month steps ("M1", "M12"), match no stop.
+    for (const dtick of [60000, 300000, 3600000, 86400000]) {
+        assert.equal(formatForStep(h24, dtick), '%H:%M\n%b %d, %Y', `24h, ${dtick} ms step: unchanged`);
+        assert.equal(formatForStep(ampm, dtick), '%-I:%M %p\n%b %d, %Y', `AM/PM, ${dtick} ms step: unchanged`);
+    }
+    for (const formats of [h24, ampm]) {
+        for (const stop of formats.tickformatstops) {
+            assert.ok(stop.dtickrange.every(edge => edge === null || typeof edge === 'number'),
+                'no stop takes a month step');
+            assert.ok(stop.dtickrange[1] < 60000, 'no stop reaches a one-minute step');
+        }
+    }
+    // Seconds between ticks: seconds in the label.
+    for (const dtick of [1000, 2000, 5000, 10000, 15000, 30000]) {
+        assert.equal(formatForStep(h24, dtick), '%H:%M:%S\n%b %d, %Y', `24h, ${dtick} ms step: seconds`);
+        assert.equal(formatForStep(ampm, dtick), '%-I:%M:%S %p\n%b %d, %Y', `AM/PM, ${dtick} ms step: seconds`);
+    }
+    // Less than a second: as many decimals as the step needs.
+    for (const [dtick, digits] of [[500, 1], [200, 1], [100, 1], [50, 2], [20, 2], [10, 2],
+        [5, 3], [2, 3], [1, 3], [0.5, 6], [0.01, 6], [0.001, 6]]) {
+        assert.equal(formatForStep(h24, dtick), `%H:%M:%S.%${digits}f\n%b %d, %Y`, `24h, ${dtick} ms step`);
+        assert.equal(formatForStep(ampm, dtick), `%-I:%M:%S.%${digits}f %p\n%b %d, %Y`, `AM/PM, ${dtick} ms step`);
+    }
+    // The date line stays in the language's order, the stops are fresh objects.
+    assert.ok(getCalendarTimeFormats('calendar-24h', 'fr').tickformatstops
+        .every(stop => stop.value.endsWith('\n%d %b %Y')), 'fr: day-first date line under every stop');
+    assert.ok(getCalendarTimeFormats('calendar-24h', 'zh').tickformatstops
+        .every(stop => stop.value.endsWith('\n%Y年%m月%d日')), 'zh: year-first date line under every stop');
+    assert.notEqual(h24.tickformatstops, getCalendarTimeFormats('calendar-24h').tickformatstops);
+    assert.notEqual(h24.tickformatstops[0].dtickrange, getCalendarTimeFormats('calendar-24h').tickformatstops[0].dtickrange);
+}
 
 assert.deepEqual(
     ['en', 'fr', 'es', 'it', 'zh'].map(language => getPlotlyLocale(language)),
