@@ -1,5 +1,41 @@
 # Phone Web Specification
 
+> **Status on 2026-11-28: what is built and what is not.** This document is the
+> specification; where it and the code differ, the code is described here, one
+> line each. The user-facing account is the Help topic **Phone and tablet**
+> (`helpSec16`), which lists what the phone layout lacks.
+>
+> - **Reload** (§5.1, §5.6): not on the phone. The button is in the top bar,
+>   which the phone layout hides; the file page has no Reload.
+> - **Convert to Parquet** (§5.6): in More → Tools only, not on the file page.
+> - **Linked time axes** (§5.2): no control on the phone; the setting keeps its
+>   value and still acts.
+> - **Legend position** (§5.2): not built; the legend is shown or hidden with
+>   its corner button only.
+> - **Compare files** (§5.2): not built.
+> - **Right axis** (§5.2): Y2 can be turned on, but no signal can be moved to
+>   it: a tap always adds to the left axis.
+> - **The sidebar's Options block** (hover by proximity, the hover of
+>   parameters that differ, synchronized hover, units in legends): not offered.
+> - **Per-trace legend actions** ("only this trace", a trace's own line shape),
+>   applying a mark to all plots, multi-selection of variables: not offered.
+> - **Workspace tabs**: not shown; a saved view with several tabs shows its
+>   active tab. Auto-fit all, Clear all plots and Reset layout: not offered.
+> - **Data tools** (§5.3, §5.8): eleven, not ten: edge interval and rate was
+>   added, in both layouts.
+> - **Dashboard**: offered as a plot type; no card size, no separators.
+> - **Settings** (§5.4): the layout choice is in More itself, not in Settings;
+>   the phone file limits of §9 are not built. No "download desktop" link.
+> - **Web manifest** (§8.1): `public/site.webmanifest` exists and is linked,
+>   with `display: browser`: a home-screen shortcut opens in the browser. No
+>   **Install app** entry, no service worker, no offline use, no share target,
+>   no file handlers (§8.2, §8.3).
+> - **Full screen**: not in the phone layout on this date.
+> - **Animated guide**: not offered in the phone layout, by design.
+>
+> Built and not in the list below: the window zoom also zooms Y (drag up or
+> down), and every one of the nine analyses is in the Analyze sheet.
+
 Status: first slice built (2026-10-04), extended since. It covers time series and
 every analysis of the desktop — FFT, the histogram, the calendar heatmap, the
 temporal profile, the integral, the trend analysis, correlation and the 2D curve
@@ -44,7 +80,7 @@ Built:
   row in Analyze; a page of its own with a formula field driven by its own keys,
   Variables / Functions / 123 tabs, live checking and a preview of the values,
   Σ Combine several, Create with "Plot n"; the tree's ✎ edits and × deletes;
-- data tools (§5.8): a hub in Analyze with the ten tools as tiles in four
+- data tools (§5.8): a hub in Analyze with the eleven tools as tiles in four
   families and the file's transformations as cards; a page per tool, at half
   height so the dotted preview is watched on the plot above it, with the signal
   chosen from a list, the side panel's controls at a finger's size (− and +
@@ -107,7 +143,8 @@ The code is in `src/app/methods/compact-methods.js`,
 Not built yet:
 
 - tap readouts beyond Plotly's own;
-- the web manifest and the service worker (§8);
+- the service worker, the install entry and the share target (§8); the web
+  manifest exists (`public/site.webmanifest`) with `display: browser`;
 - deferring Plotly;
 - the phone file-size defaults (§9).
 
@@ -274,7 +311,8 @@ With no file loaded, the plot area shows:
 
 Data holds files and signals.
 
-- **Open file**, and the list of loaded files with reload and remove.
+- **Open file**, and the list of loaded files with remove. (Reload: specified,
+  not built.)
 - Sheet, dataset or MAT variable pickers, shown as full-sheet pages.
 - The variable tree with filter, sort and expand/collapse.
 - **Tap a variable to add it to or remove it from the active plot.** Drag-and-drop
@@ -287,10 +325,10 @@ Plot holds everything the per-panel toolbar does today for the active plot. The
 compact mode hides the panel toolbar.
 
 - Plot mode: timeseries, phase 2D, phase 2D+t, phase 3D, state animation 2D/3D.
-- Autoscale, and linked time axes.
+- Autoscale. (Linked time axes: specified, not built; the setting still acts.)
 - **View**: log, stack, Y2, line shape.
 - **Marks**: NaN, gaps, repeated, samples.
-- Legend position, cursors, compare files.
+- Cursors. (Legend position and compare files: specified, not built.)
 - **Sound**: the audio strip, built (see the list at the top).
 - **Statistics and export**: statistics (Σ) and **Export** (§8.3), built.
   Export closes the sheet before the dialog opens: the image is the plot at the
@@ -335,7 +373,8 @@ Analyze holds whatever produces new numbers.
     a 2D plot. The drawing is the entry's `icon` (`offIcon` for "None") in
     `compact-analyses.js`.
 - **Data tools** (§5.8): outliers, derivative, integrate, moving average,
-  interpolate, detrend, filter, resample, xcorr and collapse.
+  interpolate, detrend, filter, resample, xcorr, collapse, and edge interval
+  and rate.
 - **Derived variables** (§5.7), also reached from Data.
 - Phase-2D fit.
 
@@ -386,8 +425,8 @@ to that file as a full-width touch target:
 - Adjust parsing (CSV and text only);
 - Transform;
 - Time-axis inspector;
-- Reload;
-- Convert to Parquet;
+- Reload (not built);
+- Convert to Parquet (built in More → Tools instead);
 - Save;
 - Remove.
 
@@ -506,7 +545,7 @@ covers. The phone has pages of its own:
     *Clean* (remove outliers, fill NaN, collapse repeated timestamps),
     *Calculus* (derivative, integral), *Smooth and filter* (moving average,
     detrend, digital filter), *Resample and compare* (resample,
-    cross-correlation). A tool a memory-saving file cannot run is a dimmed
+    cross-correlation, edge interval and rate). A tool a memory-saving file cannot run is a dimmed
     tile that says so;
   - the file's **transformations as cards**, in chain order: the result on
     the first line, where it came from and how on the second. The card is the
