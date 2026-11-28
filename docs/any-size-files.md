@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); la escucha (🔊), que lee del archivo cada fila del rango que suena, y la exportación WAV de ese rango, por trozos ("Implementado: escuchar un archivo lazy"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). La fase 5 se cerró con una decisión, no con código nuevo: el proyecto de un archivo lazy es su vista ("Decidido (fase 5)"). De la fase 6 queda MAT: OpenModelica primero, MATLAB anotado como hueco (#396).** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4 (4a, 4b-1 a 4b-5) implementadas: toda herramienta de datos corre en lazy (secciones "Implementado (fase 4b-1)" a "Implementado (fase 4b-4)"); histograma, heatmap y perfil temporal exactos sobre todas las filas (secciones "Implementado: histograma exacto" y "Implementado: heatmap y perfil temporal exactos"); y en la 4b-5 lo que la 4b dejaba ("Implementado (fase 4b-5)"): los resultados en disco con la base de DuckDB en OPFS, conservados de una sesión a la otra, la actualización en vivo por continuación, *completar marcas de tiempo* y el guardado de un dataset por trozos. Los dos ajustes de curvas, exactos sobre todas las filas sin tope ("Implementado: ajuste de curvas exacto"); el análisis de tendencia, exacto sobre todas las filas de cada tramo, con sus dos huecos dichos en la UI ("Implementado: análisis de tendencia exacto"); la escucha (🔊), que lee del archivo cada fila del rango que suena, y la exportación WAV de ese rango, por trozos ("Implementado: escuchar un archivo lazy"); y la regla de que todo análisis o herramienta nueva nace funcionando en lazy (`CLAUDE.md`, `CONTRIBUTING.md`). Parquet sin red resuelto (§8). La fase 5 se cerró con una decisión, no con código nuevo: el proyecto de un archivo lazy es su vista ("Decidido (fase 5)"). De la fase 6 queda MAT: OpenModelica primero, MATLAB anotado como hueco (#396); el netCDF de series abre en lazy, con las mismas series que en memoria ("Implementado: las series de un netCDF por trozos").** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -32,7 +32,8 @@ bordes conocidos, la mayoría dichos en la interfaz.
 | # | Qué | Estado hoy | Por dónde seguir |
 |---|---|---|---|
 | 1 | **`.mat` de MATLAB** (v5/v7 y v7.3) en lazy | se cargan siempre enteros; issue #396 | escribir un "lector por columnas" con la forma que describe `src/parsers/mat-v4-stream.js`; `src/data/columnar-ingest.js` lo abre en lazy sin más cambios. Enganchar en `_lazyMatReader` (`src/app/methods/file-methods.js`). Modelo de prueba: `scripts/test-lazy-mat.mjs` |
-| 2 | **pickle, netCDF de series, audio** | solo cargan enteros (Excel entra por conversión a Parquet) | el mismo camino que 1: un lector por columnas por formato. Solo si hace falta |
+| ~~2~~ | ~~**netCDF de series** en lazy~~ | **cerrado**: cuando las series de un netCDF no entran en memoria se copian al motor por trozos y el archivo abre en modo de ahorro, con todas las filas para cada análisis, herramienta y exportación. Ya no hay pregunta que hacer | "Implementado: las series de un netCDF por trozos" |
+| 2b | **pickle, audio** | solo cargan enteros (Excel entra por conversión a Parquet) | el mismo camino que 1: un lector por columnas por formato. Solo si hace falta |
 | 3 | **Fórmulas sin forma SQL** | el traductor de `src/expr/sql.js` escribe **las 23 funciones** del lenguaje, `diff()` y `cumsum()` incluidas, como ventanas: no falta ninguna. La **cadena de fórmulas** —la causa que un usuario alcanzaba, medida: se rendía en el paso 11, o en el 8 según los nombres de las columnas— está cerrada: sección "Implementado: una fórmula construida sobre otra". Queda sin forma SQL un **nombre que no resuelve**: una columna de texto o booleana, el resultado de una herramienta cuya tabla ya no está (hasta reconstruirla), una variable de índice independiente (solo en `.mat` de MATLAB, que nunca abre en lazy), y lo que se construya sobre cualquiera de ellos. La app lo avisa al crearla (`derivedLazyOverviewOnly`) y los análisis la rechazan | de esa lista, la columna **booleana** es la única que un archivo lazy encuentra de verdad, y tiene forma SQL propia (su columna): medirla y traducirla. Las demás son el ejecutor por trozos (`src/data/chunk-executor.js`) o no ocurren en lazy |
 | ~~4~~ | ~~**Eje de tiempo generado** (archivo sin columna de tiempo)~~ | **cerrado** (#413): el eje que dibuja el panel es la **fila del archivo**, no la posición de la muestra en el resumen, así que el tramo en pantalla y las filas del archivo son las mismas filas; la tendencia lo lee como cualquier otro, y lo que leía filas equivocadas sin avisar (ajuste de curvas, FFT, audio, exportaciones) lee las que el rango nombra | "Implementado: el eje de un archivo lazy sin columna de tiempo" |
 | 5 | **Límites del `.mat` lazy** | la copia ocupa disco del orden de `data_2`; recargar copia todo de nuevo; un archivo corto y muy ancho ahorra poca memoria (su resumen son casi todas sus filas) | "Implementado: resultados `.mat` en lazy", huecos conocidos. Para el último: un lector eager con arreglos tipados, o el resumen por demanda |
@@ -2626,6 +2627,120 @@ cancelación) y `scripts/e2e-lazy-repeated-marks.mjs` (Chromium: el mismo CSV de
 12 MB entero y en lazy, las mismas barras, textos y anillos con los mismos
 zooms; un archivo lazy sin repetidos).
 
+### Implementado: las series de un netCDF por trozos
+
+El lector de netCDF ya no tiene el archivo en memoria —netCDF3 por rangos de
+bytes (`src/gridded/nc3-reader.js`), netCDF4 por h5wasm montado con WORKERFS
+(`src/gridded/hdf5-input.js`, que lee por `File.slice` y nunca copia el
+archivo)— pero sí las series que construye, un `Float64Array` cada una. Ese es
+el muro: un subconjunto de 500 puntos de rejilla por un millón de pasos son
+cuatro gigabytes de arreglos, así que el archivo se rechaza antes de leerlo
+(`checkLoadLimit`, y los topes de `netcdf-parser.js`: 32 M de valores por
+lectura entera, 10 000 series, y un subconjunto espacial espaciado de una
+variable reticulada).
+
+`src/parsers/netcdf-columns.js` entrega esas mismas series por trozos de pasos
+de tiempo, con la forma que `src/data/columnar-ingest.js` copia a tablas del
+motor y adopta como dataset lazy: la misma que habla el lector del `.mat` de
+OpenModelica. Nada de lo que viene después sabe que las filas salieron de un
+netCDF.
+
+**Las mismas series, exactamente.** Qué coordenada es el eje X, qué variables
+se alinean con ella, en cuántas series se abre cada una y cuáles se quedan lo
+decide `_planGeneric` —la misma función que corre el camino en memoria, no una
+segunda lectura de las reglas— y cada bloque de valores pasa por el mismo
+`decodeNumeric`, cuyo `_FillValue` y `scale_factor` son por valor, así que un
+bloque tiene los dobles que la serie entera habría tenido en esas filas.
+`_readSeriesSlab` es la aritmética de `_readSeriesBatch` para las filas de un
+trozo: una lectura del archivo por variable por trozo, y todas las series de
+esa variable salen de esa lectura, así que una variable comprimida se
+descomprime una vez y no una vez por serie (el error que costó 75 s en un
+archivo de 3,6 MB cuando las series se leían de a una).
+
+El sumidero aprendió las tres cosas que un netCDF necesita y una trayectoria
+no:
+
+- `extra` en una variable declarada, para lo que la forma genérica no tiene
+  campo: el nombre que se muestra, las unidades, la procedencia netCDF y, para
+  el eje, el tipo de dato que decidió el camino en memoria (la conjetura del
+  propio dataset, hecha sobre una columna de una tabla, llama "real" a un eje
+  de tiempo);
+- `timeKind`, para que un eje CF de milisegundos siga siendo un calendario en
+  vez de leerse como un número;
+- `buildTree`, para que el árbol agrupe las series por el dataset del que se
+  cortó cada una, bajo las dimensiones del archivo y sus atributos globales,
+  como en memoria.
+
+**Cómo llega al motor.** El archivo se lee en el worker de parsing, que es el
+único lugar donde se puede leer por partes (`FileReaderSync`, y el WORKERFS
+sobre el que se monta h5wasm, no existen fuera de un worker), y DuckDB-WASM
+vive en el hilo principal. Los bloques cruzan **de a uno y a pedido**: el
+sumidero pide el siguiente solo cuando terminó de insertar el anterior, así que
+el worker nunca se adelanta al motor y no se acumula ninguna cola. Esa es toda
+la contrapresión, y es la razón de que sean tres pedidos comunes
+(`netcdf-columns:open`, `:block`, `:close` en `src/workers/parse-handlers.js`)
+y no un canal propio — la misma forma que usan los datasets reticulados para
+sus mapas. El lector queda abierto en el worker entre pedido y pedido, bajo el
+id que el hilo principal le dio, y se cierra haya terminado la copia, fallado o
+cancelado. Del otro lado, `src/data/netcdf-columns-client.js` arma con eso el
+lector que el sumidero lee.
+
+El árbol viaja como **datos**: el esqueleto que el lector entrega lleva una
+marca en lugar de cada variable que el sumidero construye, y
+`netcdfTreeFromSkeleton` pone las construidas en su lugar del otro lado. Una
+hoja que no es una marca —los metadatos del archivo, sus atributos globales,
+las coordenadas que no se grafican— viaja como está.
+
+**Dónde se engancha.** Un netCDF no se juzga por el tamaño del archivo sino por
+lo que sus series cargarían, así que el modo lazy se pide **donde ese límite se
+descubre**: en el `NETCDF_OVER_LIMIT` de `_parseNetcdfFileByParts`, antes de
+preguntarle al usuario si lo carga entero. Si hay dataset lazy, no hay pregunta
+que hacer; la pregunta queda para cuando no lo hay (sin motor, sin worker, un
+archivo que el lector no toma, o sin lugar en el motor para la copia). La copia
+en sí la hace `_openLazyColumnar`, que es el `_openLazyMat` de antes
+generalizado: los dos formatos comparten el presupuesto de disco, el progreso
+(`lazyIngestCopying`, renombrada de `lazyMatCopying` en los cinco idiomas) y el
+camino de cancelación.
+
+**Huecos conocidos:**
+
+- la coordenada X se lee entera, como la lee el camino en memoria, porque toda
+  decisión sobre el eje se toma de sus valores: 8 bytes por paso, unos 250 MB a
+  30 millones de pasos. Lo que esto levanta es el costo de las *series*, que es
+  donde está el tamaño de un netCDF (una por variable y por punto de rejilla);
+- una variable que no se puede leer por trozos (sin `supportsSlice`) y una red
+  PyPSA se dejan al camino en memoria, enteras;
+- las fixtures del repositorio tienen ejes cortos: la más larga es la descarga
+  tipo ERA5 chunkeada en el tiempo, de 96 pasos y 48 series, que forzada a
+  bloques de ocho valores se lee en 96 bloques —el mismo camino que un millón de
+  filas en mil bloques, chunk por chunk— pero ninguna tiene un eje de miles de
+  pasos. Medirlo con un archivo real queda pendiente.
+
+**Pruebas:** `scripts/test-lazy-netcdf.mjs` (`npm run test:lazy-netcdf`) lee
+cinco fixtures dos veces —entera y por trozos sobre un DuckDB-WASM real— y
+compara las variables y su orden, el tipo, la descripción, el nombre mostrado,
+las unidades, el tipo de dato, si es constante, la interpolación y la
+procedencia de cada una; los metadatos, hasta las notas de las variables
+salteadas o cargadas en parte; **todas las filas de todas las series**; y el
+árbol. netCDF3 clásico y de 64 bits, un netCDF4 agrupado, un calendario CMIP
+sin años bisiestos, una descarga tipo ERA5 cuyas 144 series son un subconjunto,
+y un cutout de atlite. Sin el `decodeNumeric` por bloque la prueba falla, así
+que no está comparando nada.
+
+Del cableado, en la misma prueba: **el cruce del worker**, con la descripción
+del lector y cada bloque pasados por `structuredClone` —lo que `postMessage`
+les hace, así que una función o cualquier otra cosa que no se pueda clonar
+falla acá y no en el navegador— y los bloques pedidos de a uno por
+`netcdf-columns-client.js`; y una guardia que falla si la carga deja de pedir
+el dataset lazy donde encuentra el límite, o lo pide después de preguntarle al
+usuario. Y en el navegador, `scripts/e2e-lazy-netcdf.mjs`
+(`npm run e2e:lazy-netcdf`): el mismo archivo abierto dos veces, entero y en
+modo de ahorro, con las mismas variables, los mismos nombres mostrados, tipos y
+unidades, el mismo árbol, el mismo eje de calendario, las mismas estadísticas
+del panel y las mismas filas dibujadas — y sin una pregunta. Lo único que esa
+prueba sustituye es el límite (64 bytes, porque ninguna fixture carga más de
+unos kilobytes y Settings toma megabytes enteros); todo lo que viene después
+—el worker, los bloques, el motor, el dataset— es lo de verdad.
 ### Implementado: una fórmula construida sobre otra, sobre todas las filas
 
 El punto 3 tenía dos causas y una de ellas la alcanzaba cualquiera.

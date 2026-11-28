@@ -1263,7 +1263,7 @@ proto.reloadActiveFile = async function() {
     const datasetFailures = [];
     try {
         await this._waitForNextPaint();
-        const streamable = this._canParseFromFile(entry.file, entry.extension) || this._isLazyMatFile(id);
+        const streamable = this._canParseFromFile(entry.file, entry.extension) || this._isLazyIngestedFile(id);
         const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
         const buffer = streamable ? null : await this._readLatestBuffer(entry);
         const contentHash = streamable ? this._fileFingerprint(latestFile || entry.file) : await this._hashBuffer(buffer);
@@ -1405,7 +1405,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
         loading = true;
         this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(source), source.file?.size || source.buffer?.byteLength);
         await this._waitForNextPaint();
-        const streamable = this._canParseFromFile(source.file, source.extension) || this._isLazyMatFile(sourceId);
+        const streamable = this._canParseFromFile(source.file, source.extension) || this._isLazyIngestedFile(sourceId);
         const latestFile = streamable ? await this._readLatestFileForStreamableReload(source) : null;
         const buffer = streamable ? null : await this._readLatestBuffer(source);
         const contentHash = streamable ? this._fileFingerprint(latestFile || source.file) : await this._hashBuffer(buffer);
@@ -2230,15 +2230,28 @@ proto._lazyMatReader = async function(file) {
     return this._lazyMatReaders.get(file);
 };
 
-// Whether a loaded file is such a result, open in memory-saving mode.
-proto._isLazyMatFile = function(fileId) {
+// Whether a loaded file is one that was copied into the engine to open in
+// memory-saving mode — a MAT v4 trajectory, a netCDF — rather than one the
+// engine reads where it lies (a CSV, a Parquet). On a reload its File is read
+// again by parts, not as a buffer.
+proto._isLazyIngestedFile = function(fileId) {
     const data = this.plotManager?.files?.get(fileId)?.data;
-    return !!data?._duckdb && data?.metadata?.ingest?.format === 'mat-v4';
+    return !!data?._duckdb && !!data?.metadata?.ingest?.format;
 };
 
 proto._openLazyMat = async function(file, options = {}) {
     const reader = await this._lazyMatReader(file);
     if (!reader) return null;
+    return this._openLazyColumnar(file, reader, { ...options, kind: 'mat' });
+};
+
+// A columnar reader copied into the engine and adopted as a memory-saving
+// (lazy) dataset: a MAT v4 trajectory read on this thread, a netCDF read by a
+// worker. Null when there is no room, the engine failed on the way, or the
+// load was cancelled — and then the file can still be loaded whole, if the
+// user says so.
+proto._openLazyColumnar = async function(file, reader, options = {}) {
+    const kind = options.kind || 'file';
     const signal = options.loadToken?.signal || options.signal || null;
     try {
         const source = await this._getDuckDbSource();
@@ -2247,7 +2260,7 @@ proto._openLazyMat = async function(file, options = {}) {
         // No room for the copy: said by the question the in-memory path asks.
         const needed = source.sinkBytesFor(reader.rows, reader.columns);
         if (needed > source.sinkBudget().available) {
-            console.warn('[mat] no room to open in memory-saving mode:', file.name);
+            console.warn(`[${kind}] no room to open in memory-saving mode:`, file?.name);
             return null;
         }
         const { ingestColumnarReader } = await import('../../data/columnar-ingest.js');
@@ -2259,7 +2272,7 @@ proto._openLazyMat = async function(file, options = {}) {
                 const percent = total > 0 ? Math.floor((100 * done) / total) : 100;
                 if (percent === shown) return;
                 shown = percent;
-                this._updateFileLoadingOverlayProgress(i18n.t('lazyMatCopying').replace('{percent}', String(percent)));
+                this._updateFileLoadingOverlayProgress(i18n.t('lazyIngestCopying').replace('{percent}', String(percent)));
             },
         });
         this._updateFileLoadingOverlayProgress('');
@@ -2267,10 +2280,54 @@ proto._openLazyMat = async function(file, options = {}) {
     } catch (err) {
         this._updateFileLoadingOverlayProgress('');
         if (err?.name === 'AbortError' || signal?.aborted) return null;
-        // The engine ran out of room on the way, or failed: the file can
-        // still be loaded whole, if the user says so.
-        console.warn('[mat] could not open in memory-saving mode:', err?.message || err);
+        console.warn(`[${kind}] could not open in memory-saving mode:`, err?.message || err);
         return null;
+    }
+};
+
+// ─── A netCDF in memory-saving mode ─────────────────────────────────────────
+//
+// When a netCDF's series would not fit in memory, they are copied into the
+// engine a block at a time instead and the file opens as a lazy dataset —
+// every analysis, data tool and export then reads every row of it. The file
+// itself is read in the parse worker, which is the only place it can be read
+// by parts (src/data/netcdf-columns-client.js).
+//
+// Called where that limit is found (_parseNetcdfFileByParts), because a netCDF
+// is judged by what its series would load and not by the size of the file.
+// Null means "open it the way it was always opened": no engine, no worker, a
+// file this reader does not take (a PyPSA network, a variable that cannot be
+// sliced), or no room in the engine for the copy.
+proto._openLazyNetcdf = async function(filename, file, options = {}) {
+    if (!file || typeof file.slice !== 'function') return null;
+    if (!this._canUseDuckDb()) return null;
+    const pool = getParsePool();
+    if (!pool) return null;
+    this._lazyColumnarSeq = (this._lazyColumnarSeq || 0) + 1;
+    const id = `netcdf_${this._lazyColumnarSeq}`;
+    const request = (op, payload) => pool.run(op, payload);
+    let description = null;
+    try {
+        description = await request('netcdf-columns:open', { id, file, filename });
+    } catch (err) {
+        // A file the reader cannot make sense of is left to the in-memory
+        // path, which reports what is wrong with it.
+        console.warn('[netcdf] not read by parts into the engine:', err?.message || err);
+        return null;
+    }
+    if (!description) return null;
+    try {
+        const { netcdfColumnarReader } = await import('../../data/netcdf-columns-client.js');
+        return await this._openLazyColumnar(file, netcdfColumnarReader(description, { id, request }), {
+            ...options,
+            kind: 'netcdf',
+        });
+    } finally {
+        // The reader holds the file open in the worker: closed whether the
+        // copy finished, failed or was cancelled.
+        try {
+            await request('netcdf-columns:close', { id });
+        } catch (_) { /* the worker is gone, and with it the reader */ }
     }
 };
 
@@ -2369,6 +2426,14 @@ proto._parseNetcdfFileByParts = async function(filename, file, options = {}) {
             return await run(readerFileCeiling(this._pypsaNetcdfEagerLimitBytes(), options));
         } catch (err) {
             if (err?.code !== 'NETCDF_OVER_LIMIT') throw err;
+            // Its series do not fit in memory. They do fit in the engine: the
+            // file opens in memory-saving mode and every analysis, data tool
+            // and export reads every row of it. The question below is only for
+            // when that cannot be done — no engine, a file this reader does
+            // not take, no room for the copy — and then it is the question
+            // every format over its limit asks.
+            const lazy = await this._openLazyNetcdf(filename, file, options);
+            if (lazy) return lazy;
             const verdict = checkLoadedNetcdfLimit(filename, err.loadedBytes, err.limitBytes);
             if (!verdict || !(await this._confirmOversizedFile(verdict, { name: filename, size: verdict.sizeBytes }))) {
                 const cancelled = new Error('netCDF load cancelled');

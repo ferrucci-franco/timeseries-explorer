@@ -192,7 +192,10 @@ export async function ingestColumnarReader(source, reader, options = {}) {
     try {
         adopted = await source.adoptDatasetTable(holder, groups[0].dataset, {
             timeName: reader.timeName || 't',
-            timeKind: 'numeric',
+            // A netCDF CF axis is milliseconds since an origin, not seconds of
+            // simulation: the dataset has to know, or every date reads as a
+            // number of milliseconds.
+            timeKind: reader.timeKind === 'datetime' ? 'datetime' : 'numeric',
             overviewPoints: points,
         });
     } catch (error) {
@@ -213,6 +216,9 @@ export async function ingestColumnarReader(source, reader, options = {}) {
         if (declared === timeDeclared) {
             variables[timeName] = {
                 ...adopted.variables[timeName],
+                // How the axis is displayed, what it is called on screen, and
+                // whatever else the format knows about it.
+                ...(declared.extra || {}),
                 name: timeName,
                 data: used[timeIndex],
                 description: declared.description || '',
@@ -224,6 +230,7 @@ export async function ingestColumnarReader(source, reader, options = {}) {
         if (declared.kind === 'parameter' || declared.column == null) {
             const values = declared.values || [];
             variables[declared.name] = {
+                ...(declared.extra || {}),
                 name: declared.name,
                 data: values,
                 description: declared.description || '',
@@ -244,6 +251,7 @@ export async function ingestColumnarReader(source, reader, options = {}) {
         const negate = !!declared.negate;
         const values = used[declared.column];
         const variable = {
+            ...(declared.extra || {}),
             name: declared.name,
             data: negate ? values.map(v => -v) : values,
             description: declared.description || '',
@@ -281,6 +289,10 @@ export async function ingestColumnarReader(source, reader, options = {}) {
         ingest: { format: reader.format, tables: groups.length, columns: reader.columns, overviewPoints: time.length },
     };
     adopted._duckdb.overviewPoints = Math.max(2, time.length);
-    adopted.tree = parser._buildTree(variables);
+    // A format whose series have a shape of their own — netCDF groups them by
+    // the dataset each was cut from, under the file's dimensions and its global
+    // attributes — hands back the tree it would have built in memory, so the
+    // sidebar of a lazy file is the sidebar of the same file read whole.
+    adopted.tree = reader.buildTree ? reader.buildTree(variables, adopted) : parser._buildTree(variables);
     return adopted;
 }

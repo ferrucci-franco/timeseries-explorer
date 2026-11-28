@@ -158,7 +158,12 @@ parsed whole: `mat-v4-stream.js` reads it by parts — a "columnar reader" — a
 `src/data/columnar-ingest.js` copies it into tables of the DuckDB engine, adopted
 as a memory-saving (lazy) dataset with the same three members plus `_duckdb`. A
 reader of another format that gives the same shape is opened lazily by the same
-ingest (`docs/any-size-files.md`, "resultados `.mat` en lazy").
+ingest (`docs/any-size-files.md`, "resultados `.mat` en lazy"):
+`src/parsers/netcdf-columns.js` is the second one, streaming the series a netCDF
+file would otherwise have held in memory (same doc, "las series de un netCDF por
+trozos"). A declared variable may carry `extra` for what the generic shape has
+no field for, and a reader `timeKind` for a calendar axis and `buildTree` for a
+format that groups its series its own way.
 
 ### `src/ui`
 

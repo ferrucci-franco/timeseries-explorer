@@ -1456,15 +1456,37 @@ try {
             return { buffer: entry.buffer, hash: String(entry.contentHash).startsWith('file:') };
         });
         assert.deepEqual(held, { buffer: null, hash: true }, 'a station file is not read whole into the page');
-        // Judged by the series it loads, not by its size: over the limit,
-        // the netCDF question says so; going on loads it.
-        await page.evaluate(() => { window.app._pypsaNetcdfEagerLimitBytes = () => 16; });
+        // Judged by the series it loads, not by its size. With no engine to put
+        // those series in, that is still a question, and it says so; cancelling
+        // it adds no file.
+        await page.evaluate(() => {
+            window.app._pypsaNetcdfEagerLimitBytes = () => 16;
+            window.app._canUseDuckDb = () => false;
+        });
         await page.setInputFiles('#file-input', resolve(FIXTURES, 'generic-timeseries-64bit-offset.nc'));
         await page.waitForSelector('.modal-overlay.show .modal-btn-confirm', { timeout: 60000 });
         const question = await page.$eval('.modal-overlay.show', el => el.innerText);
         assert.match(question, /carga .* de series/, `the question is about the series loaded (${question})`);
-        await page.click('.modal-overlay.show .modal-btn-confirm');
+        await page.click('.modal-overlay.show .modal-btn-cancel');
+        await page.waitForSelector('.modal-overlay.show', { state: 'detached' });
+        assert.equal(await page.evaluate(() => window.app.files.size), 1, 'cancelled, the file is not added');
+
+        // With the engine there, the same file over the same limit opens in
+        // memory-saving mode instead, and there is nothing to ask.
+        await page.evaluate(() => { delete window.app._canUseDuckDb; });
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'generic-timeseries-64bit-offset.nc'));
         await page.waitForFunction(() => window.app.files.size === 2, null, { timeout: 60000 });
+        const overLimit = await page.evaluate(() => {
+            const pm = window.app.plotManager;
+            const data = pm.files.get(pm.activeFileId).data;
+            return {
+                lazy: !!data._duckdb,
+                format: data.metadata.format,
+                asked: document.querySelectorAll('.modal-overlay.show').length,
+            };
+        });
+        assert.deepEqual(overLimit, { lazy: true, format: 'netcdf-lazy', asked: 0 },
+            'over its limit, with an engine, the series are copied into it and nothing is asked');
 
         await page.setInputFiles('#file-input', {
             name: 'download.nc', mimeType: 'application/octet-stream',
