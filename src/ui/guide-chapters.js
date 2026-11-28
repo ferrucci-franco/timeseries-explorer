@@ -23,6 +23,7 @@ export const GUIDE_GROUPS = {
     signals: say('New signals', 'Nouveaux signaux', 'Nuevas señales', 'Nuovi segnali', '新信号'),
     analysis: say('Analysis', 'Analyse', 'Análisis', 'Analisi', '分析'),
     tools: say('With your tools', 'Avec vos outils', 'Con sus herramientas', 'Con i tuoi strumenti', '配合你的工具'),
+    phone: say('On a phone', 'Sur téléphone', 'En el teléfono', 'Sul telefono', '在手机上'),
 };
 
 // ─── Made-up data ──────────────────────────────────────────────────────────
@@ -175,6 +176,22 @@ function processLine() {
         const current = 9 + 1.9 * fall + 0.3 * Math.sin(i / 6) + 0.15 * (rnd() - 0.5);
         return `${(i / 4).toFixed(2)},${pressure.toFixed(2)},${flow.toFixed(2)},${current.toFixed(2)}`;
     };
+}
+
+// Ten seconds of the vibration of a pump's bearing, read by a portable logger
+// at 200 Hz in two directions: the running speed (12.5 Hz, 750 rpm) whose
+// amplitude breathes slowly, its second harmonic, and noise.
+function pumpBearingCsv() {
+    const rnd = random(64);
+    const lines = ['time [s],vib_x [mm/s],vib_y [mm/s]'];
+    for (let i = 0; i < 2000; i++) {
+        const t = i / 200;
+        const breath = 0.65 + 0.35 * Math.sin(2 * Math.PI * 0.3 * t);
+        const x = 3 * breath * Math.sin(2 * Math.PI * 12.5 * t) + 0.9 * Math.sin(2 * Math.PI * 25 * t) + 0.5 * (rnd() - 0.5);
+        const y = 1.6 * breath * Math.sin(2 * Math.PI * 12.5 * t + 1.2) + 0.5 * Math.sin(2 * Math.PI * 25 * t + 0.4) + 0.5 * (rnd() - 0.5);
+        lines.push(`${t.toFixed(3)},${x.toFixed(3)},${y.toFixed(3)}`);
+    }
+    return lines.join('\n');
 }
 
 // ─── Small helpers ─────────────────────────────────────────────────────────
@@ -2152,6 +2169,187 @@ export const GUIDE_CHAPTERS = [
             await d.cam(null, null, 700);
             await d.wait(1600);
             line.on = false;
+        },
+    },
+
+    {
+        id: 'phone', g: 'phone', icon: '▯', est: 42000, device: 'phone',
+        t: say('The same app, on a phone', 'La même application, sur un téléphone', 'La misma app, en un teléfono', 'La stessa app, su un telefono', '同一个应用，在手机上'),
+        d: say(
+            'Open the same address on a phone or a tablet: nothing to install, and the same files, plots and analyses, laid out for a finger. Tap signals to plot them, pan with one finger, pinch with two, double tap to fit; <b>Analyze</b> holds every analysis, <b>Plot</b> the statistics and the export to the phone’s share menu. What a phone does not have: Live Update, which belongs to the Full Desktop edition, and this animated guide.',
+            'Ouvrez la même adresse sur un téléphone ou une tablette : rien à installer, et les mêmes fichiers, graphiques et analyses, disposés pour le doigt. Touchez les signaux pour les tracer, déplacez avec un doigt, pincez avec deux, touchez deux fois pour tout ajuster ; <b>Analyser</b> contient toutes les analyses, <b>Graphique</b> les statistiques et l’export vers le menu de partage du téléphone. Ce qu’un téléphone n’a pas : Live Update, propre à l’édition Full Desktop, et ce guide animé.',
+            'Abra la misma dirección en un teléfono o una tableta: nada que instalar, y los mismos archivos, gráficos y análisis, dispuestos para el dedo. Toque las señales para graficarlas, desplace con un dedo, pellizque con dos, toque dos veces para ajustar; <b>Analizar</b> reúne todos los análisis, <b>Gráfico</b> las estadísticas y la exportación al menú de compartir del teléfono. Lo que un teléfono no tiene: Live Update, propio de la edición Full Desktop, y esta guía animada.',
+            'Apri lo stesso indirizzo su un telefono o un tablet: niente da installare, e gli stessi file, grafici e analisi, disposti per il dito. Tocca i segnali per tracciarli, sposta con un dito, pizzica con due, tocca due volte per adattare; <b>Analizza</b> contiene tutte le analisi, <b>Grafico</b> le statistiche e l’esportazione verso il menu di condivisione del telefono. Ciò che un telefono non ha: Live Update, proprio dell’edizione Full Desktop, e questa guida animata.',
+            '在手机或平板上打开同一个网址：无需安装，同样的文件、图表和分析，按手指操作重新排布。点一下信号即可绘图，单指平移，双指捏合缩放，双击自适应；<b>分析</b>里有全部分析，<b>图表</b>里有统计和导出（可送到手机的分享菜单）。手机上没有的：实时更新（属于完整桌面版 Full Desktop），以及这份动画指南。',
+        ),
+        async setup(d) {
+            await d.loadText('pump_bearing.csv', pumpBearingCsv());
+            if (!d.app._compactIsActive()) throw new Error('guide: the frame is not in the phone layout');
+        },
+        async run(d) {
+            const app = d.app;
+            const plot = () => app.plotManager.plots.get(app._compactActivePanelId());
+            const gd = () => plot()?.div;
+            const span = () => {
+                const [lo, hi] = gd()._fullLayout.xaxis.range.map(Number);
+                return { lo, hi, width: hi - lo };
+            };
+            // A sheet slides, and the plot is drawn again once it has settled.
+            const settled = async (sheet) => {
+                const ok = await d.until(() => app._compact.sheet === sheet && gd()?._fullLayout, 5000);
+                if (!ok) throw new Error(`guide: the phone layout did not ${sheet ? `open ${sheet}` : 'close its sheet'}`);
+                await d.wait(500);
+            };
+
+            d.say(say(
+                'On site, a logger file opened on the phone',
+                'Sur site, un fichier d’enregistreur ouvert sur le téléphone',
+                'En campo, un archivo de registrador abierto en el teléfono',
+                'Sul campo, un file del logger aperto sul telefono',
+                '在现场，用手机打开一份记录仪文件',
+            ));
+            await d.wait(2000);
+
+            // ── Tap to plot ──
+            d.say(say(
+                'Tap <b>Choose signals</b>…',
+                'Touchez <b>Choisir des signaux</b>…',
+                'Toque <b>Elegir señales</b>…',
+                'Tocca <b>Scegli i segnali</b>…',
+                '点<b>选择信号</b>……',
+            ));
+            await d.tap('.compact-active-panel .compact-placeholder-btn', { after: 200 });
+            if (!await d.until(() => app._compact.sheet === 'data' && d.$('.compact-sheet #variables-tree .tree-item'), 5000)) {
+                throw new Error('guide: the Data sheet did not open');
+            }
+            await d.wait(600);
+            d.say(say(
+                '…and tap a signal to plot it: two vibrations of a pump bearing',
+                '…et touchez un signal pour le tracer : deux vibrations d’un palier de pompe',
+                '…y toque una señal para graficarla: dos vibraciones de un cojinete de bomba',
+                '…e tocca un segnale per tracciarlo: due vibrazioni di un cuscinetto di pompa',
+                '……再点信号即可绘图：水泵轴承的两路振动',
+            ));
+            for (const [n, name] of ['vib_x', 'vib_y'].entries()) {
+                const row = await d.variable(name);
+                await d.tap({ el: row.querySelector('.tree-label') || row }, { after: 200 });
+                if (!await d.until(() => plot()?.traces.length === n + 1, 5000)) throw new Error(`guide: ${name} was not plotted`);
+                await d.wait(500);
+            }
+            d.say(say(
+                '<b>Done</b>: the plot takes the whole screen',
+                '<b>Terminé</b> : le graphique prend tout l’écran',
+                '<b>Listo</b>: el gráfico ocupa toda la pantalla',
+                '<b>Fatto</b>: il grafico prende tutto lo schermo',
+                '<b>完成</b>：图表占满整个屏幕',
+            ));
+            await d.tap('.compact-sheet .compact-data-done', { after: 200 });
+            await settled(null);
+            await d.wait(1200);
+            const full = span();
+
+            // ── Fingers on the plot ──
+            d.say(say(
+                'Two fingers: pinch out to zoom on the time axis',
+                'Deux doigts : écartez pour zoomer sur l’axe du temps',
+                'Dos dedos: sepárelos para ampliar el eje de tiempo',
+                'Due dita: allargale per ingrandire l’asse del tempo',
+                '双指：张开即可放大时间轴',
+            ));
+            await d.pinch(plotArea(gd(), 0.5, 0.45), 60, 250, { ms: 1200 });
+            await d.pinch(plotArea(gd(), 0.5, 0.6), 60, 250, { ms: 1200 });
+            if (!await d.until(() => span().width < full.width / 4, 4000)) throw new Error('guide: the pinch did not zoom the plot');
+            await d.wait(900);
+            d.say(say(
+                'One finger: drag to move along the record',
+                'Un doigt : glissez pour parcourir l’enregistrement',
+                'Un dedo: arrastre para recorrer el registro',
+                'Un dito: trascina per scorrere la registrazione',
+                '单指：拖动即可沿记录平移',
+            ));
+            const before = span();
+            await d.drag(plotArea(gd(), 0.78, 0.5), plotArea(gd(), 0.2, 0.5), { ms: 1300 });
+            if (!await d.until(() => span().lo > before.lo + before.width / 4, 4000)) throw new Error('guide: the finger did not pan the plot');
+            await d.wait(900);
+            d.say(say(
+                'Double tap: the whole record again',
+                'Touchez deux fois : tout l’enregistrement à nouveau',
+                'Toque dos veces: todo el registro de nuevo',
+                'Tocca due volte: di nuovo tutta la registrazione',
+                '双击：回到整段记录',
+            ));
+            const fitted = () => span().width > full.width * 0.95;
+            await d.doubleTap(plotArea(gd(), 0.5, 0.5));
+            // (two taps that a busy machine spread too far apart are not a
+            // double tap: the plot's own Fit button does what was meant)
+            if (!await d.until(fitted, 2500)) {
+                await d.wait(4200);
+                await d.tap('.compact-active-panel .compact-fit-btn[data-axis="all"]');
+            }
+            if (!await d.until(fitted, 4000)) throw new Error('guide: the plot did not fit');
+            await d.wait(1200);
+
+            // ── An analysis ──
+            d.say(say(
+                '<b>Analyze</b> → Fourier (FFT)',
+                '<b>Analyser</b> → Fourier (FFT)',
+                '<b>Analizar</b> → Fourier (FFT)',
+                '<b>Analizza</b> → Fourier (FFT)',
+                '<b>分析</b> → Fourier (FFT)',
+            ));
+            await d.tap('.compact-nav-btn[data-sheet="analyze"]', { after: 200 });
+            await settled('analyze');
+            // (the list of analyses: None first, then Fourier)
+            await d.tap(d.$$('.compact-sheet .compact-radio')[1], { after: 200 });
+            const spectrum = () => d.$('.compact-active-panel .fft-spectrum-pane .js-plotly-plot');
+            if (!await d.until(() => plot()?.mode === 'fft' && spectrum()?._fullLayout && /ready/.test(d.$('.compact-active-panel .fft-status')?.className || ''), 10000)) {
+                throw new Error('guide: no spectrum on the phone');
+            }
+            await d.wait(900);
+            await d.tap('.compact-sheet .compact-sheet-close', { after: 200 });
+            await settled(null);
+            d.say(say(
+                'The signal above, its spectrum below — tap a peak to read it',
+                'Le signal en haut, son spectre en bas — touchez un pic pour le lire',
+                'Arriba la señal, abajo su espectro — toque un pico para leerlo',
+                'Sopra il segnale, sotto il suo spettro — tocca un picco per leggerlo',
+                '上方是信号，下方是频谱——点一下峰值即可读数',
+            ));
+            await d.wait(1000);
+            await d.tap(plotPoint(spectrum(), 12.5, 1), { after: 400 });
+            d.say(say(
+                '<b>12.5 Hz</b>: the running speed, 750 rpm — and its harmonic',
+                '<b>12,5 Hz</b> : la vitesse de rotation, 750 tr/min — et son harmonique',
+                '<b>12,5 Hz</b>: la velocidad de giro, 750 rpm — y su armónico',
+                '<b>12,5 Hz</b>: la velocità di rotazione, 750 giri/min — e la sua armonica',
+                '<b>12.5 Hz</b>：转速 750 转/分——以及它的谐波',
+            ));
+            await d.wait(2600);
+
+            // ── Statistics and export ──
+            d.say(say(
+                '<b>Plot</b>: the plot’s type and signals, statistics, export',
+                '<b>Graphique</b> : type et signaux du graphique, statistiques, export',
+                '<b>Gráfico</b>: tipo y señales del gráfico, estadísticas, exportación',
+                '<b>Grafico</b>: tipo e segnali del grafico, statistiche, esportazione',
+                '<b>图表</b>：图表类型与信号、统计、导出',
+            ));
+            await d.tap('.compact-nav-btn[data-sheet="plot"]', { after: 200 });
+            await settled('plot');
+            const exportButton = d.$('.compact-sheet .compact-export-btn');
+            if (!exportButton) throw new Error('guide: the Plot sheet has no Export');
+            await d.reveal(exportButton, 900);
+            await d.wait(1400);
+            d.say(say(
+                '<b>Export…</b>: the data as CSV or the plot as an image, to share from the phone',
+                '<b>Exporter…</b> : les données en CSV ou le graphique en image, à partager depuis le téléphone',
+                '<b>Exportar…</b>: los datos en CSV o el gráfico como imagen, para compartir desde el teléfono',
+                '<b>Esporta…</b>: i dati in CSV o il grafico come immagine, da condividere dal telefono',
+                '<b>导出…</b>：数据存为 CSV 或图表存为图片，可直接从手机分享',
+            ));
+            await d.tap(exportButton, { after: 300 });
+            if (!await d.until(() => d.$('.modal-overlay .modal-dialog-plot-export'), 5000)) throw new Error('guide: the export dialog did not open');
+            await d.wait(3000);
         },
     },
 ];

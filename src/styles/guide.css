@@ -143,6 +143,11 @@ body.theme-dark .guide {
     background: var(--bg-primary);
     box-shadow: 0 0 0 1px var(--guide-ring), 0 0 0 6px var(--guide-halo), 0 10px 30px rgba(15, 25, 50, 0.22);
 }
+/* A demo of the phone layout: the same screen, drawn as a phone held upright. */
+.guide-screen.guide-screen-phone {
+    border-radius: 30px;
+    border-width: 7px;
+}
 .guide-cam { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .guide-cam iframe { display: block; border: 0; pointer-events: none; background: var(--bg-primary); }
 .guide-veil {
