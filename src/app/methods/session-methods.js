@@ -172,7 +172,27 @@ proto.openSessionOrProjectFromUser = function() {
     });
 };
 
+// A session or a project being loaded, counted while it is: the version
+// check reads this (_versionCheckBusy).
+//
+// A project load closes the files that are open before it opens the ones it
+// brings, and a silent one shows no overlay — so for a moment nothing else
+// about the app says it is busy. A build deployed in that moment would reload
+// the page and the load would be gone (#394).
+proto._withSessionLoad = async function(run) {
+    this._sessionLoadDepth = (this._sessionLoadDepth || 0) + 1;
+    try {
+        return await run();
+    } finally {
+        this._sessionLoadDepth = Math.max(0, (this._sessionLoadDepth || 1) - 1);
+    }
+};
+
 proto.loadSessionOrProjectFile = async function(file, options = {}) {
+    return this._withSessionLoad(() => this._loadSessionOrProjectFile(file, options));
+};
+
+proto._loadSessionOrProjectFile = async function(file, options = {}) {
     const extension = this._fileExtension(file.name);
     if (extension === '.json') {
         const text = await file.text();
